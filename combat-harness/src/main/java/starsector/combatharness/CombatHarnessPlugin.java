@@ -6,15 +6,13 @@ import com.fs.starfarer.api.input.InputEventAPI;
 
 import org.apache.log4j.Logger;
 
-import java.io.File;
-import java.io.FileWriter;
 import java.util.List;
 
 /**
  * EveryFrameCombatPlugin that monitors combat, tracks damage, and writes results.
  *
  * One matchup per game launch. After combat ends (or time limit), writes result.json
- * and calls System.exit(0).
+ * to saves/common/combat_harness/ and calls System.exit(0).
  */
 public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
@@ -25,18 +23,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private DamageTracker damageTracker;
     private boolean resultsWritten = false;
     private int frameCount = 0;
-    private final File workdir;
-
-    public CombatHarnessPlugin(File workdir) {
-        this.workdir = workdir;
-    }
 
     @Override
     public void init(CombatEngineAPI engine) {
         this.engine = engine;
+        if (engine == null) return;
 
         try {
-            config = MatchupConfig.fromFile(new File(workdir, "matchup.json"));
+            config = MatchupConfig.loadFromCommon();
         } catch (Exception e) {
             log.error("Failed to load matchup config", e);
             return;
@@ -56,13 +50,13 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     @Override
     public void advance(float amount, List<InputEventAPI> events) {
         if (engine == null || engine.isPaused()) return;
-        if (config == null) return;  // config failed to load
+        if (config == null) return;
 
         frameCount++;
 
         // Update heartbeat
         if (frameCount % 60 == 0) {
-            writeHeartbeat();
+            ResultWriter.writeHeartbeat(engine.getTotalElapsedTime(false));
         }
 
         // Check combat end
@@ -72,7 +66,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
         if ((combatOver || timedOut) && !resultsWritten) {
             try {
-                ResultWriter.writeResult(engine, damageTracker, config, workdir, timedOut);
+                ResultWriter.writeResult(engine, damageTracker, config, timedOut);
                 resultsWritten = true;
                 log.info("Results written for matchup " + config.matchupId
                         + " (winner=" + (timedOut ? "TIMEOUT" : (engine.getWinningSideId() == 0 ? "PLAYER" : "ENEMY"))
@@ -82,18 +76,6 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             }
 
             System.exit(resultsWritten ? 0 : 1);
-        }
-    }
-
-    private void writeHeartbeat() {
-        try {
-            File heartbeat = new File(workdir, "heartbeat.txt");
-            try (FileWriter fw = new FileWriter(heartbeat)) {
-                fw.write(System.currentTimeMillis() + " " + engine.getTotalElapsedTime(false));
-            }
-        } catch (Exception e) {
-            // Heartbeat failure is non-fatal
-            log.debug("Failed to write heartbeat", e);
         }
     }
 }

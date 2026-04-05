@@ -2,11 +2,6 @@ package starsector.combatharness;
 
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
-import java.io.File;
-import java.nio.file.Files;
-import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,26 +33,6 @@ class ResultWriterTest {
         assertEquals(2000f, (float) json.getDouble("hard_flux"), 0.01f);
         assertEquals(12000f, (float) json.getDouble("max_flux"), 0.01f);
         assertEquals(3, json.getInt("overload_count"));
-    }
-
-    @Test
-    void atomicWriteCreatesResultFile(@TempDir Path tempDir) throws Exception {
-        JSONObject result = new JSONObject();
-        result.put("matchup_id", "test_001");
-        result.put("winner", "PLAYER");
-
-        ResultWriter.atomicWrite(result, tempDir.toFile());
-
-        File resultFile = new File(tempDir.toFile(), "result.json");
-        assertTrue(resultFile.exists(), "result.json should exist");
-
-        File tmpFile = new File(tempDir.toFile(), "result.json.tmp");
-        assertFalse(tmpFile.exists(), "result.json.tmp should not exist after completion");
-
-        String content = Files.readString(resultFile.toPath());
-        JSONObject parsed = new JSONObject(content);
-        assertEquals("test_001", parsed.getString("matchup_id"));
-        assertEquals("PLAYER", parsed.getString("winner"));
     }
 
     @Test

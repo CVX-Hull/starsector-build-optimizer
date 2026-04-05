@@ -1,4 +1,5 @@
 {
     "title": "Optimizer Arena",
-    "difficulty": "VARIABLE"
+    "difficulty": "VARIABLE",
+    "icon": "icon.jpg"
 }

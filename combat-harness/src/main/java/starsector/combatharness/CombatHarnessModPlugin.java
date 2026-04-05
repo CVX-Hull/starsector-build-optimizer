@@ -1,10 +1,9 @@
 package starsector.combatharness;
 
 import com.fs.starfarer.api.BaseModPlugin;
+import com.fs.starfarer.api.Global;
 
 import org.apache.log4j.Logger;
-
-import java.io.File;
 
 /**
  * Mod entry point. Registered via mod_info.json "modPlugin" field.
@@ -17,16 +16,21 @@ public class CombatHarnessModPlugin extends BaseModPlugin {
     public void onApplicationLoad() throws Exception {
         log.info("Combat Harness v0.1.0 loaded");
 
-        File workdir = new File("mods/combat-harness/workdir");
-        if (!workdir.exists()) {
-            log.warn("Workdir not found: " + workdir.getAbsolutePath());
+        // Debug: write a test file to discover actual saves/common/ path
+        try {
+            Global.getSettings().writeTextFileToCommon("combat_harness_probe.txt", "probe");
+            log.info("Wrote probe file to saves/common/combat_harness_probe.txt");
+        } catch (Exception e) {
+            log.error("Failed to write probe file: " + e.getMessage());
+        }
+
+        boolean exists = MatchupConfig.existsInCommon();
+        log.info("fileExistsInCommon('" + MatchupConfig.COMMON_PREFIX + "matchup.json') = " + exists);
+
+        if (exists) {
+            log.info("matchup.json found — Optimizer Arena mission is ready");
         } else {
-            File matchup = new File(workdir, "matchup.json");
-            if (matchup.exists()) {
-                log.info("matchup.json found — Optimizer Arena mission is ready");
-            } else {
-                log.info("No matchup.json in workdir — place one before running Optimizer Arena");
-            }
+            log.info("No matchup.json found — write " + MatchupConfig.COMMON_PREFIX + "matchup.json to saves/common/");
         }
     }
 

@@ -1,7 +1,5 @@
 package data.missions.optimizer_arena;
 
-import java.io.File;
-
 import com.fs.starfarer.api.fleet.FleetGoal;
 import com.fs.starfarer.api.fleet.FleetMemberType;
 import com.fs.starfarer.api.mission.FleetSide;
@@ -14,20 +12,25 @@ import starsector.combatharness.MatchupConfig;
 public class MissionDefinition implements MissionDefinitionPlugin {
 
     public void defineMission(MissionDefinitionAPI api) {
-        File workdir = new File("mods/combat-harness/workdir");
-        File matchupFile = new File(workdir, "matchup.json");
-
-        if (!matchupFile.exists()) {
-            // No matchup config — set up a placeholder so the mission list doesn't crash
+        if (!MatchupConfig.existsInCommon()) {
             api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
             api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
-            api.addBriefingItem("ERROR: No matchup.json found in mods/combat-harness/workdir/");
+            api.addBriefingItem("ERROR: No matchup.json found in saves/common/combat_harness/");
             api.addBriefingItem("Place a matchup.json before launching this mission.");
             api.initMap(-8000f, 8000f, -6000f, 6000f);
             return;
         }
 
-        MatchupConfig config = MatchupConfig.fromFile(matchupFile);
+        MatchupConfig config;
+        try {
+            config = MatchupConfig.loadFromCommon();
+        } catch (Exception e) {
+            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
+            api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
+            api.addBriefingItem("ERROR: Failed to parse matchup.json: " + e.getMessage());
+            api.initMap(-8000f, 8000f, -6000f, 6000f);
+            return;
+        }
 
         // Init fleets — both AI-controlled, both attacking
         api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
@@ -57,6 +60,6 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         api.initMap(-hw, hw, -hh, hh);
 
         // Attach combat harness plugin
-        api.addPlugin(new CombatHarnessPlugin(workdir));
+        api.addPlugin(new CombatHarnessPlugin());
     }
 }

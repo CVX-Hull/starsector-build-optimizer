@@ -1,5 +1,6 @@
 package starsector.combatharness;
 
+import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.combat.ArmorGridAPI;
 import com.fs.starfarer.api.combat.CombatEngineAPI;
 import com.fs.starfarer.api.combat.CombatFleetManagerAPI;
@@ -12,18 +13,19 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
 import java.util.List;
 
 /**
- * Collects final combat state and writes result.json atomically.
+ * Collects final combat state and writes result.json via the game's SettingsAPI.
+ *
+ * Output goes to saves/common/combat_harness/result.json
+ * (direct java.io.File access is blocked by Starsector's security sandbox).
  */
 public class ResultWriter {
 
     public static void writeResult(CombatEngineAPI engine, DamageTracker tracker,
-                                   MatchupConfig config, File outputDir, boolean timedOut)
+                                   MatchupConfig config, boolean timedOut)
             throws JSONException {
         String winner;
         if (timedOut) {
@@ -82,7 +84,7 @@ public class ResultWriter {
         result.put("aggregate", aggregateToJSON(playerTotalDealt, enemyTotalDealt,
                 playerDestroyed, enemyDestroyed, playerRetreated, enemyRetreated));
 
-        atomicWrite(result, outputDir);
+        writeToCommon(result);
     }
 
     static JSONObject shipToJSON(ShipAPI ship, DamageTracker tracker)
@@ -169,16 +171,25 @@ public class ResultWriter {
         return json;
     }
 
-    public static void atomicWrite(JSONObject json, File outputDir) throws JSONException {
-        File tmp = new File(outputDir, "result.json.tmp");
-        File result = new File(outputDir, "result.json");
-        try (FileWriter fw = new FileWriter(tmp)) {
-            fw.write(json.toString(2));
+    /** Write result JSON to saves/common/combat_harness/result.json via SettingsAPI. */
+    static void writeToCommon(JSONObject json) throws JSONException {
+        try {
+            Global.getSettings().writeTextFileToCommon(
+                    MatchupConfig.COMMON_PREFIX + "result.json",
+                    json.toString(2));
         } catch (IOException e) {
-            throw new RuntimeException("Failed to write result file", e);
+            throw new RuntimeException("Failed to write result.json to saves/common/", e);
         }
-        if (!tmp.renameTo(result)) {
-            throw new RuntimeException("Failed to rename result.json.tmp to result.json");
+    }
+
+    /** Write heartbeat to saves/common/combat_harness/heartbeat.txt via SettingsAPI. */
+    public static void writeHeartbeat(float elapsedTime) {
+        try {
+            Global.getSettings().writeTextFileToCommon(
+                    MatchupConfig.COMMON_PREFIX + "heartbeat.txt",
+                    System.currentTimeMillis() + " " + elapsedTime);
+        } catch (IOException e) {
+            // Heartbeat failure is non-fatal
         }
     }
 
