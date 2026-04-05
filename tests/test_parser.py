@@ -14,7 +14,6 @@ from starsector_optimizer.models import (
     WeaponType,
 )
 from starsector_optimizer.parser import (
-    extract_wpn_metadata,
     load_game_data,
     parse_hullmod_csv,
     parse_loose_json,

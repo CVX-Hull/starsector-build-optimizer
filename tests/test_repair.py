@@ -188,3 +188,27 @@ class TestIsFeasible:
         build = Build("test", {}, frozenset(), 15, 0)
         ok, violations = is_feasible(build, hull, _game_data())
         assert not ok
+
+    def test_wrong_weapon_type_infeasible(self):
+        """MISSILE weapon in BALLISTIC slot should be infeasible."""
+        missile = Weapon("missile1", "Missile", SlotSize.MEDIUM, WeaponType.MISSILE,
+                         100, 0, DamageType.HIGH_EXPLOSIVE, 0, 50, 0, 700, 10,
+                         0, 1.0, 1, 0, 5, 0, 300, 0, [], [])
+        gd = _game_data(weapons={"missile1": missile})
+        hull = _hull(op=100)
+        build = Build("test", {"WS1": "missile1"}, frozenset(), 0, 0)
+        ok, violations = is_feasible(build, hull, gd)
+        assert not ok
+        assert any("incompatible" in v.lower() or "type" in v.lower() for v in violations)
+
+    def test_wrong_weapon_size_infeasible(self):
+        """LARGE weapon in MEDIUM slot should be infeasible."""
+        large_w = Weapon("large1", "Large Gun", SlotSize.LARGE, WeaponType.BALLISTIC,
+                         500, 0, DamageType.KINETIC, 0, 300, 0, 900, 20,
+                         0, 2.0, 1, 0, 0, 0, 500, 20, [], [])
+        gd = _game_data(weapons={"large1": large_w})
+        hull = _hull(op=100)
+        build = Build("test", {"WS1": "large1"}, frozenset(), 0, 0)
+        ok, violations = is_feasible(build, hull, gd)
+        assert not ok
+        assert any("size" in v.lower() for v in violations)

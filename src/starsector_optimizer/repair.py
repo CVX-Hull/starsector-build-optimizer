@@ -6,6 +6,7 @@ from .hullmod_effects import (
     HULL_SIZE_RESTRICTIONS,
     INCOMPATIBLE_PAIRS,
     SHIELD_DEPENDENT_MODS,
+    SLOT_COMPATIBILITY,
 )
 from .models import (
     Build,
@@ -173,6 +174,29 @@ def is_feasible(
     cost = compute_op_cost(build, hull, game_data)
     if cost > hull.ordnance_points:
         violations.append(f"OP budget exceeded: {cost} > {hull.ordnance_points}")
+
+    # C2: Slot compatibility
+    slot_map = {s.id: s for s in hull.weapon_slots}
+    for slot_id, weapon_id in build.weapon_assignments.items():
+        if not weapon_id:
+            continue
+        if slot_id not in slot_map:
+            violations.append(f"Unknown slot {slot_id}")
+            continue
+        slot = slot_map[slot_id]
+        if weapon_id in game_data.weapons:
+            weapon = game_data.weapons[weapon_id]
+            allowed = SLOT_COMPATIBILITY.get(slot.slot_type, set())
+            if weapon.weapon_type not in allowed:
+                violations.append(
+                    f"Weapon {weapon_id} type {weapon.weapon_type.value} "
+                    f"incompatible with slot {slot_id} type {slot.slot_type.value}"
+                )
+            if weapon.size != slot.slot_size:
+                violations.append(
+                    f"Weapon {weapon_id} size {weapon.size.value} "
+                    f"doesn't match slot {slot_id} size {slot.slot_size.value}"
+                )
 
     # C3: Incompatible pairs
     for a, b in INCOMPATIBLE_PAIRS:
