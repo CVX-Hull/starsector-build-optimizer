@@ -13,24 +13,18 @@ from .models import Heartbeat
 
 
 def parse_heartbeat(line: str) -> Heartbeat:
-    """Parse a heartbeat line (6-field enriched or 2-field legacy)."""
+    """Parse a 6-field heartbeat line."""
     parts = line.strip().split()
-    if len(parts) >= 6:
-        return Heartbeat(
-            timestamp_ms=int(parts[0]),
-            elapsed=float(parts[1]),
-            player_hp=float(parts[2]),
-            enemy_hp=float(parts[3]),
-            player_alive=int(parts[4]),
-            enemy_alive=int(parts[5]),
-        )
-    elif len(parts) >= 2:
-        return Heartbeat(
-            timestamp_ms=int(parts[0]),
-            elapsed=float(parts[1]),
-        )
-    else:
-        raise ValueError(f"Invalid heartbeat format: {line!r}")
+    if len(parts) < 6:
+        raise ValueError(f"Invalid heartbeat format (expected 6 fields): {line!r}")
+    return Heartbeat(
+        timestamp_ms=int(parts[0]),
+        elapsed=float(parts[1]),
+        player_hp=float(parts[2]),
+        enemy_hp=float(parts[3]),
+        player_alive=int(parts[4]),
+        enemy_alive=int(parts[5]),
+    )
 
 
 class CurtailmentMonitor:
@@ -65,19 +59,12 @@ class CurtailmentMonitor:
 
         latest = heartbeats[-1]
 
-        # Legacy heartbeats without HP data → can't curtail
-        if latest.player_hp is None or latest.enemy_hp is None:
-            return False, None
-
         # Don't stop before min_time (protects phase ships)
         if latest.elapsed < self.min_time:
             return False, None
 
         # Compute HP loss rates over the window
         old = heartbeats[-(self.window + 1)]
-        if old.player_hp is None or old.enemy_hp is None:
-            return False, None
-
         dt = latest.elapsed - old.elapsed
         if dt <= 0:
             return False, None

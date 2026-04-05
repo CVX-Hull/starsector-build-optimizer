@@ -19,7 +19,6 @@ class MatchupConfigTest {
     @Test
     void parseValidJSONWithAllFields() throws Exception {
         JSONObject json = validJSON();
-        json.put("player_flagship", "eagle_test");
         json.put("time_limit_seconds", 120.0);
         json.put("time_mult", 5.0);
         json.put("map_width", 16000.0);
@@ -30,7 +29,6 @@ class MatchupConfigTest {
         assertEquals("eval_001", config.matchupId);
         assertArrayEquals(new String[]{"eagle_test"}, config.playerVariants);
         assertArrayEquals(new String[]{"dominator_Standard"}, config.enemyVariants);
-        assertEquals("eagle_test", config.playerFlagship);
         assertEquals(120.0f, config.timeLimitSeconds, 0.01f);
         assertEquals(5.0f, config.timeMult, 0.01f);
         assertEquals(16000.0f, config.mapWidth, 0.01f);
@@ -42,7 +40,6 @@ class MatchupConfigTest {
         MatchupConfig config = MatchupConfig.fromJSON(validJSON());
 
         assertEquals("eval_001", config.matchupId);
-        assertNull(config.playerFlagship);
         assertEquals(300.0f, config.timeLimitSeconds, 0.01f);
         assertEquals(3.0f, config.timeMult, 0.01f);
         assertEquals(24000.0f, config.mapWidth, 0.01f);
@@ -109,7 +106,6 @@ class MatchupConfigTest {
     @Test
     void roundTrip() throws Exception {
         JSONObject json = validJSON();
-        json.put("player_flagship", "eagle_test");
         json.put("time_mult", 4.0);
 
         MatchupConfig config = MatchupConfig.fromJSON(json);
@@ -118,7 +114,6 @@ class MatchupConfigTest {
 
         assertEquals(config.matchupId, config2.matchupId);
         assertArrayEquals(config.playerVariants, config2.playerVariants);
-        assertEquals(config.playerFlagship, config2.playerFlagship);
         assertEquals(config.timeMult, config2.timeMult, 0.01f);
     }
 }

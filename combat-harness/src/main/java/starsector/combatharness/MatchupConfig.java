@@ -16,19 +16,17 @@ public class MatchupConfig {
     public final String matchupId;
     public final String[] playerVariants;
     public final String[] enemyVariants;
-    public final String playerFlagship;
     public final float timeLimitSeconds;
     public final float timeMult;
     public final float mapWidth;
     public final float mapHeight;
 
     private MatchupConfig(String matchupId, String[] playerVariants, String[] enemyVariants,
-                          String playerFlagship, float timeLimitSeconds, float timeMult,
+                          float timeLimitSeconds, float timeMult,
                           float mapWidth, float mapHeight) {
         this.matchupId = matchupId;
         this.playerVariants = playerVariants;
         this.enemyVariants = enemyVariants;
-        this.playerFlagship = playerFlagship;
         this.timeLimitSeconds = timeLimitSeconds;
         this.timeMult = timeMult;
         this.mapWidth = mapWidth;
@@ -51,11 +49,6 @@ public class MatchupConfig {
             throw new IllegalArgumentException("enemy_variants is required and must be non-empty");
         }
 
-        String playerFlagship = json.optString("player_flagship", null);
-        if ("".equals(playerFlagship)) {
-            playerFlagship = null;
-        }
-
         float timeLimitSeconds = (float) json.optDouble("time_limit_seconds", 300.0);
         if (timeLimitSeconds <= 0) {
             throw new IllegalArgumentException("time_limit_seconds must be > 0");
@@ -75,7 +68,7 @@ public class MatchupConfig {
         }
 
         return new MatchupConfig(matchupId, playerVariants, enemyVariants,
-                playerFlagship, timeLimitSeconds, timeMult, mapWidth, mapHeight);
+                timeLimitSeconds, timeMult, mapWidth, mapHeight);
     }
 
     public JSONObject toJSON() throws JSONException {
@@ -83,9 +76,6 @@ public class MatchupConfig {
         json.put("matchup_id", matchupId);
         json.put("player_variants", new JSONArray(playerVariants));
         json.put("enemy_variants", new JSONArray(enemyVariants));
-        if (playerFlagship != null) {
-            json.put("player_flagship", playerFlagship);
-        }
         json.put("time_limit_seconds", timeLimitSeconds);
         json.put("time_mult", timeMult);
         json.put("map_width", mapWidth);

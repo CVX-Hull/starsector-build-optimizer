@@ -442,10 +442,3 @@ class TestEnrichedHeartbeat:
 
         assert pool._is_heartbeat_fresh(inst)
 
-    def test_heartbeat_content_validation_legacy(self, pool, config):
-        """Parse 2-field legacy heartbeat."""
-        pool.setup()
-        inst = pool._instances[0]
-        inst.heartbeat_path.write_text(f"{int(time.time() * 1000)} 10.0")
-
-        assert pool._is_heartbeat_fresh(inst)

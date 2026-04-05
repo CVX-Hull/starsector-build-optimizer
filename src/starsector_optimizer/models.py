@@ -386,10 +386,10 @@ class MatchupConfig:
 
 @dataclass(frozen=True)
 class Heartbeat:
-    """Parsed heartbeat from the combat harness. 6-field enriched or 2-field legacy."""
+    """Parsed heartbeat from the combat harness (6-field enriched format)."""
     timestamp_ms: int
     elapsed: float
-    player_hp: float | None = None  # None for legacy 2-field format
-    enemy_hp: float | None = None
-    player_alive: int | None = None
-    enemy_alive: int | None = None
+    player_hp: float
+    enemy_hp: float
+    player_alive: int
+    enemy_alive: int

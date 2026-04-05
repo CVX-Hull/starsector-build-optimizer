@@ -18,12 +18,7 @@ The Java combat harness writes heartbeat data to `saves/common/combat_harness_he
 - `player_alive`: number of alive non-fighter player ships
 - `enemy_alive`: number of alive non-fighter enemy ships
 
-**Legacy format (2 fields, backward compatible):**
-```
-<timestamp_ms> <elapsed_seconds>
-```
-
-The parser handles both formats gracefully. Legacy heartbeats have HP fractions set to `None`.
+The parser requires all 6 fields. Invalid formats raise `ValueError`.
 
 ## Stop Signal Protocol
 
@@ -74,10 +69,10 @@ Frozen dataclass parsed from heartbeat file content.
 |-------|------|-------|
 | `timestamp_ms` | `int` | Wall-clock time |
 | `elapsed` | `float` | Game-time elapsed |
-| `player_hp` | `float \| None` | None for legacy 2-field format |
-| `enemy_hp` | `float \| None` | None for legacy 2-field format |
-| `player_alive` | `int \| None` | None for legacy format |
-| `enemy_alive` | `int \| None` | None for legacy format |
+| `player_hp` | `float` | Aggregate HP fraction (0.0-1.0) |
+| `enemy_hp` | `float` | Aggregate HP fraction (0.0-1.0) |
+| `player_alive` | `int` | Alive non-fighter ship count |
+| `enemy_alive` | `int` | Alive non-fighter ship count |
 
 ### `CurtailmentMonitor`
 

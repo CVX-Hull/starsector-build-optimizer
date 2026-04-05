@@ -100,7 +100,7 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 - `saves/` — per-instance combat protocol files (queue, results, done, heartbeat)
 - `data/config/` — game writes `settings.json` back at runtime (100KB). Contains `resolutionOverride` and `screenScaleOverride`.
 - `data/variants/` — optimizer-generated variants are per-instance (different instances evaluate different builds)
-- `mods/` — `enabled_mods.json` per instance. Mod dir copied to avoid shared workdir.
+- `mods/` — `enabled_mods.json` per instance. Mod dir copied to avoid shared-state issues.
 - `screenshots/` — game may write here
 
 ## Lifecycle
@@ -187,7 +187,7 @@ Parse 6-field heartbeat content (not just file mtime) for curtailment integratio
 <timestamp_ms> <elapsed_seconds> <player_hp> <enemy_hp> <player_alive> <enemy_alive>
 ```
 
-Backward compatible: also handles legacy 2-field format.
+Requires all 6 fields. Invalid formats raise an error.
 
 ## Curtailment Integration
 

@@ -25,14 +25,9 @@ class TestParseHeartbeat:
         assert hb.player_alive == 2
         assert hb.enemy_alive == 1
 
-    def test_parse_legacy_2_field(self):
-        hb = parse_heartbeat("1712345678000 10.0")
-        assert hb.timestamp_ms == 1712345678000
-        assert hb.elapsed == pytest.approx(10.0)
-        assert hb.player_hp is None
-        assert hb.enemy_hp is None
-        assert hb.player_alive is None
-        assert hb.enemy_alive is None
+    def test_parse_invalid_format_raises(self):
+        with pytest.raises(ValueError, match="expected 6 fields"):
+            parse_heartbeat("1712345678000 10.0")
 
     def test_read_heartbeat_file(self, tmp_path):
         path = tmp_path / "combat_harness_heartbeat.txt.data"
@@ -145,16 +140,6 @@ class TestCurtailmentDecisions:
         assert stop
         assert winner == "ENEMY"
 
-    def test_no_hp_data_no_stop(self):
-        """Legacy heartbeats (no HP) → never curtail."""
-        monitor = CurtailmentMonitor(min_time=0.0)
-        hbs = [
-            Heartbeat(timestamp_ms=1712345678000 + i * 1000, elapsed=30.0 + i,
-                      player_hp=None, enemy_hp=None, player_alive=None, enemy_alive=None)
-            for i in range(20)
-        ]
-        stop, _ = monitor.should_stop(hbs)
-        assert not stop
 
 
 # --- Stop signal tests ---
