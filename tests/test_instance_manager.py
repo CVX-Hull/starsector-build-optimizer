@@ -427,3 +427,25 @@ class TestContextManager:
             with pool:
                 pass
             mock_td.assert_called_once()
+
+
+# --- Enriched Heartbeat Tests ---
+
+
+class TestEnrichedHeartbeat:
+
+    def test_heartbeat_content_validation_6_field(self, pool, config):
+        """Parse 6-field enriched heartbeat content."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.heartbeat_path.write_text(f"{int(time.time() * 1000)} 30.0 0.85 0.42 2 1")
+
+        assert pool._is_heartbeat_fresh(inst)
+
+    def test_heartbeat_content_validation_legacy(self, pool, config):
+        """Parse 2-field legacy heartbeat."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.heartbeat_path.write_text(f"{int(time.time() * 1000)} 10.0")
+
+        assert pool._is_heartbeat_fresh(inst)

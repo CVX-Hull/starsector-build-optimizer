@@ -163,6 +163,36 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 
 Stored in `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (user-global). All instances on the same machine share activation automatically. No per-instance action needed.
 
+## Launcher Click
+
+The game has a launcher (Java Swing) before the actual game loads. The instance manager clicks "Play Starsector" using `xdotool` (which works on Swing windows, unlike LWJGL). After the game loads, TitleScreenPlugin + MenuNavigator (java.awt.Robot) handle in-game navigation.
+
+**Launcher polling:** Instead of a fixed sleep, poll for the launcher window:
+```python
+for _ in range(30):  # up to 15 seconds
+    result = subprocess.run(["xdotool", "search", "--name", "Starsector"], ...)
+    if result.stdout.strip():
+        break
+    time.sleep(0.5)
+```
+
+## Per-Instance Game Logging
+
+Game stdout/stderr captured to `{work_dir}/game_stdout.log` instead of `/dev/null`. Essential for debugging crashes.
+
+## Enriched Heartbeat Parsing
+
+Parse 6-field heartbeat content (not just file mtime) for curtailment integration:
+```
+<timestamp_ms> <elapsed_seconds> <player_hp> <enemy_hp> <player_alive> <enemy_alive>
+```
+
+Backward compatible: also handles legacy 2-field format.
+
+## Curtailment Integration
+
+The poll loop passes accumulated heartbeats to `CurtailmentMonitor.should_stop()`. If curtailment triggers, writes stop signal file to instance's `saves/common/`. See spec 20.
+
 ## Launch Script Portability
 
 The enhanced `starsector.sh` has CPU-specific JVM flags (AVX3, Shenandoah GC). For cloud machines with different CPUs, a portable launch script with G1GC may be needed. The `InstanceConfig` can be extended with a `launch_script` field if needed.

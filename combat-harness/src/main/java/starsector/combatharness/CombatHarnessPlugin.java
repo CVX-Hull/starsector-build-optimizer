@@ -1,5 +1,6 @@
 package starsector.combatharness;
 
+import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.combat.BaseEveryFrameCombatPlugin;
 import com.fs.starfarer.api.combat.CombatEngineAPI;
 import com.fs.starfarer.api.combat.ShipAPI;
@@ -27,6 +28,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private static final Logger log = Logger.getLogger(CombatHarnessPlugin.class);
     private static final float SHIP_SPACING = 800f;
+    private static final String STOP_FILE = MatchupConfig.COMMON_PREFIX + "stop";
 
     private enum State { INIT, SPAWNING, FIGHTING, CLEANING, DONE }
 
@@ -174,9 +176,36 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         // Center camera on midpoint between player and enemy ships
         updateCamera();
 
-        // Heartbeat every 60 frames
+        // Heartbeat every 60 frames (enriched with HP fractions)
         if (frameCount % 60 == 0) {
-            ResultWriter.writeHeartbeat(engine.getTotalElapsedTime(false));
+            ResultWriter.writeHeartbeat(
+                    engine.getTotalElapsedTime(false),
+                    computeAggregateHp(playerShips),
+                    computeAggregateHp(enemyShips),
+                    countAlive(playerShips),
+                    countAlive(enemyShips));
+        }
+
+        // Check for stop signal from Python curtailment monitor
+        if (Global.getSettings().fileExistsInCommon(STOP_FILE)) {
+            try {
+                Global.getSettings().deleteTextFileFromCommon(STOP_FILE);
+            } catch (Exception e) {
+                // Best effort cleanup
+            }
+            float elapsed = contactMade ? engine.getTotalElapsedTime(false) - matchupStartTime : 0f;
+            try {
+                allResults.put(ResultWriter.buildMatchupResult(
+                        currentConfig, playerShips, enemyShips,
+                        currentTracker, "STOPPED", elapsed));
+                log.info("Matchup " + currentConfig.matchupId
+                        + " stopped by curtailment, duration=" + elapsed + "s");
+            } catch (Exception e) {
+                log.error("Failed to build result for stopped " + currentConfig.matchupId, e);
+            }
+            state = State.CLEANING;
+            cleanupFramesLeft = 3;
+            return;
         }
 
         // Start timer only once fleets engage (approach time doesn't count)
@@ -277,6 +306,16 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             if (s.isAlive() && !s.isFighter()) count++;
         }
         return count;
+    }
+
+    /** Compute aggregate HP fraction across a list of ships (0.0-1.0). */
+    private float computeAggregateHp(List<ShipAPI> ships) {
+        if (ships.isEmpty()) return 0f;
+        float total = 0f;
+        for (ShipAPI s : ships) {
+            total += s.getHullLevel();  // 0.0 (destroyed) to 1.0 (full HP)
+        }
+        return total / ships.size();
     }
 
     /** Center viewport on midpoint of all tracked ships so the fight is visible. */

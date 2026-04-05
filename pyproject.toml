@@ -4,8 +4,10 @@ version = "0.1.0"
 description = "Automated ship build optimizer for Starsector"
 requires-python = ">=3.10"
 dependencies = [
+    "lifelines>=0.30.0",
     "numpy",
     "pandas",
+    "scipy>=1.15.3",
 ]
 
 [project.optional-dependencies]

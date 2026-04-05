@@ -36,6 +36,25 @@ class ResultWriterTest {
     }
 
     @Test
+    void formatHeartbeatHas6Fields() {
+        String heartbeat = ResultWriter.formatHeartbeat(10.5f, 0.85f, 0.42f, 2, 1);
+        String[] parts = heartbeat.split(" ");
+        assertEquals(6, parts.length, "Heartbeat should have 6 space-separated fields");
+        // Field 0: timestamp (long)
+        assertTrue(Long.parseLong(parts[0]) > 0);
+        // Field 1: elapsed
+        assertEquals(10.5f, Float.parseFloat(parts[1]), 0.01f);
+        // Field 2: player HP fraction
+        assertEquals(0.85f, Float.parseFloat(parts[2]), 0.01f);
+        // Field 3: enemy HP fraction
+        assertEquals(0.42f, Float.parseFloat(parts[3]), 0.01f);
+        // Field 4: player alive count
+        assertEquals(2, Integer.parseInt(parts[4]));
+        // Field 5: enemy alive count
+        assertEquals(1, Integer.parseInt(parts[5]));
+    }
+
+    @Test
     void aggregateToJSONContainsAllFields() throws Exception {
         JSONObject json = ResultWriter.aggregateToJSON(15000f, 8000f, 0, 2, 0, 1);
 

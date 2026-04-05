@@ -362,7 +362,7 @@ class ShipCombatResult:
 class CombatResult:
     """Full result from a single combat matchup."""
     matchup_id: str
-    winner: str  # "PLAYER", "ENEMY", or "TIMEOUT"
+    winner: str  # "PLAYER", "ENEMY", "TIMEOUT", or "STOPPED"
     duration_seconds: float
     player_ships: tuple[ShipCombatResult, ...]
     enemy_ships: tuple[ShipCombatResult, ...]
@@ -382,3 +382,14 @@ class MatchupConfig:
     time_mult: float = 3.0
     map_width: float = 24000.0
     map_height: float = 18000.0
+
+
+@dataclass(frozen=True)
+class Heartbeat:
+    """Parsed heartbeat from the combat harness. 6-field enriched or 2-field legacy."""
+    timestamp_ms: int
+    elapsed: float
+    player_hp: float | None = None  # None for legacy 2-field format
+    enemy_hp: float | None = None
+    player_alive: int | None = None
+    enemy_alive: int | None = None

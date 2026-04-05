@@ -86,15 +86,30 @@ public class ResultWriter {
         }
     }
 
-    /** Write heartbeat to saves/common/. Non-fatal on failure. */
-    public static void writeHeartbeat(float elapsedTime) {
+    /**
+     * Write enriched heartbeat to saves/common/. Non-fatal on failure.
+     * Format: timestamp_ms elapsed player_hp enemy_hp player_alive enemy_alive
+     */
+    public static void writeHeartbeat(float elapsedTime,
+                                       float playerHpFraction, float enemyHpFraction,
+                                       int playerAlive, int enemyAlive) {
         try {
             Global.getSettings().writeTextFileToCommon(
                     MatchupConfig.COMMON_PREFIX + "heartbeat.txt",
-                    System.currentTimeMillis() + " " + elapsedTime);
+                    formatHeartbeat(elapsedTime, playerHpFraction, enemyHpFraction,
+                                   playerAlive, enemyAlive));
         } catch (IOException e) {
             // Non-fatal
         }
+    }
+
+    /** Format heartbeat string with 6 fields. Package-visible for testing. */
+    static String formatHeartbeat(float elapsedTime,
+                                   float playerHpFraction, float enemyHpFraction,
+                                   int playerAlive, int enemyAlive) {
+        return System.currentTimeMillis() + " " + elapsedTime
+                + " " + playerHpFraction + " " + enemyHpFraction
+                + " " + playerAlive + " " + enemyAlive;
     }
 
     static JSONObject shipToJSON(ShipAPI ship, DamageTracker tracker)

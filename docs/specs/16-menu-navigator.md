@@ -34,15 +34,27 @@ Each click: `Robot.mouseMove(x, y)` → delay → `mousePress(BUTTON1_DOWN_MASK)
 
 ### Coordinate Calibration
 
-Coordinates determined empirically by tracking mouse position during manual navigation at 1920x1080 windowed on a 2560x1440 display. Robot uses absolute screen coordinates.
+**Two sets of coordinates exist:** one for Xvfb 1920x1080 fullscreen (production/headless), one for windowed on a physical display (development).
 
+**Xvfb 1920x1080 fullscreen** (current, for headless operation):
 ```java
-private static final int MISSIONS_X = 1417, MISSIONS_Y = 486;
-private static final int ARENA_X = 635, ARENA_Y = 909;
-private static final int PLAY_MISSION_X = 1311, PLAY_MISSION_Y = 941;
+private static final int MISSIONS_X = 1401, MISSIONS_Y = 453;
+private static final int ARENA_X = 619, ARENA_Y = 876;
+private static final int PLAY_MISSION_X = 1295, PLAY_MISSION_Y = 908;
 ```
 
-**Re-calibration:** On a different display or window manager, coordinates will differ. To re-calibrate: hide the queue file, launch the game, start a mouse position logger (`xdotool getmouselocation` in a loop), manually click through each menu step, record positions from the log.
+**Launcher button** (handled by Python instance manager via xdotool, NOT Robot):
+```
+Launcher "Play Starsector" button: (297, 255)
+```
+The launcher is Java Swing — xdotool synthetic events work. The game itself is LWJGL — only Robot works.
+
+**Re-calibration for new game versions or display setups:**
+1. Start Xvfb at 1920x1080: `Xvfb :100 -screen 0 1920x1080x24 -nolisten tcp`
+2. Launch game on `:100`, click Play Starsector via xdotool
+3. Screenshot: `DISPLAY=:100 import -window root /tmp/screenshot.png`
+4. Open in an image viewer with coordinate display, annotate button centers
+5. Update coordinates in `MenuNavigator.java` and instance manager
 
 ## TitleScreenPlugin
 
