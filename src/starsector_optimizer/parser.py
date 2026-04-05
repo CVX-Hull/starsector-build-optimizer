@@ -161,7 +161,7 @@ def merge_ship_hull_data(hulls: list[ShipHull], ship_dir: Path) -> list[ShipHull
             ss = SlotSize.from_str(ws.get("size", ""))
             mt = MountType.from_str(ws.get("mount", ""))
             if st is None or ss is None or mt is None:
-                logger.warning("Skipping weapon slot %s in %s (unknown type/size/mount)",
+                logger.debug("Skipping weapon slot %s in %s (unknown type/size/mount)",
                                ws.get("id"), hull.id)
                 continue
             loc = ws.get("locations", [0, 0])
@@ -209,7 +209,7 @@ def parse_weapon_csv(csv_path: Path, wpn_dir: Path) -> list[Weapon]:
 
         damage_type = DamageType.from_str(row.get("type", ""))
         if damage_type is None:
-            logger.warning("Skipping weapon %s: unknown damage type %s", wid, row.get("type"))
+            logger.debug("Skipping weapon %s: unknown damage type %s", wid, row.get("type"))
             continue
 
         # Get weapon type and size from .wpn file, fallback to inference
@@ -222,7 +222,7 @@ def parse_weapon_csv(csv_path: Path, wpn_dir: Path) -> list[Weapon]:
             size = None
 
         if weapon_type is None or size is None:
-            logger.warning("Skipping weapon %s: missing weapon_type or size", wid)
+            logger.debug("Skipping weapon %s: missing weapon_type or size", wid)
             continue
 
         weapons.append(Weapon(
@@ -308,6 +308,17 @@ def load_game_data(
         hulls={h.id: h for h in hulls if h.id},
         weapons={w.id: w for w in weapons if w.id},
         hullmods={m.id: m for m in hullmods if m.id},
+    )
+
+    # Validation summary
+    hulls_with_slots = sum(1 for h in game_data.hulls.values() if h.weapon_slots)
+    hidden_mods = sum(1 for m in game_data.hullmods.values() if m.is_hidden)
+    logger.info(
+        "Loaded game data: %d hulls (%d with weapon slots), "
+        "%d weapons, %d hullmods (%d hidden)",
+        len(game_data.hulls), hulls_with_slots,
+        len(game_data.weapons),
+        len(game_data.hullmods), hidden_mods,
     )
 
     # Validate hullmod registry against parsed data

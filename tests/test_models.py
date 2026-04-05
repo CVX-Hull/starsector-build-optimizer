@@ -338,7 +338,8 @@ class TestEffectiveStats:
             armor_rating=1000.0, hull_hitpoints=8000.0,
             shield_efficiency=0.8, shield_upkeep=0.4,
             has_shields=True, max_speed=60.0,
-            weapon_range_bonus=0.0, weapon_range_cap=None,
+            weapon_range_bonus=0.0, weapon_range_threshold=None,
+            weapon_range_compression=1.0,
             peak_performance_time=480.0,
         )
         assert stats.flux_dissipation == 700.0
@@ -348,7 +349,7 @@ class TestEffectiveStats:
 class TestScorerResult:
     def test_construction(self):
         stats = EffectiveStats(700, 11000, 1000, 8000, 0.8, 0.4,
-                               True, 60, 0, None, 480)
+                               True, 60, 0, None, 1.0, 480)
         result = ScorerResult(
             composite_score=0.75, total_dps=500.0, kinetic_dps=300.0,
             he_dps=200.0, energy_dps=0.0, flux_balance=0.7,

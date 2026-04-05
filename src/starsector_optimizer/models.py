@@ -79,6 +79,12 @@ class SlotType(_ParseableEnum):
     COMPOSITE = "COMPOSITE"
     SYNERGY = "SYNERGY"
     UNIVERSAL = "UNIVERSAL"
+    # Non-assignable slot types (player can't change these)
+    BUILT_IN = "BUILT_IN"
+    DECORATIVE = "DECORATIVE"
+    LAUNCH_BAY = "LAUNCH_BAY"
+    STATION_MODULE = "STATION_MODULE"
+    SYSTEM = "SYSTEM"
 
 
 class SlotSize(_ParseableEnum):
@@ -90,6 +96,7 @@ class SlotSize(_ParseableEnum):
 class MountType(_ParseableEnum):
     TURRET = "TURRET"
     HARDPOINT = "HARDPOINT"
+    HIDDEN = "HIDDEN"  # Non-assignable (built-in weapons only)
 
 
 class ShieldType(_ParseableEnum):
@@ -290,7 +297,8 @@ class EffectiveStats:
     has_shields: bool
     max_speed: float
     weapon_range_bonus: float
-    weapon_range_cap: float | None
+    weapon_range_threshold: float | None   # SO: ranges above this are compressed
+    weapon_range_compression: float        # SO: multiplier for range above threshold
     peak_performance_time: float
 
 

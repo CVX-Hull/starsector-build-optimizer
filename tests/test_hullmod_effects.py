@@ -90,9 +90,19 @@ class TestSlotCompatibility:
             WeaponType.BALLISTIC, WeaponType.ENERGY, WeaponType.MISSILE
         }
 
-    def test_all_slot_types_covered(self):
-        for st in SlotType:
+    def test_all_assignable_slot_types_covered(self):
+        assignable = {SlotType.BALLISTIC, SlotType.ENERGY, SlotType.MISSILE,
+                      SlotType.HYBRID, SlotType.COMPOSITE, SlotType.SYNERGY,
+                      SlotType.UNIVERSAL}
+        for st in assignable:
             assert st in SLOT_COMPATIBILITY
+
+    def test_non_assignable_not_in_compatibility(self):
+        non_assignable = {SlotType.BUILT_IN, SlotType.DECORATIVE,
+                          SlotType.LAUNCH_BAY, SlotType.STATION_MODULE,
+                          SlotType.SYSTEM}
+        for st in non_assignable:
+            assert st not in SLOT_COMPATIBILITY
 
 
 # --- HULLMOD_EFFECTS registry tests ---
@@ -162,7 +172,7 @@ class TestComputeEffectiveStatsNoMods:
     def test_no_range_bonus(self):
         stats = compute_effective_stats(_hull(), _build(), _game_data())
         assert stats.weapon_range_bonus == 0.0
-        assert stats.weapon_range_cap is None
+        assert stats.weapon_range_threshold is None
 
 
 class TestComputeEffectiveStatsWithMods:
@@ -197,11 +207,11 @@ class TestComputeEffectiveStatsWithMods:
         expected = (700.0 + 10 * DISSIPATION_PER_VENT) * 2.0
         assert pytest.approx(stats.flux_dissipation) == expected
 
-    def test_safety_overrides_range_cap(self):
+    def test_safety_overrides_range_compression(self):
         build = _build(hullmods=frozenset(["safetyoverrides"]))
         stats = compute_effective_stats(_hull(), build, _game_data())
-        assert stats.weapon_range_cap is not None
-        assert stats.weapon_range_cap == pytest.approx(450.0, abs=50)
+        assert stats.weapon_range_threshold == pytest.approx(450.0)
+        assert stats.weapon_range_compression == pytest.approx(0.25)
 
     def test_safety_overrides_ppt(self):
         hull = _hull(peak_cr_sec=480.0)
@@ -260,7 +270,7 @@ class TestGetEffectiveWeaponRange:
                    200, 0, DamageType.KINETIC, 0, 200, 0, 700, 10,
                    0, 0.75, 1, 0, 0, 0, 500, 30, [], [])
         stats = EffectiveStats(700, 11000, 1000, 8000, 0.8, 0.4,
-                               True, 60, 0.0, None, 480)
+                               True, 60, 0.0, None, 1.0, 480)
         assert get_effective_weapon_range(w, stats) == 700.0
 
     def test_with_itu(self):
@@ -269,17 +279,28 @@ class TestGetEffectiveWeaponRange:
                    200, 0, DamageType.KINETIC, 0, 200, 0, 700, 10,
                    0, 0.75, 1, 0, 0, 0, 500, 30, [], [])
         stats = EffectiveStats(700, 11000, 1000, 8000, 0.8, 0.4,
-                               True, 60, 200.0, None, 480)
+                               True, 60, 200.0, None, 1.0, 480)
         assert get_effective_weapon_range(w, stats) == 900.0
 
-    def test_with_so_cap(self):
+    def test_with_so_compression(self):
+        """SO compresses ranges above 450: (700-450)*0.25+450 = 512.5."""
         from starsector_optimizer.models import Weapon, SlotSize, WeaponType, DamageType
         w = Weapon("test", "Test", SlotSize.MEDIUM, WeaponType.BALLISTIC,
                    200, 0, DamageType.KINETIC, 0, 200, 0, 700, 10,
                    0, 0.75, 1, 0, 0, 0, 500, 30, [], [])
         stats = EffectiveStats(700, 11000, 1000, 8000, 0.8, 0.4,
-                               True, 60, 0.0, 450.0, 480)
-        assert get_effective_weapon_range(w, stats) <= 450.0
+                               True, 60, 0.0, 450.0, 0.25, 480)
+        assert get_effective_weapon_range(w, stats) == pytest.approx(512.5)
+
+    def test_so_short_range_unaffected(self):
+        """Weapons at or below threshold are unaffected by SO."""
+        from starsector_optimizer.models import Weapon, SlotSize, WeaponType, DamageType
+        w = Weapon("test", "Test", SlotSize.MEDIUM, WeaponType.BALLISTIC,
+                   200, 0, DamageType.KINETIC, 0, 200, 0, 400, 10,
+                   0, 0.75, 1, 0, 0, 0, 500, 30, [], [])
+        stats = EffectiveStats(700, 11000, 1000, 8000, 0.8, 0.4,
+                               True, 60, 0.0, 450.0, 0.25, 480)
+        assert get_effective_weapon_range(w, stats) == 400.0
 
 
 # --- Constraint constants tests ---

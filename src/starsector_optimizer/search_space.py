@@ -52,11 +52,13 @@ def get_eligible_hullmods(
 
 def build_search_space(hull: ShipHull, game_data: GameData) -> SearchSpace:
     """Build the optimization search space for a given hull."""
-    # Weapon options per slot (excluding built-in weapon slots)
+    # Weapon options per slot (excluding built-in and non-assignable slots)
     weapon_options: dict[str, list[str]] = {}
     for slot in hull.weapon_slots:
         if slot.id in hull.built_in_weapons:
             continue
+        if slot.slot_type not in SLOT_COMPATIBILITY:
+            continue  # SYSTEM, BUILT_IN, DECORATIVE, LAUNCH_BAY, etc.
         compatible = get_compatible_weapons(slot, game_data.weapons)
         weapon_options[slot.id] = ["empty"] + [w.id for w in compatible]
 

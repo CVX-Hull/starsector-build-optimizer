@@ -10,11 +10,11 @@ All vanilla data lives under the game installation's `data/` directory. Mods fol
 
 | File | Path | Format | Records (0.98a) |
 |---|---|---|---|
-| Ship stats | `data/hulls/ship_data.csv` | CSV (56 columns) | 211 rows |
-| Ship geometry | `data/hulls/*.ship` | Loose JSON | 203 files |
-| Weapon stats | `data/weapons/weapon_data.csv` | CSV (49 columns) | 205 rows |
+| Ship stats | `data/hulls/ship_data.csv` | CSV (56 columns) | ~200 hulls parsed |
+| Ship geometry | `data/hulls/*.ship` | Loose JSON | ~200 files |
+| Weapon stats | `data/weapons/weapon_data.csv` | CSV (49 columns) | ~205 rows (~146 parsed) |
 | Weapon visuals | `data/weapons/*.weapon` | Loose JSON | 1 per weapon |
-| Hullmod definitions | `data/hullmods/hull_mods.csv` | CSV (20 columns) | 285 rows |
+| Hullmod definitions | `data/hullmods/hull_mods.csv` | CSV (20 columns) | ~285 rows (~130 parsed) |
 | Ship systems | `data/shipsystems/ship_systems.csv` | CSV | ~30 systems |
 | System behavior | `data/shipsystems/*.system` | Loose JSON | 1 per system |
 | Pre-built loadouts | `data/variants/*.variant` | Loose JSON | 91 variants |
@@ -40,7 +40,7 @@ Key columns for optimization:
 |---|---|---|---|
 | `name` | string | Display name | "Eagle" |
 | `id` | string | Internal ID (used in variants) | "eagle" |
-| `designation` | string | Ship role | "Cruiser" |
+| `designation` | string | Role description (e.g., "Battleship", "Carrier", "Advanced Gunship") | "Cruiser" |
 | `tech/manufacturer` | string | Tech line / faction | "Midline" |
 | `system id` | string | Ship system reference | "maneuveringjets" |
 | `fleet pts` | int | Deployment points | 15 |
@@ -85,6 +85,7 @@ Key columns for optimization:
 - `shield efficiency` lower = better (0.6 means 0.6 flux per 1 damage blocked)
 - `peak CR sec` combined with `CR loss/sec` determines combat endurance
 - Ships with `shield type = PHASE` use phase cloak instead of shields
+- `designation` is a free-form role string (e.g., "Battleship", "Carrier", "Advanced Gunship"), NOT hull size. Hull size (FRIGATE, DESTROYER, CRUISER, CAPITAL_SHIP) comes from the `hullSize` field in `.ship` JSON files.
 
 ---
 
@@ -172,7 +173,7 @@ Key columns:
 | `ammo` | int | Ammunition count (0=unlimited) | 0 |
 | `ammo/sec` | float | Ammo regeneration rate | 0 |
 | `reload size` | int | Ammo per reload | 0 |
-| `type` | string | BALLISTIC, ENERGY, MISSILE | "BALLISTIC" |
+| `type` | string | Damage type: KINETIC, HIGH_EXPLOSIVE, ENERGY, FRAGMENTATION | "KINETIC" |
 | `energy/shot` | float | Flux cost per shot | 200 |
 | `energy/second` | float | Flux cost per second (beams) | — |
 | `chargeup` | float | Time before first shot (sec) | 0 |
@@ -203,6 +204,10 @@ Key columns:
 | `customAncillaryHL` | string | Additional highlight text | — |
 | `noDPSInTooltip` | bool | Hide DPS in tooltip | false |
 | `number` | int | Sort order | — |
+
+### Weapon Mount Type
+
+**Important:** The `type` column in weapon_data.csv is the **damage type** (KINETIC, HIGH_EXPLOSIVE, ENERGY, FRAGMENTATION), NOT the weapon mount type. The weapon mount type (BALLISTIC, ENERGY, MISSILE) that determines slot compatibility is defined in the weapon's `.wpn` file (e.g., `data/weapons/heavymauler.wpn`) under the `"type"` field. The parser must read `.wpn` files to determine which slots a weapon can fit into.
 
 ### Derived Metrics (Computed During Parsing)
 
@@ -292,7 +297,7 @@ Pre-built ship loadouts. The optimizer generates these to define candidate build
     "hullId": "eagle",
     "hullMods": [
         "heavyarmor",
-        "hardenedshields"
+        "hardenedshieldemitter"
     ],
     "permaMods": [],
     "sMods": [],
@@ -359,8 +364,8 @@ Or simply: all weapons on autofire in individual groups (safe default for AI-con
 
 Mods can add, modify, or replace any game data. Load order:
 
-1. Load vanilla data from `starsector-core/`
-2. For each enabled mod (from `starsector/mods/`):
+1. Load vanilla data from the game's `data/` directory (project path: `game/starsector/data/`)
+2. For each enabled mod (from `mods/` under the game root):
    - If mod has `data/hulls/ship_data.csv`, merge/override entries
    - If mod has `data/weapons/weapon_data.csv`, merge/override entries
    - If mod has new `*.ship` files, add to hull pool

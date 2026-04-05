@@ -46,7 +46,7 @@ Three design philosophies define ship characteristics:
 
 ### Vanilla Ship Count
 
-- ~74 base hulls (plus faction/LP variants with different built-in hullmods and modified weapon slots)
+- ~200 hulls in 0.98a ship_data.csv (including faction/LP variants with different built-in hullmods and modified weapon slots)
 - Hull stats defined in `data/hulls/ship_data.csv`
 - Slot layouts defined in `data/hulls/*.ship` (JSON)
 
@@ -322,7 +322,7 @@ Minimum durations by hull size: Frigate 4s, Destroyer 6s, Cruiser 8s, Capital 10
 
 ### Installable Hullmod Count
 
-~47 standard + logistics hullmods available for installation (~37 standard, ~11 logistics). ~112 total entries in data including built-in and d-mods.
+~130 hullmods parsed after filtering non-installable entries. ~285 total CSV rows in hull_mods.csv including built-in, d-mods, and other non-installable entries.
 
 ### Hullmod OP Cost Scaling
 

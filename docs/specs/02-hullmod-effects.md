@@ -38,7 +38,8 @@ class HullModEffect:
     dissipation_mult: float = 1.0              # multiplier on flux dissipation
     speed_bonus: dict[HullSize, float]         # flat speed added by hull size
     range_bonus: float = 0.0                   # flat weapon range bonus
-    range_cap: float | None = None             # weapon range hard cap
+    range_threshold: float | None = None       # SO: ranges above this are compressed
+    range_compression: float = 1.0             # SO: multiplier for excess range (0.25 = 75% reduction)
     hull_hp_mult: float = 1.0                  # multiplier on hull hitpoints
     armor_mult: float = 1.0                    # multiplier on armor rating
     removes_shields: bool = False
@@ -54,7 +55,7 @@ class HullModEffect:
 |---|---|---|
 | `heavyarmor` | Heavy Armor | armor_flat_bonus: F=150, D=300, C=400, Cap=500 |
 | `hardenedshieldemitter` | Hardened Shields | shield_efficiency_mult=0.80 |
-| `safetyoverrides` | Safety Overrides | dissipation_mult=2.0, speed_bonus: F=50,D=30,C=20, range_cap=450, ppt_mult=0.333 |
+| `safetyoverrides` | Safety Overrides | dissipation_mult=2.0, speed_bonus: F=50,D=30,C=20, range_threshold=450/compression=0.25, ppt_mult=0.333 |
 | `shield_shunt` | Shield Shunt | removes_shields=True, armor_mult=1.15 |
 | `reinforcedhull` | Reinforced Bulkheads | hull_hp_mult=1.40 |
 | `stabilizedshieldemitter` | Stabilized Shields | shield_upkeep_mult=0.50 |

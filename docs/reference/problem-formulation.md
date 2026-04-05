@@ -87,8 +87,8 @@ Enforced by construction in the search space — each slot only offers compatibl
 
 ### C3: Hullmod Incompatibilities (Mutual Exclusion)
 ```
-h_shield_shunt + h_makeshift_shield ≤ 1
-h_front_conversion + h_omni_conversion ≤ 1
+h_shield_shunt + h_frontshield ≤ 1
+h_frontemitter + h_adaptiveshields ≤ 1
 h_safety_overrides + h_flux_shunt ≤ 1
 h_safety_overrides = 0  if hull_size == Capital
 ```
@@ -183,7 +183,7 @@ The OP budget eliminates the vast majority of combinations:
 ### Pruning Factors
 
 1. **OP budget**: Eliminates ~99.9% of naive combinations (the dominant pruner)
-2. **Slot type restrictions**: Reduces per-slot options from ~129 to ~5-50
+2. **Slot type restrictions**: Reduces per-slot options from ~200+ to ~5-50
 3. **Hullmod incompatibilities**: Eliminates a few specific combinations
 4. **SO range penalty**: Makes long-range weapons on SO builds pointless
 5. **Built-in weapons/hullmods**: Some slots are pre-filled

@@ -158,7 +158,7 @@ has_missiles = OrConjunction(
 # Shield hullmods forbidden with Shield Shunt
 ForbiddenAndConjunction(
     ForbiddenEqualsClause(hullmod_shield_shunt, True),
-    ForbiddenEqualsClause(hullmod_hardened_shields, True)
+    ForbiddenEqualsClause(hullmod_hardenedshieldemitter, True)
 )
 ```
 
@@ -326,7 +326,7 @@ The Python orchestrator writes `.variant` files for each candidate build:
     "displayName": "Optimizer Build #42",
     "fluxVents": 15,
     "fluxCapacitors": 10,
-    "hullMods": ["heavyarmor", "hardenedshields"],
+    "hullMods": ["heavyarmor", "hardenedshieldemitter"],
     "weaponGroups": [
         {
             "autofire": true,
@@ -360,7 +360,7 @@ DISPLAY=:${10+i}
 WORKDIR=workdir/instance_${i}/
 
 # Symlink game install, copy per-instance data
-ln -s /path/to/starsector-core ${WORKDIR}/starsector-core
+ln -s /path/to/starsector ${WORKDIR}/starsector
 cp -r mod_data ${WORKDIR}/mods/build-optimizer/
 
 # Launch Xvfb

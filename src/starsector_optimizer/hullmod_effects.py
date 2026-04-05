@@ -51,7 +51,8 @@ class HullModEffect:
     dissipation_mult: float = 1.0
     speed_bonus: dict[HullSize, float] = field(default_factory=dict)
     range_bonus: float = 0.0
-    range_cap: float | None = None
+    range_threshold: float | None = None   # SO: ranges above this are compressed
+    range_compression: float = 1.0         # SO: multiplier for range above threshold (0.25 = 75% reduction)
     hull_hp_mult: float = 1.0
     armor_mult: float = 1.0
     removes_shields: bool = False
@@ -80,7 +81,8 @@ HULLMOD_EFFECTS: dict[str, HullModEffect] = {
             HullSize.DESTROYER: 30,
             HullSize.CRUISER: 20,
         },
-        range_cap=450.0,
+        range_threshold=450.0,
+        range_compression=0.25,  # (range - 450) * 0.25 + 450
         ppt_mult=1.0 / 3.0,
     ),
     "shield_shunt": HullModEffect(
@@ -144,7 +146,8 @@ def compute_effective_stats(
     has_shields = hull.shield_type.value not in ("NONE", "PHASE")
     speed = hull.max_speed
     range_bonus = 0.0
-    range_cap: float | None = None
+    range_threshold: float | None = None
+    range_compression: float = 1.0
     ppt = hull.peak_cr_sec
 
     # Collect effects from installed hullmods
@@ -182,11 +185,9 @@ def compute_effective_stats(
             speed += effect.speed_bonus[hull.hull_size]
         if effect.range_bonus != 0.0:
             range_bonus += effect.range_bonus
-        if effect.range_cap is not None:
-            if range_cap is None:
-                range_cap = effect.range_cap
-            else:
-                range_cap = min(range_cap, effect.range_cap)
+        if effect.range_threshold is not None:
+            range_threshold = effect.range_threshold
+            range_compression = effect.range_compression
 
     return EffectiveStats(
         flux_dissipation=dissipation,
@@ -198,16 +199,23 @@ def compute_effective_stats(
         has_shields=has_shields,
         max_speed=speed,
         weapon_range_bonus=range_bonus,
-        weapon_range_cap=range_cap,
+        weapon_range_threshold=range_threshold,
+        weapon_range_compression=range_compression,
         peak_performance_time=ppt,
     )
 
 
 def get_effective_weapon_range(weapon: Weapon, effective_stats: EffectiveStats) -> float:
-    """Get weapon's effective range after hullmod modifications."""
+    """Get weapon's effective range after hullmod modifications.
+
+    Safety Overrides compresses ranges above threshold:
+    effective = (base - threshold) * compression + threshold
+    E.g., 700 range with SO: (700 - 450) * 0.25 + 450 = 512.5
+    """
     r = weapon.range + effective_stats.weapon_range_bonus
-    if effective_stats.weapon_range_cap is not None:
-        r = min(r, effective_stats.weapon_range_cap)
+    if effective_stats.weapon_range_threshold is not None and r > effective_stats.weapon_range_threshold:
+        excess = r - effective_stats.weapon_range_threshold
+        r = effective_stats.weapon_range_threshold + excess * effective_stats.weapon_range_compression
     return r
 
 

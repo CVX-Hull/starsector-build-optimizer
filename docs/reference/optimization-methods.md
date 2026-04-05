@@ -79,7 +79,7 @@ params = [
               categories=["empty", "heavymauler", "assaultchaingun", ...]),
     Parameter("weapon_slot_2", ParameterType.CATEGORICAL, ...),
     Parameter("hullmod_heavyarmor", ParameterType.BINARY),
-    Parameter("hullmod_hardenedshields", ParameterType.BINARY),
+    Parameter("hullmod_hardenedshieldemitter", ParameterType.BINARY),
     Parameter("vents", ParameterType.INTEGER, lower=0, upper=30),
     Parameter("caps", ParameterType.INTEGER, lower=0, upper=30),
 ]
@@ -154,8 +154,8 @@ cs.add_hyperparameter(ws1)
 
 # Hullmods
 hm_heavy_armor = CategoricalHyperparameter("hm_heavyarmor", [True, False])
-hm_shield_shunt = CategoricalHyperparameter("hm_shieldshunt", [True, False])
-hm_hardened_shields = CategoricalHyperparameter("hm_hardenedshields", [True, False])
+hm_shield_shunt = CategoricalHyperparameter("hm_shield_shunt", [True, False])
+hm_hardened_shields = CategoricalHyperparameter("hm_hardenedshieldemitter", [True, False])
 cs.add_hyperparameters([hm_heavy_armor, hm_shield_shunt, hm_hardened_shields])
 
 # Conditional: hardened shields only without shield shunt
@@ -389,8 +389,8 @@ Handled at search space level (ConfigSpace forbidden clauses) or by post-generat
 
 ```python
 INCOMPATIBLE_PAIRS = [
-    ("shieldshunt", "makeshiftshieldgenerator"),
-    ("shieldconversion_front", "shieldconversion_omni"),
+    ("shield_shunt", "frontshield"),
+    ("frontemitter", "adaptiveshields"),
     ("safetyoverrides", "fluxshunt"),
 ]
 
