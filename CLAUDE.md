@@ -1,13 +1,20 @@
 # Starsector Ship Build Optimizer
 
-Automated ship build discovery for Starsector using Bayesian optimization and combat simulation. Phase 1 implements the data layer (game data parsing, search space definition, constraint repair, heuristic scoring, variant generation).
+Automated ship build discovery for Starsector using Bayesian optimization and combat simulation.
+
+- **Phase 1** (complete): Data layer — game data parsing, search space, constraint repair, heuristic scoring, variant generation.
+- **Phase 2** (in progress): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
 
 ## Commands
 
-- Run tests: `uv run pytest tests/ -v`
+- Run Python tests: `uv run pytest tests/ -v`
 - Run single test file: `uv run pytest tests/test_parser.py -v`
 - Run single test: `uv run pytest tests/test_models.py::test_weapon_sustained_dps -v`
+- Build combat harness: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew jar`
+- Run Java tests: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew test`
+- Deploy mod: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew deploy`
 - Game data location: `game/starsector/data/` (gitignored, not in repo)
+- See `combat-harness/CLAUDE.md` for Java-specific instructions
 
 ## Workflow — DDD + TDD
 
@@ -44,17 +51,30 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 ## Project Layout
 
 ```
-src/starsector_optimizer/
-├── models.py           # Dataclasses + enums (ShipHull, Weapon, HullMod, Build, etc.)
-├── hullmod_effects.py  # Game constants, hullmod effect registry, compute_effective_stats()
-├── parser.py           # CSV + loose JSON → model objects
-├── search_space.py     # Per-hull weapon/hullmod compatibility
-├── repair.py           # Constraint enforcement (optimizer→domain boundary)
-├── scorer.py           # Heuristic scoring → ScorerResult
-├── variant.py          # Build → .variant JSON
-└── calibration.py      # Random build generation + feature extraction
+src/starsector_optimizer/          # Phase 1: Python data layer
+├── models.py                      # Dataclasses + enums (ShipHull, Weapon, Build, etc.)
+├── hullmod_effects.py             # Game constants, hullmod effect registry
+├── parser.py                      # CSV + loose JSON → model objects
+├── search_space.py                # Per-hull weapon/hullmod compatibility
+├── repair.py                      # Constraint enforcement (optimizer→domain boundary)
+├── scorer.py                      # Heuristic scoring → ScorerResult
+├── variant.py                     # Build → .variant JSON
+└── calibration.py                 # Random build generation + feature extraction
+
+combat-harness/                    # Phase 2: Java combat harness mod
+├── CLAUDE.md                      # Java-specific instructions
+├── build.gradle.kts               # Gradle build
+├── src/main/java/starsector/combatharness/
+│   ├── MatchupConfig.java         # matchup.json parser
+│   ├── DamageTracker.java         # DamageListener — per-ship damage accumulation
+│   ├── ResultWriter.java          # Atomic result.json output
+│   ├── CombatHarnessPlugin.java   # EveryFrameCombatPlugin — combat monitoring
+│   └── CombatHarnessModPlugin.java # BaseModPlugin — mod entry point
+└── mod/                           # Deployed to game/starsector/mods/combat-harness/
+    ├── mod_info.json
+    └── data/missions/optimizer_arena/MissionDefinition.java
 
 docs/
-├── specs/              # DDD module specifications (drive implementation)
-└── reference/          # Background research and game mechanics reference
+├── specs/                         # DDD module specifications (drive implementation)
+└── reference/                     # Background research and game mechanics reference
 ```

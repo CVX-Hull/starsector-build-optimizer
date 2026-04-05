@@ -1,15 +1,19 @@
-"""Starsector Ship Build Optimizer — Phase 1: Data Layer + Heuristic Scorer."""
+"""Starsector Ship Build Optimizer."""
 
 from .models import (
     Build,
+    CombatResult,
+    DamageBreakdown,
     DamageType,
     EffectiveStats,
     GameData,
     HullMod,
     HullSize,
+    MatchupConfig,
     MountType,
     ScorerResult,
     ShieldType,
+    ShipCombatResult,
     ShipHull,
     SlotSize,
     SlotType,
@@ -26,8 +30,9 @@ from .variant import generate_variant, write_variant_file, load_variant_file
 from .calibration import generate_diverse_builds, compute_build_features
 
 __all__ = [
-    "Build", "DamageType", "EffectiveStats", "GameData", "HullMod", "HullSize",
-    "MountType", "ScorerResult", "ShieldType", "ShipHull", "SlotSize", "SlotType",
+    "Build", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
+    "GameData", "HullMod", "HullSize", "MatchupConfig", "MountType", "ScorerResult",
+    "ShieldType", "ShipCombatResult", "ShipHull", "SlotSize", "SlotType",
     "Weapon", "WeaponSlot", "WeaponType",
     "compute_effective_stats", "HULLMOD_EFFECTS",
     "load_game_data",

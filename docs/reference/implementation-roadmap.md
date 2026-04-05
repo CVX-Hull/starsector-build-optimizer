@@ -19,10 +19,13 @@ Each phase is independently useful and can be shipped/tested before proceeding.
 
 ---
 
-## Phase 1: Data Layer + Heuristic Scorer
+## Phase 1: Data Layer + Heuristic Scorer ✓ COMPLETE
 
 ### Goal
 Parse Starsector game data, build constraint-aware search spaces, implement heuristic scoring, and generate .variant files.
+
+### Status
+Complete. 210 tests passing across 9 test files. All modules implemented with DDD+TDD.
 
 ### Dependencies
 - Python 3.10+
@@ -78,53 +81,50 @@ Parse Starsector game data, build constraint-aware search spaces, implement heur
 ## Phase 2: Java Combat Harness Mod
 
 ### Goal
-A Starsector mod that runs automated combat matchups and exports results as JSON.
+A Starsector mod that runs one automated AI-vs-AI combat matchup per game launch and exports results as JSON. Phase 3 (Instance Manager) handles orchestration and parallelism.
+
+### Design Decision: One Matchup Per Launch
+Starsector's mission system doesn't support chaining missions programmatically. There's no API to navigate title screen → mission → next mission. Rather than building a fragile queue processor, Phase 2 handles one matchup per launch via a `matchup.json` config file.
 
 ### Dependencies
-- Java 17 (Starsector 0.98a runtime)
+- Java 17 (Starsector 0.98a bundled JRE)
 - Starsector API (starfarer.api.jar from game installation)
-- Starsector game installation
+- Gradle build system
+- Starsector game installation (activated)
 
 ### Deliverables
 
-1. **Mod skeleton**
-   - mod_info.json
-   - Settings registration for EveryFrameCombatPlugin
-   - Build system (Gradle or Maven compiling against starfarer.api.jar)
+1. **Mod skeleton** (`combat-harness/`)
+   - Gradle project with starfarer.api.jar as compileOnly dependency
+   - mod_info.json, BaseModPlugin, mission registration
+   - Deploy task copies to game/starsector/mods/
 
-2. **Queue processor**
-   - Reads matchup queue from JSON config file
-   - Each matchup: player variant IDs, enemy variant IDs, time limit, replicate count
-   - Auto-starts missions from queue
+2. **Matchup config parser** (MatchupConfig.java)
+   - Reads matchup.json: player/enemy variant IDs, time limit, time multiplier, map size
+   - Validation with sane defaults
 
-3. **Combat harness plugin** (EveryFrameCombatPlugin)
-   - On init: set time multiplier, register damage listener
-   - On advance: check combat end / time limit
-   - On combat end: collect results, write to file, advance to next matchup
-   - Heartbeat file (updated each frame) for instance health monitoring
+3. **Combat harness plugin** (CombatHarnessPlugin.java — EveryFrameCombatPlugin)
+   - init: set time multiplier, register DamageTracker
+   - advance: check combat end / time limit, write results, System.exit(0)
+   - Heartbeat file for Phase 3 health monitoring
 
-4. **Damage tracker** (DamageListener)
-   - Per-weapon damage tracking (kinetic, HE, energy, frag, EMP)
-   - Per-ship: hull remaining, armor remaining, flux stats
-   - Total damage dealt/received by fleet side
-   - Overload count and duration
-   - Time-to-kill
+4. **Damage tracker** (DamageTracker.java — DamageListener)
+   - Per-ship damage accumulation (shield, armor, hull, EMP — dealt and taken)
+   - Source identification via instanceof (ShipAPI, DamagingProjectileAPI, BeamAPI)
 
-5. **Result exporter**
-   - Write JSON result file per matchup/replicate
-   - Include all tracked metrics
-   - Atomic write (write to temp, rename) to prevent partial reads
+5. **Result writer** (ResultWriter.java)
+   - Atomic JSON write (write .tmp, rename)
+   - Per-ship stats: hull/armor fraction, flux, disabled weapons, damage dealt/taken
+   - Aggregate stats: ships destroyed/retreated per side
 
-6. **Dev mode integration**
-   - F8 to reload data files for quick iteration
-   - Configurable time multiplier
-   - Toggle between single matchup and batch mode
+6. **Mission definition** (MissionDefinition.java — Janino script)
+   - Reads matchup.json, sets up both fleets with AI control
+   - Attaches CombatHarnessPlugin
 
 ### Testing
-- Manual: load mod, enter simulator, verify combat runs and results appear
-- Verify damage totals match combat log
-- Test with known matchup outcomes (e.g., Paragon vs Lasher should always win)
-- Stress test: queue 100 matchups, verify all complete
+- JUnit 5 for MatchupConfig, DamageTracker, ResultWriter (JSON parsing, accumulation, serialization)
+- Manual game launch: Optimizer Arena mission → combat runs → result.json appears → game exits
+- Known matchup sanity: Onslaught vs Lasher should always have PLAYER win
 
 ---
 

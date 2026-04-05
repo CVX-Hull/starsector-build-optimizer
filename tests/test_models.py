@@ -4,14 +4,18 @@ import pytest
 
 from starsector_optimizer.models import (
     Build,
+    CombatResult,
+    DamageBreakdown,
     DamageType,
     EffectiveStats,
     GameData,
     HullMod,
     HullSize,
+    MatchupConfig,
     MountType,
     ScorerResult,
     ShieldType,
+    ShipCombatResult,
     ShipHull,
     SlotSize,
     SlotType,
@@ -369,3 +373,134 @@ class TestGameData:
     def test_construction(self):
         gd = GameData(hulls={}, weapons={}, hullmods={})
         assert len(gd.hulls) == 0
+
+
+# --- Phase 2: Combat protocol dataclass tests ---
+
+
+class TestDamageBreakdown:
+    def test_defaults_are_zero(self):
+        db = DamageBreakdown()
+        assert db.shield == 0.0
+        assert db.armor == 0.0
+        assert db.hull == 0.0
+        assert db.emp == 0.0
+
+    def test_construction(self):
+        db = DamageBreakdown(shield=100.0, armor=200.0, hull=50.0, emp=10.0)
+        assert db.shield == 100.0
+        assert db.armor == 200.0
+
+    def test_frozen(self):
+        db = DamageBreakdown()
+        with pytest.raises(AttributeError):
+            db.shield = 1.0
+
+
+class TestShipCombatResult:
+    def test_construction(self):
+        scr = ShipCombatResult(
+            fleet_member_id="0",
+            variant_id="eagle_opt_test",
+            hull_id="eagle",
+            destroyed=False,
+            hull_fraction=0.82,
+            armor_fraction=0.45,
+            cr_remaining=0.61,
+            peak_time_remaining=142.0,
+            disabled_weapons=0,
+            flameouts=0,
+            damage_dealt=DamageBreakdown(shield=1000.0, armor=500.0),
+            damage_taken=DamageBreakdown(hull=200.0),
+            overload_count=1,
+        )
+        assert scr.hull_id == "eagle"
+        assert not scr.destroyed
+        assert scr.damage_dealt.shield == 1000.0
+        assert scr.damage_taken.hull == 200.0
+        assert scr.overload_count == 1
+
+    def test_frozen(self):
+        scr = ShipCombatResult(
+            fleet_member_id="0", variant_id="x", hull_id="x",
+            destroyed=False, hull_fraction=1.0, armor_fraction=1.0,
+            cr_remaining=1.0, peak_time_remaining=0.0,
+            disabled_weapons=0, flameouts=0,
+            damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+            overload_count=0,
+        )
+        with pytest.raises(AttributeError):
+            scr.destroyed = True
+
+
+class TestCombatResult:
+    def test_construction(self):
+        ship = ShipCombatResult(
+            fleet_member_id="0", variant_id="eagle_test", hull_id="eagle",
+            destroyed=False, hull_fraction=0.9, armor_fraction=0.7,
+            cr_remaining=0.5, peak_time_remaining=100.0,
+            disabled_weapons=0, flameouts=0,
+            damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+            overload_count=0,
+        )
+        cr = CombatResult(
+            matchup_id="eval_001",
+            winner="PLAYER",
+            duration_seconds=87.3,
+            player_ships=(ship,),
+            enemy_ships=(),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=1,
+        )
+        assert cr.matchup_id == "eval_001"
+        assert cr.winner == "PLAYER"
+        assert len(cr.player_ships) == 1
+        assert cr.enemy_ships_destroyed == 1
+
+    def test_frozen(self):
+        cr = CombatResult(
+            matchup_id="x", winner="PLAYER", duration_seconds=0.0,
+            player_ships=(), enemy_ships=(),
+            player_ships_destroyed=0, enemy_ships_destroyed=0,
+        )
+        with pytest.raises(AttributeError):
+            cr.winner = "ENEMY"
+
+
+class TestMatchupConfig:
+    def test_construction_with_defaults(self):
+        mc = MatchupConfig(
+            matchup_id="eval_001",
+            player_variants=("eagle_test",),
+            enemy_variants=("dominator_Standard",),
+        )
+        assert mc.matchup_id == "eval_001"
+        assert mc.player_flagship is None
+        assert mc.time_limit_seconds == 300.0
+        assert mc.time_mult == 3.0
+        assert mc.map_width == 24000.0
+        assert mc.map_height == 18000.0
+
+    def test_construction_with_all_fields(self):
+        mc = MatchupConfig(
+            matchup_id="eval_002",
+            player_variants=("eagle_test", "wolf_test"),
+            enemy_variants=("dominator_Standard",),
+            player_flagship="eagle_test",
+            time_limit_seconds=120.0,
+            time_mult=5.0,
+            map_width=16000.0,
+            map_height=12000.0,
+        )
+        assert len(mc.player_variants) == 2
+        assert mc.player_flagship == "eagle_test"
+        assert mc.time_mult == 5.0
+
+    def test_frozen(self):
+        mc = MatchupConfig(
+            matchup_id="x",
+            player_variants=("a",),
+            enemy_variants=("b",),
+        )
+        with pytest.raises(AttributeError):
+            mc.time_mult = 5.0

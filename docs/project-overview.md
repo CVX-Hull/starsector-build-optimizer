@@ -28,6 +28,8 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 
 ### Module Specifications (DDD)
 
+**Phase 1: Python Data Layer** (complete)
+
 | Spec | Module | Contents |
 |---|---|---|
 | [01-data-models](./specs/01-data-models.md) | `models.py` | Dataclasses, enums, type definitions |
@@ -38,6 +40,17 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | [06-heuristic-scorer](./specs/06-heuristic-scorer.md) | `scorer.py` | Static build quality metrics |
 | [07-variant-generator](./specs/07-variant-generator.md) | `variant.py` | .variant file generation |
 | [08-calibration-pipeline](./specs/08-calibration-pipeline.md) | `calibration.py` | Build sampling + weight fitting |
+
+**Phase 2: Java Combat Harness Mod** (complete)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [09-combat-protocol](./specs/09-combat-protocol.md) | Python ↔ Java | JSON schemas, workdir layout |
+| [10-matchup-config](./specs/10-matchup-config.md) | `MatchupConfig.java` | matchup.json parsing + validation |
+| [11-damage-tracker](./specs/11-damage-tracker.md) | `DamageTracker.java` | DamageListener, per-ship accumulation |
+| [12-result-writer](./specs/12-result-writer.md) | `ResultWriter.java` | Atomic result.json output |
+| [13-combat-harness-plugin](./specs/13-combat-harness-plugin.md) | `CombatHarnessPlugin.java` | EveryFrameCombatPlugin |
+| [14-mod-skeleton](./specs/14-mod-skeleton.md) | Mod files | ModPlugin, MissionDefinition, mod_info |
 
 ### Reference Documents
 

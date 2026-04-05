@@ -326,3 +326,58 @@ class GameData:
     hulls: dict[str, ShipHull]
     weapons: dict[str, Weapon]
     hullmods: dict[str, HullMod]
+
+
+# --- Phase 2: Combat protocol dataclasses ---
+
+
+@dataclass(frozen=True)
+class DamageBreakdown:
+    """Damage breakdown by target layer (shield/armor/hull/emp)."""
+    shield: float = 0.0
+    armor: float = 0.0
+    hull: float = 0.0
+    emp: float = 0.0
+
+
+@dataclass(frozen=True)
+class ShipCombatResult:
+    """Per-ship combat result from a single matchup."""
+    fleet_member_id: str
+    variant_id: str
+    hull_id: str
+    destroyed: bool
+    hull_fraction: float
+    armor_fraction: float
+    cr_remaining: float
+    peak_time_remaining: float
+    disabled_weapons: int
+    flameouts: int
+    damage_dealt: DamageBreakdown
+    damage_taken: DamageBreakdown
+    overload_count: int
+
+
+@dataclass(frozen=True)
+class CombatResult:
+    """Full result from a single combat matchup."""
+    matchup_id: str
+    winner: str  # "PLAYER", "ENEMY", or "TIMEOUT"
+    duration_seconds: float
+    player_ships: tuple[ShipCombatResult, ...]
+    enemy_ships: tuple[ShipCombatResult, ...]
+    player_ships_destroyed: int
+    enemy_ships_destroyed: int
+
+
+@dataclass(frozen=True)
+class MatchupConfig:
+    """Configuration for a single combat matchup."""
+    matchup_id: str
+    player_variants: tuple[str, ...]
+    enemy_variants: tuple[str, ...]
+    player_flagship: str | None = None
+    time_limit_seconds: float = 300.0
+    time_mult: float = 3.0
+    map_width: float = 24000.0
+    map_height: float = 18000.0

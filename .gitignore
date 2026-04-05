@@ -18,5 +18,13 @@ game/
 .DS_Store
 Thumbs.db
 
+# Gradle
+combat-harness/.gradle/
+combat-harness/build/
+combat-harness/mod/jars/*.jar
+combat-harness/mod/workdir/matchup.json
+combat-harness/mod/workdir/result.json
+combat-harness/mod/workdir/heartbeat.txt
+
 # Claude
 .claude/
