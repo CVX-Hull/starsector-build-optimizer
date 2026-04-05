@@ -191,17 +191,17 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 
 ---
 
-## 7. Open Questions for Phase 4 Implementation
+## 7. Open Questions
 
-1. **Heuristic calibration**: Can we improve R² above 0.75 by calibrating heuristic weights against simulation results? If yes, switch to full MFBO.
+1. **Heuristic calibration**: Can we improve R² above 0.75 by calibrating heuristic weights against simulation results? If yes, switch to full MFBO. Integration test confirmed the gap is large: heuristic top-3 all had negative sim fitness (logistics hullmod spam scores well heuristically but fails in combat). This is a Phase 6 task.
 
-2. **Repair collision rate**: What fraction of raw proposals collide after repair? If >30%, consider reducing the infeasible volume (priority-list encoding instead of independent slot selection).
+2. **Repair collision rate**: **Resolved — 0% collisions.** Measured: 50,000 random builds on Wolf (smallest hull, 70D), all unique after repair. 2,000 builds each on Eagle (77D) and Onslaught (86D) also 0% collisions. The search space is so vast that the greedy OP-drop repair produces sufficiently diverse outputs. The BuildCache is retained as a safety net but won't save sim budget in practice. No need for priority-list encoding.
 
-3. **WilcoxonPruner p-threshold**: Default 0.1 may be too aggressive or conservative. Tune on heuristic proxy first.
+3. **Opponent pool composition**: The 4-6 opponents per size are manually selected. How sensitive are results to pool composition? Test with 3 opponents vs 5 vs 7. Hull-size mismatches were fixed in audit; composition sensitivity not yet tested.
 
-4. **Opponent pool composition**: The 5-6 opponents are manually selected. How sensitive are results to pool composition? Test with 3 opponents vs 5 vs 7.
+4. **Noise floor**: How much variance does the AI behavior introduce? If high, may need more replicates per matchup. If low, 1 replicate per opponent may suffice. Integration test showed some matchups are deterministic (both sides at full HP = non-engagement), while others have clear outcomes. Need multiple replays of the same matchup to measure variance.
 
-5. **Noise floor**: How much variance does the AI behavior introduce? If high, may need more replicates per matchup. If low, 1 replicate per opponent may suffice.
+5. **Heuristic rewards logistics hullmods**: The heuristic's `op_efficiency` and `effective_hp` metrics reward logistics mods (recovery_shuttles, efficiency_overhaul, reinforcedhull) that contribute nothing in arena combat but have real value in campaign gameplay. Excluding logistics from the search space would produce builds impractical for actual fleet use. The optimizer will naturally learn that combat mods produce better sim fitness — the warm-start heuristic scores are scaled to 0.1x so they're weak priors that real sim signal overwrites after 20-30 trials. Not a bug; working as designed.
 
 ---
 
