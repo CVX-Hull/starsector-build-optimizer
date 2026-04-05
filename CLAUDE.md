@@ -27,6 +27,13 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 
 6. **Structured scorer output.** `heuristic_score()` returns `ScorerResult` with all component metrics. These become Phase 5 behavior descriptors and Phase 6 features without refactoring.
 
+7. **Verify game facts against actual game files, never assume.** The game data files at `game/starsector/data/` are the ground truth. When working with game-specific knowledge (hullmod IDs, effect values, CSV column meanings, slot types, damage formulas, tag conventions), always verify against the actual data files before hardcoding or referencing. The reference docs in `docs/reference/` are secondary and may be stale. Specific pitfalls encountered:
+   - Hullmod IDs are non-obvious (e.g., `hardenedshieldemitter` not `hardenedshields`, `frontshield` not `makeshift_shield_generator`). Look up in `data/hullmods/hull_mods.csv`.
+   - The `type` column in `weapon_data.csv` is **damage type** (KINETIC, HE, ENERGY, FRAG), NOT weapon type. Weapon type (BALLISTIC/ENERGY/MISSILE) comes from `.wpn` files.
+   - The `designation` column in `ship_data.csv` is a role string (e.g., "Battleship"), NOT hull size. Hull size comes from `hullSize` in `.ship` JSON files.
+   - Hullmod effects like Safety Overrides have non-obvious formulas (range compression, not a hard cap). Check the wiki or game code when adding hullmod effects.
+   - Tag conventions change between game versions (e.g., logistics detection uses `"Logistics"` in `uiTags`, not `"logistics"` in `tags`).
+
 ## Design Invariants
 
 - Every `Build` returned by `repair_build()` passes `is_feasible()`
