@@ -1,0 +1,83 @@
+# Starsector Ship Build Optimizer — Project Overview
+
+## What This Project Is
+
+An automated system for discovering optimal and diverse ship builds in [Starsector](https://fractalsoftworks.com/), a space combat game by Fractal Softworks. The system combines:
+
+1. **A Java mod** that runs automated combat simulations inside the game engine
+2. **A Python optimizer** that uses state-of-the-art Bayesian optimization and evolutionary methods to search the build space
+3. **A multi-fidelity evaluation pipeline** that balances cheap heuristic scoring with expensive but accurate combat simulation
+4. **A quality-diversity discovery engine** that maps the full landscape of viable build archetypes
+
+## Why This Exists
+
+Ship building in Starsector is a complex constrained optimization problem. A single ship hull has ~10^6 to 10^8 feasible build configurations after constraint pruning (from a naive ~10^13-14). Players rely on intuition, community guides, and manual trial-and-error. No automated optimization tool exists — this would be the first.
+
+The closest academic analogue is the Hearthstone deckbuilding problem (DSA-ME, arXiv:2112.03534), where discrete item selection from constrained pools is optimized via expensive game simulation.
+
+## Game Version
+
+- **Starsector 0.98a-RC8** (released March 27, 2025)
+- Game runs on **Java 17** (upgraded from Java 7 in 0.98a)
+
+## Development Approach
+
+DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` drive tests, which drive implementation.
+
+## Document Index
+
+### Module Specifications (DDD)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [01-data-models](./specs/01-data-models.md) | `models.py` | Dataclasses, enums, type definitions |
+| [02-hullmod-effects](./specs/02-hullmod-effects.md) | `hullmod_effects.py` | Game constants, hullmod effect registry |
+| [03-game-data-parser](./specs/03-game-data-parser.md) | `parser.py` | CSV + JSON parsing |
+| [04-search-space](./specs/04-search-space.md) | `search_space.py` | Per-hull weapon/hullmod compatibility |
+| [05-repair-operator](./specs/05-repair-operator.md) | `repair.py` | Constraint enforcement |
+| [06-heuristic-scorer](./specs/06-heuristic-scorer.md) | `scorer.py` | Static build quality metrics |
+| [07-variant-generator](./specs/07-variant-generator.md) | `variant.py` | .variant file generation |
+| [08-calibration-pipeline](./specs/08-calibration-pipeline.md) | `calibration.py` | Build sampling + weight fitting |
+
+### Reference Documents
+
+| Document | Contents |
+|---|---|
+| [game-mechanics](./reference/game-mechanics.md) | Starsector combat mechanics, ship fitting, weapons, flux, armor, shields, AI behavior |
+| [problem-formulation](./reference/problem-formulation.md) | Formal optimization problem definition, decision variables, constraints, search space analysis |
+| [literature-review](./reference/literature-review.md) | Survey of 40+ papers across BO, evolutionary methods, QD, multi-fidelity, surrogates, game optimization |
+| [system-architecture](./reference/system-architecture.md) | Full system design: Java mod, Python orchestrator, parallel instances, optimizer integration |
+| [optimization-methods](./reference/optimization-methods.md) | Technical guide to each optimization method and implementation specifics |
+| [multi-fidelity-strategy](./reference/multi-fidelity-strategy.md) | Three-tier evaluation pipeline, surrogate models, noise handling |
+| [quality-diversity](./reference/quality-diversity.md) | MAP-Elites for build archetype discovery, behavior descriptors |
+| [implementation-roadmap](./reference/implementation-roadmap.md) | Phased build plan with dependencies and technology choices |
+| [game-data-reference](./reference/game-data-reference.md) | File formats, CSV schemas, .variant and .ship file structures |
+
+## Key Design Decisions
+
+1. **Bounce** (arXiv:2307.00618) as primary optimizer — native batch parallelism, handles all our variable types, GP noise model
+2. **SMAC3** as secondary optimizer — best conditional parameter handling via ConfigSpace, random forest surrogate
+3. **Multi-fidelity with safety** — rMFBO (arXiv:2210.13937) prevents misleading low-fidelity from hurting performance
+4. **Repair operators** for constraint handling — literature consensus over penalty or constrained generation
+5. **CMA-MAE + CatCMA** for quality-diversity — discovers diverse build archetypes, not just one optimum
+6. **TabPFN-2.5 + RF ensemble** for neural surrogate — best-in-class for small tabular data (500-2000 samples)
+
+## Technology Stack
+
+| Component | Technology |
+|---|---|
+| Combat harness mod | Java (Starsector API, LWJGL) |
+| Game data parsing | Python (pandas, stdlib json) |
+| Optimizer | Python (Bounce, SMAC3, MCBO framework) |
+| Quality-diversity | Python (pyribs, cmaes library) |
+| Neural surrogate | Python (TabPFN, CatBoost, scikit-learn) |
+| Multi-fidelity | Python (BoTorch for composite GP, MFES-HB) |
+| Instance management | Python + Bash (Xvfb for virtual displays) |
+| Visualization | Python (matplotlib, plotly) |
+
+## External Resources
+
+- [Starsector Official Site](https://fractalsoftworks.com/)
+- [Starsector Wiki](https://starsector.wiki.gg/)
+- [Starsector API Javadoc](https://fractalsoftworks.com/starfarer.api/) / [Community Mirror](https://jaghaimo.github.io/starsector-api/)
+- [Starsector Forums](https://fractalsoftworks.com/forum/)
