@@ -109,8 +109,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             spawnShips();
         }
 
+        // Point camera at first player ship so the combat is visible
+        if (!playerShips.isEmpty()) {
+            engine.setPlayerShipExternal(playerShips.get(0));
+        }
+
         matchupStartTime = engine.getTotalElapsedTime(false);
-        log.info("  Player ships: " + playerShips.size() + ", Enemy ships: " + enemyShips.size());
+        log.info("  Player ships: " + playerShips.size() + ", Enemy ships: " + enemyShips.size()
+                + ", timeMult=" + engine.getTimeMult().getModifiedValue());
         state = State.FIGHTING;
     }
 
