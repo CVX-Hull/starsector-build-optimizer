@@ -4,33 +4,35 @@ import org.apache.log4j.Logger;
 
 import java.awt.Robot;
 import java.awt.event.InputEvent;
-import java.awt.event.KeyEvent;
 
 /**
  * Uses java.awt.Robot to navigate Starsector menus from title screen to mission start.
  *
- * Coordinates are hardcoded for 1920x1080 with screenScaleOverride=1.
- * These must be calibrated empirically via screenshots.
+ * Coordinates are calibrated for 1920x1080 with screenScaleOverride=1,
+ * windowed mode with title bar at y=37.
  *
- * java.awt.Robot is NOT blocked by Starsector's security sandbox
- * (sandbox only blocks java.io, java.lang.reflect, javax.script, java.util.prefs).
+ * Robot generates absolute screen coordinates (not window-relative).
+ * java.awt.Robot is NOT blocked by Starsector's security sandbox.
  */
 public class MenuNavigator {
 
     private static final Logger log = Logger.getLogger(MenuNavigator.class);
 
-    // Coordinates for 1920x1080, screenScaleOverride=1
-    // TODO: calibrate these via screenshots at target resolution
-    private static final int MISSIONS_X = 1580;
-    private static final int MISSIONS_Y = 360;
+    // Calibrated empirically at 1920x1080, screenScaleOverride=1, windowed.
+    // Robot uses absolute screen coordinates.
+    // Recorded by tracking mouse position during manual navigation.
 
-    // Last item in mission list (after scrolling to bottom)
-    private static final int ARENA_X = 250;
-    private static final int ARENA_Y = 710;
+    // "Missions" button on main menu
+    private static final int MISSIONS_X = 1417;
+    private static final int MISSIONS_Y = 486;
+
+    // "Optimizer Arena" — last item in mission list after scrolling to bottom
+    private static final int ARENA_X = 635;
+    private static final int ARENA_Y = 909;
 
     // "Play Mission" button
-    private static final int PLAY_MISSION_X = 1660;
-    private static final int PLAY_MISSION_Y = 940;
+    private static final int PLAY_MISSION_X = 1311;
+    private static final int PLAY_MISSION_Y = 941;
 
     /**
      * Navigate from main menu to Optimizer Arena mission start.
@@ -41,25 +43,29 @@ public class MenuNavigator {
             Robot robot = new Robot();
             robot.setAutoDelay(50);
 
-            log.info("MenuNavigator: clicking Missions...");
+            // Step 1: Click "Missions" on main menu
+            log.info("MenuNavigator: clicking Missions at (" + MISSIONS_X + "," + MISSIONS_Y + ")...");
             robotClick(robot, MISSIONS_X, MISSIONS_Y);
             Thread.sleep(2000);
 
-            // Scroll mission list to bottom
-            log.info("MenuNavigator: scrolling to bottom of mission list...");
+            // Step 2: Scroll mission list to bottom to reveal Optimizer Arena
+            log.info("MenuNavigator: scrolling mission list to bottom...");
+            // Move mouse to the mission list area first (use same x, mid-screen y)
+            robot.mouseMove(ARENA_X, 600);
+            robot.delay(200);
             for (int i = 0; i < 15; i++) {
                 robot.mouseWheel(5);
                 Thread.sleep(100);
             }
             Thread.sleep(500);
 
-            // Click Optimizer Arena (last/bottom item)
-            log.info("MenuNavigator: clicking Optimizer Arena...");
+            // Step 3: Click Optimizer Arena (last item in list)
+            log.info("MenuNavigator: clicking Optimizer Arena at (" + ARENA_X + "," + ARENA_Y + ")...");
             robotClick(robot, ARENA_X, ARENA_Y);
             Thread.sleep(1500);
 
-            // Click Play Mission
-            log.info("MenuNavigator: clicking Play Mission...");
+            // Step 4: Click "Play Mission"
+            log.info("MenuNavigator: clicking Play Mission at (" + PLAY_MISSION_X + "," + PLAY_MISSION_Y + ")...");
             robotClick(robot, PLAY_MISSION_X, PLAY_MISSION_Y);
 
             log.info("MenuNavigator: navigation complete");
