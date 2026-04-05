@@ -192,46 +192,58 @@ If implementing a custom CatCMA emitter is too complex initially:
 
 ### The Data Efficiency Problem
 
-MAP-Elites needs many evaluations to fill a large archive. With 5000 cells and simulation at 60s each, filling even 50% of cells with 5 evals each = 12,500 simulations = 208 hours.
+MAP-Elites needs many evaluations to fill a large archive. With 5000 cells and simulation at ~25s each (wall-clock, with curtailment), filling even 50% of cells with 5 evals each = 12,500 simulations = ~90 hours on 8 instances.
 
 ### Solution: Two-Phase Approach
 
-**Phase 1 — Heuristic Illumination (~1 hour, no simulation)**
+**Phase A — Heuristic Illumination (~1 hour, no simulation)**
 
 ```python
 # Use heuristic scorer as fitness function (free evaluations)
 for _ in range(500_000):
     solutions = scheduler.ask()
-    repaired = [repair_op_budget(s) for s in solutions]
-    objectives = [heuristic_scorer.score(s) for s in repaired]
+    repaired = [repair_build(s, hull, game_data) for s in solutions]
+    objectives = [heuristic_score(s, hull, game_data).composite_score for s in repaired]
     measures = [compute_descriptors(s) for s in repaired]
     scheduler.tell(objectives, measures)
 
 # Archive now has diverse builds optimized by heuristic
 ```
 
-**Phase 2 — Simulation Validation + Refinement (~2-5 days)**
+**Phase B — Simulation Validation Against Opponent Pool**
+
+Each archive elite is evaluated against the full opponent pool (5-6 opponents from Phase 4). Fitness = average HP differential across opponents. This ensures builds are robust, not just good against one archetype.
 
 ```python
-# Select top builds from each occupied cell
-validation_builds = []
-for cell in archive.occupied_cells():
-    elite = archive.get_elite(cell)
-    validation_builds.append(elite)
+# Select elites from occupied cells
+elites = [archive.get_elite(cell) for cell in archive.occupied_cells()]
 
-# Run through simulation
-sim_results = parallel_simulate(validation_builds, replicates=5)
+# Evaluate against opponent pool (reuse Phase 4 infrastructure)
+for elite in elites:
+    matchups = [MatchupConfig(player=[elite], enemy=[opp]) for opp in opponent_pool]
+    results = instance_pool.evaluate(matchups)
+    sim_fitness = mean([r.hp_differential for r in results])
+    archive.update(elite, sim_fitness, compute_descriptors(elite))
+```
 
-# Train correction model
-correction_model = train_residual_gp(
-    X=build_features(validation_builds),
-    y_sim=sim_results,
-    y_heuristic=heuristic_scores(validation_builds)
+**Phase C — Surrogate Refinement (DSA-ME Pattern)**
+
+Train a correction model (TabPFN at N<300, CatBoost at N>300) on Phase B sim results. Re-illuminate with `heuristic + correction` as fitness. Validate changed/new elites with simulation. 2-3 rounds until archive stabilizes.
+
+```python
+# Train correction model on (build_features, sim_score - heuristic_score)
+correction = train_correction_model(
+    X=build_features(validated_elites),
+    y=sim_scores - heuristic_scores,
 )
 
-# Phase 2b: Re-illuminate with corrected fitness
-corrected_scorer = lambda build: heuristic_scorer.score(build) + correction_model.predict(build)
+# Re-illuminate with corrected fitness (cheap — uses the model, not simulation)
+corrected_scorer = lambda build: heuristic_score(build) + correction.predict(build)
 # Run another CMA-MAE pass with corrected scorer...
+
+# Validate new/changed elites with simulation
+changed_elites = find_changed_cells(old_archive, new_archive)
+sim_validate(changed_elites, opponent_pool)
 ```
 
 ### DSA-ME Pattern (Online Neural Surrogate)
@@ -246,7 +258,7 @@ From the Hearthstone deckbuilding paper (arXiv:2112.03534):
 6. Retrain NN
 7. Repeat
 
-**Expected budget:** 2000-5000 simulation evaluations for a useful archive.
+**Expected budget:** 2000-5000 simulation evaluations for a useful archive (~5-10 hours on 8 instances).
 
 ---
 

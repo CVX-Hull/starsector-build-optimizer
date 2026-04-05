@@ -32,9 +32,9 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 - **ArXiv**: [2307.00618](https://arxiv.org/abs/2307.00618) (NeurIPS 2023)
 - **Authors**: Papenmeier, Nardi, Poloczek
 - **Key contribution**: Uses sparse count-sketch embeddings that map high-dimensional mixed variables into lower-dimensional target space, progressively increasing dimensionality. Variables of same type only share bins. Prior observations remain valid across refinements (nested property).
-- **Relevance**: VERY HIGH — **our recommended primary optimizer**. Native batch parallelism (tested B=1-20), handles all our variable types, GP noise model, more reliable than CASMOPOLITAN when problem lacks structure.
-- **Implementation**: [GitHub](https://github.com/lpapenme/bounce) — Python ≥ 3.10, BoTorch/GPyTorch. Research code but reasonably modular.
-- **Limitations**: No native constraint handling (needs repair wrapper).
+- **Relevance**: MEDIUM. Elegant algorithm but **not suitable as primary optimizer** for our constrained problem. No constraint support (the internal binning/embedding makes repair interaction poorly defined), no PyPI package, research-quality code. Native batch parallelism (qEI) is a genuine strength. Could be used for benchmarking on heuristic proxy.
+- **Implementation**: [GitHub](https://github.com/lpapenme/bounce) — Python ≥ 3.10, BoTorch/GPyTorch. Research code, Poetry-based, not packaged.
+- **Limitations**: No constraint handling, no PyPI, research code quality.
 
 ### CoCaBO — Multi-Armed Bandits + GP for Mixed Variables
 - **ArXiv**: [1906.08878](https://arxiv.org/abs/1906.08878) (AAAI 2020)
@@ -83,6 +83,38 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 - **Key contribution**: Shows CASMOPOLITAN's TO kernel is a special case of heat kernels on Hamming graphs. Proposes improved variants.
 - **Relevance**: MEDIUM. Theoretical insight for kernel design.
 
+### Optuna TPE — Tree-structured Parzen Estimator
+- **ArXiv**: [2304.11127](https://arxiv.org/abs/2304.11127) (2023)
+- **Authors**: Watanabe, Hutter
+- **Key contribution**: Comprehensive study of TPE algorithm components. Multivariate mode builds joint Parzen estimator (Scott's rule bandwidth). `n^(-1/(4+d))` bandwidth scaling means TPE degrades at high dimensions.
+- **Relevance**: CRITICAL — **our chosen primary optimizer framework**. Clean ask-tell API, constant_liar batch parallelism (acceptable at B=4-8), swappable samplers via OptunaHub. Our `repair_build()` eliminates the need for native constraint handling.
+- **Implementation**: `pip install optuna` — production-ready, 10K+ GitHub stars.
+- **Limitations**: Degrades past ~30D (kernel density estimation curse of dimensionality). Needs n_ei_candidates=256+ and n_startup_trials=100+ for our 50-70D space.
+
+### c-TPE — Constrained TPE
+- **ArXiv**: [2211.14411](https://arxiv.org/abs/2211.14411) (IJCAI 2023)
+- **Authors**: Watanabe, Hutter
+- **Key contribution**: Modifies TPE density estimation to properly handle inequality constraints. Separates feasible/infeasible trials in density modeling. More principled than simple penalty.
+- **Relevance**: HIGH. Use via `constraints_func` to report OP budget violation to TPE, biasing away from infeasible regions.
+- **Implementation**: Available as OptunaHub sampler.
+
+### piBO — Prior-Informed Bayesian Optimization
+- **ArXiv**: [2204.11051](https://arxiv.org/abs/2204.11051) (ICLR 2022)
+- **Authors**: Hvarfner et al.
+- **Key contribution**: Multiplies acquisition function by user-specified prior distribution over optimum location. **Convergence guaranteed at regular rates regardless of prior quality.** Even a wrong prior won't break convergence.
+- **Relevance**: HIGH. Our heuristic scores can define the prior. Guarantee that bad heuristic won't hurt asymptotic performance.
+
+### Warm Starting Bayesian Optimization
+- **ArXiv**: [1608.03585](https://arxiv.org/abs/1608.03585) (2016)
+- **Authors**: Poloczek, Wang, Frazier
+- **Key contribution**: Multi-task GP jointly models current task and previous tasks. Transfers knowledge from cheap evaluations to expensive task.
+- **Relevance**: HIGH. Foundation for using heuristic evaluations to warm-start simulation BO.
+
+### Prior Mean Models for Faster BO
+- **Reference**: Scientific Reports (2025), Nature
+- **Key contribution**: Uses NN-trained prior mean function in GP for 73D particle accelerator optimization. Standard BO hadn't converged after 900 iterations; prior-mean BO converged in one step. Even correlation r~0.41 helped in early stages.
+- **Relevance**: CRITICAL. Validates our heuristic-as-prior-mean approach. Our R²≈0.49 is sufficient for early speedup.
+
 ---
 
 ## 2. Evolutionary Methods for Mixed Spaces
@@ -114,20 +146,20 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 - **ArXiv**: [2210.13937](https://arxiv.org/abs/2210.13937) (AISTATS 2023)
 - **Authors**: Mikkola et al.
 - **Key contribution**: Provides theoretical guarantee that multi-fidelity BO performs no worse than single-fidelity BO, with high controllable probability. Prevents misleading low-fidelity sources from hurting performance.
-- **Relevance**: CRITICAL. Our heuristic (R²≈0.5-0.7) is a moderately reliable low-fidelity source. rMFBO prevents the optimizer from being misled in regions where the heuristic is poor.
+- **Relevance**: MEDIUM. Our heuristic R²≈0.49 is below the 0.75 threshold where MFBO reliably helps (per best-practices paper). We use heuristic-as-warm-start instead of full MFBO. rMFBO becomes relevant if heuristic calibration improves.
 
 ### MFES-HB — Multi-Fidelity Ensemble Surrogate + HyperBand
 - **ArXiv**: [2012.03011](https://arxiv.org/abs/2012.03011) (AAAI 2021)
 - **Authors**: Li et al.
 - **Key contribution**: Builds ensemble surrogate from ALL fidelity levels (unlike BOHB which only uses highest). Product of Experts framework with learned weights per fidelity. Discordant sources are automatically downweighted.
-- **Relevance**: VERY HIGH. 3.3-8.9x speedup over BOHB. Adaptive weighting handles variable heuristic-simulation correlation.
+- **Relevance**: MEDIUM. Designed for Hyperband-style continuous fidelity (training epochs). With our 2 discrete fidelity levels (instant heuristic vs full sim, no intermediate), the Hyperband bracket structure degenerates. Better suited if we had 3+ fidelity levels.
 - **Implementation**: [GitHub](https://github.com/PKU-DAIR/MFES-HB)
 
 ### MF-MES — Multi-Fidelity Max-value Entropy Search
 - **ArXiv**: [1901.08275](https://arxiv.org/abs/1901.08275) (ICML 2020)
 - **Authors**: Takeno et al.
 - **Key contribution**: Information-theoretic acquisition for multi-fidelity. Computes information gain from evaluating at any (x, fidelity) pair. Supports async parallel.
-- **Relevance**: HIGH. Strong candidate for our 3-tier fidelity.
+- **Relevance**: MEDIUM. Requires GP surrogate (we use TPE). Relevant if we switch to BoTorch-based optimization.
 - **Implementation**: [GitHub](https://github.com/takeuchi-lab/MF-MES)
 
 ### DEHB — Differential Evolution + HyperBand
@@ -228,6 +260,21 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 - **Key contribution**: Classifies constraint types and handling strategies.
 - **Relevance**: MEDIUM. Reference for constraint handling design.
 
+### Lamarckian vs Baldwinian Repair in Multi-Objective Optimization
+- **Reference**: Ishibuchi et al., EMO 2005 (Springer LNCS 3410)
+- **Key contribution**: Compares Lamarckian (remember repaired genotype) vs Baldwinian (remember original genotype with repaired fitness) repair on knapsack problems. Baldwinian outperforms Lamarckian in EA context; partial Lamarckianism (5% rule) often best.
+- **Relevance**: HIGH. For TPE/BO, Lamarckian is preferred (record repaired params via `add_trial`), because surrogate learns the feasible manifold directly. The EA-specific convergence concerns don't apply to density-based TPE.
+
+### Decoder-Based EA for Constrained Optimization
+- **Reference**: Koziel & Michalewicz, 1999 (Springer)
+- **Key contribution**: Defines homomorphous mapping between n-dimensional cube and feasible space. Identifies many-to-one mapping (collision) problem and its consequences: wasted evaluations, surrogate confusion.
+- **Relevance**: HIGH. Our `repair_build()` is a decoder/repair operator. The collision problem motivates our deduplication cache.
+
+### Constraint-Handling Techniques Survey
+- **Reference**: Coello Coello (2002), comprehensive survey
+- **Key contribution**: Classifies constraint handling into penalty functions, repair methods, decoder methods, feasibility-preserving operators. Repair finds feasible solutions in 1 generation vs 7-72 for penalty.
+- **Relevance**: HIGH. Validates our repair-first approach over penalty-only.
+
 ---
 
 ## 6. Neural Surrogates and Tabular Deep Learning
@@ -319,6 +366,33 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 - **Key finding**: CNNs on composition + battlefield features achieve ~90-95% binary win/loss accuracy.
 - **Relevance**: HIGH. Precedent for combat outcome prediction accuracy.
 
+### Early Prediction of Winner in StarCraft Matches
+- **Reference**: Sanchez-Ruiz (2017), CIG Conference
+- **Key contribution**: Time-dependent features (resource trajectories, army value over time) more predictive than static features. Adversarial features (damage dealt to enemy) outperform non-adversarial features (own economy). 80%+ accuracy with 200 training samples using adversarial features.
+- **Relevance**: HIGH. Validates our heartbeat trajectory feature approach. HP differential at early checkpoints should be highly predictive.
+
+### Empirical Game-Theoretic Analysis (EGTA) Survey
+- **ArXiv**: [2403.04018](https://arxiv.org/abs/2403.04018) (2024)
+- **Authors**: Wellman et al.
+- **Key contribution**: Framework for analyzing strategic interactions via payoff matrices constructed from simulation. Covers Nash equilibria, dominated strategies, meta-game analysis.
+- **Relevance**: HIGH. Our opponent pool + win-rate matrix is a lightweight EGTA approach.
+
+### Policy Space Response Oracles (PSRO) Survey
+- **ArXiv**: [2403.02227](https://arxiv.org/abs/2403.02227) (2024)
+- **Key contribution**: Iterative framework: start with small strategy set, find equilibrium, generate best response, add to set. Converges to Nash.
+- **Relevance**: MEDIUM. Overkill for our fixed opponent pool, but relevant if we want to co-evolve opponents.
+
+### BO for Nash Equilibria in Black-Box Games
+- **ArXiv**: [1804.10586](https://arxiv.org/abs/1804.10586) (2018)
+- **Authors**: Al-Dujaili et al.
+- **Key contribution**: GP surrogates approximate payoffs, then solve for equilibria on the surrogate. 50-200 evaluations for convergence on small games.
+- **Relevance**: MEDIUM. For future minimax optimization if needed.
+
+### Pareto Set Learning for Expensive Multi-Objective Optimization
+- **ArXiv**: [2210.08495](https://arxiv.org/abs/2210.08495) (NeurIPS 2022)
+- **Key contribution**: Learning the full Pareto front with GPs in expensive settings (50-200 evaluations). Returns diverse set of Pareto-optimal solutions.
+- **Relevance**: HIGH. Could provide Pareto front of builds (win rate vs shield tanks, vs kiters, vs carriers).
+
 ---
 
 ## 8. Noise Handling and Adaptive Replication
@@ -372,7 +446,9 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 **What has NOT been done in the literature:**
 1. No automated build optimization for Starsector or structurally similar ship-fitting games
 2. No QD-based exploration of game build archetypes with combat simulation
-3. No multi-fidelity optimization combining static heuristics with combat simulation
+3. No heuristic-as-prior-mean combined with Optuna TPE for warm-starting expensive game simulation BO
 4. No CatCMA-based emitter inside MAP-Elites for mixed-variable game build discovery
+5. No curtailment system using model-free TTD-ratio extrapolation for game combat simulation
+6. No opponent-pool-based fitness evaluation with WilcoxonPruner for sample-efficient build optimization
 
-Our project would be novel work at the intersection of mixed-variable BO, quality-diversity, multi-fidelity optimization, and game build optimization.
+Our project would be novel work at the intersection of mixed-variable BO, quality-diversity, multi-fidelity optimization, and game build optimization. The opponent pool strategy with WilcoxonPruner is particularly novel — it addresses the RPS dynamics inherent in combat games while remaining sample-efficient.

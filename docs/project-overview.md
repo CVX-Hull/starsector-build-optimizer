@@ -68,12 +68,12 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 
 ## Key Design Decisions
 
-1. **Bounce** (arXiv:2307.00618) as primary optimizer — native batch parallelism, handles all our variable types, GP noise model
-2. **SMAC3** as secondary optimizer — best conditional parameter handling via ConfigSpace, random forest surrogate
-3. **Multi-fidelity with safety** — rMFBO (arXiv:2210.13937) prevents misleading low-fidelity from hurting performance
+1. **Optuna TPE** as primary optimizer — clean ask-tell API, batch parallelism via constant_liar, swappable samplers via OptunaHub
+2. **CatCMAwM** as QD emitter for Phase 5 — joint Gaussian + categorical distribution via cmaes library
+3. **Heuristic warm-start** — 50K random builds scored with heuristic, top-500 seed the Optuna study
 4. **Repair operators** for constraint handling — literature consensus over penalty or constrained generation
 5. **CMA-MAE + CatCMA** for quality-diversity — discovers diverse build archetypes, not just one optimum
-6. **TabPFN-2.5 + RF ensemble** for neural surrogate — best-in-class for small tabular data (500-2000 samples)
+6. **TabPFN v2 + CatBoost** for neural surrogate — TabPFN for cold-start (N<300), CatBoost for scale (N>300)
 
 ## Technology Stack
 
@@ -81,10 +81,10 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 |---|---|
 | Combat harness mod | Java (Starsector API, LWJGL) |
 | Game data parsing | Python (pandas, stdlib json) |
-| Optimizer | Python (Bounce, SMAC3, MCBO framework) |
+| Optimizer | Python (Optuna, cmaes) |
 | Quality-diversity | Python (pyribs, cmaes library) |
 | Neural surrogate | Python (TabPFN, CatBoost, scikit-learn) |
-| Multi-fidelity | Python (BoTorch for composite GP, MFES-HB) |
+| Multi-fidelity | Heuristic warm-start + full sim with curtailment |
 | Instance management | Python + Bash (Xvfb for virtual displays) |
 | Visualization | Python (matplotlib, plotly) |
 

@@ -12,13 +12,13 @@ Complete design for the Starsector Ship Build Optimizer system, covering all com
 │                                                                  │
 │  ┌──────────────┐  ┌───────────────┐  ┌───────────────────────┐ │
 │  │  Game Data    │  │  Heuristic    │  │  Optimizer Engine     │ │
-│  │  Parser       │  │  Scorer       │  │  (Bounce/SMAC3/       │ │
+│  │  Parser       │  │  Scorer       │  │  (Optuna/             │ │
 │  │              │  │  (Fidelity 0) │  │   CatCMA/pyribs)      │ │
 │  └──────┬───────┘  └───────┬───────┘  └──────────┬────────────┘ │
 │         │                  │                      │              │
 │  ┌──────┴──────────────────┴──────────────────────┴───────────┐ │
 │  │                    Evaluation Pipeline                      │ │
-│  │  Heuristic (0ms) → Short Sim (5s) → Full Sim (60s)        │ │
+│  │  Heuristic (0ms) → Full Sim + Curtailment (22-35s)        │ │
 │  └────────────────────────────┬────────────────────────────────┘ │
 │                               │                                  │
 │  ┌────────────────────────────┴────────────────────────────────┐ │
@@ -144,23 +144,16 @@ def build_search_space(hull: ShipHull, weapons: list[Weapon], hullmods: list[Hul
     return space
 ```
 
-### Conditional Parameters (SMAC3 ConfigSpace)
+### Constraint Handling via Repair
 
-```python
-# Missile hullmods only active if missiles equipped
-expanded_missile_racks = CategoricalHP("hullmod_expanded_missile_racks", [True, False])
-has_missiles = OrConjunction(
-    EqualsCondition(expanded_missile_racks, weapon_slot_1, missile_weapon_id_1),
-    EqualsCondition(expanded_missile_racks, weapon_slot_1, missile_weapon_id_2),
-    ...
-)
+All constraints are enforced by `repair_build()` after the optimizer proposes a candidate. This is simpler and more robust than expressing constraints in the search space definition:
 
-# Shield hullmods forbidden with Shield Shunt
-ForbiddenAndConjunction(
-    ForbiddenEqualsClause(hullmod_shield_shunt, True),
-    ForbiddenEqualsClause(hullmod_hardenedshieldemitter, True)
-)
-```
+- **OP budget:** Greedy drop of lowest value-per-OP items until feasible
+- **Hullmod incompatibilities:** Remove the lower-value hullmod from each conflicting pair
+- **Logistics limit:** Keep max 3 logistics hullmods
+- **Slot compatibility:** Already enforced in search space (only eligible weapons per slot)
+
+Optuna's `constraints_func` reports OP budget violation to bias TPE sampling away from infeasible regions (c-TPE approach), reducing wasted repair operations over time.
 
 ### Repair Operator
 
@@ -394,40 +387,42 @@ cd ${WORKDIR} && DISPLAY=:${10+i} ./starsector.sh &
 
 ## Component 6: Optimizer Engine
 
-### Primary: Bounce
+### Primary: Optuna TPE
 
 ```python
-from bounce import Bounce
+import optuna
+from optuna.samplers import TPESampler
+from optuna.pruners import WilcoxonPruner
 
-optimizer = Bounce(
-    search_space=build_search_space(hull),
-    batch_size=16,            # Match parallel instances
-    initial_target_dim=5,     # Start with 5 bins
-    noise_variance=0.1,       # GP noise for stochastic sim
+sampler = TPESampler(
+    multivariate=True,
+    constant_liar=True,       # Batch parallelism for 4-8 instances
+    n_ei_candidates=256,      # Default 24 too few for 70D
+    n_startup_trials=100,     # Default 10 too few for 70D
+)
+pruner = WilcoxonPruner(p_threshold=0.1)
+
+study = optuna.create_study(
+    sampler=sampler,
+    pruner=pruner,
+    direction="maximize",
+    storage="sqlite:///study.db",
 )
 
-for iteration in range(max_iterations):
-    candidates = optimizer.ask(n=16)
-    repaired = [repair_build(c) for c in candidates]
-    results = parallel_evaluate(repaired)  # Distribute across instances
-    optimizer.tell(repaired, results)
-```
+# Warm-start with heuristic
+warm_start(study, hull, game_data, config)
 
-### Secondary: SMAC3 (for conditional parameters)
-
-```python
-from smac import HyperparameterOptimizationFacade
-from ConfigSpace import ConfigurationSpace, CategoricalHyperparameter
-
-cs = ConfigurationSpace()
-# Define weapons, hullmods, flux allocation with conditionals
-# ... (see Search Space Definition above)
-
-facade = HyperparameterOptimizationFacade(
-    scenario=Scenario(cs, n_trials=500, n_workers=16),
-    target_function=evaluate_build,
-)
-incumbent = facade.optimize()
+# Ask-tell loop with repair + Lamarckian recording
+for _ in range(sim_budget):
+    trial = study.ask(distributions)
+    raw_build = trial_params_to_build(trial.params, hull_id)
+    repaired = repair_build(raw_build, hull, game_data)
+    score = evaluate_against_opponent_pool(repaired)
+    study.add_trial(create_trial(
+        params=build_to_trial_params(repaired, space),  # Lamarckian
+        distributions=distributions,
+        values=[score],
+    ))
 ```
 
 ### Quality-Diversity: pyribs + CatCMA
@@ -492,8 +487,8 @@ for _ in range(n_generations):
 
 ### Mode 3: Full Parallel Production
 - N Starsector instances with Xvfb
-- Multi-fidelity pipeline (heuristic → short sim → full sim)
-- Batch optimizer (Bounce with B=N)
+- Heuristic warm-start → Full sim with curtailment
+- Optuna TPE with constant_liar (batch size = N instances)
 - Full throughput
 
 ---

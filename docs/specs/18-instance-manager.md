@@ -191,7 +191,35 @@ Requires all 6 fields. Invalid formats raise an error.
 
 ## Curtailment Integration
 
-The poll loop passes accumulated heartbeats to `CurtailmentMonitor.should_stop()`. If curtailment triggers, writes stop signal file to instance's `saves/common/`. See spec 20.
+`InstancePool` accepts an optional `CurtailmentMonitor`:
+
+```python
+InstancePool(config: InstanceConfig, curtailment: CurtailmentMonitor | None = None)
+```
+
+When `curtailment` is provided, the poll loop reads heartbeat file **content** (not just mtime) for RUNNING instances, accumulates `list[Heartbeat]` per instance, and calls `should_stop()` each cycle.
+
+**`GameInstance` additions:**
+- `heartbeats: list[Heartbeat]` — accumulated heartbeats for current batch, cleared on new batch assignment
+
+**`_read_and_check_curtailment(inst)` method:**
+1. Read `inst.heartbeat_path` content
+2. Parse with `parse_heartbeat(line)` → `Heartbeat`
+3. Append to `inst.heartbeats`
+4. Call `self._curtailment.should_stop(inst.heartbeats)`
+5. If `(True, winner)`: call `CurtailmentMonitor.write_stop_signal(inst.saves_common)`
+
+Called in poll loop when `inst.state == RUNNING` and heartbeat is fresh.
+
+## Variant File Placement
+
+`InstancePool` provides a method to write optimizer-generated variant files to all instances:
+
+```python
+def write_variant_to_all(self, variant: dict, filename: str) -> None
+```
+
+Writes a variant JSON file to every instance's `data/variants/` directory. Required because `_assign_and_launch` only writes the queue JSON — variant files must already exist in the work directory. Stock variants are symlinked at setup time; optimizer-generated variants need explicit placement before `evaluate()`.
 
 ## Launch Script Portability
 

@@ -442,3 +442,90 @@ class TestEnrichedHeartbeat:
 
         assert pool._is_heartbeat_fresh(inst)
 
+
+# --- Curtailment Integration Tests ---
+
+
+class TestCurtailmentIntegration:
+
+    def test_pool_works_without_curtailment(self, pool, config):
+        """InstancePool(config) works without curtailment parameter."""
+        pool.setup()
+        assert pool._curtailment is None
+
+    def test_pool_accepts_curtailment(self, config):
+        """InstancePool(config, curtailment=monitor) stores monitor."""
+        from starsector_optimizer.curtailment import CurtailmentMonitor
+        monitor = CurtailmentMonitor()
+        pool = InstancePool(config, curtailment=monitor)
+        assert pool._curtailment is monitor
+
+    def test_heartbeats_start_empty(self, pool, config):
+        """GameInstance.heartbeats starts as empty list."""
+        pool.setup()
+        inst = pool._instances[0]
+        assert inst.heartbeats == []
+
+    def test_read_and_check_curtailment_parses(self, config):
+        """_read_and_check_curtailment parses heartbeat content."""
+        from starsector_optimizer.curtailment import CurtailmentMonitor
+        monitor = CurtailmentMonitor()
+        pool = InstancePool(config, curtailment=monitor)
+        pool.setup()
+        inst = pool._instances[0]
+        inst.state = InstanceState.RUNNING
+        inst.heartbeat_path.write_text("1712345678000 45.5 0.85 0.42 2 1")
+        pool._read_and_check_curtailment(inst)
+        assert len(inst.heartbeats) == 1
+        assert inst.heartbeats[0].player_hp == pytest.approx(0.85)
+        assert inst.heartbeats[0].enemy_hp == pytest.approx(0.42)
+
+    def test_curtailment_noop_without_monitor(self, pool, config):
+        """_read_and_check_curtailment does nothing when curtailment is None."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.heartbeat_path.write_text("1712345678000 45.5 0.85 0.42 2 1")
+        pool._read_and_check_curtailment(inst)
+        assert inst.heartbeats == []
+
+    def test_stop_signal_written_when_curtailment_triggers(self, config):
+        """When should_stop returns True, stop signal file is created."""
+        from starsector_optimizer.curtailment import CurtailmentMonitor
+        # min_time=0 and window=3 to trigger quickly
+        monitor = CurtailmentMonitor(min_time=0.0, window=3, ttd_ratio=2.0, max_ttd=200.0)
+        pool = InstancePool(config, curtailment=monitor)
+        pool.setup()
+        inst = pool._instances[0]
+        inst.state = InstanceState.RUNNING
+
+        # Write a series of one-sided heartbeats — player barely damaged, enemy dying fast
+        for i in range(5):
+            elapsed = 35.0 + i
+            player_hp = 0.95 - i * 0.005
+            enemy_hp = 0.5 - i * 0.08
+            inst.heartbeat_path.write_text(
+                f"1712345678{i:03d} {elapsed} {player_hp} {enemy_hp} 1 1"
+            )
+            pool._read_and_check_curtailment(inst)
+
+        stop_file = inst.saves_common / "combat_harness_stop.data"
+        assert stop_file.exists()
+
+
+# --- Variant File Placement Tests ---
+
+
+class TestVariantFilePlacement:
+
+    def test_write_variant_to_all(self, pool, config):
+        """write_variant_to_all writes variant file to every instance's variants_dir."""
+        pool.setup()
+        variant = {"variantId": "test_opt_001", "hullId": "wolf", "displayName": "Test"}
+        pool.write_variant_to_all(variant, "test_opt_001.variant")
+        for inst in pool._instances:
+            vpath = inst.variants_dir / "test_opt_001.variant"
+            assert vpath.exists()
+            import json
+            data = json.loads(vpath.read_text())
+            assert data["variantId"] == "test_opt_001"
+

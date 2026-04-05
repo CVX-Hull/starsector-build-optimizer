@@ -6,6 +6,7 @@ requires-python = ">=3.10"
 dependencies = [
     "lifelines>=0.30.0",
     "numpy",
+    "optuna>=4.0.0",
     "pandas",
     "scipy>=1.15.3",
 ]

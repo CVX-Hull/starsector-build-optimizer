@@ -32,6 +32,13 @@ from .result_parser import parse_combat_result, parse_results_file, write_queue_
 from .instance_manager import InstanceConfig, InstancePool
 from .curtailment import CurtailmentMonitor, parse_heartbeat
 from .timeout_tuner import TimeoutTuner
+from .opponent_pool import (
+    OpponentPool, DEFAULT_OPPONENT_POOL, get_opponents,
+    generate_matchups, compute_fitness, hp_differential,
+)
+from .optimizer import (
+    OptimizerConfig, BuildCache, optimize_hull, evaluate_build, warm_start,
+)
 
 __all__ = [
     "Build", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
@@ -49,4 +56,7 @@ __all__ = [
     "InstanceConfig", "InstancePool",
     "CurtailmentMonitor", "parse_heartbeat",
     "TimeoutTuner",
+    "OpponentPool", "DEFAULT_OPPONENT_POOL", "get_opponents",
+    "generate_matchups", "compute_fitness", "hp_differential",
+    "OptimizerConfig", "BuildCache", "optimize_hull", "evaluate_build", "warm_start",
 ]

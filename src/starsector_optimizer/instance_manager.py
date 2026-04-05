@@ -18,8 +18,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from .models import CombatResult, MatchupConfig
+from .models import CombatResult, Heartbeat, MatchupConfig
+from .curtailment import CurtailmentMonitor, parse_heartbeat
 from .result_parser import parse_results_file, write_queue_file
+from .variant import write_variant_file
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,7 @@ class GameInstance:
     last_heartbeat_time: float = 0.0
     launch_time: float = 0.0
     restart_count: int = 0
+    heartbeats: list[Heartbeat] = field(default_factory=list)
 
     @property
     def saves_common(self) -> Path:
@@ -114,8 +117,9 @@ class InstancePool:
             results = pool.evaluate(matchups)
     """
 
-    def __init__(self, config: InstanceConfig) -> None:
+    def __init__(self, config: InstanceConfig, curtailment: CurtailmentMonitor | None = None) -> None:
         self._config = config
+        self._curtailment = curtailment
         self._instances: list[GameInstance] = []
 
     def setup(self) -> None:
@@ -195,6 +199,7 @@ class InstancePool:
                 elif inst.state == InstanceState.RUNNING:
                     if self._is_heartbeat_fresh(inst):
                         inst.last_heartbeat_time = time.monotonic()
+                        self._read_and_check_curtailment(inst)
                     elif time.monotonic() - inst.last_heartbeat_time > self._config.heartbeat_timeout_seconds:
                         logger.warning("Instance %d heartbeat timed out", inst.instance_id)
                         inst.state = InstanceState.FAILED
@@ -290,6 +295,7 @@ class InstancePool:
         inst.assigned_matchups = chunk
         inst.results = []
         inst.restart_count = 0
+        inst.heartbeats = []
 
         self._clean_protocol_files(inst)
         self._write_queue(inst, chunk)
@@ -429,3 +435,28 @@ class InstancePool:
             raise InstanceError(
                 f"Instance {inst.instance_id} failed after {inst.restart_count} restarts"
             )
+
+    # --- Curtailment integration ---
+
+    def _read_and_check_curtailment(self, inst: GameInstance) -> None:
+        """Read heartbeat content and check if curtailment should trigger."""
+        if self._curtailment is None:
+            return
+        try:
+            content = inst.heartbeat_path.read_text().strip()
+            if not content:
+                return
+            hb = parse_heartbeat(content)
+            inst.heartbeats.append(hb)
+            should_stop, _ = self._curtailment.should_stop(inst.heartbeats)
+            if should_stop:
+                CurtailmentMonitor.write_stop_signal(inst.saves_common)
+        except (ValueError, OSError):
+            pass  # Malformed heartbeat or file not readable
+
+    # --- Variant file placement ---
+
+    def write_variant_to_all(self, variant: dict, filename: str) -> None:
+        """Write a variant file to every instance's data/variants/ directory."""
+        for inst in self._instances:
+            write_variant_file(variant, inst.variants_dir / filename)

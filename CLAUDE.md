@@ -4,6 +4,9 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 
 - **Phase 1** (complete): Data layer — game data parsing, search space, constraint repair, heuristic scoring, variant generation.
 - **Phase 2** (complete): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
+- **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
+- **Phase 3.5** (complete): Stochastic curtailment (TTD-ratio extrapolation) + data-driven timeout tuning (Weibull AFT).
+- **Phase 4** (in progress): Optimizer integration — Optuna TPE, opponent pool, heuristic warm-start.
 
 ## Commands
 
@@ -13,6 +16,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - Build combat harness: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew jar`
 - Run Java tests: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew test`
 - Deploy mod: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew deploy`
+- Run optimizer (heuristic-only): `uv run python scripts/run_optimizer.py --hull eagle --game-dir game/starsector --heuristic-only`
 - Game data location: `game/starsector/data/` (gitignored, not in repo)
 - See `combat-harness/CLAUDE.md` for Java-specific instructions
 
@@ -70,7 +74,11 @@ src/starsector_optimizer/          # Python modules
 ├── calibration.py                 # Random build generation + feature extraction
 ├── estimator.py                   # Throughput + cost estimation for simulation campaigns
 ├── result_parser.py               # Parse combat result JSON ↔ Python dataclasses
-└── instance_manager.py            # Manage N parallel Starsector game instances
+├── instance_manager.py            # Manage N parallel Starsector game instances
+├── curtailment.py                 # Stochastic curtailment (TTD-ratio extrapolation)
+├── timeout_tuner.py               # Data-driven timeout prediction (Weibull AFT)
+├── opponent_pool.py               # Diverse opponent pool per hull size
+└── optimizer.py                   # Optuna integration, ask-tell loop, warm-start
 
 combat-harness/                    # Java combat harness mod
 ├── CLAUDE.md                      # Java-specific instructions

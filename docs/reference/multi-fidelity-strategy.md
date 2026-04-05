@@ -1,342 +1,181 @@
 # Multi-Fidelity Evaluation Strategy
 
-This document covers the three-tier evaluation pipeline, surrogate model design, noise handling, and adaptive replication strategies.
+This document covers the two-tier evaluation pipeline, surrogate model design, noise handling, and adaptive replication strategies.
+
+**Updated based on Phase 3.5 + Phase 4 research findings.** Key change: "short sim" fidelity level removed — empirically shown to corrupt optimizer signal. Pipeline is now heuristic + full sim with curtailment.
 
 ---
 
-## Three-Tier Fidelity Hierarchy
+## Two-Tier Fidelity Hierarchy
 
-| Fidelity | Method | Cost | Accuracy (R² with Fidelity 2) | Use |
+| Fidelity | Method | Cost | Accuracy | Use |
 |---|---|---|---|---|
-| **0 — Heuristic** | Static metrics from game data | ~0ms | ~0.5-0.7 | Screen 10,000+ candidates/second |
-| **1 — Short Sim** | 15s game time, 3x speed | ~5s | ~0.8-0.9 | Capture combat dynamics approximately |
-| **2 — Full Sim** | 60s game time, 3-5x speed, 5-10 replicates | ~60-300s | Ground truth (noisy) | Final validation |
+| **0 — Heuristic** | Static metrics from game data | ~0ms | R² ≈ 0.49 with sim | Screen 100K+ candidates/second |
+| **1 — Full Sim** | 180s game time, 5x speed, curtailment | ~22-35s wall-clock | Ground truth (noisy) | Optimization + validation |
 
-### Why Multi-Fidelity Matters
+### Why NOT Three Tiers (No Short Sim)
 
-At 60s per evaluation, 500 evaluations = 8.3 hours with a single instance. Multi-fidelity can achieve 2-5x speedup by spending most evaluations at cheap fidelities and promoting only promising candidates to expensive ones.
+Phase 3.5 research proved short simulations corrupt the optimizer:
 
-### Critical Caveat: Unreliable Low-Fidelity Sources
+| Timeout | Timeout rate (cruiser) | Rank correlation | Convergence penalty |
+|---|---|---|---|
+| 60s | 100% | N/A (flat) | +20% iterations (+18h) |
+| 120s | 94% | 0.65 | +7% iterations (+6h) |
+| 180s | 46% | 0.93 | +2% iterations (+2h) |
+| 300s | 0.3% | 0.87 | Baseline |
 
-Our heuristic (Fidelity 0) has R² ≈ 0.5-0.7 with true combat performance. Standard multi-fidelity BO can actually perform **worse** than single-fidelity when low-fidelity sources are poor approximations (rMFBO, arXiv:2210.13937).
+A "short sim" at 15-30s game time would have near-100% timeout rate, producing a flat fitness landscape. The approach time alone (ships closing from 4000 units) consumes ~6s wall-clock at 5x. By the time ships engage, there's barely time for meaningful combat.
 
-**Where the heuristic fails:**
+**Curtailment replaces short sim for time savings.** Decisive fights (Onslaught vs Lasher) end naturally in ~47s game-time. Curtailment stops one-sided fights 12-24% faster. The fights that run long are the close, interesting ones where you *need* the full duration for a meaningful signal.
+
+### Where the Heuristic Works and Fails
+
+**Works well (captured by static metrics):**
+- Flux balance — universally predictive
+- Gross capability (DPS, EHP) — rank-orders builds reasonably
+- Obvious bad builds — clearly under-armed or over-fluxed builds score poorly
+
+**Fails (emergent from combat dynamics):**
 - Weapon synergies (kinetic + HE coverage) — emergent, not captured by sum of DPS
 - AI behavior adaptation — the AI manages flux, selects targets, toggles shields
 - Range dynamics — mismatched ranges cause idle weapons, invisible to static metrics
 - Armor penetration — the nonlinear damage formula favors high per-shot damage
 - Safety Overrides interactions — the speed+range tradeoff plays out in positioning
 
-**Where the heuristic works well:**
-- Flux balance — universally predictive, easy to compute
-- Gross capability (DPS, EHP) — rank-orders builds reasonably
-- Obvious bad builds — clearly under-armed or over-fluxed builds score poorly
+**R² ≈ 0.49 is below the 0.75 threshold for reliable MFBO** (per best-practices paper, arXiv 2410.00544). Full MFBO (jointly modeling heuristic + sim) can actually perform *worse* than single-fidelity when low-fidelity sources are poor approximations. This is why we use the heuristic as a warm-start prior, NOT as a co-modeled fidelity level.
 
 ---
 
-## Fidelity 0: Heuristic Scorer
+## Heuristic as Prior Mean (NOT Full MFBO)
 
-### Static Metrics
+### The Architecture
 
-```python
-class HeuristicScorer:
-    def score(self, build, hull, enemy=None):
-        weapons = self.get_equipped_weapons(build)
-        
-        # 1. Flux Balance (most predictive)
-        weapon_flux = sum(w.flux_per_second for w in weapons)
-        dissipation = hull.flux_dissipation + build.vents * 10
-        flux_balance = weapon_flux / max(dissipation, 1)
-        flux_score = self._flux_balance_curve(flux_balance)
-        
-        # 2. DPS by damage type
-        total_dps = sum(w.sustained_dps for w in weapons)
-        kinetic_frac = sum(w.dps for w in weapons if w.type == "KINETIC") / max(total_dps, 1)
-        he_frac = sum(w.dps for w in weapons if w.type == "HIGH_EXPLOSIVE") / max(total_dps, 1)
-        damage_mix_score = 1.0 - abs(kinetic_frac - 0.5)  # Reward balanced mix
-        
-        # 3. Flux Efficiency
-        total_flux = sum(w.flux_per_second for w in weapons)
-        flux_efficiency = total_dps / max(total_flux, 1)
-        
-        # 4. Effective HP
-        armor_ehp = self._compute_armor_ehp(hull, build)
-        shield_ehp = self._compute_shield_ehp(hull, build)
-        total_ehp = hull.hitpoints + armor_ehp + shield_ehp
-        
-        # 5. Range Coherence
-        ranges = [w.range for w in weapons if w.range > 0]
-        if ranges:
-            range_coherence = 1.0 - min(1.0, np.std(ranges) / np.mean(ranges))
-        else:
-            range_coherence = 0
-        
-        # 6. OP Efficiency
-        op_used = build.total_op_cost
-        op_efficiency = (total_dps + total_ehp * 0.01) / max(op_used, 1)
-        
-        # Weighted composite (weights from regression calibration)
-        return (self.w[0] * self._normalize(total_dps)
-              + self.w[1] * self._normalize(flux_efficiency)
-              + self.w[2] * self._normalize(total_ehp)
-              + self.w[3] * range_coherence
-              + self.w[4] * flux_score
-              + self.w[5] * damage_mix_score
-              + self.w[6] * self._normalize(op_efficiency))
-    
-    def _flux_balance_curve(self, ratio):
-        """Sigmoid-like scoring: good below 0.8, penalty above 1.0."""
-        if ratio <= 0.6:
-            return 1.0
-        elif ratio <= 0.8:
-            return 1.0 - (ratio - 0.6) * 0.5
-        elif ratio <= 1.0:
-            return 0.9 - (ratio - 0.8) * 2.0
-        else:
-            return max(0.0, 0.5 - (ratio - 1.0) * 2.0)
-```
-
-### Calibration Procedure
-
-1. Generate 200-300 diverse builds (Latin Hypercube sampling in build space)
-2. Run each through Fidelity 2 (full sim, 5 replicates)
-3. Compute all static metrics for each build
-4. Fit weighted regression: `sim_score = Σ w_i × metric_i`
-5. Validate with held-out set (80/20 split)
-6. Expected R² ≈ 0.5-0.7
-
----
-
-## Fidelity 1: Short Simulation
-
-### Configuration
-
-- Combat duration: 15 seconds of game time (vs 60s for full sim)
-- Speed multiplier: 3x (stable physics)
-- Replicates: 1-2 (for screening, not precision)
-- All ships AI-controlled
-
-### What It Captures That Heuristic Misses
-
-- Weapon-to-shield flux dynamics (hard flux accumulation)
-- AI engagement decisions (closing to range, shield toggling)
-- Early combat trajectory (which side gains flux advantage)
-- Missile effectiveness vs PD coverage
-- Range dictation (who controls engagement distance)
-
-### What It Misses
-
-- Long-term attrition (armor degradation over minutes)
-- PPT effects (Safety Overrides penalty only matters in long fights)
-- Comeback mechanics (ships that win late after absorbing early damage)
-- Full missile expenditure (ammo-limited builds may not fire all missiles)
-
-### When Short Sim Is Sufficient
-
-For **relative ranking** of builds (not absolute win rate), short sims correlate highly with full sims. They are sufficient for:
-- Eliminating clearly bad builds (Phase 2 screening)
-- Identifying which builds have good early-combat flux dynamics
-- Ranking builds within the same archetype
-
----
-
-## Fidelity 2: Full Simulation
-
-### Configuration
-
-- Combat duration: 60 seconds of game time
-- Speed multiplier: 3-5x (3x preferred for accuracy; 5x acceptable)
-- Replicates: 5-10 for final evaluation, 3 for optimization loop
-- All ships AI-controlled
-- Personality: Steady (default) unless testing specific scenarios
-
-### Physics Accuracy at Speed
-
-| Speed | Accuracy | Risk |
-|---|---|---|
-| 1x | Perfect | Too slow for batch optimization |
-| 2x | Very good | Negligible physics artifacts |
-| 3x | Good | Minor collision detection issues at extreme speeds |
-| 5x | Acceptable | Occasional projectile passthrough, slight spread changes |
-| 10x+ | Poor | Projectiles phase through ships, combat results unreliable |
-
-**Recommendation:** Use 3x for final validation, 5x acceptable during exploration.
-
----
-
-## Composite Surrogate Model
-
-### Architecture: Heuristic as Mean Function + GP Correction
-
-Based on the Kennedy-O'Hagan AR1 framework:
+Based on the particle accelerator BO paper (Scientific Reports 2025): use the heuristic as the GP's prior mean function. The GP learns the residual between heuristic and simulation.
 
 ```
 f_predicted(x) = heuristic(x) + GP_correction(x)
 ```
 
-The GP learns the **residual** between heuristic and simulation. This is easier to learn than the raw simulation output because:
-- The heuristic captures most of the variance
-- The residual is smoother and lower-variance
-- Less training data needed for the GP
+**Why this works even at R² = 0.49:**
+- The GP correction term absorbs the heuristic's systematic biases
+- The heuristic provides a reasonable starting point (better than constant mean)
+- The residual `f_sim - f_heuristic` is smoother and lower-variance than `f_sim` alone
+- Convergence guarantee: piBO (ICLR 2022) proves convergence at regular rates regardless of prior quality
 
-### Implementation in BoTorch
+**Key safeguard:** Linear decay weight transitions from heuristic-prior to constant-prior over time, preventing a bad prior from biasing late-stage refinement.
 
-```python
-import torch
-from botorch.models import SingleTaskGP
-from gpytorch.means import GenericDeterministicMean
+### Implementation with Optuna + Heuristic Warm-Start
 
-class HeuristicMean:
-    """Use heuristic score as GP mean function."""
-    def __init__(self, heuristic_scorer):
-        self.scorer = heuristic_scorer
-    
-    def __call__(self, X):
-        return torch.tensor([self.scorer.score(x) for x in X])
-
-# Fit GP on residuals
-train_X = observed_builds  # Tensor of build parameters
-train_Y_sim = simulation_scores
-train_Y_heuristic = heuristic_scores
-train_Y_residual = train_Y_sim - train_Y_heuristic
-
-model = SingleTaskGP(
-    train_X, 
-    train_Y_residual,
-    mean_module=gpytorch.means.ZeroMean(),  # Residual should be zero-mean
-)
-
-# Prediction: heuristic + GP correction
-def predict(x):
-    heuristic = scorer.score(x)
-    residual_mean, residual_var = model.posterior(x).mean, model.posterior(x).variance
-    return heuristic + residual_mean, residual_var
-```
-
-### Alternative: Heuristic as Input Feature
-
-Instead of a mean function, include the heuristic score as an additional input feature to the GP/RF:
+We don't use BoTorch's GP directly (TPE is our primary sampler). Instead, the heuristic informs optimization via warm-starting:
 
 ```python
-# Augment input with heuristic score
-X_augmented = np.column_stack([build_features, heuristic_scores])
-model.fit(X_augmented, sim_scores)
+# Phase A: Heuristic exploration (cost: ~0, time: seconds)
+builds = generate_diverse_builds(hull, game_data, n=50_000)
+scores = [heuristic_score(b, hull, game_data).composite_score for b in builds]
+top_500 = sorted(zip(builds, scores), key=lambda x: -x[1])[:500]
+
+# Phase B: Warm-start Optuna study
+for build, score in top_500:
+    trial = create_trial(
+        params=build_to_params(build),
+        distributions=search_space_distributions,
+        values=[score * 0.5],  # Scale down — heuristic != sim
+    )
+    study.add_trial(trial)
+
+# Phase C: Simulation-guided optimization
+# TPE now has 500 "observations" informing its density estimators
+# It will explore near heuristically-good regions first
+for _ in range(sim_budget):
+    trial = study.ask()
+    build = repair_build(trial_to_build(trial), hull, game_data)
+    sim_score = evaluate_against_opponent_pool(build)
+    study.add_trial(create_trial(
+        params=build_to_params(build),
+        distributions=search_space_distributions,
+        values=[sim_score],
+    ))
 ```
 
-This is simpler and lets the model learn a nonlinear mapping from heuristic to sim (not just additive correction).
+### When to Upgrade to Full MFBO
 
----
-
-## Multi-Fidelity Optimization Methods
-
-### Recommended: rMFBO (Safe Multi-Fidelity)
-
-rMFBO ensures performance is bounded below by single-fidelity BO even when low-fidelity sources are misleading.
-
-**When to use:** Always, as a safety wrapper around any multi-fidelity method.
-
-### Alternative: MFES-HB (Ensemble Surrogate + HyperBand)
-
-MFES-HB builds surrogates at ALL fidelity levels and uses Product of Experts with learned weights. Discordant fidelities are automatically downweighted.
-
-**Implementation:** [GitHub](https://github.com/PKU-DAIR/MFES-HB)
-
-**Fidelity mapping for HyperBand:**
-- Budget 1 → Fidelity 0 (heuristic)
-- Budget 2 → Fidelity 1 (short sim)
-- Budget 3 → Fidelity 2 (full sim)
-
-### Alternative: BoTorch Multi-Fidelity Knowledge Gradient
-
-```python
-from botorch.acquisition import qMultiFidelityKnowledgeGradient
-from botorch.models import SingleTaskMultiFidelityGP
-
-# Fidelity as an additional input dimension
-# 0.0 = heuristic, 0.5 = short sim, 1.0 = full sim
-model = SingleTaskMultiFidelityGP(
-    train_X=train_X_with_fidelity,
-    train_Y=train_Y,
-    data_fidelities=[fidelity_dim_index],
-)
-
-acqf = qMultiFidelityKnowledgeGradient(
-    model=model,
-    target_fidelities={fidelity_dim_index: 1.0},  # Optimize at full fidelity
-    cost_aware_utility=cost_model,  # Cost of each fidelity level
-)
-```
+If heuristic calibration improves R² above 0.75 (after Phase 6 surrogate correction), switch to BoTorch's `SingleTaskMultiFidelityGP` with `qMultiFidelityKnowledgeGradient`. The infrastructure is the same — just swap the acquisition function.
 
 ---
 
 ## Noise Handling and Adaptive Replication
 
+### Sources of Noise
+
+1. **AI behavior randomness**: Starsector's AI makes different micro-decisions each run
+2. **Weapon projectile spread**: Random within specified arcs
+3. **Timing jitter**: Shield toggling, target selection slightly stochastic
+
 ### How Many Replicates?
 
-| Phase | Replicates | Purpose |
+| Phase | Replicates per Opponent | Purpose |
 |---|---|---|
 | Heuristic screening | 0 (deterministic) | Pre-filter |
-| Short sim screening | 1-2 | Quick ranking |
-| Optimization loop | 3 | Sufficient for BO surrogate |
-| Final validation | 5-10 | Confident ranking |
-| Publication-quality | 20+ | Tight confidence intervals |
+| Optimization loop | 1 per opponent × 5 opponents = 5 total | Sufficient for TPE |
+| Final validation (racing) | 5 per opponent × 5 opponents = 25 total | Confident ranking |
 
-### Adaptive Replication via Knowledge Gradient
+The opponent pool already provides noise reduction: averaging across 5 diverse opponents smooths out matchup-specific variance.
 
-The Knowledge Gradient (KG) naturally handles the "new build vs re-evaluate" decision:
-- For new builds: KG = expected information from exploring unknown territory
-- For existing builds: KG = expected gain from reducing uncertainty at that point
-- KG selects whichever gives highest marginal value of information
+### WilcoxonPruner for Adaptive Budget
 
-### Racing (irace-style) for Final Selection
+WilcoxonPruner (Optuna) runs a Wilcoxon signed-rank test comparing each build's per-opponent scores to the best build's. If the build is statistically worse (p < 0.1) after 2-3 opponents, prune it. This saves 40-60% of simulation budget on clearly bad builds.
 
-After optimization identifies top-20 candidates:
+### Racing for Final Selection (irace-style)
 
-1. Evaluate all 20 on scenario 1 (opponent type A), 1 replicate each
-2. Apply Friedman test — eliminate statistically inferior builds
-3. Evaluate survivors on scenario 2 (opponent type B)
+After optimization identifies top-10 candidates:
+
+1. Evaluate all 10 on opponent 1, 5 replicates each
+2. Friedman test — eliminate statistically inferior builds
+3. Evaluate survivors on opponent 2, 5 replicates each
 4. Repeat until budget exhausted or winner emerges
 
-This naturally allocates more evaluations to competitive builds.
-
-### OCBA (Optimal Computing Budget Allocation)
-
-For final-stage comparison of top-K builds:
-- Allocate more replicates to builds that are close to the best (need precision)
-- Allocate more replicates to builds with higher variance (need certainty)
-- Maximizes Probability of Correct Selection given total budget
+This naturally allocates more replicates to competitive builds.
 
 ---
 
 ## Recommended Evaluation Pipeline
 
 ```
-Phase 1: HEURISTIC SCREENING (minutes, no game needed)
-    Input: Full search space (~10^6-10^8 feasible builds)
-    Method: Random/Sobol sampling + heuristic scoring
-    Output: Top 500-1000 candidates
-    Budget: 100,000-500,000 heuristic evaluations
+Phase 1: HEURISTIC SCREENING (seconds, no game needed)
+    Input: Full search space
+    Method: generate_diverse_builds(50K-100K) + heuristic_score()
+    Output: Top 500 candidates as warm-start for Optuna
+    Budget: 0 simulation evaluations
 
-Phase 2: SHORT SIM SCREENING (hours)
-    Input: Top 500-1000 from Phase 1
-    Method: 1-2 replicates of short sim (15s game time)
-    Output: Top 50-100 candidates
-    Budget: 500-2000 short sim evaluations
-    Wall-clock: ~30 min with 16 instances
+Phase 2: OPTIMIZER-GUIDED FULL SIM (hours)
+    Input: Warm-started Optuna study + optimizer exploration
+    Method: TPE with constant_liar, WilcoxonPruner, opponent pool (5 opponents)
+    Output: Top 10-20 builds with mean HP differentials
+    Budget: 200-400 builds × ~3 opponents avg (WilcoxonPruner) = 600-1200 sims
+    Wall-clock: ~2-3 hours with 8 instances
 
-Phase 3: OPTIMIZER-GUIDED FULL SIM (hours)
-    Input: Top 100 as warm-start + optimizer exploration
-    Method: Bounce/SMAC3 with full sim (60s, 3 replicates)
-    Output: Top 10-20 builds with mean performance estimates
-    Budget: 200-400 full sim evaluations
-    Wall-clock: ~2-4 hours with 16 instances
+Phase 3: RACING VALIDATION (hours)
+    Input: Top 10-20 from Phase 2
+    Method: irace-style racing, 5+ replicates per opponent per survivor
+    Output: Final ranked builds with confidence intervals + matchup profiles
+    Budget: 250-500 sims
+    Wall-clock: ~1 hour with 8 instances
 
-Phase 4: FINAL VALIDATION (hours)
-    Input: Top 10-20 from Phase 3
-    Method: irace-style racing, 10+ replicates per survivor
-    Output: Final ranked builds with confidence intervals
-    Budget: 100-200 full sim evaluations
-    Wall-clock: ~1-2 hours with 16 instances
+Total per hull: ~3-4 hours, ~1000-1700 sims, ~$11
 ```
 
-**Total wall-clock: ~4-8 hours for a complete hull optimization.**
+**Total wall-clock: ~3-4 hours for a complete hull optimization.**
+
+---
+
+## Comparison: Old Pipeline vs New Pipeline
+
+| Aspect | Old (3-tier) | New (2-tier + curtailment) |
+|---|---|---|
+| Fidelity levels | Heuristic → Short sim → Full sim | Heuristic → Full sim + curtailment |
+| Short sim risk | 100% timeout rate at 15s → corrupted signal | Eliminated |
+| Time savings mechanism | Short sim screening | Curtailment (12-24%) + WilcoxonPruner (40-60%) |
+| Warm-start method | Feed short-sim survivors to full-sim | Feed heuristic top-500 directly to TPE |
+| Opponent strategy | Not specified | Fixed diverse pool (5-6 archetypes) |
+| Budget per hull | ~500-2000 sims + 500-2000 short sims | ~1000-1700 sims total |
+| Wall-clock per hull | ~4-8 hours | ~3-4 hours |
