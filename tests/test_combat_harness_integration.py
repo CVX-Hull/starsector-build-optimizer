@@ -1,6 +1,6 @@
-"""Integration tests for the combat harness mod protocol.
+"""Integration tests for the combat harness batch protocol.
 
-Tests matchup.json generation and result.json parsing.
+Tests queue generation, batch result parsing, and done signal detection.
 Game-launch testing is manual (see combat-harness/CLAUDE.md).
 """
 
@@ -23,121 +23,137 @@ SAVES_COMMON = Path(__file__).parent.parent / "game" / "starsector" / "saves" / 
 VARIANT_DIR = Path(__file__).parent.parent / "game" / "starsector" / "data" / "variants"
 
 
-class TestMatchupJsonGeneration:
-    """Test that Python can write valid matchup.json for the Java mod."""
+class TestQueueGeneration:
+    """Test that Python can write valid queue files for the Java mod."""
 
-    def test_generate_matchup_json(self, game_data):
-        """Generate a matchup.json with an optimizer variant vs vanilla opponent."""
+    def test_generate_queue_json(self, game_data):
+        """Generate a queue with multiple matchup configs."""
         eagle = game_data.hulls["eagle"]
         build = generate_random_build(eagle, game_data)
         variant = generate_variant(build, eagle, game_data)
-        variant_id = variant["variantId"]
+        vid = variant["variantId"]
 
-        matchup = {
-            "matchup_id": "test_001",
-            "player_variants": [variant_id],
-            "enemy_variants": ["dominator_Standard"],
-            "player_flagship": variant_id,
-            "time_limit_seconds": 300,
-            "time_mult": 3.0,
-            "map_width": 24000,
-            "map_height": 18000,
-        }
+        queue = [
+            {
+                "matchup_id": "test_001",
+                "player_variants": [vid],
+                "enemy_variants": ["dominator_Assault"],
+                "time_limit_seconds": 180,
+                "time_mult": 3.0,
+            },
+            {
+                "matchup_id": "test_002",
+                "player_variants": [vid],
+                "enemy_variants": ["enforcer_Assault"],
+                "time_limit_seconds": 180,
+                "time_mult": 3.0,
+            },
+        ]
 
-        # Verify it's valid JSON
-        json_str = json.dumps(matchup, indent=2)
+        json_str = json.dumps(queue, indent=2)
         parsed = json.loads(json_str)
-        assert parsed["matchup_id"] == "test_001"
-        assert len(parsed["player_variants"]) == 1
-        assert len(parsed["enemy_variants"]) == 1
+        assert len(parsed) == 2
+        assert parsed[0]["matchup_id"] == "test_001"
+        assert parsed[1]["matchup_id"] == "test_002"
 
-    def test_matchup_config_dataclass_from_dict(self):
-        """Verify MatchupConfig can be constructed from the same schema."""
+    def test_matchup_config_construction(self):
         mc = MatchupConfig(
             matchup_id="eval_001",
-            player_variants=("eagle_opt_test",),
-            enemy_variants=("dominator_Standard",),
-            player_flagship="eagle_opt_test",
+            player_variants=("eagle_test",),
+            enemy_variants=("dominator_Assault",),
         )
         assert mc.time_limit_seconds == 300.0
         assert mc.time_mult == 3.0
 
-    def test_deploy_variant_and_matchup(self, game_data):
-        """Generate variant file + matchup.json, write to saves/common/ with .data extension."""
+    def test_deploy_queue_file(self, game_data):
+        """Write queue + variant files to saves/common/ with .data extension."""
         if not SAVES_COMMON.exists():
-            pytest.skip("saves/common/ not found (game not installed or never launched)")
+            pytest.skip("saves/common/ not found")
 
         eagle = game_data.hulls["eagle"]
         build = generate_random_build(eagle, game_data)
         variant = generate_variant(build, eagle, game_data)
-        variant_id = variant["variantId"]
+        vid = variant["variantId"]
 
-        # Write variant file to game's variants directory
         if VARIANT_DIR.exists():
-            variant_path = VARIANT_DIR / f"{variant_id}.variant"
-            write_variant_file(variant, variant_path)
-            assert variant_path.exists()
+            write_variant_file(variant, VARIANT_DIR / f"{vid}.variant")
 
-        # Write matchup.json with .data extension (game appends .data to saves/common/ files)
-        matchup = {
-            "matchup_id": "integration_test",
-            "player_variants": [variant_id],
-            "enemy_variants": ["dominator_Assault"],
-            "player_flagship": variant_id,
-            "time_limit_seconds": 120,
-            "time_mult": 3.0,
-        }
-        matchup_path = SAVES_COMMON / "combat_harness_matchup.json.data"
-        matchup_path.write_text(json.dumps(matchup, indent=2))
-        assert matchup_path.exists()
-
-        # Verify it's parseable
-        loaded = json.loads(matchup_path.read_text())
-        assert loaded["matchup_id"] == "integration_test"
-
-
-class TestResultJsonParsing:
-    """Test that Python can parse result.json written by the Java mod."""
-
-    SAMPLE_RESULT = {
-        "matchup_id": "eval_001",
-        "winner": "PLAYER",
-        "duration_seconds": 87.3,
-        "player_ships": [
+        queue = [
             {
-                "fleet_member_id": "0",
-                "variant_id": "eagle_opt_test",
-                "hull_id": "eagle",
-                "destroyed": False,
-                "hull_fraction": 0.82,
-                "armor_fraction": 0.45,
-                "cr_remaining": 0.61,
-                "peak_time_remaining": 142.0,
-                "disabled_weapons": 0,
-                "flameouts": 0,
-                "damage_dealt": {"shield": 12450.0, "armor": 8230.0, "hull": 3100.0, "emp": 500.0},
-                "damage_taken": {"shield": 6200.0, "armor": 2100.0, "hull": 1800.0, "emp": 0.0},
-                "flux_stats": {"curr_flux": 2340.0, "hard_flux": 1200.0, "max_flux": 12000.0, "overload_count": 0},
-            }
-        ],
-        "enemy_ships": [],
-        "aggregate": {
-            "player_total_damage_dealt": 23780.0,
-            "enemy_total_damage_dealt": 10100.0,
-            "player_ships_destroyed": 0,
-            "enemy_ships_destroyed": 2,
-            "player_ships_retreated": 0,
-            "enemy_ships_retreated": 0,
+                "matchup_id": "integration_test",
+                "player_variants": [vid],
+                "enemy_variants": ["dominator_Assault"],
+                "time_limit_seconds": 120,
+                "time_mult": 3.0,
+            },
+        ]
+
+        queue_path = SAVES_COMMON / "combat_harness_queue.json.data"
+        queue_path.write_text(json.dumps(queue, indent=2))
+        assert queue_path.exists()
+
+        loaded = json.loads(queue_path.read_text())
+        assert len(loaded) == 1
+        assert loaded[0]["matchup_id"] == "integration_test"
+
+
+class TestBatchResultParsing:
+    """Test that Python can parse batch results written by the Java mod."""
+
+    SAMPLE_RESULTS = [
+        {
+            "matchup_id": "eval_001",
+            "winner": "ENEMY",
+            "duration_seconds": 56.8,
+            "player_ships": [
+                {
+                    "fleet_member_id": "uuid-1",
+                    "variant_id": "eagle_opt_test",
+                    "hull_id": "eagle",
+                    "destroyed": True,
+                    "hull_fraction": 0.0,
+                    "armor_fraction": 0.36,
+                    "cr_remaining": 0.7,
+                    "peak_time_remaining": 472.0,
+                    "disabled_weapons": 8,
+                    "flameouts": 0,
+                    "damage_dealt": {"shield": 4300.0, "armor": 0.0, "hull": 0.0, "emp": 0.0},
+                    "damage_taken": {"shield": 0.0, "armor": 5098.0, "hull": 24588.0, "emp": 0.0},
+                    "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 12900.0, "overload_count": 0},
+                }
+            ],
+            "enemy_ships": [
+                {
+                    "fleet_member_id": "uuid-2",
+                    "variant_id": "dominator_Assault",
+                    "hull_id": "dominator",
+                    "destroyed": False,
+                    "hull_fraction": 1.0,
+                    "armor_fraction": 1.0,
+                    "cr_remaining": 0.7,
+                    "peak_time_remaining": 532.0,
+                    "disabled_weapons": 0,
+                    "flameouts": 0,
+                    "damage_dealt": {"shield": 0.0, "armor": 5098.0, "hull": 24588.0, "emp": 0.0},
+                    "damage_taken": {"shield": 4300.0, "armor": 0.0, "hull": 0.0, "emp": 0.0},
+                    "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 13000.0, "overload_count": 0},
+                }
+            ],
+            "aggregate": {
+                "player_total_damage_dealt": 4300.0,
+                "enemy_total_damage_dealt": 29686.0,
+                "player_ships_destroyed": 1,
+                "enemy_ships_destroyed": 0,
+                "player_ships_retreated": 0,
+                "enemy_ships_retreated": 0,
+            },
         },
-    }
+    ]
 
-    def test_parse_sample_result(self):
-        """Parse a sample result.json into CombatResult dataclass."""
-        data = self.SAMPLE_RESULT
-
-        player_ships = []
-        for s in data["player_ships"]:
-            player_ships.append(ShipCombatResult(
+    def _parse_result(self, data: dict) -> CombatResult:
+        """Parse a single result dict into CombatResult."""
+        player_ships = tuple(
+            ShipCombatResult(
                 fleet_member_id=s["fleet_member_id"],
                 variant_id=s["variant_id"],
                 hull_id=s["hull_id"],
@@ -151,55 +167,66 @@ class TestResultJsonParsing:
                 damage_dealt=DamageBreakdown(**s["damage_dealt"]),
                 damage_taken=DamageBreakdown(**s["damage_taken"]),
                 overload_count=s["flux_stats"]["overload_count"],
-            ))
-
-        result = CombatResult(
+            )
+            for s in data["player_ships"]
+        )
+        enemy_ships = tuple(
+            ShipCombatResult(
+                fleet_member_id=s["fleet_member_id"],
+                variant_id=s["variant_id"],
+                hull_id=s["hull_id"],
+                destroyed=s["destroyed"],
+                hull_fraction=s["hull_fraction"],
+                armor_fraction=s["armor_fraction"],
+                cr_remaining=s["cr_remaining"],
+                peak_time_remaining=s["peak_time_remaining"],
+                disabled_weapons=s["disabled_weapons"],
+                flameouts=s["flameouts"],
+                damage_dealt=DamageBreakdown(**s["damage_dealt"]),
+                damage_taken=DamageBreakdown(**s["damage_taken"]),
+                overload_count=s["flux_stats"]["overload_count"],
+            )
+            for s in data["enemy_ships"]
+        )
+        return CombatResult(
             matchup_id=data["matchup_id"],
             winner=data["winner"],
             duration_seconds=data["duration_seconds"],
-            player_ships=tuple(player_ships),
-            enemy_ships=(),
+            player_ships=player_ships,
+            enemy_ships=enemy_ships,
             player_ships_destroyed=data["aggregate"]["player_ships_destroyed"],
             enemy_ships_destroyed=data["aggregate"]["enemy_ships_destroyed"],
             player_ships_retreated=data["aggregate"]["player_ships_retreated"],
             enemy_ships_retreated=data["aggregate"]["enemy_ships_retreated"],
         )
 
-        assert result.winner == "PLAYER"
-        assert result.duration_seconds == 87.3
-        assert len(result.player_ships) == 1
-        assert result.player_ships[0].hull_fraction == 0.82
-        assert result.player_ships[0].damage_dealt.shield == 12450.0
-        assert result.enemy_ships_destroyed == 2
+    def test_parse_batch_results(self):
+        results = [self._parse_result(r) for r in self.SAMPLE_RESULTS]
+        assert len(results) == 1
+        assert results[0].winner == "ENEMY"
+        assert results[0].player_ships[0].destroyed is True
+        assert results[0].enemy_ships[0].hull_fraction == 1.0
 
-    def test_result_json_round_trip(self, tmp_path):
-        """Write sample result to file, read back, verify."""
-        result_path = tmp_path / "result.json"
-        result_path.write_text(json.dumps(self.SAMPLE_RESULT, indent=2))
+    def test_results_round_trip(self, tmp_path):
+        results_path = tmp_path / "combat_harness_results.json.data"
+        results_path.write_text(json.dumps(self.SAMPLE_RESULTS, indent=2))
 
-        loaded = json.loads(result_path.read_text())
-        assert loaded["matchup_id"] == "eval_001"
-        assert loaded["winner"] == "PLAYER"
-        assert len(loaded["player_ships"]) == 1
-        assert loaded["player_ships"][0]["hull_fraction"] == 0.82
+        loaded = json.loads(results_path.read_text())
+        assert len(loaded) == 1
+        assert loaded[0]["matchup_id"] == "eval_001"
+
+    def test_done_signal_detection(self, tmp_path):
+        done_path = tmp_path / "combat_harness_done.data"
+        assert not done_path.exists()
+
+        done_path.write_text("1712345678000")
+        assert done_path.exists()
 
     def test_validate_result_schema(self):
-        """Verify all required fields are present in the sample."""
-        data = self.SAMPLE_RESULT
-        assert "matchup_id" in data
-        assert "winner" in data
-        assert data["winner"] in ("PLAYER", "ENEMY", "TIMEOUT")
-        assert "duration_seconds" in data
-        assert data["duration_seconds"] > 0
-        assert "player_ships" in data
-        assert "enemy_ships" in data
-        assert "aggregate" in data
-
-        for ship in data["player_ships"]:
-            assert 0.0 <= ship["hull_fraction"] <= 1.0
-            assert 0.0 <= ship["armor_fraction"] <= 1.0
-            assert ship["disabled_weapons"] >= 0
-            assert ship["flameouts"] >= 0
-            assert "damage_dealt" in ship
-            assert "damage_taken" in ship
-            assert "flux_stats" in ship
+        for data in self.SAMPLE_RESULTS:
+            assert data["winner"] in ("PLAYER", "ENEMY", "TIMEOUT")
+            assert data["duration_seconds"] > 0
+            for ship in data["player_ships"] + data["enemy_ships"]:
+                assert 0.0 <= ship["hull_fraction"] <= 1.0
+                assert 0.0 <= ship["armor_fraction"] <= 1.0
+                assert ship["disabled_weapons"] >= 0

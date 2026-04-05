@@ -1,16 +1,12 @@
 package starsector.combatharness;
 
-import com.fs.starfarer.api.Global;
-
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
 /**
- * Configuration for a single combat matchup, parsed from matchup.json.
- *
- * Files are read from saves/common/combat_harness/ via the game's SettingsAPI
- * (direct java.io.File access is blocked by Starsector's security sandbox).
+ * Configuration for a single combat matchup. Used within MatchupQueue.
+ * Parsed from a JSON object with fields: matchup_id, player_variants, enemy_variants, etc.
  */
 public class MatchupConfig {
 
@@ -37,24 +33,6 @@ public class MatchupConfig {
         this.timeMult = timeMult;
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
-    }
-
-    /**
-     * Load matchup config from saves/common/combat_harness/matchup.json.
-     * Uses the game's SettingsAPI to comply with the security sandbox.
-     */
-    public static MatchupConfig loadFromCommon() throws JSONException {
-        try {
-            String content = Global.getSettings().readTextFileFromCommon(COMMON_PREFIX + "matchup.json");
-            return fromJSON(new JSONObject(content));
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to read matchup config from saves/common/" + COMMON_PREFIX + "matchup.json", e);
-        }
-    }
-
-    /** Check if matchup.json exists in saves/common/. */
-    public static boolean existsInCommon() {
-        return Global.getSettings().fileExistsInCommon(COMMON_PREFIX + "matchup.json");
     }
 
     public static MatchupConfig fromJSON(JSONObject json) throws JSONException {

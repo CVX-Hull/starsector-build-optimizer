@@ -2,13 +2,8 @@ package starsector.combatharness;
 
 import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.combat.ArmorGridAPI;
-import com.fs.starfarer.api.combat.CombatEngineAPI;
-import com.fs.starfarer.api.combat.CombatFleetManagerAPI;
-import com.fs.starfarer.api.combat.DeployedFleetMemberAPI;
 import com.fs.starfarer.api.combat.FluxTrackerAPI;
 import com.fs.starfarer.api.combat.ShipAPI;
-import com.fs.starfarer.api.fleet.FleetMemberAPI;
-import com.fs.starfarer.api.mission.FleetSide;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -18,83 +13,87 @@ import java.io.IOException;
 import java.util.List;
 
 /**
- * Collects final combat state and writes result.json via the game's SettingsAPI.
- *
- * Output goes to saves/common/combat_harness/result.json
- * (direct java.io.File access is blocked by Starsector's security sandbox).
+ * Constructs result JSON from tracked ship data and writes batch results via SettingsAPI.
  */
 public class ResultWriter {
 
-    public static void writeResult(CombatEngineAPI engine, DamageTracker tracker,
-                                   MatchupConfig config, boolean timedOut)
-            throws JSONException {
-        String winner;
-        if (timedOut) {
-            winner = "TIMEOUT";
-        } else {
-            int winningSide = engine.getWinningSideId();
-            winner = winningSide == 0 ? "PLAYER" : "ENEMY";
-        }
-
-        float duration = engine.getTotalElapsedTime(false);
-
-        JSONArray playerShips = new JSONArray();
-        JSONArray enemyShips = new JSONArray();
-
-        // Use getAllEverDeployedCopy() to include destroyed ships
-        // (engine.getShips() may not include ships removed after destruction)
-        collectShipsFromFleetManager(engine.getFleetManager(FleetSide.PLAYER), tracker, playerShips);
-        collectShipsFromFleetManager(engine.getFleetManager(FleetSide.ENEMY), tracker, enemyShips);
-
-        // Aggregate stats
-        CombatFleetManagerAPI playerFM = engine.getFleetManager(FleetSide.PLAYER);
-        CombatFleetManagerAPI enemyFM = engine.getFleetManager(FleetSide.ENEMY);
+    /**
+     * Build a single matchup result from directly-tracked ShipAPI references.
+     * Does NOT use fleet manager (which accumulates across matchups in batched sessions).
+     */
+    public static JSONObject buildMatchupResult(MatchupConfig config,
+                                                 List<ShipAPI> playerShips,
+                                                 List<ShipAPI> enemyShips,
+                                                 DamageTracker tracker,
+                                                 String winner,
+                                                 float duration) throws JSONException {
+        JSONArray playerArr = new JSONArray();
+        JSONArray enemyArr = new JSONArray();
 
         float playerTotalDealt = 0f;
         float enemyTotalDealt = 0f;
-        // Sum damage dealt from per-ship JSON objects
-        for (int i = 0; i < playerShips.length(); i++) {
-            JSONObject s = playerShips.getJSONObject(i);
-            JSONObject dealt = s.getJSONObject("damage_dealt");
+        int playerDestroyed = 0;
+        int enemyDestroyed = 0;
+
+        for (ShipAPI ship : playerShips) {
+            JSONObject shipJson = shipToJSON(ship, tracker);
+            playerArr.put(shipJson);
+            JSONObject dealt = shipJson.getJSONObject("damage_dealt");
             playerTotalDealt += dealt.getDouble("shield") + dealt.getDouble("armor")
                     + dealt.getDouble("hull") + dealt.getDouble("emp");
-        }
-        for (int i = 0; i < enemyShips.length(); i++) {
-            JSONObject s = enemyShips.getJSONObject(i);
-            JSONObject dealt = s.getJSONObject("damage_dealt");
-            enemyTotalDealt += dealt.getDouble("shield") + dealt.getDouble("armor")
-                    + dealt.getDouble("hull") + dealt.getDouble("emp");
+            if (!ship.isAlive()) playerDestroyed++;
         }
 
-        int playerDestroyed = countDestroyed(playerFM);
-        int enemyDestroyed = countDestroyed(enemyFM);
-        int playerRetreated = safeSize(playerFM.getRetreatedCopy());
-        int enemyRetreated = safeSize(enemyFM.getRetreatedCopy());
+        for (ShipAPI ship : enemyShips) {
+            JSONObject shipJson = shipToJSON(ship, tracker);
+            enemyArr.put(shipJson);
+            JSONObject dealt = shipJson.getJSONObject("damage_dealt");
+            enemyTotalDealt += dealt.getDouble("shield") + dealt.getDouble("armor")
+                    + dealt.getDouble("hull") + dealt.getDouble("emp");
+            if (!ship.isAlive()) enemyDestroyed++;
+        }
 
         JSONObject result = new JSONObject();
         result.put("matchup_id", config.matchupId);
         result.put("winner", winner);
         result.put("duration_seconds", duration);
-        result.put("player_ships", playerShips);
-        result.put("enemy_ships", enemyShips);
+        result.put("player_ships", playerArr);
+        result.put("enemy_ships", enemyArr);
         result.put("aggregate", aggregateToJSON(playerTotalDealt, enemyTotalDealt,
-                playerDestroyed, enemyDestroyed, playerRetreated, enemyRetreated));
-
-        writeToCommon(result);
+                playerDestroyed, enemyDestroyed, 0, 0));
+        return result;
     }
 
-    /** Collect ship data from a fleet manager, including destroyed/disabled ships. */
-    private static void collectShipsFromFleetManager(CombatFleetManagerAPI fm,
-                                                     DamageTracker tracker,
-                                                     JSONArray output) throws JSONException {
-        List<DeployedFleetMemberAPI> allDeployed = fm.getAllEverDeployedCopy();
-        if (allDeployed == null) return;
-        for (DeployedFleetMemberAPI dfm : allDeployed) {
-            if (dfm.isFighterWing()) continue;
-            ShipAPI ship = dfm.getShip();
-            if (ship == null) continue;
-            if (ship.isFighter()) continue;
-            output.put(shipToJSON(ship, tracker));
+    /** Write batch results array to saves/common/. */
+    public static void writeAllResults(JSONArray results) throws JSONException {
+        try {
+            Global.getSettings().writeTextFileToCommon(
+                    MatchupConfig.COMMON_PREFIX + "results.json",
+                    results.toString(2));
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to write results to saves/common/", e);
+        }
+    }
+
+    /** Write done signal to saves/common/. */
+    public static void writeDoneSignal() {
+        try {
+            Global.getSettings().writeTextFileToCommon(
+                    MatchupConfig.COMMON_PREFIX + "done",
+                    String.valueOf(System.currentTimeMillis()));
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to write done signal to saves/common/", e);
+        }
+    }
+
+    /** Write heartbeat to saves/common/. Non-fatal on failure. */
+    public static void writeHeartbeat(float elapsedTime) {
+        try {
+            Global.getSettings().writeTextFileToCommon(
+                    MatchupConfig.COMMON_PREFIX + "heartbeat.txt",
+                    System.currentTimeMillis() + " " + elapsedTime);
+        } catch (IOException e) {
+            // Non-fatal
         }
     }
 
@@ -180,37 +179,5 @@ public class ResultWriter {
         json.put("player_ships_retreated", playerRetreated);
         json.put("enemy_ships_retreated", enemyRetreated);
         return json;
-    }
-
-    /** Write result JSON to saves/common/combat_harness/result.json via SettingsAPI. */
-    static void writeToCommon(JSONObject json) throws JSONException {
-        try {
-            Global.getSettings().writeTextFileToCommon(
-                    MatchupConfig.COMMON_PREFIX + "result.json",
-                    json.toString(2));
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to write result.json to saves/common/", e);
-        }
-    }
-
-    /** Write heartbeat to saves/common/combat_harness/heartbeat.txt via SettingsAPI. */
-    public static void writeHeartbeat(float elapsedTime) {
-        try {
-            Global.getSettings().writeTextFileToCommon(
-                    MatchupConfig.COMMON_PREFIX + "heartbeat.txt",
-                    System.currentTimeMillis() + " " + elapsedTime);
-        } catch (IOException e) {
-            // Heartbeat failure is non-fatal
-        }
-    }
-
-    private static int countDestroyed(CombatFleetManagerAPI fm) {
-        List<FleetMemberAPI> destroyed = fm.getDestroyedCopy();
-        List<FleetMemberAPI> disabled = fm.getDisabledCopy();
-        return safeSize(destroyed) + safeSize(disabled);
-    }
-
-    private static int safeSize(List<?> list) {
-        return list != null ? list.size() : 0;
     }
 }

@@ -1,7 +1,6 @@
 package starsector.combatharness;
 
 import com.fs.starfarer.api.BaseModPlugin;
-import com.fs.starfarer.api.Global;
 
 import org.apache.log4j.Logger;
 
@@ -14,23 +13,17 @@ public class CombatHarnessModPlugin extends BaseModPlugin {
 
     @Override
     public void onApplicationLoad() throws Exception {
-        log.info("Combat Harness v0.1.0 loaded");
+        log.info("Combat Harness v0.2.0 loaded");
 
-        // Debug: write a test file to discover actual saves/common/ path
-        try {
-            Global.getSettings().writeTextFileToCommon("combat_harness_probe.txt", "probe");
-            log.info("Wrote probe file to saves/common/combat_harness_probe.txt");
-        } catch (Exception e) {
-            log.error("Failed to write probe file: " + e.getMessage());
-        }
-
-        boolean exists = MatchupConfig.existsInCommon();
-        log.info("fileExistsInCommon('" + MatchupConfig.COMMON_PREFIX + "matchup.json') = " + exists);
-
-        if (exists) {
-            log.info("matchup.json found — Optimizer Arena mission is ready");
+        if (MatchupQueue.existsInCommon()) {
+            try {
+                MatchupQueue queue = MatchupQueue.loadFromCommon();
+                log.info("Matchup queue found with " + queue.size() + " matchups — Optimizer Arena mission is ready");
+            } catch (Exception e) {
+                log.warn("Matchup queue found but failed to parse: " + e.getMessage());
+            }
         } else {
-            log.info("No matchup.json found — write " + MatchupConfig.COMMON_PREFIX + "matchup.json to saves/common/");
+            log.info("No matchup queue in saves/common/ — write combat_harness_queue.json.data before running Optimizer Arena");
         }
     }
 

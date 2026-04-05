@@ -374,11 +374,10 @@ class CombatResult:
 
 @dataclass(frozen=True)
 class MatchupConfig:
-    """Configuration for a single combat matchup."""
+    """Configuration for a single combat matchup. Used within a matchup queue."""
     matchup_id: str
     player_variants: tuple[str, ...]
     enemy_variants: tuple[str, ...]
-    player_flagship: str | None = None
     time_limit_seconds: float = 300.0
     time_mult: float = 3.0
     map_width: float = 24000.0

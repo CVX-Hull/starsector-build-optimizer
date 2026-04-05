@@ -1,0 +1,5 @@
+{
+    "plugins": {
+        "combatHarnessTitleScreen": "starsector.combatharness.TitleScreenPlugin"
+    }
+}

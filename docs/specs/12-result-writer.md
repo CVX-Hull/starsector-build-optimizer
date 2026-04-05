@@ -1,58 +1,39 @@
 # Result Writer Specification
 
-Collects final combat state and writes `result.json` via the game's SettingsAPI. Defined in `combat-harness/src/main/java/starsector/combatharness/ResultWriter.java`.
-
-## File Output
-
-Results are written to `saves/common/combat_harness_result.json` via `Global.getSettings().writeTextFileToCommon()`. The game appends `.data` to the filename on disk.
-
-Atomic writes (tmp + rename) are **not possible** through the SettingsAPI — the game handles writing internally.
+Constructs result JSON from tracked ship data and writes batch results via SettingsAPI. Defined in `combat-harness/src/main/java/starsector/combatharness/ResultWriter.java`.
 
 ## Functions
 
-### `static void writeResult(CombatEngineAPI engine, DamageTracker tracker, MatchupConfig config, boolean timedOut)`
+### `static JSONObject buildMatchupResult(MatchupConfig config, List<ShipAPI> playerShips, List<ShipAPI> enemyShips, DamageTracker tracker, String winner, float duration)`
 
-Main entry point. Collects all combat data and writes result.json.
+Build a single matchup result JSONObject from directly-tracked ShipAPI references. Does NOT use fleet manager (which accumulates across matchups in batched sessions).
 
-1. Determine winner: `timedOut` → `"TIMEOUT"`, else `engine.getWinningSideId()` (0=PLAYER, 1=ENEMY)
-2. Get combat duration: `engine.getTotalElapsedTime(false)`
-3. Collect ships from both fleet managers via `collectShipsFromFleetManager()`
-4. Compute aggregate stats from fleet managers
-5. Build final JSONObject and write via `writeToCommon()`
-
-### `static void collectShipsFromFleetManager(CombatFleetManagerAPI fm, DamageTracker tracker, JSONArray output)`
-
-Iterate `fm.getAllEverDeployedCopy()` to collect all ships including destroyed/disabled ones. `engine.getShips()` may drop destroyed ships — the fleet manager tracks everything ever deployed.
-
-Skips fighter wings and null ships.
+- `winner`: `"PLAYER"`, `"ENEMY"`, or `"TIMEOUT"`
+- `duration`: combat time for this matchup (relative, not cumulative engine time)
+- Ship data extracted via `shipToJSON()` for each tracked ship
+- Aggregate stats computed from the ship lists (destroyed = `!ship.isAlive()` count)
 
 ### `static JSONObject shipToJSON(ShipAPI ship, DamageTracker tracker)`
 
-Extract per-ship stats:
+Extract per-ship stats from a ShipAPI reference:
+- `fleet_member_id`, `variant_id` (null-safe), `hull_id` (null-safe)
+- `destroyed` (`!ship.isAlive()`), `hull_fraction`, `armor_fraction`
+- `cr_remaining`, `peak_time_remaining`, `disabled_weapons` (null-safe), `flameouts`
+- `damage_dealt/taken` from DamageTracker accumulators
+- `flux_stats` from FluxTrackerAPI (null-safe)
 
-| Field | Source |
-|-------|--------|
-| `fleet_member_id` | `ship.getFleetMemberId()` |
-| `variant_id` | `ship.getVariant().getHullVariantId()` (null-safe) |
-| `hull_id` | `ship.getHullSpec().getHullId()` (null-safe) |
-| `destroyed` | `!ship.isAlive()` |
-| `hull_fraction` | `ship.getHullLevel()` (inherited from CombatEntityAPI) |
-| `armor_fraction` | Average of armor grid cells / max armor per cell |
-| `cr_remaining` | `ship.getCurrentCR()` |
-| `peak_time_remaining` | `ship.getPeakTimeRemaining()` |
-| `disabled_weapons` | `ship.getDisabledWeapons().size()` (null-safe) |
-| `flameouts` | `ship.getNumFlameouts()` |
-| `damage_dealt/taken` | From `tracker.getOrCreate(fleetMemberId)` |
-| `flux_stats` | From `ship.getFluxTracker()` (null-safe) |
+### `static void writeAllResults(JSONArray results)`
+Write the batch results array to `combat_harness_results.json` via SettingsAPI.
+
+### `static void writeDoneSignal()`
+Write `combat_harness_done` signal file (contains timestamp) via SettingsAPI.
 
 ### `static void writeHeartbeat(float elapsedTime)`
+Write heartbeat to `combat_harness_heartbeat.txt` via SettingsAPI. Non-fatal on failure.
 
-Write heartbeat to `saves/common/combat_harness_heartbeat.txt` via SettingsAPI. Non-fatal on failure.
+### Static JSON Helpers (JUnit-testable)
 
-## Testable Helpers
-
-These static methods are testable via JUnit without the game running:
-
-- `damageToJSON(shield, armor, hull, emp)` — pure JSON construction
-- `fluxStatsToJSON(currFlux, hardFlux, maxFlux, overloadCount)` — pure JSON construction
-- `aggregateToJSON(...)` — pure JSON construction
+- `damageToJSON(shield, armor, hull, emp)` → `{"shield": N, "armor": N, ...}`
+- `fluxStatsToJSON(currFlux, hardFlux, maxFlux, overloadCount)` → `{...}`
+- `aggregateToJSON(playerDealt, enemyDealt, playerDestroyed, enemyDestroyed, playerRetreated, enemyRetreated)` → `{...}`
+- `computeArmorFraction(ShipAPI)` → average armor grid cells / max

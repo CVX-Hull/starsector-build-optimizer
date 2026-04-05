@@ -8,59 +8,67 @@ import com.fs.starfarer.api.mission.MissionDefinitionPlugin;
 
 import starsector.combatharness.CombatHarnessPlugin;
 import starsector.combatharness.MatchupConfig;
+import starsector.combatharness.MatchupQueue;
 
+/**
+ * Sets up the first matchup's ships and attaches the CombatHarnessPlugin.
+ * The plugin handles subsequent matchups by spawning/removing ships mid-combat.
+ *
+ * The first matchup's ships MUST be added here (via addToFleet) because the game
+ * shows a "No ships deployed" screen for empty fleets and won't start combat.
+ * spawnShipOrWing() only works once combat is already running.
+ */
 public class MissionDefinition implements MissionDefinitionPlugin {
 
     public void defineMission(MissionDefinitionAPI api) {
-        if (!MatchupConfig.existsInCommon()) {
-            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
+        if (!MatchupQueue.existsInCommon()) {
+            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
             api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
-            api.addBriefingItem("ERROR: No matchup.json found in saves/common/combat_harness/");
-            api.addBriefingItem("Place a matchup.json before launching this mission.");
+            api.addBriefingItem("ERROR: No queue file found in saves/common/");
+            api.addBriefingItem("Write combat_harness_queue.json.data before launching.");
             api.initMap(-8000f, 8000f, -6000f, 6000f);
             return;
         }
 
-        MatchupConfig config;
+        MatchupQueue queue;
         try {
-            config = MatchupConfig.loadFromCommon();
+            queue = MatchupQueue.loadFromCommon();
         } catch (Exception e) {
-            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
+            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
             api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
-            api.addBriefingItem("ERROR: Failed to parse matchup.json: " + e.getMessage());
+            api.addBriefingItem("ERROR: Failed to parse queue: " + e.getMessage());
             api.initMap(-8000f, 8000f, -6000f, 6000f);
             return;
         }
 
-        // Init fleets — both AI-controlled, both attacking
-        // PLAYER side: useDefaultAI=false (tells engine no human is controlling, all ships get AI)
-        // ENEMY side: useDefaultAI=true (standard for enemy)
+        // PLAYER useDefaultAI=false: all ships get AI (no human control)
+        // ENEMY useDefaultAI=true: standard enemy AI
         api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
         api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
 
         api.setFleetTagline(FleetSide.PLAYER, "Optimizer Candidate");
         api.setFleetTagline(FleetSide.ENEMY, "Test Opponent");
 
-        // Add player ships — no flagship (no human control)
-        for (int i = 0; i < config.playerVariants.length; i++) {
-            String variantId = config.playerVariants[i];
+        // Add first matchup's ships — required for the deployment screen to work.
+        // Subsequent matchups are handled by the plugin via spawnShipOrWing().
+        MatchupConfig first = queue.get(0);
+        for (int i = 0; i < first.playerVariants.length; i++) {
+            String variantId = first.playerVariants[i];
             api.addToFleet(FleetSide.PLAYER, variantId,
                     FleetMemberType.SHIP, variantId, false);
         }
-
-        // Add enemy ships
-        for (int i = 0; i < config.enemyVariants.length; i++) {
-            String variantId = config.enemyVariants[i];
+        for (int i = 0; i < first.enemyVariants.length; i++) {
+            String variantId = first.enemyVariants[i];
             api.addToFleet(FleetSide.ENEMY, variantId,
                     FleetMemberType.SHIP, variantId, false);
         }
 
-        // Map setup
-        float hw = config.mapWidth / 2f;
-        float hh = config.mapHeight / 2f;
+        // Arena map
+        float hw = 12000f;
+        float hh = 9000f;
         api.initMap(-hw, hw, -hh, hh);
 
-        // Attach combat harness plugin
+        // Attach plugin — handles combat monitoring and subsequent matchups
         api.addPlugin(new CombatHarnessPlugin());
     }
 }

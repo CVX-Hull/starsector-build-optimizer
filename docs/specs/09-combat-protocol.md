@@ -1,137 +1,104 @@
 # Combat Protocol Specification
 
-Defines the contract between the Python optimizer (Phase 1) and the Java combat harness mod (Phase 2). Communication is filesystem-based: Python writes input files, Java reads them via the game's SettingsAPI, runs combat, and writes output files.
+Defines the contract between the Python optimizer and the Java combat harness mod. Communication is filesystem-based via `<starsector>/saves/common/`, using the game's SettingsAPI. The game appends `.data` to all filenames — Python must write files with the `.data` extension.
 
-## File I/O via saves/common/
+All filenames use a flat `combat_harness_` prefix (subdirectories don't work with SettingsAPI).
 
-Starsector's security sandbox blocks `java.io.File` from mod code. All file I/O uses `Global.getSettings()` methods which operate on `<starsector>/saves/common/`. The game **appends `.data`** to all filenames in this directory.
+## File Protocol
 
-Files use a flat `combat_harness_` prefix (subdirectories may not work with SettingsAPI).
+| File | Disk Path | SettingsAPI Name | Written By | Purpose |
+|------|-----------|-----------------|------------|---------|
+| Queue | `saves/common/combat_harness_queue.json.data` | `combat_harness_queue.json` | Python | Array of matchup configs |
+| Results | `saves/common/combat_harness_results.json.data` | `combat_harness_results.json` | Java | Array of combat results |
+| Done | `saves/common/combat_harness_done.data` | `combat_harness_done` | Java | Signal: all matchups complete |
+| Heartbeat | `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java | Liveness: timestamp + elapsed |
 
-### File Locations
+## Lifecycle
 
-| File | Disk Path | SettingsAPI Name | Written By |
-|------|-----------|-----------------|------------|
-| Matchup config | `saves/common/combat_harness_matchup.json.data` | `combat_harness_matchup.json` | Python |
-| Combat result | `saves/common/combat_harness_result.json.data` | `combat_harness_result.json` | Java |
-| Heartbeat | `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java |
+1. Python writes `.variant` files to `data/variants/` and queue to `saves/common/`
+2. Game launches (one launch per batch of N matchups)
+3. TitleScreenPlugin detects queue → auto-navigates to Optimizer Arena mission
+4. CombatHarnessPlugin processes matchups sequentially in one combat session
+5. After all matchups: writes results array + done signal, calls `System.exit(0)`
+6. Python polls for done signal, reads results
 
-**Python must write files with the `.data` extension** for the game to find them.
+## Queue Input Schema
 
-## matchup.json Schema
-
-```json
-{
-    "matchup_id": "eval_001",
-    "player_variants": ["eagle_opt_0001_a3f2b1c4"],
-    "enemy_variants": ["dominator_Assault"],
-    "player_flagship": "eagle_opt_0001_a3f2b1c4",
-    "time_limit_seconds": 300,
-    "time_mult": 3.0,
-    "map_width": 24000,
-    "map_height": 18000
-}
-```
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `matchup_id` | string | yes | — | Unique identifier for this matchup |
-| `player_variants` | string[] | yes | — | Variant IDs for player side |
-| `enemy_variants` | string[] | yes | — | Variant IDs for enemy side |
-| `player_flagship` | string\|null | no | null | Player variant to mark as flagship |
-| `time_limit_seconds` | float | no | 300.0 | Max combat duration in game-time seconds |
-| `time_mult` | float | no | 3.0 | Time acceleration (clamped to [1.0, 5.0]) |
-| `map_width` | float | no | 24000.0 | Combat arena width |
-| `map_height` | float | no | 18000.0 | Combat arena height |
-
-Variant IDs must correspond to `.variant` files loadable by the game (either in `data/variants/` or the mod's variant directory).
-
-## result.json Schema
+`combat_harness_queue.json.data` — JSON array of matchup config objects:
 
 ```json
-{
-    "matchup_id": "eval_001",
-    "winner": "PLAYER",
-    "duration_seconds": 87.3,
-    "player_ships": [
-        {
-            "fleet_member_id": "uuid-string",
-            "variant_id": "eagle_opt_0001_a3f2b1c4",
-            "hull_id": "eagle",
-            "destroyed": false,
-            "hull_fraction": 0.82,
-            "armor_fraction": 0.45,
-            "cr_remaining": 0.61,
-            "peak_time_remaining": 142.0,
-            "disabled_weapons": 0,
-            "flameouts": 0,
-            "damage_dealt": {"shield": 12450.0, "armor": 8230.0, "hull": 3100.0, "emp": 500.0},
-            "damage_taken": {"shield": 6200.0, "armor": 2100.0, "hull": 1800.0, "emp": 0.0},
-            "flux_stats": {"curr_flux": 2340.0, "hard_flux": 1200.0, "max_flux": 12000.0, "overload_count": 0}
-        }
-    ],
-    "enemy_ships": [],
-    "aggregate": {
-        "player_total_damage_dealt": 23780.0,
-        "enemy_total_damage_dealt": 10100.0,
-        "player_ships_destroyed": 0,
-        "enemy_ships_destroyed": 2,
-        "player_ships_retreated": 0,
-        "enemy_ships_retreated": 0
+[
+    {
+        "matchup_id": "eval_001",
+        "player_variants": ["eagle_opt_0001"],
+        "enemy_variants": ["dominator_Assault"],
+        "time_limit_seconds": 180,
+        "time_mult": 3.0,
+        "map_width": 24000,
+        "map_height": 18000
     }
-}
+]
 ```
 
-Ship data is collected via `getAllEverDeployedCopy()` from the fleet manager, which includes destroyed/disabled ships (unlike `engine.getShips()` which may drop them).
+Each element follows the MatchupConfig schema (see spec 10). The array must be non-empty.
 
-### Top-Level Fields
+## Results Output Schema
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `matchup_id` | string | Echoed from input |
-| `winner` | string | `"PLAYER"`, `"ENEMY"`, or `"TIMEOUT"` |
-| `duration_seconds` | float | Actual combat duration |
-| `player_ships` | ShipResult[] | Per-ship results for player side |
-| `enemy_ships` | ShipResult[] | Per-ship results for enemy side |
-| `aggregate` | AggregateResult | Fleet-level summary |
+`combat_harness_results.json.data` — JSON array of result objects, one per matchup:
 
-### ShipResult Fields
+```json
+[
+    {
+        "matchup_id": "eval_001",
+        "winner": "ENEMY",
+        "duration_seconds": 56.8,
+        "player_ships": [
+            {
+                "fleet_member_id": "uuid",
+                "variant_id": "eagle_opt_0001",
+                "hull_id": "eagle",
+                "destroyed": true,
+                "hull_fraction": 0.0,
+                "armor_fraction": 0.36,
+                "cr_remaining": 0.7,
+                "peak_time_remaining": 472.0,
+                "disabled_weapons": 8,
+                "flameouts": 0,
+                "damage_dealt": {"shield": 4300.0, "armor": 0.0, "hull": 0.0, "emp": 0.0},
+                "damage_taken": {"shield": 0.0, "armor": 5098.0, "hull": 24588.0, "emp": 0.0},
+                "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 12900.0, "overload_count": 0}
+            }
+        ],
+        "enemy_ships": [...],
+        "aggregate": {
+            "player_total_damage_dealt": 4300.0,
+            "enemy_total_damage_dealt": 29686.0,
+            "player_ships_destroyed": 1,
+            "enemy_ships_destroyed": 0,
+            "player_ships_retreated": 0,
+            "enemy_ships_retreated": 0
+        }
+    }
+]
+```
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `fleet_member_id` | string | UUID assigned by the combat engine |
-| `variant_id` | string | Variant ID used to spawn this ship |
-| `hull_id` | string | Hull spec ID (e.g., "eagle") |
-| `destroyed` | boolean | True if ship was destroyed |
-| `hull_fraction` | float | Hull HP remaining (0.0-1.0) |
-| `armor_fraction` | float | Average armor remaining (0.0-1.0) |
-| `cr_remaining` | float | Combat readiness |
-| `peak_time_remaining` | float | Seconds of peak performance time remaining |
-| `disabled_weapons` | int | Number of disabled weapon slots |
-| `flameouts` | int | Number of engine flameouts |
-| `damage_dealt` | DamageBreakdown | Damage dealt TO enemies |
-| `damage_taken` | DamageBreakdown | Damage received FROM enemies |
-| `flux_stats` | FluxStats | Flux state at end of combat |
+Results are ordered by matchup execution order (same order as input queue).
 
-### DamageBreakdown / FluxStats / AggregateResult Fields
+Ship data is collected from tracked ShipAPI references (not fleet manager, which accumulates across matchups in a batched session).
 
-See `src/starsector_optimizer/models.py` for the corresponding Python dataclasses: `DamageBreakdown`, `ShipCombatResult`, `CombatResult`, `MatchupConfig`.
+## Done Signal
 
-## heartbeat.txt Format
+`combat_harness_done.data` — written after all results are written. Contains a timestamp. Python should poll for this file (not the results file) to detect completion.
 
-Updated every ~60 frames: `<timestamp_ms> <combat_elapsed_seconds>`
+## Heartbeat
 
-Phase 3 monitors this file for liveness (no update for >60s = instance hung).
-
-## Game Exit Protocol
-
-After writing result.json, the Java mod calls `System.exit(0)`. Phase 3 detects completion by process exit + presence of result file.
+`combat_harness_heartbeat.txt.data` — updated every ~60 frames with `<timestamp_ms> <combat_elapsed_seconds>`. Used for liveness monitoring.
 
 ## Python Dataclasses
 
 Defined in `src/starsector_optimizer/models.py`:
 
+- `MatchupConfig(frozen=True)` — single matchup configuration
 - `DamageBreakdown(frozen=True)` — shield, armor, hull, emp
 - `ShipCombatResult(frozen=True)` — per-ship combat stats
 - `CombatResult(frozen=True)` — full matchup result
-- `MatchupConfig(frozen=True)` — matchup input configuration

@@ -16,6 +16,7 @@ val gameDir = rootProject.projectDir.resolve("../game/starsector")
 dependencies {
     compileOnly(files("${gameDir}/starfarer.api.jar"))
     compileOnly(files("${gameDir}/log4j-1.2.9.jar"))
+    compileOnly(files("${gameDir}/lwjgl_util.jar"))
 
     // Use game's json.jar for compilation (older org.json with checked exceptions)
     compileOnly(files("${gameDir}/json.jar"))

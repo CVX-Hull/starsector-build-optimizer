@@ -1,47 +1,70 @@
 # Combat Harness Plugin Specification
 
-EveryFrameCombatPlugin that orchestrates combat monitoring, data collection, and result writing. Defined in `combat-harness/src/main/java/starsector/combatharness/CombatHarnessPlugin.java`.
+State machine that cycles through a batch of matchups in a single combat session. Defined in `combat-harness/src/main/java/starsector/combatharness/CombatHarnessPlugin.java`.
 
-## Class
+Extends `BaseEveryFrameCombatPlugin`. Attached by `MissionDefinition` via `api.addPlugin()`.
 
-Extends `BaseEveryFrameCombatPlugin`. No-arg constructor (config is loaded from `saves/common/` via SettingsAPI in `init()`).
+## State Machine
 
-## State
-
-```java
-private CombatEngineAPI engine;
-private MatchupConfig config;
-private DamageTracker damageTracker;
-private boolean resultsWritten = false;
-private int frameCount = 0;
+```
+INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE
 ```
 
-## Lifecycle
+### State: INIT (first advance() call)
+1. Load queue via `MatchupQueue.loadFromCommon()`
+2. `engine.setDoNotEndCombat(true)` — keep combat alive across matchups
+3. Apply time multiplier from first matchup config
+4. Transition to SPAWNING
 
-### `init(CombatEngineAPI engine)`
+### State: SPAWNING
+1. Get `queue.get(currentIndex)` → `currentConfig`
+2. Spawn player ships: `engine.getFleetManager(FleetSide.PLAYER).spawnShipOrWing(variantId, location, facing)` → store returned ShipAPI in `playerShips` list
+3. Spawn enemy ships: same for ENEMY side → store in `enemyShips` list
+4. Create new DamageTracker, register via `engine.getListenerManager().addListener(tracker)`
+5. Record `matchupStartTime = engine.getTotalElapsedTime(false)`
+6. Transition to FIGHTING
 
-1. Store engine reference (null-check)
-2. Load config: `MatchupConfig.loadFromCommon()` (reads from `saves/common/`)
-3. Apply time multiplier: `engine.getTimeMult().modifyMult("harness", config.timeMult)`
-4. Create DamageTracker, register: `engine.getListenerManager().addListener(damageTracker)`
-5. Log startup
+**Ship positions:** Player ships at `(-2000, offset)` facing 0° (right). Enemy ships at `(2000, offset)` facing 180° (left). Offset vertically by 800 units for multiple ships.
 
-### `advance(float amount, List<InputEventAPI> events)`
+### State: FIGHTING
+Per-frame:
+1. Update heartbeat every 60 frames
+2. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins.
+3. **Timeout check:** `(engine.getTotalElapsedTime(false) - matchupStartTime) > currentConfig.timeLimitSeconds`
+4. On end: determine winner ("PLAYER"/"ENEMY"/"TIMEOUT"), compute duration, build result via `ResultWriter.buildMatchupResult()`, add to `allResults` array
+5. Transition to CLEANING
 
-1. If `engine == null` or `engine.isPaused()` or `config == null` → return
-2. `frameCount++`
-3. If `frameCount % 60 == 0` → `ResultWriter.writeHeartbeat(elapsed)` (via SettingsAPI)
-4. Check combat end:
-   - `engine.isCombatOver()` → normal end
-   - `engine.getTotalElapsedTime(false) > config.timeLimitSeconds` → timeout
-5. If combat ended AND `!resultsWritten`:
-   a. `ResultWriter.writeResult(engine, damageTracker, config, timedOut)` (via SettingsAPI)
-   b. `resultsWritten = true`
-   c. Log results
-   d. `System.exit(0)` (or `System.exit(1)` on write failure)
+### State: CLEANING
+1. Remove all entities: iterate `engine.getShips()`, `engine.getProjectiles()`, `engine.getMissiles()` → `engine.removeEntity()` each
+2. Unregister old DamageTracker: `engine.getListenerManager().removeListener(tracker)`
+3. Clear `playerShips` and `enemyShips` lists
+4. Wait 3 frames (`cleanupFramesLeft` counter) for engine to process removals
+5. Increment `currentIndex`
+6. If more matchups → SPAWNING. If done → DONE.
+
+### State: DONE
+1. `ResultWriter.writeAllResults(allResults)` — write all results as JSON array
+2. `ResultWriter.writeDoneSignal()` — write done signal file
+3. Log completion
+4. `System.exit(0)`
+
+## Custom Win Detection
+
+```java
+private int countAlive(List<ShipAPI> ships) {
+    int count = 0;
+    for (ShipAPI s : ships) {
+        if (s.isAlive() && !s.isFighter()) count++;
+    }
+    return count;
+}
+```
+
+With `setDoNotEndCombat(true)`, `engine.isCombatOver()` stays false. We detect matchup end ourselves.
 
 ## Error Handling
 
-- If `matchup.json` missing or invalid → log error, do not crash (config stays null, advance() returns early)
-- If result writing fails → log error, `System.exit(1)`
-- Always null-check engine before accessing it in `advance()`
+- Queue load failure → log error, `System.exit(1)`
+- Ship spawn failure → log warning, skip matchup, record error in result
+- Result write failure → log error, `System.exit(1)`
+- Always null-check engine in `advance()`

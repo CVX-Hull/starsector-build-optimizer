@@ -479,7 +479,6 @@ class TestMatchupConfig:
             enemy_variants=("dominator_Standard",),
         )
         assert mc.matchup_id == "eval_001"
-        assert mc.player_flagship is None
         assert mc.time_limit_seconds == 300.0
         assert mc.time_mult == 3.0
         assert mc.map_width == 24000.0
@@ -490,14 +489,12 @@ class TestMatchupConfig:
             matchup_id="eval_002",
             player_variants=("eagle_test", "wolf_test"),
             enemy_variants=("dominator_Standard",),
-            player_flagship="eagle_test",
             time_limit_seconds=120.0,
             time_mult=5.0,
             map_width=16000.0,
             map_height=12000.0,
         )
         assert len(mc.player_variants) == 2
-        assert mc.player_flagship == "eagle_test"
         assert mc.time_mult == 5.0
 
     def test_frozen(self):

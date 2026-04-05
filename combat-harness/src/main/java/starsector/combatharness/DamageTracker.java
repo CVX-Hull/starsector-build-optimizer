@@ -33,6 +33,11 @@ public class DamageTracker implements DamageListener {
         return accumulators;
     }
 
+    /** Clear all accumulators. Called between matchups in a batched session. */
+    public void reset() {
+        accumulators.clear();
+    }
+
     public ShipDamageAccumulator getOrCreate(String fleetMemberId) {
         return accumulators.computeIfAbsent(fleetMemberId, k -> new ShipDamageAccumulator());
     }

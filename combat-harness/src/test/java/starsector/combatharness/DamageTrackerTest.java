@@ -80,4 +80,34 @@ class DamageTrackerTest {
         assertTrue(tracker.getAccumulators().containsKey("a"));
         assertTrue(tracker.getAccumulators().containsKey("b"));
     }
+
+    @Test
+    void resetClearsAllAccumulators() {
+        tracker.recordDamage("a", "b", 100f, 0f, 0f, 0f);
+        assertEquals(2, tracker.getAccumulators().size());
+
+        tracker.reset();
+
+        assertTrue(tracker.getAccumulators().isEmpty());
+    }
+
+    @Test
+    void getOrCreateReturnsFreshAfterReset() {
+        tracker.recordDamage("a", "b", 100f, 0f, 0f, 0f);
+        tracker.reset();
+
+        DamageTracker.ShipDamageAccumulator acc = tracker.getOrCreate("a");
+        assertEquals(0f, acc.shieldDamageDealt, 0.01f);
+        assertEquals(0f, acc.shieldDamageTaken, 0.01f);
+    }
+
+    @Test
+    void newDamageAfterResetStartsFresh() {
+        tracker.recordDamage("a", "b", 100f, 0f, 0f, 0f);
+        tracker.reset();
+        tracker.recordDamage("a", "b", 50f, 0f, 0f, 0f);
+
+        assertEquals(50f, tracker.getOrCreate("a").shieldDamageDealt, 0.01f);
+        assertEquals(50f, tracker.getOrCreate("b").shieldDamageTaken, 0.01f);
+    }
 }
