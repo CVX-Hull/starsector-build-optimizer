@@ -15,7 +15,19 @@ public class MissionDefinition implements MissionDefinitionPlugin {
 
     public void defineMission(MissionDefinitionAPI api) {
         File workdir = new File("mods/combat-harness/workdir");
-        MatchupConfig config = MatchupConfig.fromFile(new File(workdir, "matchup.json"));
+        File matchupFile = new File(workdir, "matchup.json");
+
+        if (!matchupFile.exists()) {
+            // No matchup config — set up a placeholder so the mission list doesn't crash
+            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
+            api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
+            api.addBriefingItem("ERROR: No matchup.json found in mods/combat-harness/workdir/");
+            api.addBriefingItem("Place a matchup.json before launching this mission.");
+            api.initMap(-8000f, 8000f, -6000f, 6000f);
+            return;
+        }
+
+        MatchupConfig config = MatchupConfig.fromFile(matchupFile);
 
         // Init fleets — both AI-controlled, both attacking
         api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
@@ -27,7 +39,7 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         // Add player ships
         for (int i = 0; i < config.playerVariants.length; i++) {
             String variantId = config.playerVariants[i];
-            boolean isFlagship = variantId.equals(config.playerFlagship);
+            boolean isFlagship = config.playerFlagship != null && variantId.equals(config.playerFlagship);
             api.addToFleet(FleetSide.PLAYER, variantId,
                     FleetMemberType.SHIP, variantId, isFlagship);
         }

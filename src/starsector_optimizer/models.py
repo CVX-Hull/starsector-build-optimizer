@@ -368,6 +368,8 @@ class CombatResult:
     enemy_ships: tuple[ShipCombatResult, ...]
     player_ships_destroyed: int
     enemy_ships_destroyed: int
+    player_ships_retreated: int
+    enemy_ships_retreated: int
 
 
 @dataclass(frozen=True)

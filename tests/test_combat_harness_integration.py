@@ -161,6 +161,8 @@ class TestResultJsonParsing:
             enemy_ships=(),
             player_ships_destroyed=data["aggregate"]["player_ships_destroyed"],
             enemy_ships_destroyed=data["aggregate"]["enemy_ships_destroyed"],
+            player_ships_retreated=data["aggregate"]["player_ships_retreated"],
+            enemy_ships_retreated=data["aggregate"]["enemy_ships_retreated"],
         )
 
         assert result.winner == "PLAYER"

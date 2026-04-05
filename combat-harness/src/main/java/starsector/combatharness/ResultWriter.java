@@ -40,7 +40,7 @@ public class ResultWriter {
 
         for (ShipAPI ship : engine.getShips()) {
             if (ship.isFighter()) continue;
-            JSONObject shipJson = shipToJSON(ship, tracker, config);
+            JSONObject shipJson = shipToJSON(ship, tracker);
             if (ship.getOwner() == 0) {
                 playerShips.put(shipJson);
             } else if (ship.getOwner() == 1) {
@@ -54,10 +54,7 @@ public class ResultWriter {
 
         float playerTotalDealt = 0f;
         float enemyTotalDealt = 0f;
-        for (DamageTracker.ShipDamageAccumulator acc : tracker.getAccumulators().values()) {
-            // We track per-ship, so aggregate from accumulators
-        }
-        // Sum from player ships
+        // Sum damage dealt from per-ship JSON objects
         for (int i = 0; i < playerShips.length(); i++) {
             JSONObject s = playerShips.getJSONObject(i);
             JSONObject dealt = s.getJSONObject("damage_dealt");
@@ -88,7 +85,7 @@ public class ResultWriter {
         atomicWrite(result, outputDir);
     }
 
-    static JSONObject shipToJSON(ShipAPI ship, DamageTracker tracker, MatchupConfig config)
+    static JSONObject shipToJSON(ShipAPI ship, DamageTracker tracker)
             throws JSONException {
         String fleetMemberId = ship.getFleetMemberId();
         String variantId = ship.getVariant() != null ? ship.getVariant().getHullVariantId() : "unknown";
@@ -106,14 +103,18 @@ public class ResultWriter {
         json.put("armor_fraction", computeArmorFraction(ship));
         json.put("cr_remaining", ship.getCurrentCR());
         json.put("peak_time_remaining", ship.getPeakTimeRemaining());
-        json.put("disabled_weapons", ship.getDisabledWeapons().size());
+        json.put("disabled_weapons", ship.getDisabledWeapons() != null ? ship.getDisabledWeapons().size() : 0);
         json.put("flameouts", ship.getNumFlameouts());
         json.put("damage_dealt", damageToJSON(acc.shieldDamageDealt, acc.armorDamageDealt,
                 acc.hullDamageDealt, acc.empDamageDealt));
         json.put("damage_taken", damageToJSON(acc.shieldDamageTaken, acc.armorDamageTaken,
                 acc.hullDamageTaken, acc.empDamageTaken));
-        json.put("flux_stats", fluxStatsToJSON(
-                flux.getCurrFlux(), flux.getHardFlux(), flux.getMaxFlux(), acc.overloadCount));
+        if (flux != null) {
+            json.put("flux_stats", fluxStatsToJSON(
+                    flux.getCurrFlux(), flux.getHardFlux(), flux.getMaxFlux(), acc.overloadCount));
+        } else {
+            json.put("flux_stats", fluxStatsToJSON(0f, 0f, 0f, acc.overloadCount));
+        }
         return json;
     }
 

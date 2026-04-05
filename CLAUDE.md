@@ -41,6 +41,10 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
    - Hullmod effects like Safety Overrides have non-obvious formulas (range compression, not a hard cap). Check the wiki or game code when adding hullmod effects.
    - Tag conventions change between game versions (e.g., logistics detection uses `"Logistics"` in `uiTags`, not `"logistics"` in `tags`).
 
+8. **Verify bundled library versions, never assume modern semantics.** The game bundles old versions of common libraries (e.g., `json.jar` is an ancient org.json with checked `JSONException` on `put()`/`getString()`). When writing Java code against game-bundled libraries, check the actual JAR for method signatures and exception types. Do not assume the modern version's API. Similarly, Starsector API methods inherited from parent interfaces (e.g., `getHullLevel()` on `CombatEntityAPI`) may not appear in the child interface's source — check the full inheritance chain.
+
+9. **Cross-check spec against implementation field-by-field.** When a spec defines a JSON schema (e.g., result.json), every field in the schema must appear in both the Java writer and the Python dataclass. Schema drift between spec, Java, and Python is easy to miss — especially optional/aggregate fields like retreat counts. Reference the spec document during implementation, don't rely on memory.
+
 ## Design Invariants
 
 - Every `Build` returned by `repair_build()` passes `is_feasible()`

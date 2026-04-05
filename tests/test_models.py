@@ -451,17 +451,21 @@ class TestCombatResult:
             enemy_ships=(),
             player_ships_destroyed=0,
             enemy_ships_destroyed=1,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
         )
         assert cr.matchup_id == "eval_001"
         assert cr.winner == "PLAYER"
         assert len(cr.player_ships) == 1
         assert cr.enemy_ships_destroyed == 1
+        assert cr.player_ships_retreated == 0
 
     def test_frozen(self):
         cr = CombatResult(
             matchup_id="x", winner="PLAYER", duration_seconds=0.0,
             player_ships=(), enemy_ships=(),
             player_ships_destroyed=0, enemy_ships_destroyed=0,
+            player_ships_retreated=0, enemy_ships_retreated=0,
         )
         with pytest.raises(AttributeError):
             cr.winner = "ENEMY"
