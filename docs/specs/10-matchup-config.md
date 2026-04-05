@@ -1,6 +1,14 @@
 # Matchup Config Specification
 
-Java POJO for parsing and validating `matchup.json`. Defined in `combat-harness/src/main/java/starsector/combatharness/MatchupConfig.java`.
+Java POJO for parsing and validating matchup config. Defined in `combat-harness/src/main/java/starsector/combatharness/MatchupConfig.java`.
+
+## File I/O
+
+Config is read from `saves/common/` via the game's SettingsAPI (not `java.io.File`):
+- `loadFromCommon()` reads `combat_harness_matchup.json` (game resolves to `saves/common/combat_harness_matchup.json.data`)
+- `existsInCommon()` checks if the file exists
+
+The `COMMON_PREFIX` constant (`combat_harness_`) is shared with `ResultWriter` for consistent naming.
 
 ## Fields
 
@@ -18,23 +26,25 @@ Java POJO for parsing and validating `matchup.json`. Defined in `combat-harness/
 ## Validation Rules
 
 - `matchupId` must be non-null and non-empty
-- `playerVariants` must be non-null and non-empty
-- `enemyVariants` must be non-null and non-empty
+- `playerVariants` and `enemyVariants` must be non-null and non-empty
 - `timeMult` clamped to `[1.0, 5.0]`
 - `timeLimitSeconds` must be > 0
 - `mapWidth` and `mapHeight` must be > 0
 
 ## Functions
 
-### `static MatchupConfig fromFile(File path)`
-Read file contents, parse as JSONObject, delegate to `fromJSON()`. Throws `RuntimeException` on I/O errors.
+### `static MatchupConfig loadFromCommon()`
+Read matchup config from `saves/common/` via `Global.getSettings().readTextFileFromCommon()`. Throws `RuntimeException` on I/O or parse errors.
+
+### `static boolean existsInCommon()`
+Check if matchup config file exists via `Global.getSettings().fileExistsInCommon()`.
 
 ### `static MatchupConfig fromJSON(JSONObject json)`
-Parse JSON fields with defaults for optional values. Apply validation and clamping. Throws `IllegalArgumentException` for missing required fields or invalid values.
+Parse JSON fields with defaults for optional values. Apply validation and clamping. Throws `IllegalArgumentException` for invalid values. Throws `JSONException` for JSON parsing errors.
 
 ### `JSONObject toJSON()`
 Serialize back to JSONObject for round-trip testing.
 
 ## JSON Parsing
 
-Uses `org.json.JSONObject` (bundled with Starsector as `json.jar`). No external JSON library dependencies.
+Uses `org.json.JSONObject` (bundled with Starsector as `json.jar`). Note: this is an old version with checked `JSONException` on all operations.

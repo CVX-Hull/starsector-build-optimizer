@@ -19,7 +19,7 @@ from starsector_optimizer.calibration import generate_random_build
 from starsector_optimizer.variant import generate_variant, write_variant_file
 
 
-WORKDIR = Path(__file__).parent.parent / "game" / "starsector" / "mods" / "combat-harness" / "workdir"
+SAVES_COMMON = Path(__file__).parent.parent / "game" / "starsector" / "saves" / "common"
 VARIANT_DIR = Path(__file__).parent.parent / "game" / "starsector" / "data" / "variants"
 
 
@@ -63,9 +63,9 @@ class TestMatchupJsonGeneration:
         assert mc.time_mult == 3.0
 
     def test_deploy_variant_and_matchup(self, game_data):
-        """Generate variant file + matchup.json, write to mod workdir if it exists."""
-        if not WORKDIR.exists():
-            pytest.skip("Mod workdir not found (mod not deployed)")
+        """Generate variant file + matchup.json, write to saves/common/ with .data extension."""
+        if not SAVES_COMMON.exists():
+            pytest.skip("saves/common/ not found (game not installed or never launched)")
 
         eagle = game_data.hulls["eagle"]
         build = generate_random_build(eagle, game_data)
@@ -78,16 +78,16 @@ class TestMatchupJsonGeneration:
             write_variant_file(variant, variant_path)
             assert variant_path.exists()
 
-        # Write matchup.json
+        # Write matchup.json with .data extension (game appends .data to saves/common/ files)
         matchup = {
             "matchup_id": "integration_test",
             "player_variants": [variant_id],
-            "enemy_variants": ["dominator_Standard"],
+            "enemy_variants": ["dominator_Assault"],
             "player_flagship": variant_id,
             "time_limit_seconds": 120,
             "time_mult": 3.0,
         }
-        matchup_path = WORKDIR / "matchup.json"
+        matchup_path = SAVES_COMMON / "combat_harness_matchup.json.data"
         matchup_path.write_text(json.dumps(matchup, indent=2))
         assert matchup_path.exists()
 

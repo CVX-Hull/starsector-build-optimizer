@@ -3,7 +3,7 @@
 Automated ship build discovery for Starsector using Bayesian optimization and combat simulation.
 
 - **Phase 1** (complete): Data layer — game data parsing, search space, constraint repair, heuristic scoring, variant generation.
-- **Phase 2** (in progress): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
+- **Phase 2** (complete): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
 
 ## Commands
 
@@ -45,6 +45,10 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 
 9. **Cross-check spec against implementation field-by-field.** When a spec defines a JSON schema (e.g., result.json), every field in the schema must appear in both the Java writer and the Python dataclass. Schema drift between spec, Java, and Python is easy to miss — especially optional/aggregate fields like retreat counts. Reference the spec document during implementation, don't rely on memory.
 
+10. **Starsector's security sandbox blocks `java.io.File`.** All mod file I/O must use `Global.getSettings()` methods: `readTextFileFromCommon(name)`, `writeTextFileToCommon(name, data)`, `fileExistsInCommon(name)`. Files go to `<starsector>/saves/common/` and the game **appends `.data`** to all filenames. Python must write files with the `.data` extension for the game to find them. Use flat filenames with a `combat_harness_` prefix (subdirectories may not work).
+
+11. **Starsector compiles loose `.java` files via Janino, but Janino can't resolve JAR classes.** If a mission script imports classes from your mod JAR, Janino compilation fails. Solution: put the MissionDefinition class in the JAR with the correct package (`data.missions.<name>`) — the game detects "already loaded from jar file" and skips Janino compilation.
+
 ## Design Invariants
 
 - Every `Build` returned by `repair_build()` passes `is_feasible()`
@@ -71,12 +75,17 @@ combat-harness/                    # Phase 2: Java combat harness mod
 ├── src/main/java/starsector/combatharness/
 │   ├── MatchupConfig.java         # matchup.json parser
 │   ├── DamageTracker.java         # DamageListener — per-ship damage accumulation
-│   ├── ResultWriter.java          # Atomic result.json output
+│   ├── ResultWriter.java          # result.json output via SettingsAPI
 │   ├── CombatHarnessPlugin.java   # EveryFrameCombatPlugin — combat monitoring
 │   └── CombatHarnessModPlugin.java # BaseModPlugin — mod entry point
+├── src/main/java/data/missions/optimizer_arena/
+│   └── MissionDefinition.java     # Mission setup (compiled in JAR, not Janino)
 └── mod/                           # Deployed to game/starsector/mods/combat-harness/
-    ├── mod_info.json
-    └── data/missions/optimizer_arena/MissionDefinition.java
+    └── mod_info.json
+
+# I/O paths (game appends .data to all saves/common/ filenames):
+#   Input:  saves/common/combat_harness_matchup.json.data
+#   Output: saves/common/combat_harness_result.json.data
 
 docs/
 ├── specs/                         # DDD module specifications (drive implementation)

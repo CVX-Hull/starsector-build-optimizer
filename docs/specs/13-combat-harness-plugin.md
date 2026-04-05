@@ -4,7 +4,7 @@ EveryFrameCombatPlugin that orchestrates combat monitoring, data collection, and
 
 ## Class
 
-Extends `BaseEveryFrameCombatPlugin`. Constructed with a `File workdir` parameter by the MissionDefinition.
+Extends `BaseEveryFrameCombatPlugin`. No-arg constructor (config is loaded from `saves/common/` via SettingsAPI in `init()`).
 
 ## State
 
@@ -14,43 +14,34 @@ private MatchupConfig config;
 private DamageTracker damageTracker;
 private boolean resultsWritten = false;
 private int frameCount = 0;
-private File workdir;
 ```
 
 ## Lifecycle
 
 ### `init(CombatEngineAPI engine)`
 
-1. Store engine reference
-2. Load config: `MatchupConfig.fromFile(new File(workdir, "matchup.json"))`
+1. Store engine reference (null-check)
+2. Load config: `MatchupConfig.loadFromCommon()` (reads from `saves/common/`)
 3. Apply time multiplier: `engine.getTimeMult().modifyMult("harness", config.timeMult)`
 4. Create DamageTracker, register: `engine.getListenerManager().addListener(damageTracker)`
-5. Log: "Combat Harness initialized for matchup {matchup_id}"
+5. Log startup
 
 ### `advance(float amount, List<InputEventAPI> events)`
 
-1. If `engine == null` or `engine.isPaused()` → return
+1. If `engine == null` or `engine.isPaused()` or `config == null` → return
 2. `frameCount++`
-3. If `frameCount % 60 == 0` → write heartbeat file (`System.currentTimeMillis() + " " + engine.getTotalElapsedTime(false)`)
-4. Check combat end condition:
+3. If `frameCount % 60 == 0` → `ResultWriter.writeHeartbeat(elapsed)` (via SettingsAPI)
+4. Check combat end:
    - `engine.isCombatOver()` → normal end
    - `engine.getTotalElapsedTime(false) > config.timeLimitSeconds` → timeout
 5. If combat ended AND `!resultsWritten`:
-   a. Determine `timedOut` flag
-   b. `ResultWriter.writeResult(engine, damageTracker, config, workdir, timedOut)`
-   c. `resultsWritten = true`
-   d. Log: "Results written for matchup {matchup_id}"
-   e. `System.exit(0)`
-
-## Heartbeat File
-
-Written to `workdir/heartbeat.txt` every 60 frames:
-```
-<timestamp_ms> <elapsed_seconds>
-```
+   a. `ResultWriter.writeResult(engine, damageTracker, config, timedOut)` (via SettingsAPI)
+   b. `resultsWritten = true`
+   c. Log results
+   d. `System.exit(0)` (or `System.exit(1)` on write failure)
 
 ## Error Handling
 
-- If `matchup.json` is missing or invalid → log error, do not crash the game
-- If result writing fails → log error, attempt `System.exit(1)`
+- If `matchup.json` missing or invalid → log error, do not crash (config stays null, advance() returns early)
+- If result writing fails → log error, `System.exit(1)`
 - Always null-check engine before accessing it in `advance()`

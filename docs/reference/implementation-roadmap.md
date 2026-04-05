@@ -78,53 +78,54 @@ Complete. 210 tests passing across 9 test files. All modules implemented with DD
 
 ---
 
-## Phase 2: Java Combat Harness Mod
+## Phase 2: Java Combat Harness Mod ✓ COMPLETE
 
 ### Goal
 A Starsector mod that runs one automated AI-vs-AI combat matchup per game launch and exports results as JSON. Phase 3 (Instance Manager) handles orchestration and parallelism.
 
-### Design Decision: One Matchup Per Launch
-Starsector's mission system doesn't support chaining missions programmatically. There's no API to navigate title screen → mission → next mission. Rather than building a fragile queue processor, Phase 2 handles one matchup per launch via a `matchup.json` config file.
+### Status
+Complete. 21 JUnit tests passing. Live-tested: Eagle vs Dominator Assault, result.json produced with full per-ship damage/flux/armor stats.
+
+### Design Decisions
+- **One matchup per launch.** No API to chain missions. Game exits after writing results.
+- **File I/O via SettingsAPI.** Starsector's security sandbox blocks `java.io.File`. All reads/writes go through `Global.getSettings().readTextFileFromCommon()`/`writeTextFileToCommon()`, which operate on `saves/common/`. The game appends `.data` to all filenames.
+- **MissionDefinition compiled in JAR.** Janino (the game's runtime compiler) cannot resolve imports from mod JARs. MissionDefinition is compiled with package `data.missions.optimizer_arena` — the game detects "already loaded from jar file" and skips Janino.
+- **Ship data via fleet manager.** `engine.getShips()` may drop destroyed ships. Use `getAllEverDeployedCopy()` from fleet manager to include all ships.
 
 ### Dependencies
-- Java 17 (Starsector 0.98a bundled JRE)
-- Starsector API (starfarer.api.jar from game installation)
-- Gradle build system
+- Java 17 (Starsector 0.98a bundled JRE for runtime, system JDK 17+ for compilation)
+- Starsector API (starfarer.api.jar)
+- Gradle 9.4+ build system
 - Starsector game installation (activated)
 
 ### Deliverables
 
 1. **Mod skeleton** (`combat-harness/`)
-   - Gradle project with starfarer.api.jar as compileOnly dependency
-   - mod_info.json, BaseModPlugin, mission registration
+   - Gradle project, mod_info.json, BaseModPlugin, mission registration
    - Deploy task copies to game/starsector/mods/
 
 2. **Matchup config parser** (MatchupConfig.java)
-   - Reads matchup.json: player/enemy variant IDs, time limit, time multiplier, map size
+   - Reads from `saves/common/combat_harness_matchup.json.data` via SettingsAPI
    - Validation with sane defaults
 
-3. **Combat harness plugin** (CombatHarnessPlugin.java — EveryFrameCombatPlugin)
-   - init: set time multiplier, register DamageTracker
-   - advance: check combat end / time limit, write results, System.exit(0)
-   - Heartbeat file for Phase 3 health monitoring
+3. **Combat harness plugin** (CombatHarnessPlugin.java)
+   - Time acceleration, DamageTracker registration, combat end detection
+   - Writes result via SettingsAPI, then System.exit(0)
 
-4. **Damage tracker** (DamageTracker.java — DamageListener)
-   - Per-ship damage accumulation (shield, armor, hull, EMP — dealt and taken)
-   - Source identification via instanceof (ShipAPI, DamagingProjectileAPI, BeamAPI)
+4. **Damage tracker** (DamageTracker.java)
+   - Per-ship damage accumulation via DamageListener
+   - Source identification via instanceof
 
 5. **Result writer** (ResultWriter.java)
-   - Atomic JSON write (write .tmp, rename)
-   - Per-ship stats: hull/armor fraction, flux, disabled weapons, damage dealt/taken
-   - Aggregate stats: ships destroyed/retreated per side
+   - Writes to `saves/common/combat_harness_result.json.data` via SettingsAPI
+   - Per-ship stats from fleet manager (including destroyed ships)
 
-6. **Mission definition** (MissionDefinition.java — Janino script)
-   - Reads matchup.json, sets up both fleets with AI control
-   - Attaches CombatHarnessPlugin
+6. **Mission definition** (MissionDefinition.java — compiled in JAR)
+   - Loads config via SettingsAPI, sets up both fleets with AI control
 
 ### Testing
-- JUnit 5 for MatchupConfig, DamageTracker, ResultWriter (JSON parsing, accumulation, serialization)
-- Manual game launch: Optimizer Arena mission → combat runs → result.json appears → game exits
-- Known matchup sanity: Onslaught vs Lasher should always have PLAYER win
+- 21 JUnit tests: MatchupConfig (10), DamageTracker (7), ResultWriter (4)
+- Live game test verified: combat runs at 3x speed, result.json with damage stats, game exits cleanly
 
 ---
 
