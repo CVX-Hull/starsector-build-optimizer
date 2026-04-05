@@ -38,8 +38,10 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private DamageTracker currentTracker;
     private List<ShipAPI> playerShips = new ArrayList<ShipAPI>();
     private List<ShipAPI> enemyShips = new ArrayList<ShipAPI>();
-    private float matchupStartTime;
-    private boolean contactMade = false;  // true once fleets engage
+    private float spawnTime;              // when ships were spawned (for approach timeout)
+    private float matchupStartTime;       // when fleets made contact (for combat timeout)
+    private boolean contactMade = false;
+    private static final float MAX_APPROACH_TIME = 30f;  // force timeout if no contact in 30s
     private JSONArray allResults = new JSONArray();
     private int frameCount = 0;
     private int cleanupFramesLeft = 0;
@@ -111,6 +113,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             spawnShips();
         }
 
+        spawnTime = engine.getTotalElapsedTime(false);
         matchupStartTime = 0f;
         contactMade = false;
         log.info("  Player ships: " + playerShips.size() + ", Enemy ships: " + enemyShips.size()
@@ -177,10 +180,17 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
 
         // Start timer only once fleets engage (approach time doesn't count)
-        if (!contactMade && engine.isFleetsInContact()) {
-            contactMade = true;
-            matchupStartTime = engine.getTotalElapsedTime(false);
-            log.info("  Contact made for " + currentConfig.matchupId);
+        if (!contactMade) {
+            if (engine.isFleetsInContact()) {
+                contactMade = true;
+                matchupStartTime = engine.getTotalElapsedTime(false);
+                log.info("  Contact made for " + currentConfig.matchupId);
+            } else if (engine.getTotalElapsedTime(false) - spawnTime > MAX_APPROACH_TIME) {
+                // Evasive AI never engaged — force contact timer to start
+                contactMade = true;
+                matchupStartTime = engine.getTotalElapsedTime(false);
+                log.info("  Approach timeout for " + currentConfig.matchupId + " — forcing combat timer start");
+            }
         }
 
         // Custom win detection
