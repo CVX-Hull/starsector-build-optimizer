@@ -34,12 +34,15 @@ Each click: `Robot.mouseMove(x, y)` → delay → `mousePress(BUTTON1_DOWN_MASK)
 
 ### Coordinate Calibration
 
-Coordinates determined empirically by launching the game at 1920x1080 scale=1 and screenshotting each menu state. Stored as named constants:
+Coordinates determined empirically by tracking mouse position during manual navigation at 1920x1080 windowed on a 2560x1440 display. Robot uses absolute screen coordinates.
+
 ```java
-private static final int MISSIONS_X = ???, MISSIONS_Y = ???;
-private static final int ARENA_X = ???, ARENA_Y = ???;
-private static final int PLAY_MISSION_X = ???, PLAY_MISSION_Y = ???;
+private static final int MISSIONS_X = 1417, MISSIONS_Y = 486;
+private static final int ARENA_X = 635, ARENA_Y = 909;
+private static final int PLAY_MISSION_X = 1311, PLAY_MISSION_Y = 941;
 ```
+
+**Re-calibration:** On a different display or window manager, coordinates will differ. To re-calibrate: hide the queue file, launch the game, start a mouse position logger (`xdotool getmouselocation` in a loop), manually click through each menu step, record positions from the log.
 
 ## TitleScreenPlugin
 
