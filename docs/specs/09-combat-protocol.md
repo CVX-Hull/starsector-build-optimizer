@@ -102,3 +102,22 @@ Defined in `src/starsector_optimizer/models.py`:
 - `DamageBreakdown(frozen=True)` — shield, armor, hull, emp
 - `ShipCombatResult(frozen=True)` — per-ship combat stats
 - `CombatResult(frozen=True)` — full matchup result
+
+## Python I/O Functions
+
+Defined in `src/starsector_optimizer/result_parser.py`:
+
+- `write_queue_file(matchups, path)` — serialize `list[MatchupConfig]` to JSON array at given path
+- `parse_combat_result(data)` — parse a single result dict → `CombatResult`
+- `parse_results_file(path)` — read results JSON file → `list[CombatResult]`
+
+See spec 19 for detailed field mapping. Note: `overload_count` lives under `flux_stats` in the Java JSON but is a top-level field on `ShipCombatResult`.
+
+## Instance Management
+
+Defined in `src/starsector_optimizer/instance_manager.py`:
+
+- `InstancePool.evaluate(matchups)` — submit matchups to N parallel game instances, return results
+- Handles per-instance work directories, Xvfb displays, health monitoring, crash recovery
+
+See spec 18 for full design.

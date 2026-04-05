@@ -9,12 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from starsector_optimizer.models import (
-    CombatResult,
-    DamageBreakdown,
-    MatchupConfig,
-    ShipCombatResult,
-)
+from starsector_optimizer.models import MatchupConfig
+from starsector_optimizer.result_parser import parse_combat_result, write_queue_file
 from starsector_optimizer.calibration import generate_random_build
 from starsector_optimizer.variant import generate_variant, write_variant_file
 
@@ -150,58 +146,8 @@ class TestBatchResultParsing:
         },
     ]
 
-    def _parse_result(self, data: dict) -> CombatResult:
-        """Parse a single result dict into CombatResult."""
-        player_ships = tuple(
-            ShipCombatResult(
-                fleet_member_id=s["fleet_member_id"],
-                variant_id=s["variant_id"],
-                hull_id=s["hull_id"],
-                destroyed=s["destroyed"],
-                hull_fraction=s["hull_fraction"],
-                armor_fraction=s["armor_fraction"],
-                cr_remaining=s["cr_remaining"],
-                peak_time_remaining=s["peak_time_remaining"],
-                disabled_weapons=s["disabled_weapons"],
-                flameouts=s["flameouts"],
-                damage_dealt=DamageBreakdown(**s["damage_dealt"]),
-                damage_taken=DamageBreakdown(**s["damage_taken"]),
-                overload_count=s["flux_stats"]["overload_count"],
-            )
-            for s in data["player_ships"]
-        )
-        enemy_ships = tuple(
-            ShipCombatResult(
-                fleet_member_id=s["fleet_member_id"],
-                variant_id=s["variant_id"],
-                hull_id=s["hull_id"],
-                destroyed=s["destroyed"],
-                hull_fraction=s["hull_fraction"],
-                armor_fraction=s["armor_fraction"],
-                cr_remaining=s["cr_remaining"],
-                peak_time_remaining=s["peak_time_remaining"],
-                disabled_weapons=s["disabled_weapons"],
-                flameouts=s["flameouts"],
-                damage_dealt=DamageBreakdown(**s["damage_dealt"]),
-                damage_taken=DamageBreakdown(**s["damage_taken"]),
-                overload_count=s["flux_stats"]["overload_count"],
-            )
-            for s in data["enemy_ships"]
-        )
-        return CombatResult(
-            matchup_id=data["matchup_id"],
-            winner=data["winner"],
-            duration_seconds=data["duration_seconds"],
-            player_ships=player_ships,
-            enemy_ships=enemy_ships,
-            player_ships_destroyed=data["aggregate"]["player_ships_destroyed"],
-            enemy_ships_destroyed=data["aggregate"]["enemy_ships_destroyed"],
-            player_ships_retreated=data["aggregate"]["player_ships_retreated"],
-            enemy_ships_retreated=data["aggregate"]["enemy_ships_retreated"],
-        )
-
     def test_parse_batch_results(self):
-        results = [self._parse_result(r) for r in self.SAMPLE_RESULTS]
+        results = [parse_combat_result(r) for r in self.SAMPLE_RESULTS]
         assert len(results) == 1
         assert results[0].winner == "ENEMY"
         assert results[0].player_ships[0].destroyed is True

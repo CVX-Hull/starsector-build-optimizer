@@ -134,48 +134,29 @@ Complete. 21 JUnit tests passing. Live-tested: Eagle vs Dominator Assault, resul
 ### Goal
 Launch and manage N parallel Starsector instances for batch combat evaluation.
 
-### Dependencies
-- Linux (Xvfb for virtual displays)
-- Python (subprocess management, file I/O)
-- Starsector installation
-- Combat harness mod (Phase 2)
+### Implementation
 
-### Deliverables
+**Modules:**
+- `src/starsector_optimizer/result_parser.py` — Parse combat result JSON ↔ Python dataclasses, write queue files
+- `src/starsector_optimizer/instance_manager.py` — `InstancePool` manages N parallel game instances
 
-1. **Instance launcher**
-   - Start Xvfb virtual display per instance
-   - Create per-instance working directory (symlink game, copy mod data)
-   - Launch Starsector with correct DISPLAY and memory settings
-   - JVM vmparams configuration (heap size, GC settings)
+**Key classes:**
+- `InstanceConfig` — Pool configuration (game_dir, num_instances, batch_size, timeouts)
+- `InstancePool` — Main class: `setup()` → `evaluate(matchups)` → `teardown()`
+- `GameInstance` — Tracks a single game instance (process handles, state, work directory)
 
-2. **Health monitor**
-   - Watch heartbeat files (updated by combat harness mod)
-   - Detect hung instances (no heartbeat for >60s)
-   - Detect crashed instances (process exit)
-   - Auto-restart failed instances
+**Per-instance work directory:** Symlinks to shared game files, real directories for `saves/`, `data/config/`, `data/variants/`, `mods/`. Total ~4MB per instance.
 
-3. **Work distributor**
-   - Write matchup queue files to per-instance work directories
-   - Balance load across instances (round-robin or shortest-queue)
-   - Track which matchups are assigned to which instance
+**Health monitoring:** Poll heartbeat file mtime every 1s. Startup timeout 90s, heartbeat timeout 120s. Crash detection via process exit + no done signal. Auto-restart up to 3 times.
 
-4. **Result collector**
-   - Watch for result JSON files in per-instance work directories
-   - Parse and aggregate results
-   - Return results to optimizer
-   - Handle partial results (instance crashed mid-batch)
+**Xvfb:** Each instance gets its own display (`:100`, `:101`, ...) at 1920x1080x24 to match MenuNavigator's calibrated Robot coordinates.
 
-5. **Resource management**
-   - Memory monitoring (total usage across instances)
-   - Configurable instance count
-   - Graceful shutdown (complete current matchups, then stop)
+**Game activation:** Stored in `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (user-global). Shared automatically across instances.
 
 ### Testing
-- Launch 2 instances, verify both run matchups independently
-- Kill an instance, verify manager detects and restarts
-- Verify results are correctly collected and attributed
-- Memory usage stays within bounds
-- Scale test: 16 instances on a 32GB machine
+- 22 unit tests (mocked subprocess, tmp_path work directories)
+- 14 result parser tests
+- Integration: Launch 2 instances locally, verify both return results
 
 ---
 

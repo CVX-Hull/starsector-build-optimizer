@@ -22,17 +22,21 @@ public class MenuNavigator {
     // Robot uses absolute screen coordinates.
     // Recorded by tracking mouse position during manual navigation.
 
-    // "Missions" button on main menu
-    private static final int MISSIONS_X = 1417;
-    private static final int MISSIONS_Y = 486;
+    // "Play Starsector" button on launcher (597x373 Swing window at 0,0)
+    private static final int LAUNCHER_X = 297;
+    private static final int LAUNCHER_Y = 255;
+
+    // "Missions" button on main menu (calibrated for 1920x1080 Xvfb fullscreen)
+    private static final int MISSIONS_X = 1401;
+    private static final int MISSIONS_Y = 453;
 
     // "Optimizer Arena" — last item in mission list after scrolling to bottom
-    private static final int ARENA_X = 635;
-    private static final int ARENA_Y = 909;
+    private static final int ARENA_X = 619;
+    private static final int ARENA_Y = 876;
 
     // "Play Mission" button
-    private static final int PLAY_MISSION_X = 1311;
-    private static final int PLAY_MISSION_Y = 941;
+    private static final int PLAY_MISSION_X = 1295;
+    private static final int PLAY_MISSION_Y = 908;
 
     /**
      * Navigate from main menu to Optimizer Arena mission start.

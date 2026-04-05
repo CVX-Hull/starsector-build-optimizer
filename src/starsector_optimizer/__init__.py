@@ -28,6 +28,8 @@ from .repair import repair_build, is_feasible
 from .scorer import heuristic_score
 from .variant import generate_variant, write_variant_file, load_variant_file
 from .calibration import generate_diverse_builds, compute_build_features
+from .result_parser import parse_combat_result, parse_results_file, write_queue_file
+from .instance_manager import InstanceConfig, InstancePool
 
 __all__ = [
     "Build", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
@@ -41,4 +43,6 @@ __all__ = [
     "heuristic_score",
     "generate_variant", "write_variant_file", "load_variant_file",
     "generate_diverse_builds", "compute_build_features",
+    "parse_combat_result", "parse_results_file", "write_queue_file",
+    "InstanceConfig", "InstancePool",
 ]

@@ -59,7 +59,7 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 ## Project Layout
 
 ```
-src/starsector_optimizer/          # Phase 1: Python data layer
+src/starsector_optimizer/          # Python modules
 ├── models.py                      # Dataclasses + enums (ShipHull, Weapon, Build, etc.)
 ├── hullmod_effects.py             # Game constants, hullmod effect registry
 ├── parser.py                      # CSV + loose JSON → model objects
@@ -67,25 +67,33 @@ src/starsector_optimizer/          # Phase 1: Python data layer
 ├── repair.py                      # Constraint enforcement (optimizer→domain boundary)
 ├── scorer.py                      # Heuristic scoring → ScorerResult
 ├── variant.py                     # Build → .variant JSON
-└── calibration.py                 # Random build generation + feature extraction
+├── calibration.py                 # Random build generation + feature extraction
+├── estimator.py                   # Throughput + cost estimation for simulation campaigns
+├── result_parser.py               # Parse combat result JSON ↔ Python dataclasses
+└── instance_manager.py            # Manage N parallel Starsector game instances
 
-combat-harness/                    # Phase 2: Java combat harness mod
+combat-harness/                    # Java combat harness mod
 ├── CLAUDE.md                      # Java-specific instructions
 ├── build.gradle.kts               # Gradle build
 ├── src/main/java/starsector/combatharness/
-│   ├── MatchupConfig.java         # matchup.json parser
+│   ├── MatchupConfig.java         # Single matchup config POJO
+│   ├── MatchupQueue.java          # Batch queue — reads JSON array from saves/common/
 │   ├── DamageTracker.java         # DamageListener — per-ship damage accumulation
-│   ├── ResultWriter.java          # result.json output via SettingsAPI
-│   ├── CombatHarnessPlugin.java   # EveryFrameCombatPlugin — combat monitoring
-│   └── CombatHarnessModPlugin.java # BaseModPlugin — mod entry point
+│   ├── ResultWriter.java          # Batch results + done signal via SettingsAPI
+│   ├── CombatHarnessPlugin.java   # State machine: INIT→SPAWNING→FIGHTING→CLEANING→DONE
+│   ├── CombatHarnessModPlugin.java # BaseModPlugin — mod entry point
+│   ├── TitleScreenPlugin.java     # Auto-navigates to mission on title screen
+│   └── MenuNavigator.java         # java.awt.Robot menu clicking (1920x1080 calibrated)
 ├── src/main/java/data/missions/optimizer_arena/
 │   └── MissionDefinition.java     # Mission setup (compiled in JAR, not Janino)
 └── mod/                           # Deployed to game/starsector/mods/combat-harness/
     └── mod_info.json
 
 # I/O paths (game appends .data to all saves/common/ filenames):
-#   Input:  saves/common/combat_harness_matchup.json.data
-#   Output: saves/common/combat_harness_result.json.data
+#   Input:  saves/common/combat_harness_queue.json.data
+#   Output: saves/common/combat_harness_results.json.data
+#   Done:   saves/common/combat_harness_done.data
+#   Health: saves/common/combat_harness_heartbeat.txt.data
 
 docs/
 ├── specs/                         # DDD module specifications (drive implementation)
