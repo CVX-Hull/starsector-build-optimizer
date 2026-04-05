@@ -4,6 +4,7 @@ import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.combat.ArmorGridAPI;
 import com.fs.starfarer.api.combat.CombatEngineAPI;
 import com.fs.starfarer.api.combat.CombatFleetManagerAPI;
+import com.fs.starfarer.api.combat.DeployedFleetMemberAPI;
 import com.fs.starfarer.api.combat.FluxTrackerAPI;
 import com.fs.starfarer.api.combat.ShipAPI;
 import com.fs.starfarer.api.fleet.FleetMemberAPI;
@@ -40,15 +41,10 @@ public class ResultWriter {
         JSONArray playerShips = new JSONArray();
         JSONArray enemyShips = new JSONArray();
 
-        for (ShipAPI ship : engine.getShips()) {
-            if (ship.isFighter()) continue;
-            JSONObject shipJson = shipToJSON(ship, tracker);
-            if (ship.getOwner() == 0) {
-                playerShips.put(shipJson);
-            } else if (ship.getOwner() == 1) {
-                enemyShips.put(shipJson);
-            }
-        }
+        // Use getAllEverDeployedCopy() to include destroyed ships
+        // (engine.getShips() may not include ships removed after destruction)
+        collectShipsFromFleetManager(engine.getFleetManager(FleetSide.PLAYER), tracker, playerShips);
+        collectShipsFromFleetManager(engine.getFleetManager(FleetSide.ENEMY), tracker, enemyShips);
 
         // Aggregate stats
         CombatFleetManagerAPI playerFM = engine.getFleetManager(FleetSide.PLAYER);
@@ -85,6 +81,21 @@ public class ResultWriter {
                 playerDestroyed, enemyDestroyed, playerRetreated, enemyRetreated));
 
         writeToCommon(result);
+    }
+
+    /** Collect ship data from a fleet manager, including destroyed/disabled ships. */
+    private static void collectShipsFromFleetManager(CombatFleetManagerAPI fm,
+                                                     DamageTracker tracker,
+                                                     JSONArray output) throws JSONException {
+        List<DeployedFleetMemberAPI> allDeployed = fm.getAllEverDeployedCopy();
+        if (allDeployed == null) return;
+        for (DeployedFleetMemberAPI dfm : allDeployed) {
+            if (dfm.isFighterWing()) continue;
+            ShipAPI ship = dfm.getShip();
+            if (ship == null) continue;
+            if (ship.isFighter()) continue;
+            output.put(shipToJSON(ship, tracker));
+        }
     }
 
     static JSONObject shipToJSON(ShipAPI ship, DamageTracker tracker)
