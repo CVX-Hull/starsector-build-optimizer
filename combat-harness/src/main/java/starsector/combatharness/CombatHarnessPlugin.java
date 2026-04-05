@@ -39,6 +39,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private List<ShipAPI> playerShips = new ArrayList<ShipAPI>();
     private List<ShipAPI> enemyShips = new ArrayList<ShipAPI>();
     private float matchupStartTime;
+    private boolean contactMade = false;  // true once fleets engage
     private JSONArray allResults = new JSONArray();
     private int frameCount = 0;
     private int cleanupFramesLeft = 0;
@@ -110,7 +111,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             spawnShips();
         }
 
-        matchupStartTime = engine.getTotalElapsedTime(false);
+        matchupStartTime = 0f;
+        contactMade = false;
         log.info("  Player ships: " + playerShips.size() + ", Enemy ships: " + enemyShips.size()
                 + ", timeMult=" + engine.getTimeMult().getModifiedValue());
         state = State.FIGHTING;
@@ -174,11 +176,18 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             ResultWriter.writeHeartbeat(engine.getTotalElapsedTime(false));
         }
 
+        // Start timer only once fleets engage (approach time doesn't count)
+        if (!contactMade && engine.isFleetsInContact()) {
+            contactMade = true;
+            matchupStartTime = engine.getTotalElapsedTime(false);
+            log.info("  Contact made for " + currentConfig.matchupId);
+        }
+
         // Custom win detection
         int playerAlive = countAlive(playerShips);
         int enemyAlive = countAlive(enemyShips);
-        float elapsed = engine.getTotalElapsedTime(false) - matchupStartTime;
-        boolean timedOut = elapsed > currentConfig.timeLimitSeconds;
+        float elapsed = contactMade ? engine.getTotalElapsedTime(false) - matchupStartTime : 0f;
+        boolean timedOut = contactMade && elapsed > currentConfig.timeLimitSeconds;
 
         String winner = null;
         if (playerAlive == 0 && enemyAlive > 0) {
