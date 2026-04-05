@@ -24,15 +24,28 @@ class SearchSpace:
     incompatible_pairs: list[tuple[str, str]] = field(default_factory=list)
 
 
+def _is_assignable_weapon(w: Weapon) -> bool:
+    """Filter out system weapons, fighter-only weapons, and restricted weapons."""
+    if "SYSTEM" in w.hints:
+        return False
+    if "restricted" in w.tags:
+        return False
+    if w.op_cost <= 0 and not w.is_beam:
+        # 0-OP non-beam weapons are typically system payloads (e.g., gorgon_payload)
+        return False
+    return True
+
+
 def get_compatible_weapons(
     slot: WeaponSlot,
     weapons: dict[str, Weapon],
 ) -> list[Weapon]:
-    """Get weapons compatible with a slot (matching type and size)."""
+    """Get weapons compatible with a slot (matching type, size, and assignability)."""
     allowed_types = SLOT_COMPATIBILITY.get(slot.slot_type, set())
     return sorted(
         [w for w in weapons.values()
-         if w.weapon_type in allowed_types and w.size == slot.slot_size],
+         if w.weapon_type in allowed_types and w.size == slot.slot_size
+         and _is_assignable_weapon(w)],
         key=lambda w: w.id,
     )
 

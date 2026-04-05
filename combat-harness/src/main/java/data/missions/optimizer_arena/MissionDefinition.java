@@ -33,18 +33,19 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         }
 
         // Init fleets — both AI-controlled, both attacking
-        api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
+        // PLAYER side: useDefaultAI=false (tells engine no human is controlling, all ships get AI)
+        // ENEMY side: useDefaultAI=true (standard for enemy)
+        api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
         api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
 
         api.setFleetTagline(FleetSide.PLAYER, "Optimizer Candidate");
         api.setFleetTagline(FleetSide.ENEMY, "Test Opponent");
 
-        // Add player ships
+        // Add player ships — no flagship (no human control)
         for (int i = 0; i < config.playerVariants.length; i++) {
             String variantId = config.playerVariants[i];
-            boolean isFlagship = config.playerFlagship != null && variantId.equals(config.playerFlagship);
             api.addToFleet(FleetSide.PLAYER, variantId,
-                    FleetMemberType.SHIP, variantId, isFlagship);
+                    FleetMemberType.SHIP, variantId, false);
         }
 
         // Add enemy ships
