@@ -1,15 +1,14 @@
 # Optimizer Specification
 
-Optuna-based optimizer with heuristic warm-start, repair deduplication, and per-opponent pruning. Defined in `src/starsector_optimizer/optimizer.py`.
+Optuna-based optimizer with heuristic warm-start and repair deduplication. Defined in `src/starsector_optimizer/optimizer.py`.
 
 ## Overview
 
 The optimizer proposes ship builds via Optuna's TPE sampler, repairs them to feasibility, evaluates against a diverse opponent pool, and feeds fitness scores back. Key features:
 
 - **Heuristic warm-start:** 50K random builds scored by heuristic, top-500 seed the study
-- **Lamarckian recording:** Repaired (not raw) params stored in the study
+- **Baldwinian recording:** Raw params recorded with repaired score via tell
 - **Build cache:** Hash-based deduplication prevents wasted simulation budget
-- **WilcoxonPruner:** Early pruning of inferior builds after 2-3 opponents
 
 ## Classes
 
@@ -25,7 +24,6 @@ Frozen dataclass configuring the optimization run.
 | `warm_start_scale` | `float` | `0.1` | Scale factor for heuristic scores |
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
 | `n_ei_candidates` | `int` | `256` | EI candidates per sample |
-| `p_threshold` | `float` | `0.1` | WilcoxonPruner p-value threshold |
 | `fitness_mode` | `str` | `"mean"` | `"mean"` or `"minimax"` |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
 
@@ -93,17 +91,16 @@ Main entry point.
 2. `space = build_search_space(hull, game_data)`
 3. `distributions = define_distributions(space)`
 4. Create `TPESampler(multivariate=True, constant_liar=True, n_ei_candidates=config.n_ei_candidates, n_startup_trials=config.n_startup_trials)`
-5. Create `WilcoxonPruner(p_threshold=config.p_threshold)`
-6. `study = optuna.create_study(sampler, pruner, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
-7. `warm_start(study, hull, game_data, config)`
-8. `cache = BuildCache()`
-9. Ask-tell loop for `sim_budget` iterations:
+5. `study = optuna.create_study(sampler=sampler, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
+6. `warm_start(study, hull, game_data, config)`
+7. `cache = BuildCache()`
+8. Ask-tell loop for `sim_budget` iterations:
    - `trial = study.ask(distributions)`
    - `raw_build = trial_params_to_build(trial.params, hull_id)`
    - `repaired = repair_build(raw_build, hull, game_data)`
    - `score = evaluate_build(repaired, hull, game_data, instance_pool, opponent_pool, cache)`
-   - `study.add_trial(create_trial(params=build_to_trial_params(repaired, space), distributions=distributions, values=[score]))` — Lamarckian
-10. Return study
+   - `study.tell(trial, score)` — Baldwinian (raw params recorded with repaired score)
+9. Return study
 
 ## JSONL Evaluation Log
 

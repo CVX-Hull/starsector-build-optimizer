@@ -7,6 +7,7 @@ from .models import (
     DamageType,
     EffectiveStats,
     GameData,
+    Heartbeat,
     HullMod,
     HullSize,
     MatchupConfig,
@@ -42,7 +43,7 @@ from .optimizer import (
 
 __all__ = [
     "Build", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
-    "GameData", "HullMod", "HullSize", "MatchupConfig", "MountType", "ScorerResult",
+    "GameData", "Heartbeat", "HullMod", "HullSize", "MatchupConfig", "MountType", "ScorerResult",
     "ShieldType", "ShipCombatResult", "ShipHull", "SlotSize", "SlotType",
     "Weapon", "WeaponSlot", "WeaponType",
     "compute_effective_stats", "HULLMOD_EFFECTS",

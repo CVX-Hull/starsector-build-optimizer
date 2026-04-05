@@ -25,20 +25,20 @@ DEFAULT_OPPONENT_POOL = OpponentPool(
     pools={
         HullSize.FRIGATE: (
             "wolf_Assault",
-            "hammerhead_Balanced",
-            "medusa_Attack",
+            "lasher_Assault",
+            "hyperion_Attack",
             "shade_Assault",
         ),
         HullSize.DESTROYER: (
             "hammerhead_Elite",
             "medusa_Attack",
             "enforcer_Assault",
-            "shade_Assault",
+            "sunder_Assault",
         ),
         HullSize.CRUISER: (
             "dominator_Assault",
             "dominator_XIV_Elite",
-            "medusa_CS",
+            "aurora_Assault",
             "heron_Attack",
             "doom_Strike",
             "eagle_Assault",
@@ -46,8 +46,8 @@ DEFAULT_OPPONENT_POOL = OpponentPool(
         HullSize.CAPITAL_SHIP: (
             "onslaught_Standard",
             "onslaught_xiv_Elite",
-            "eagle_xiv_Elite",
-            "heron_Strike",
+            "legion_xiv_Elite",
+            "astral_Elite",
             "conquest_Elite",
         ),
     }
@@ -84,7 +84,10 @@ def hp_differential(result: CombatResult) -> float:
 
     Returns mean(player hull_fractions) - mean(enemy hull_fractions).
     Range: -1.0 (total loss) to +1.0 (total victory).
+    Returns 0.0 if either side has no ships.
     """
+    if not result.player_ships or not result.enemy_ships:
+        return 0.0
     player_hp = sum(s.hull_fraction for s in result.player_ships) / len(result.player_ships)
     enemy_hp = sum(s.hull_fraction for s in result.enemy_ships) / len(result.enemy_ships)
     return player_hp - enemy_hp

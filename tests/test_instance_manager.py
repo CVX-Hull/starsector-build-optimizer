@@ -488,6 +488,33 @@ class TestCurtailmentIntegration:
         pool._read_and_check_curtailment(inst)
         assert inst.heartbeats == []
 
+    def test_heartbeat_dedup_same_timestamp(self, config):
+        """Same heartbeat content read twice → only 1 heartbeat accumulated."""
+        from starsector_optimizer.curtailment import CurtailmentMonitor
+        monitor = CurtailmentMonitor()
+        pool = InstancePool(config, curtailment=monitor)
+        pool.setup()
+        inst = pool._instances[0]
+        inst.state = InstanceState.RUNNING
+        inst.heartbeat_path.write_text("1712345678000 45.5 0.85 0.42 2 1")
+        pool._read_and_check_curtailment(inst)
+        pool._read_and_check_curtailment(inst)  # Same content, same timestamp
+        assert len(inst.heartbeats) == 1
+
+    def test_heartbeat_different_timestamps_both_added(self, config):
+        """Different timestamps → both heartbeats accumulated."""
+        from starsector_optimizer.curtailment import CurtailmentMonitor
+        monitor = CurtailmentMonitor()
+        pool = InstancePool(config, curtailment=monitor)
+        pool.setup()
+        inst = pool._instances[0]
+        inst.state = InstanceState.RUNNING
+        inst.heartbeat_path.write_text("1712345678000 45.5 0.85 0.42 2 1")
+        pool._read_and_check_curtailment(inst)
+        inst.heartbeat_path.write_text("1712345679000 46.5 0.83 0.38 2 1")
+        pool._read_and_check_curtailment(inst)
+        assert len(inst.heartbeats) == 2
+
     def test_stop_signal_written_when_curtailment_triggers(self, config):
         """When should_stop returns True, stop signal file is created."""
         from starsector_optimizer.curtailment import CurtailmentMonitor

@@ -237,7 +237,6 @@ Connect the Optuna optimizer framework to the evaluation pipeline with a diverse
    - `TPESampler(multivariate=True, constant_liar=True, n_ei_candidates=256, n_startup_trials=100)`
    - Ask-tell loop: `study.ask()` → repair → evaluate against opponent pool → `study.add_trial()` with repaired params (Lamarckian)
    - Report OP budget violation via `constraints_func` (biases TPE away from infeasible regions)
-   - WilcoxonPruner integration: prune builds that are statistically worse than best after 2-3 opponents (save 40-60% of sim budget on bad builds)
    - Swappable sampler: start TPE, option to switch to CatCMAwM via OptunaHub for refinement
 
 4. **Heuristic warm-start pipeline**
@@ -270,7 +269,7 @@ Based on repair operator + BO literature review:
 | Activity | Sims | Wall-clock (8 inst) | Cost |
 |---|---|---|---|
 | Warm-start (50 builds × 5 opponents) | 250 | ~50min | ~$3 |
-| BO exploration (150 builds × 5 opponents, WilcoxonPruner ~40% savings) | ~450 | ~1.5h | ~$5 |
+| BO exploration (150 builds × 5 opponents) | 750 | ~2.5h | ~$8 |
 | Racing (10 builds × 5 opponents × 5 replays) | 250 | ~50min | ~$3 |
 | **Total per hull** | **~950** | **~3.5h** | **~$11** |
 
@@ -281,7 +280,6 @@ With $30: optimize 2-3 hulls fully, or 5+ hulls with reduced racing.
 - Benchmark TPE vs random search on heuristic proxy — verify TPE outperforms by trial 200
 - End-to-end: optimize a frigate (small search space) with 2 simulation instances
 - Verify repair deduplication prevents wasted evaluations
-- Verify WilcoxonPruner prunes bad builds after 2-3 opponents
 - Compare optimizer results to known community builds
 
 ---
@@ -392,7 +390,7 @@ Train ML models that predict combat outcomes from build parameters, reducing sim
 5. **Integration with optimizer**
    - Surrogate as cheap pre-filter: score 1000 candidates, simulate only top-50
    - Composite: heuristic + surrogate correction (GP learns residual)
-   - WilcoxonPruner uses surrogate prediction as early signal before full opponent pool evaluation completes
+   - Surrogate prediction as early signal before full opponent pool evaluation completes
 
 ### Testing
 - Train on 200 sim results, predict held-out 50: measure R² and rank correlation
@@ -456,7 +454,7 @@ Validate pool locally: run all opponents against each other (15-30 matchups, ~15
 
 All Phase 4-6 code written and tested against heuristic proxy:
 
-1. **Optuna integration** — ask-tell loop, repair, deduplication, WilcoxonPruner
+1. **Optuna integration** — ask-tell loop, repair, deduplication
 2. **Opponent pool** — definition, matchup generation, fitness aggregation
 3. **Warm-start pipeline** — heuristic screening, study population
 4. **Result logging** — JSONL writer, convergence plotting
@@ -465,7 +463,6 @@ All Phase 4-6 code written and tested against heuristic proxy:
 **Validation on heuristic proxy:**
 - Run TPE on Wolf (70D) with heuristic_score as objective — verify convergence by trial 200
 - Benchmark TPE vs random search — verify statistically significant improvement
-- Verify WilcoxonPruner prunes bad builds after 2-3 "opponents" (mock with heuristic variants)
 - Verify deduplication catches repair collisions
 
 **Estimated time:** 2-3 days of development. Zero simulation cost.

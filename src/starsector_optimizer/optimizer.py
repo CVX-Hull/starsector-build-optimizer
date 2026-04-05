@@ -1,7 +1,7 @@
 """Optimizer — Optuna-based build optimization with heuristic warm-start.
 
-Ask-tell loop with TPE sampler, WilcoxonPruner for per-opponent pruning,
-Lamarckian repair recording, and hash-based deduplication.
+Ask-tell loop with TPE sampler, Baldwinian repair recording,
+and hash-based deduplication.
 
 See spec 24 for design rationale.
 """
@@ -47,7 +47,6 @@ class OptimizerConfig:
     warm_start_scale: float = 0.1
     n_startup_trials: int = 100
     n_ei_candidates: int = 256
-    p_threshold: float = 0.1
     fitness_mode: str = "mean"
     study_storage: str | None = None
 
@@ -266,11 +265,9 @@ def optimize_hull(
         n_ei_candidates=config.n_ei_candidates,
         n_startup_trials=config.n_startup_trials,
     )
-    pruner = optuna.pruners.WilcoxonPruner(p_threshold=config.p_threshold)
 
     study = optuna.create_study(
         sampler=sampler,
-        pruner=pruner,
         direction="maximize",
         storage=config.study_storage,
         study_name=hull_id,
@@ -297,14 +294,7 @@ def optimize_hull(
             eval_log_path=eval_log_path,
         )
 
-        # Lamarckian: record repaired params
-        repaired_trial = create_trial(
-            params=build_to_trial_params(repaired, space),
-            distributions=distributions,
-            values=[score],
-            state=TrialState.COMPLETE,
-        )
-        study.add_trial(repaired_trial)
+        study.tell(trial, score)
 
         if (i + 1) % 10 == 0:
             logger.info(

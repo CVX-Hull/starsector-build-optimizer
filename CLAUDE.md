@@ -6,7 +6,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - **Phase 2** (complete): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
 - **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
 - **Phase 3.5** (complete): Stochastic curtailment (TTD-ratio extrapolation) + data-driven timeout tuning (Weibull AFT).
-- **Phase 4** (in progress): Optimizer integration — Optuna TPE, opponent pool, heuristic warm-start.
+- **Phase 4** (complete): Optimizer integration — Optuna TPE, opponent pool, heuristic warm-start.
 
 ## Commands
 

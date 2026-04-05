@@ -24,10 +24,10 @@ Variant IDs match filenames in `data/variants/` (without `.variant` extension):
 
 | Hull Size | Opponents |
 |-----------|-----------|
-| FRIGATE | `wolf_Assault`, `hammerhead_Balanced`, `medusa_Attack`, `shade_Assault` |
-| DESTROYER | `hammerhead_Elite`, `medusa_Attack`, `enforcer_Assault`, `shade_Assault` |
-| CRUISER | `dominator_Assault`, `dominator_XIV_Elite`, `medusa_CS`, `heron_Attack`, `doom_Strike`, `eagle_Assault` |
-| CAPITAL_SHIP | `onslaught_Standard`, `onslaught_xiv_Elite`, `eagle_xiv_Elite`, `heron_Strike`, `conquest_Elite` |
+| FRIGATE | `wolf_Assault`, `lasher_Assault`, `hyperion_Attack`, `shade_Assault` |
+| DESTROYER | `hammerhead_Elite`, `medusa_Attack`, `enforcer_Assault`, `sunder_Assault` |
+| CRUISER | `dominator_Assault`, `dominator_XIV_Elite`, `aurora_Assault`, `heron_Attack`, `doom_Strike`, `eagle_Assault` |
+| CAPITAL_SHIP | `onslaught_Standard`, `onslaught_xiv_Elite`, `legion_xiv_Elite`, `astral_Elite`, `conquest_Elite` |
 
 ## Functions
 
@@ -58,6 +58,7 @@ Computes normalized HP differential from a single `CombatResult`.
 Algorithm: `mean(hull_fraction for player ships) - mean(hull_fraction for enemy ships)`.
 
 - Destroyed ships have `hull_fraction = 0.0`
+- If either `player_ships` or `enemy_ships` is empty, returns 0.0 (guard clause before division).
 - Range: -1.0 (total loss) to +1.0 (total victory)
 - Timeout draws: based on remaining HP fractions
 

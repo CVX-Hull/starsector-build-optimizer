@@ -447,6 +447,9 @@ class InstancePool:
             if not content:
                 return
             hb = parse_heartbeat(content)
+            # Deduplicate: skip if same timestamp as last heartbeat
+            if inst.heartbeats and inst.heartbeats[-1].timestamp_ms == hb.timestamp_ms:
+                return
             inst.heartbeats.append(hb)
             should_stop, _ = self._curtailment.should_stop(inst.heartbeats)
             if should_stop:

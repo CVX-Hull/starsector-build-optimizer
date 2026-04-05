@@ -162,6 +162,26 @@ class TestHpDifferential:
         diff = hp_differential(result)
         assert diff == pytest.approx(0.0)
 
+    def test_empty_player_ships(self):
+        """Empty player_ships returns 0.0."""
+        result = CombatResult(
+            matchup_id="test", winner="ENEMY", duration_seconds=60.0,
+            player_ships=(), enemy_ships=(_make_ship(0.5),),
+            player_ships_destroyed=0, enemy_ships_destroyed=0,
+            player_ships_retreated=0, enemy_ships_retreated=0,
+        )
+        assert hp_differential(result) == 0.0
+
+    def test_empty_enemy_ships(self):
+        """Empty enemy_ships returns 0.0."""
+        result = CombatResult(
+            matchup_id="test", winner="PLAYER", duration_seconds=60.0,
+            player_ships=(_make_ship(0.8),), enemy_ships=(),
+            player_ships_destroyed=0, enemy_ships_destroyed=0,
+            player_ships_retreated=0, enemy_ships_retreated=0,
+        )
+        assert hp_differential(result) == 0.0
+
 
 # --- Compute Fitness Tests ---
 

@@ -121,10 +121,6 @@ If heuristic calibration improves R² above 0.75 (after Phase 6 surrogate correc
 
 The opponent pool already provides noise reduction: averaging across 5 diverse opponents smooths out matchup-specific variance.
 
-### WilcoxonPruner for Adaptive Budget
-
-WilcoxonPruner (Optuna) runs a Wilcoxon signed-rank test comparing each build's per-opponent scores to the best build's. If the build is statistically worse (p < 0.1) after 2-3 opponents, prune it. This saves 40-60% of simulation budget on clearly bad builds.
-
 ### Racing for Final Selection (irace-style)
 
 After optimization identifies top-10 candidates:
@@ -149,9 +145,9 @@ Phase 1: HEURISTIC SCREENING (seconds, no game needed)
 
 Phase 2: OPTIMIZER-GUIDED FULL SIM (hours)
     Input: Warm-started Optuna study + optimizer exploration
-    Method: TPE with constant_liar, WilcoxonPruner, opponent pool (5 opponents)
+    Method: TPE with constant_liar, opponent pool (5 opponents)
     Output: Top 10-20 builds with mean HP differentials
-    Budget: 200-400 builds × ~3 opponents avg (WilcoxonPruner) = 600-1200 sims
+    Budget: 200-400 builds × 5 opponents = 1000-2000 sims
     Wall-clock: ~2-3 hours with 8 instances
 
 Phase 3: RACING VALIDATION (hours)
@@ -174,7 +170,7 @@ Total per hull: ~3-4 hours, ~1000-1700 sims, ~$11
 |---|---|---|
 | Fidelity levels | Heuristic → Short sim → Full sim | Heuristic → Full sim + curtailment |
 | Short sim risk | 100% timeout rate at 15s → corrupted signal | Eliminated |
-| Time savings mechanism | Short sim screening | Curtailment (12-24%) + WilcoxonPruner (40-60%) |
+| Time savings mechanism | Short sim screening | Curtailment (12-24%) |
 | Warm-start method | Feed short-sim survivors to full-sim | Feed heuristic top-500 directly to TPE |
 | Opponent strategy | Not specified | Fixed diverse pool (5-6 archetypes) |
 | Budget per hull | ~500-2000 sims + 500-2000 short sims | ~1000-1700 sims total |

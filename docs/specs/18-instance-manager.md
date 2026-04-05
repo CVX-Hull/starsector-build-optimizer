@@ -205,9 +205,10 @@ When `curtailment` is provided, the poll loop reads heartbeat file **content** (
 **`_read_and_check_curtailment(inst)` method:**
 1. Read `inst.heartbeat_path` content
 2. Parse with `parse_heartbeat(line)` → `Heartbeat`
-3. Append to `inst.heartbeats`
-4. Call `self._curtailment.should_stop(inst.heartbeats)`
-5. If `(True, winner)`: call `CurtailmentMonitor.write_stop_signal(inst.saves_common)`
+3. **Deduplicate:** if `inst.heartbeats` is non-empty and the parsed heartbeat's `timestamp_ms` equals the last accumulated heartbeat's `timestamp_ms`, skip (the game overwrites the file each cycle but the Python poll loop may read it multiple times before it changes)
+4. Append to `inst.heartbeats`
+5. Call `self._curtailment.should_stop(inst.heartbeats)`
+6. If `(True, winner)`: call `CurtailmentMonitor.write_stop_signal(inst.saves_common)`
 
 Called in poll loop when `inst.state == RUNNING` and heartbeat is fresh.
 

@@ -392,19 +392,15 @@ cd ${WORKDIR} && DISPLAY=:${10+i} ./starsector.sh &
 ```python
 import optuna
 from optuna.samplers import TPESampler
-from optuna.pruners import WilcoxonPruner
-
 sampler = TPESampler(
     multivariate=True,
     constant_liar=True,       # Batch parallelism for 4-8 instances
     n_ei_candidates=256,      # Default 24 too few for 70D
     n_startup_trials=100,     # Default 10 too few for 70D
 )
-pruner = WilcoxonPruner(p_threshold=0.1)
 
 study = optuna.create_study(
     sampler=sampler,
-    pruner=pruner,
     direction="maximize",
     storage="sqlite:///study.db",
 )

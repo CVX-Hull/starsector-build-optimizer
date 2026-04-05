@@ -247,3 +247,79 @@ class TestWarmStart:
         # Scaled by 0.1, should be 0.02-0.08
         for trial in study.trials:
             assert trial.value < 0.5  # Way below unscaled heuristic range
+
+
+# --- Optimize Hull Integration Tests ---
+
+
+class TestOptimizeHullIntegration:
+    """Tests using mocked InstancePool to verify ask-tell loop correctness."""
+
+    def _make_mock_pool(self):
+        """Create a mock InstancePool that returns synthetic CombatResults."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+
+        mock_pool = MagicMock()
+        mock_pool.write_variant_to_all = MagicMock()
+
+        def mock_evaluate(matchups):
+            results = []
+            for m in matchups:
+                player_ship = ShipCombatResult(
+                    fleet_member_id="p0", variant_id=m.player_variants[0],
+                    hull_id="wolf", destroyed=False, hull_fraction=0.7,
+                    armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
+                    disabled_weapons=0, flameouts=0,
+                    damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+                    overload_count=0,
+                )
+                enemy_ship = ShipCombatResult(
+                    fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                    hull_id="enemy", destroyed=True, hull_fraction=0.0,
+                    armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
+                    disabled_weapons=0, flameouts=0,
+                    damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+                    overload_count=0,
+                )
+                results.append(CombatResult(
+                    matchup_id=m.matchup_id, winner="PLAYER",
+                    duration_seconds=60.0,
+                    player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                    player_ships_destroyed=0, enemy_ships_destroyed=1,
+                    player_ships_retreated=0, enemy_ships_retreated=0,
+                ))
+            return results
+
+        mock_pool.evaluate = mock_evaluate
+        return mock_pool
+
+    def test_no_orphaned_trials(self, wolf_hull, game_data):
+        """After optimize_hull, no trials are in RUNNING or WAITING state."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=3, warm_start_n=5, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        for trial in study.trials:
+            assert trial.state == optuna.trial.TrialState.COMPLETE, (
+                f"Trial {trial.number} is {trial.state.name}, expected COMPLETE"
+            )
+
+    def test_trial_count_matches_budget(self, wolf_hull, game_data):
+        """Study has exactly warm_start_n + sim_budget completed trials."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=3, warm_start_n=5, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        assert len(study.trials) == config.warm_start_n + config.sim_budget

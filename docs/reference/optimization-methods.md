@@ -112,30 +112,9 @@ for _ in range(budget):
 
 1. **High dimensionality**: Kernel density estimation degrades. TPE essentially becomes random search with mild bias past ~30D. Mitigation: increase `n_ei_candidates` to 256+, use 100+ startup trials.
 2. **Irrelevant categoricals**: TPE wastes budget exploring unimportant hullmod toggles. Many hullmods have near-zero effect on combat. Mitigation: pre-filter eligible hullmods to only combat-relevant ones.
-3. **Noisy objectives**: Combat simulation has variance from AI behavior randomness. Mitigation: average across 5+ opponent matchups (reduces noise) and use WilcoxonPruner.
+3. **Noisy objectives**: Combat simulation has variance from AI behavior randomness. Mitigation: average across 5+ opponent matchups (reduces noise).
 4. **Local optima trapping**: TPE's density ratio creates attraction basins. Mitigation: restart studies with different seeds; use CatCMAwM for exploration.
 5. **Constant liar degradation**: At batch size 4-8, expect ~1.5-2x the trial budget vs sequential to achieve same quality. Still far better than random search.
-
-### WilcoxonPruner Integration
-
-Prune builds that are statistically worse than the best after evaluating against 2-3 opponents (instead of all 5-6). Saves 40-60% of simulation budget on bad builds.
-
-```python
-from optuna.pruners import WilcoxonPruner
-
-pruner = WilcoxonPruner(p_threshold=0.1)
-
-def objective(trial):
-    build = suggest_and_repair(trial)
-    scores = []
-    for i, opponent in enumerate(opponent_pool):
-        score = simulate(build, opponent)
-        trial.report(score, i)
-        scores.append(score)
-        if trial.should_prune():
-            return sum(scores) / len(scores)  # Return partial mean
-    return sum(scores) / len(scores)
-```
 
 ### Expected Performance
 
@@ -290,7 +269,7 @@ Select 5-6 stock opponents per hull size, covering archetypes:
 
 ### Budget Impact
 
-5 opponents per evaluation × 200 builds = 1000 sims. With WilcoxonPruner (prune after 2-3 opponents), effective cost drops to ~600 sims.
+5 opponents per evaluation × 200 builds = 1000 sims.
 
 ### Why NOT These Alternatives
 
@@ -321,7 +300,7 @@ Select 5-6 stock opponents per hull size, covering archetypes:
 
 ### Recommendation Summary
 
-1. **Use Optuna TPE** as primary optimizer with warm-start, repair, deduplication, WilcoxonPruner
+1. **Use Optuna TPE** as primary optimizer with warm-start, repair, deduplication
 2. **Use CatCMAwM** as MAP-Elites emitter (Phase 5) and optional refinement sampler
 3. **Use SMAC3** only if we discover conditional parameter spaces that repair cannot handle
 4. **Keep Bounce** as reference for benchmarking discussions only
