@@ -3,6 +3,7 @@ package starsector.combatharness;
 import com.fs.starfarer.api.combat.BaseEveryFrameCombatPlugin;
 import com.fs.starfarer.api.combat.CombatEngineAPI;
 import com.fs.starfarer.api.combat.ShipAPI;
+import com.fs.starfarer.api.combat.ViewportAPI;
 import com.fs.starfarer.api.input.InputEventAPI;
 import com.fs.starfarer.api.mission.FleetSide;
 
@@ -109,11 +110,6 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             spawnShips();
         }
 
-        // Point camera at first player ship so the combat is visible
-        if (!playerShips.isEmpty()) {
-            engine.setPlayerShipExternal(playerShips.get(0));
-        }
-
         matchupStartTime = engine.getTotalElapsedTime(false);
         log.info("  Player ships: " + playerShips.size() + ", Enemy ships: " + enemyShips.size()
                 + ", timeMult=" + engine.getTimeMult().getModifiedValue());
@@ -170,6 +166,9 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     }
 
     private void doFighting() {
+        // Center camera on midpoint between player and enemy ships
+        updateCamera();
+
         // Heartbeat every 60 frames
         if (frameCount % 60 == 0) {
             ResultWriter.writeHeartbeat(engine.getTotalElapsedTime(false));
@@ -259,5 +258,29 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             if (s.isAlive() && !s.isFighter()) count++;
         }
         return count;
+    }
+
+    /** Center viewport on midpoint of all tracked ships so the fight is visible. */
+    private void updateCamera() {
+        float sumX = 0f, sumY = 0f;
+        int count = 0;
+        for (ShipAPI s : playerShips) {
+            sumX += s.getLocation().x;
+            sumY += s.getLocation().y;
+            count++;
+        }
+        for (ShipAPI s : enemyShips) {
+            sumX += s.getLocation().x;
+            sumY += s.getLocation().y;
+            count++;
+        }
+        if (count > 0) {
+            ViewportAPI vp = engine.getViewport();
+            vp.setExternalControl(true);
+            float cx = sumX / count;
+            float cy = sumY / count;
+            vp.set(cx - vp.getVisibleWidth() / 2f, cy - vp.getVisibleHeight() / 2f,
+                    vp.getVisibleWidth(), vp.getVisibleHeight());
+        }
     }
 }
