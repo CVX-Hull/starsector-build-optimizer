@@ -260,6 +260,11 @@ def parse_hullmod_csv(csv_path: Path) -> list[HullMod]:
         mid = row.get("id", "").strip()
         if not mid:
             continue
+        # Skip corrupted rows where description text leaked into the id column
+        # (Starsector CSV has loose quoting that confuses pandas)
+        if " " in mid or "%" in mid or '"' in mid:
+            logger.warning("Skipping corrupted hullmod id: %r", mid)
+            continue
         hidden = row.get("hidden", "").strip().lower() in ("true", "1")
         hidden_everywhere = row.get("hiddenEverywhere", "").strip().lower() in ("true", "1")
         mods.append(HullMod(
