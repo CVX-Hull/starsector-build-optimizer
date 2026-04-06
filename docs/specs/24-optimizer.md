@@ -25,6 +25,7 @@ Frozen dataclass configuring the optimization run.
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
 | `n_ei_candidates` | `int` | `256` | EI candidates per sample |
 | `fitness_mode` | `str` | `"mean"` | `"mean"` or `"minimax"` |
+| `eval_batch_size` | `int` | `4` | Builds evaluated per batch. Set to num_instances // num_opponents for full utilization. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
 
 ### `BuildCache`
@@ -94,12 +95,13 @@ Main entry point.
 5. `study = optuna.create_study(sampler=sampler, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
 6. `warm_start(study, hull, game_data, config)`
 7. `cache = BuildCache()`
-8. Ask-tell loop for `sim_budget` iterations:
-   - `trial = study.ask(distributions)`
-   - `raw_build = trial_params_to_build(trial.params, hull_id)`
-   - `repaired = repair_build(raw_build, hull, game_data)`
-   - `score = evaluate_build(repaired, hull, game_data, instance_pool, opponent_pool, cache)`
-   - `study.tell(trial, score)` — Baldwinian (raw params recorded with repaired score)
+8. Batched ask-tell loop (`sim_budget // eval_batch_size` batches):
+   - Ask `eval_batch_size` trials from study (constant_liar handles pending trials)
+   - For each trial: repair build, check cache (tell cached score immediately), generate variant + matchups for uncached
+   - `instance_pool.evaluate(all_matchups)` — all uncached matchups in one batch
+   - Map results back to builds by matchup_id prefix, compute fitness per build
+   - Tell all trials their scores
+   - On `InstanceError`: tell affected trials score=-1.0, log failure, continue
 9. Return study
 
 ## JSONL Evaluation Log

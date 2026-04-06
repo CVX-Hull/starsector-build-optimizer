@@ -20,7 +20,7 @@ from optuna.distributions import CategoricalDistribution, IntDistribution
 from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
-from .instance_manager import InstancePool
+from .instance_manager import InstanceError, InstancePool
 from .models import Build, GameData, ShipHull
 from .opponent_pool import (
     OpponentPool,
@@ -48,6 +48,7 @@ class OptimizerConfig:
     n_startup_trials: int = 100
     n_ei_candidates: int = 256
     fitness_mode: str = "mean"
+    eval_batch_size: int = 4
     study_storage: str | None = None
 
 
@@ -276,33 +277,73 @@ def optimize_hull(
 
     warm_start(study, hull, game_data, config)
 
+    opponents = get_opponents(opponent_pool, hull.hull_size)
     cache = BuildCache()
-    for i in range(config.sim_budget):
-        trial = study.ask(distributions)
-        raw_build = trial_params_to_build(trial.params, hull_id)
-        repaired = repair_build(raw_build, hull, game_data)
+    completed = 0
 
-        score = evaluate_build(
-            repaired,
-            hull,
-            game_data,
-            instance_pool,
-            opponent_pool,
-            cache,
-            config,
-            trial_number=i,
-            eval_log_path=eval_log_path,
-        )
+    while completed < config.sim_budget:
+        batch_size = min(config.eval_batch_size, config.sim_budget - completed)
 
-        study.tell(trial, score)
+        # Ask batch_size trials (constant_liar handles pending trials)
+        trials = [study.ask(distributions) for _ in range(batch_size)]
+        builds = [
+            repair_build(trial_params_to_build(t.params, hull_id), hull, game_data)
+            for t in trials
+        ]
 
-        if (i + 1) % 10 == 0:
-            logger.info(
-                "Trial %d/%d: fitness=%.3f, best=%.3f",
-                i + 1,
-                config.sim_budget,
-                score,
-                study.best_value,
+        # Check cache, collect matchups for uncached builds
+        all_matchups = []
+        variant_map: dict[str, tuple[int, object, Build]] = {}
+        for j, (trial, build) in enumerate(zip(trials, builds)):
+            cached = cache.get(build)
+            if cached is not None:
+                study.tell(trial, cached)
+                continue
+            trial_num = completed + j
+            vid = f"{hull_id}_opt_{trial_num:06d}"
+            variant = generate_variant(build, hull, game_data, variant_id=vid)
+            instance_pool.write_variant_to_all(variant, f"{vid}.variant")
+            matchups = generate_matchups(
+                vid, opponents,
+                matchup_id_prefix=f"{hull_id}_{trial_num:06d}",
             )
+            all_matchups.extend(matchups)
+            variant_map[vid] = (j, trial, build)
+
+        # Evaluate all uncached matchups in one batch
+        if all_matchups:
+            try:
+                results = instance_pool.evaluate(all_matchups)
+                for vid, (j, trial, build) in variant_map.items():
+                    prefix = vid.replace(f"{hull_id}_opt_", f"{hull_id}_")
+                    build_results = [
+                        r for r in results if r.matchup_id.startswith(prefix)
+                    ]
+                    fitness = (
+                        compute_fitness(build_results, mode=config.fitness_mode)
+                        if build_results
+                        else -1.0
+                    )
+                    cache.put(build, fitness)
+                    study.tell(trial, fitness)
+
+                    if eval_log_path:
+                        _append_eval_log(
+                            eval_log_path, hull_id, completed + j,
+                            build, build_results, fitness,
+                        )
+            except InstanceError:
+                logger.error(
+                    "Instance failure at trial %d, scoring batch as -1.0", completed
+                )
+                for vid, (j, trial, build) in variant_map.items():
+                    study.tell(trial, -1.0)
+
+        completed += batch_size
+
+        if completed % 10 == 0 or completed >= config.sim_budget:
+            best = study.best_value if study.best_trial else 0.0
+            logger.info("Progress: %d/%d trials, best=%.3f",
+                        completed, config.sim_budget, best)
 
     return study

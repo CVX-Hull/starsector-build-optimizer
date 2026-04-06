@@ -140,7 +140,7 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 
 ### `teardown()`
 
-1. For each instance: terminate game process (SIGTERM, wait 5s, SIGKILL if needed), terminate Xvfb
+1. For each instance: terminate game process (SIGTERM, wait 5s, SIGKILL if needed), terminate Xvfb (SIGTERM, wait 5s, SIGKILL if needed)
 2. Set state to STOPPED
 
 ## Xvfb Display
@@ -148,6 +148,21 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 - Instance `i` gets display `xvfb_base_display + i`
 - Resolution: `1920x1080x24` (must match MenuNavigator's hardcoded Robot coordinates)
 - Flags: `-nolisten tcp` (no network access needed)
+
+### Xvfb Lifecycle
+
+**`_kill_instance(inst)`** must terminate both game and Xvfb with wait:
+1. Terminate game process, wait 5s, SIGKILL if needed
+2. Terminate Xvfb process, wait 5s, SIGKILL if needed (prevents stale Xvfb blocking restarts)
+
+**`_start_xvfb(inst)`** must handle stale processes and verify readiness:
+1. If `inst.xvfb_process` still running (`poll() is None`), terminate and wait first
+2. Clean both lock file (`/tmp/.X{N}-lock`) AND socket file (`/tmp/.X11-unix/X{N}`)
+3. Start Xvfb process
+4. Wait for **socket file** to exist (not just lock file — the socket is what clients connect to)
+5. Timeout: 5 seconds (50 iterations × 0.1s)
+
+**`_start_game(inst)`** captures stdout/stderr to `{work_dir}/game_stdout.log` (not `/dev/null`). Essential for debugging crashes.
 
 ## Error Handling
 

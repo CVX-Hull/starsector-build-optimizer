@@ -366,7 +366,7 @@ class TestProcessManagement:
         assert pool._can_restart(inst)
 
     def test_graceful_shutdown(self, pool, config):
-        """Teardown kills all processes."""
+        """Teardown kills all processes and waits for them."""
         pool.setup()
         for inst in pool._instances:
             mock_game = MagicMock()
@@ -381,8 +381,24 @@ class TestProcessManagement:
 
         for inst in pool._instances:
             inst.game_process.terminate.assert_called_once()
+            inst.game_process.wait.assert_called_once()
             inst.xvfb_process.terminate.assert_called_once()
+            inst.xvfb_process.wait.assert_called_once()
             assert inst.state == InstanceState.STOPPED
+
+    def test_kill_instance_waits_for_xvfb(self, pool, config):
+        """_kill_instance terminates Xvfb and waits for it to exit."""
+        pool.setup()
+        inst = pool._instances[0]
+        mock_xvfb = MagicMock()
+        mock_xvfb.poll.return_value = None
+        mock_game = MagicMock()
+        mock_game.poll.return_value = None
+        inst.xvfb_process = mock_xvfb
+        inst.game_process = mock_game
+        pool._kill_instance(inst)
+        mock_xvfb.terminate.assert_called_once()
+        mock_xvfb.wait.assert_called_once()
 
 
 # --- Display Numbering Tests ---

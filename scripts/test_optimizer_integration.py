@@ -61,7 +61,7 @@ print("\n3. Setting up 2 Xvfb instances...")
 config = InstanceConfig(
     game_dir=GAME_DIR,
     num_instances=2,
-    batch_size=10,
+    batch_size=2,  # Match num_opponents for parallel distribution
     xvfb_base_display=200,
 )
 curtailment = CurtailmentMonitor(min_time=30.0, ttd_ratio=3.0)

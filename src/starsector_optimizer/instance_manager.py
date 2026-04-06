@@ -65,6 +65,10 @@ class InstanceConfig:
     startup_timeout_seconds: float = 90.0
     poll_interval_seconds: float = 1.0
     max_restarts: int = 3
+    process_kill_timeout_seconds: float = 5.0
+    launcher_timeout_seconds: float = 30.0
+    launcher_x: int = 297  # "Play Starsector" button, calibrated for 1920x1080
+    launcher_y: int = 255
 
 
 @dataclass
@@ -309,13 +313,19 @@ class InstancePool:
 
     def _start_xvfb(self, inst: GameInstance) -> None:
         """Start Xvfb with instance's display number and wait until ready."""
+        timeout = self._config.process_kill_timeout_seconds
+        # Kill any existing Xvfb for this instance
         if inst.xvfb_process and inst.xvfb_process.poll() is None:
-            return  # already running
+            inst.xvfb_process.terminate()
+            try:
+                inst.xvfb_process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                inst.xvfb_process.kill()
 
-        # Clean up stale lock files from previous runs
+        # Clean up stale lock and socket files
         lock_file = Path(f"/tmp/.X{inst.display_num}-lock")
-        lock_file.unlink(missing_ok=True)
         socket_file = Path(f"/tmp/.X11-unix/X{inst.display_num}")
+        lock_file.unlink(missing_ok=True)
         socket_file.unlink(missing_ok=True)
 
         inst.xvfb_process = subprocess.Popen(
@@ -323,44 +333,66 @@ class InstancePool:
              "-nolisten", "tcp"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
-        # Wait for Xvfb to create the display socket
-        for _ in range(30):  # up to 3 seconds
-            if lock_file.exists() and inst.xvfb_process.poll() is None:
+        # Wait for socket file (what clients actually connect to)
+        poll_interval = 0.1
+        max_polls = int(timeout / poll_interval)
+        for _ in range(max_polls):
+            if socket_file.exists() and inst.xvfb_process.poll() is None:
                 break
-            time.sleep(0.1)
+            time.sleep(poll_interval)
         else:
-            logger.warning("Xvfb :%d may not be ready (lock file not found)", inst.display_num)
+            logger.warning("Xvfb :%d may not be ready (socket not found)", inst.display_num)
 
     def _start_game(self, inst: GameInstance) -> None:
         """Launch game process with DISPLAY set to instance's Xvfb."""
         env = os.environ.copy()
         env["DISPLAY"] = f":{inst.display_num}"
+        log_path = inst.work_dir / "game_stdout.log"
+        inst._game_log_file = open(log_path, "w")
         inst.game_process = subprocess.Popen(
             ["./starsector.sh"],
             cwd=str(inst.work_dir),
             env=env,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=inst._game_log_file,
+            stderr=subprocess.STDOUT,
         )
-        # Click "Play Starsector" on the launcher (Java Swing — xdotool works)
-        # Launcher takes ~5s to appear, button at (297, 255)
         self._click_launcher(inst)
 
     def _click_launcher(self, inst: GameInstance) -> None:
-        """Click 'Play Starsector' on the launcher using xdotool."""
+        """Click 'Play Starsector' on the launcher using xdotool search polling."""
         display = f":{inst.display_num}"
-        time.sleep(8)  # wait for launcher to appear
+        env = {**os.environ, "DISPLAY": display}
+        launcher_timeout = self._config.launcher_timeout_seconds
+        poll_interval = 0.5
+        max_polls = int(launcher_timeout / poll_interval)
+
+        # Poll for launcher window
+        for _ in range(max_polls):
+            try:
+                result = subprocess.run(
+                    ["xdotool", "search", "--name", "Starsector"],
+                    env=env, timeout=self._config.process_kill_timeout_seconds,
+                    capture_output=True, text=True,
+                )
+                if result.stdout.strip():
+                    break
+            except Exception:
+                pass
+            time.sleep(poll_interval)
+
+        time.sleep(poll_interval)  # brief settle after window appears
         try:
+            lx, ly = self._config.launcher_x, self._config.launcher_y
             subprocess.run(
-                ["xdotool", "mousemove", "297", "255"],
-                env={**os.environ, "DISPLAY": display},
-                timeout=5, capture_output=True,
+                ["xdotool", "mousemove", str(lx), str(ly)],
+                env=env, timeout=self._config.process_kill_timeout_seconds,
+                capture_output=True,
             )
             time.sleep(0.3)
             subprocess.run(
                 ["xdotool", "click", "1"],
-                env={**os.environ, "DISPLAY": display},
-                timeout=5, capture_output=True,
+                env=env, timeout=self._config.process_kill_timeout_seconds,
+                capture_output=True,
             )
             logger.info("Instance %d: clicked launcher Play button", inst.instance_id)
         except Exception as e:
@@ -368,14 +400,19 @@ class InstancePool:
 
     def _kill_instance(self, inst: GameInstance) -> None:
         """Kill game process and Xvfb for an instance."""
+        timeout = self._config.process_kill_timeout_seconds
         if inst.game_process and inst.game_process.poll() is None:
             inst.game_process.terminate()
             try:
-                inst.game_process.wait(timeout=5)
+                inst.game_process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 inst.game_process.kill()
         if inst.xvfb_process and inst.xvfb_process.poll() is None:
             inst.xvfb_process.terminate()
+            try:
+                inst.xvfb_process.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                inst.xvfb_process.kill()
 
     # --- Health checks ---
 

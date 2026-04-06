@@ -323,3 +323,48 @@ class TestOptimizeHullIntegration:
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
         assert len(study.trials) == config.warm_start_n + config.sim_budget
+
+    def test_batched_evaluation(self, wolf_hull, game_data):
+        """optimize_hull sends multiple matchups per evaluate() call."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        # eval_batch_size=2 with 1 opponent → 2 matchups per evaluate() call
+        config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20,
+                                 eval_batch_size=2)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # Should have completed all trials
+        assert len(study.trials) == config.warm_start_n + config.sim_budget
+        for trial in study.trials:
+            assert trial.state == optuna.trial.TrialState.COMPLETE
+
+    def test_error_recovery(self, wolf_hull, game_data):
+        """InstanceError during evaluation doesn't crash the optimizer."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.instance_manager import InstanceError
+
+        pool = self._make_mock_pool()
+        call_count = [0]
+        original_evaluate = pool.evaluate
+
+        def failing_evaluate(matchups):
+            call_count[0] += 1
+            if call_count[0] == 2:  # Fail on second batch
+                raise InstanceError("Test failure")
+            return original_evaluate(matchups)
+
+        pool.evaluate = failing_evaluate
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20,
+                                 eval_batch_size=2)
+
+        # Should not raise — error is caught internally
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        assert len(study.trials) == config.warm_start_n + config.sim_budget
