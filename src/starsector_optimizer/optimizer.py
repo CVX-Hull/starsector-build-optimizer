@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, GameData, ShipHull
+from .models import Build, GameData, HullSize, ShipHull
 from .opponent_pool import (
     OpponentPool,
     compute_fitness,
@@ -73,6 +74,77 @@ class BuildCache:
 
     def put(self, build: Build, score: float) -> None:
         self._cache[self.hash_build(build)] = score
+
+
+def preflight_check(
+    hull_id: str,
+    game_data: GameData,
+    instance_pool: InstancePool,
+    opponent_pool: OpponentPool,
+) -> None:
+    """Validate all prerequisites before launching expensive simulation.
+
+    Runs in <1 second. Raises ValueError with descriptive message on failure.
+    """
+    # Hull exists
+    if hull_id not in game_data.hulls:
+        raise ValueError(f"Hull '{hull_id}' not found in game data. "
+                         f"Available: {sorted(list(game_data.hulls.keys())[:10])}...")
+
+    hull = game_data.hulls[hull_id]
+    game_dir = instance_pool._config.game_dir
+
+    # Combat harness mod deployed
+    mod_jar = game_dir / "mods" / "combat-harness" / "jars" / "combat-harness.jar"
+    if not mod_jar.exists():
+        raise ValueError(
+            f"combat-harness mod not deployed at {mod_jar}. "
+            f"Run: cd combat-harness && ./gradlew deploy"
+        )
+
+    # enabled_mods.json exists
+    enabled_mods = game_dir / "mods" / "enabled_mods.json"
+    if not enabled_mods.exists():
+        raise ValueError(f"enabled_mods.json not found at {enabled_mods}")
+
+    # Opponent variants exist
+    opponents = get_opponents(opponent_pool, hull.hull_size)
+    variants_dir = game_dir / "data" / "variants"
+    for opp_id in opponents:
+        # Variants can be flat or in subdirectories
+        found = list(variants_dir.rglob(f"{opp_id}.variant"))
+        if not found:
+            raise ValueError(
+                f"Opponent variant '{opp_id}' not found under {variants_dir}. "
+                f"Check DEFAULT_OPPONENT_POOL variant IDs."
+            )
+
+    # Xvfb and xdotool installed
+    for tool in ("Xvfb", "xdotool"):
+        if shutil.which(tool) is None:
+            raise ValueError(f"'{tool}' not found on PATH. Install it first.")
+
+    logger.info("Preflight check passed for %s (%d opponents)", hull_id, len(opponents))
+
+
+def validate_variant(variant: dict, game_data: GameData) -> list[str]:
+    """Validate a generated variant dict against game data. Returns error strings."""
+    errors = []
+
+    hull_id = variant.get("hullId", "")
+    if hull_id and hull_id not in game_data.hulls:
+        errors.append(f"Unknown hull: {hull_id}")
+
+    for mod_id in variant.get("hullMods", []):
+        if mod_id not in game_data.hullmods:
+            errors.append(f"Unknown hullmod: {mod_id}")
+
+    for group in variant.get("weaponGroups", []):
+        for slot_id, weapon_id in group.get("weapons", {}).items():
+            if weapon_id not in game_data.weapons:
+                errors.append(f"Unknown weapon: {weapon_id} in slot {slot_id}")
+
+    return errors
 
 
 def define_distributions(space: SearchSpace) -> dict[str, optuna.distributions.BaseDistribution]:
@@ -186,6 +258,10 @@ def evaluate_build(
 
     variant_id = f"{hull.id}_opt_{trial_number:06d}"
     variant = generate_variant(repaired, hull, game_data, variant_id=variant_id)
+    errors = validate_variant(variant, game_data)
+    if errors:
+        logger.warning("Invalid variant %s: %s", variant_id, errors)
+        return -1.0
     instance_pool.write_variant_to_all(variant, f"{variant_id}.variant")
 
     opponents = get_opponents(opponent_pool, hull.hull_size)
@@ -254,6 +330,7 @@ def optimize_hull(
     eval_log_path: Path | None = None,
 ) -> optuna.Study:
     """Main optimization entry point. Returns the Optuna study."""
+    preflight_check(hull_id, game_data, instance_pool, opponent_pool)
     hull = game_data.hulls[hull_id]
     space = build_search_space(hull, game_data)
     distributions = define_distributions(space)
@@ -302,6 +379,11 @@ def optimize_hull(
             trial_num = completed + j
             vid = f"{hull_id}_opt_{trial_num:06d}"
             variant = generate_variant(build, hull, game_data, variant_id=vid)
+            errors = validate_variant(variant, game_data)
+            if errors:
+                logger.warning("Invalid variant %s: %s", vid, errors)
+                study.tell(trial, -1.0)
+                continue
             instance_pool.write_variant_to_all(variant, f"{vid}.variant")
             matchups = generate_matchups(
                 vid, opponents,

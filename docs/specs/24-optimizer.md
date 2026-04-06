@@ -84,13 +84,36 @@ Warm-start trials use scaled-down heuristic scores (0.1x default) so they provid
 10. If `eval_log_path`: append JSONL record
 11. Return fitness
 
+### `preflight_check(hull_id, game_data, instance_pool, opponent_pool) -> None`
+
+Validates all prerequisites before launching expensive simulation. Runs in <1 second. Raises `ValueError` with a descriptive message on failure. Called at the start of `optimize_hull`.
+
+Checks:
+1. `hull_id` exists in `game_data.hulls`
+2. Combat harness mod deployed: `game_dir/mods/combat-harness/jars/combat-harness.jar` exists
+3. `enabled_mods.json` exists and contains `combat_harness`
+4. All opponent variant IDs in the pool resolve to `.variant` files under `game_dir/data/variants/`
+5. `Xvfb` and `xdotool` are installed (found on PATH via `shutil.which`)
+
+### `validate_variant(variant: dict, game_data: GameData) -> list[str]`
+
+Validates a generated variant dict against game data. Returns list of error strings (empty = valid).
+
+Checks:
+1. Every hullmod ID in `hullMods` exists in `game_data.hullmods`
+2. Every weapon ID in `weaponGroups` exists in `game_data.weapons`
+3. `hullId` exists in `game_data.hulls`
+
+Called by `evaluate_build` before writing variant files to instances.
+
 ### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config) -> Study`
 
 Main entry point.
 
-1. Look up `hull = game_data.hulls[hull_id]`
-2. `space = build_search_space(hull, game_data)`
-3. `distributions = define_distributions(space)`
+1. `preflight_check(hull_id, game_data, instance_pool, opponent_pool)` — fail fast
+2. Look up `hull = game_data.hulls[hull_id]`
+3. `space = build_search_space(hull, game_data)`
+4. `distributions = define_distributions(space)`
 4. Create `TPESampler(multivariate=True, constant_liar=True, n_ei_candidates=config.n_ei_candidates, n_startup_trials=config.n_startup_trials)`
 5. `study = optuna.create_study(sampler=sampler, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
 6. `warm_start(study, hull, game_data, config)`

@@ -9,13 +9,15 @@ from starsector_optimizer.models import Build, HullSize
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.calibration import generate_random_build
-from starsector_optimizer.opponent_pool import DEFAULT_OPPONENT_POOL
+from starsector_optimizer.opponent_pool import DEFAULT_OPPONENT_POOL, OpponentPool
 from starsector_optimizer.optimizer import (
     BuildCache,
     OptimizerConfig,
     build_to_trial_params,
     define_distributions,
+    preflight_check,
     trial_params_to_build,
+    validate_variant,
     warm_start,
 )
 
@@ -261,6 +263,8 @@ class TestOptimizeHullIntegration:
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
 
         mock_pool = MagicMock()
+        mock_pool._config = MagicMock()
+        mock_pool._config.game_dir = Path("game/starsector")
         mock_pool.write_variant_to_all = MagicMock()
 
         def mock_evaluate(matchups):
@@ -368,3 +372,94 @@ class TestOptimizeHullIntegration:
         # Should not raise — error is caught internally
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
         assert len(study.trials) == config.warm_start_n + config.sim_budget
+
+
+# --- Preflight Check Tests ---
+
+
+class TestPreflightCheck:
+
+    def test_invalid_hull_id_raises(self, game_data):
+        """Unknown hull_id raises ValueError."""
+        from unittest.mock import MagicMock
+        pool = MagicMock()
+        pool._config = MagicMock()
+        pool._config.game_dir = Path("game/starsector")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        with pytest.raises(ValueError, match="not found"):
+            preflight_check("nonexistent_hull", game_data, pool, opp_pool)
+
+    def test_missing_mod_raises(self, game_data):
+        """Missing combat harness mod raises ValueError."""
+        from unittest.mock import MagicMock
+        pool = MagicMock()
+        pool._config = MagicMock()
+        pool._config.game_dir = Path("/tmp/fake_game_dir")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        with pytest.raises(ValueError, match="combat-harness"):
+            preflight_check("wolf", game_data, pool, opp_pool)
+
+    def test_valid_config_passes(self, game_data):
+        """Valid config passes without raising."""
+        from unittest.mock import MagicMock
+        pool = MagicMock()
+        pool._config = MagicMock()
+        pool._config.game_dir = Path("game/starsector")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        preflight_check("wolf", game_data, pool, opp_pool)  # Should not raise
+
+    def test_missing_opponent_variant_raises(self, game_data):
+        """Opponent variant not found raises ValueError."""
+        from unittest.mock import MagicMock
+        pool = MagicMock()
+        pool._config = MagicMock()
+        pool._config.game_dir = Path("game/starsector")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("nonexistent_variant",)})
+        with pytest.raises(ValueError, match="nonexistent_variant"):
+            preflight_check("wolf", game_data, pool, opp_pool)
+
+
+# --- Variant Validation Tests ---
+
+
+class TestValidateVariant:
+
+    def test_valid_variant_no_errors(self, game_data):
+        """Valid variant returns empty error list."""
+        variant = {
+            "hullId": "wolf",
+            "hullMods": ["heavyarmor", "hardenedshieldemitter"],
+            "weaponGroups": [{"weapons": {"WS0001": "heavymauler"}}],
+        }
+        errors = validate_variant(variant, game_data)
+        assert errors == []
+
+    def test_invalid_hullmod_detected(self, game_data):
+        """Unknown hullmod ID produces an error."""
+        variant = {
+            "hullId": "wolf",
+            "hullMods": ["heavyarmor", "fake_hullmod_xyz"],
+            "weaponGroups": [],
+        }
+        errors = validate_variant(variant, game_data)
+        assert any("fake_hullmod_xyz" in e for e in errors)
+
+    def test_invalid_weapon_detected(self, game_data):
+        """Unknown weapon ID produces an error."""
+        variant = {
+            "hullId": "wolf",
+            "hullMods": [],
+            "weaponGroups": [{"weapons": {"WS0001": "nonexistent_gun"}}],
+        }
+        errors = validate_variant(variant, game_data)
+        assert any("nonexistent_gun" in e for e in errors)
+
+    def test_corrupted_hullmod_id_detected(self, game_data):
+        """Hullmod ID with spaces/special chars produces an error."""
+        variant = {
+            "hullId": "wolf",
+            "hullMods": ['all point-defense weapons deal %s more damage to all targets."'],
+            "weaponGroups": [],
+        }
+        errors = validate_variant(variant, game_data)
+        assert len(errors) > 0

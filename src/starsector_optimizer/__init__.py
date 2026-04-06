@@ -39,6 +39,7 @@ from .opponent_pool import (
 )
 from .optimizer import (
     OptimizerConfig, BuildCache, optimize_hull, evaluate_build, warm_start,
+    preflight_check, validate_variant,
 )
 
 __all__ = [
@@ -60,4 +61,5 @@ __all__ = [
     "OpponentPool", "DEFAULT_OPPONENT_POOL", "get_opponents",
     "generate_matchups", "compute_fitness", "hp_differential",
     "OptimizerConfig", "BuildCache", "optimize_hull", "evaluate_build", "warm_start",
+    "preflight_check", "validate_variant",
 ]
