@@ -127,3 +127,63 @@ class TestLoadExistingVariant:
         loaded = load_variant_file(variant_files[0])
         assert "hullId" in loaded
         assert "weaponGroups" in loaded
+
+
+# --- Variant to Build Conversion Tests ---
+
+
+class TestVariantToBuild:
+
+    def test_round_trip(self, game_data, game_dir):
+        """Build → variant → variant_to_build preserves key fields."""
+        from starsector_optimizer.variant import variant_to_build
+        from starsector_optimizer.calibration import generate_random_build
+        hull = game_data.hulls["wolf"]
+        build = generate_random_build(hull, game_data)
+        variant = generate_variant(build, hull, game_data)
+        reconstructed = variant_to_build(variant, "wolf")
+        assert reconstructed.hull_id == build.hull_id
+        assert reconstructed.hullmods == build.hullmods
+        assert reconstructed.flux_vents == build.flux_vents
+        assert reconstructed.flux_capacitors == build.flux_capacitors
+
+    def test_empty_weapon_groups(self):
+        """Variant with no weaponGroups produces all-None weapons."""
+        from starsector_optimizer.variant import variant_to_build
+        variant = {"hullId": "wolf", "hullMods": [], "weaponGroups": [],
+                   "fluxVents": 5, "fluxCapacitors": 3}
+        build = variant_to_build(variant, "wolf")
+        assert all(v is None for v in build.weapon_assignments.values())
+
+    def test_hullmods_as_frozenset(self):
+        """hullMods list becomes frozenset."""
+        from starsector_optimizer.variant import variant_to_build
+        variant = {"hullId": "wolf", "hullMods": ["heavyarmor", "hardenedshieldemitter"],
+                   "weaponGroups": [], "fluxVents": 0, "fluxCapacitors": 0}
+        build = variant_to_build(variant, "wolf")
+        assert isinstance(build.hullmods, frozenset)
+        assert build.hullmods == frozenset(["heavyarmor", "hardenedshieldemitter"])
+
+
+class TestLoadStockBuilds:
+
+    def test_loads_eagle_variants(self, game_data, game_dir):
+        """Finds eagle_Assault, eagle_Balanced, etc."""
+        from starsector_optimizer.variant import load_stock_builds
+        builds = load_stock_builds(game_dir, "eagle")
+        assert len(builds) >= 5  # eagle_Assault, Balanced, Support, d_Assault, xiv_Elite, LG_*
+        assert all(b.hull_id == "eagle" for b in builds)
+
+    def test_stock_builds_have_weapons(self, game_data, game_dir):
+        """Stock builds have at least some weapons equipped."""
+        from starsector_optimizer.variant import load_stock_builds
+        builds = load_stock_builds(game_dir, "eagle")
+        for build in builds:
+            equipped = sum(1 for v in build.weapon_assignments.values() if v is not None)
+            assert equipped >= 3, f"Stock build has only {equipped} weapons"
+
+    def test_nonexistent_hull_returns_empty(self, game_dir):
+        """Hull with no stock variants returns empty list."""
+        from starsector_optimizer.variant import load_stock_builds
+        builds = load_stock_builds(game_dir, "nonexistent_hull_xyz")
+        assert builds == []

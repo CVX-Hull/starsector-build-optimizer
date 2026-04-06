@@ -22,7 +22,7 @@ from starsector_optimizer.variant import generate_variant
 from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
 from starsector_optimizer.curtailment import CurtailmentMonitor
 from starsector_optimizer.opponent_pool import (
-    OpponentPool, generate_matchups, compute_fitness, hp_differential, get_opponents,
+    OpponentPool, generate_matchups, hp_differential, get_opponents,
 )
 from starsector_optimizer.optimizer import (
     OptimizerConfig, BuildCache, define_distributions,
@@ -133,7 +133,8 @@ try:
                 study.tell(trial, -1.0)  # No results = worst
                 continue
 
-            fitness = compute_fitness(build_results, mode="mean")
+            from starsector_optimizer.combat_fitness import aggregate_combat_fitness
+            fitness = aggregate_combat_fitness(build_results, mode="mean")
             cache.put(build, fitness)
             study.tell(trial, fitness)
             best_fitness = max(best_fitness, fitness)

@@ -27,12 +27,13 @@ from .parser import load_game_data
 from .search_space import build_search_space, SearchSpace
 from .repair import repair_build, is_feasible
 from .scorer import heuristic_score
-from .variant import generate_variant, write_variant_file, load_variant_file
+from .variant import generate_variant, write_variant_file, load_variant_file, variant_to_build, load_stock_builds
 from .calibration import generate_diverse_builds, compute_build_features
 from .result_parser import parse_combat_result, parse_results_file, write_queue_file
 from .instance_manager import InstanceConfig, InstancePool
 from .curtailment import CurtailmentMonitor, parse_heartbeat
 from .timeout_tuner import TimeoutTuner
+from .combat_fitness import combat_fitness, aggregate_combat_fitness
 from .opponent_pool import (
     OpponentPool, DEFAULT_OPPONENT_POOL, get_opponents,
     generate_matchups, compute_fitness, hp_differential,
@@ -62,4 +63,6 @@ __all__ = [
     "generate_matchups", "compute_fitness", "hp_differential",
     "OptimizerConfig", "BuildCache", "optimize_hull", "evaluate_build", "warm_start",
     "preflight_check", "validate_variant",
+    "combat_fitness", "aggregate_combat_fitness",
+    "variant_to_build", "load_stock_builds",
 ]

@@ -71,13 +71,14 @@ src/starsector_optimizer/          # Python modules
 ├── search_space.py                # Per-hull weapon/hullmod compatibility
 ├── repair.py                      # Constraint enforcement (optimizer→domain boundary)
 ├── scorer.py                      # Heuristic scoring → ScorerResult
-├── variant.py                     # Build → .variant JSON
+├── variant.py                     # Build ↔ .variant JSON (generate, load, stock builds)
 ├── calibration.py                 # Random build generation + feature extraction
 ├── estimator.py                   # Throughput + cost estimation for simulation campaigns
 ├── result_parser.py               # Parse combat result JSON ↔ Python dataclasses
 ├── instance_manager.py            # Manage N parallel Starsector game instances
 ├── curtailment.py                 # Stochastic curtailment (TTD-ratio extrapolation)
 ├── timeout_tuner.py               # Data-driven timeout prediction (Weibull AFT)
+├── combat_fitness.py              # Hierarchical composite combat fitness score
 ├── opponent_pool.py               # Diverse opponent pool per hull size
 └── optimizer.py                   # Optuna integration, ask-tell loop, warm-start
 

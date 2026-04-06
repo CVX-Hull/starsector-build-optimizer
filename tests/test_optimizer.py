@@ -316,7 +316,7 @@ class TestOptimizeHullIntegration:
             )
 
     def test_trial_count_matches_budget(self, wolf_hull, game_data):
-        """Study has exactly warm_start_n + sim_budget completed trials."""
+        """Study has at least warm_start_n + sim_budget trials (stock builds add more)."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -326,7 +326,8 @@ class TestOptimizeHullIntegration:
         config = OptimizerConfig(sim_budget=3, warm_start_n=5, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        assert len(study.trials) == config.warm_start_n + config.sim_budget
+        # Stock builds + heuristic warm-start + sim trials
+        assert len(study.trials) >= config.warm_start_n + config.sim_budget
 
     def test_batched_evaluation(self, wolf_hull, game_data):
         """optimize_hull sends multiple matchups per evaluate() call."""
@@ -341,8 +342,8 @@ class TestOptimizeHullIntegration:
                                  eval_batch_size=2)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # Should have completed all trials
-        assert len(study.trials) == config.warm_start_n + config.sim_budget
+        # Should have completed all trials (stock builds + warm-start + sim)
+        assert len(study.trials) >= config.warm_start_n + config.sim_budget
         for trial in study.trials:
             assert trial.state == optuna.trial.TrialState.COMPLETE
 
@@ -371,7 +372,7 @@ class TestOptimizeHullIntegration:
 
         # Should not raise — error is caught internally
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        assert len(study.trials) == config.warm_start_n + config.sim_budget
+        assert len(study.trials) >= config.warm_start_n + config.sim_budget
 
 
 # --- Preflight Check Tests ---

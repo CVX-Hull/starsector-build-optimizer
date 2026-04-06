@@ -64,3 +64,42 @@ def write_variant_file(variant: dict, path: Path) -> None:
 def load_variant_file(path: Path) -> dict:
     """Load a .variant file (loose JSON format)."""
     return parse_loose_json(path.read_text())
+
+
+def variant_to_build(variant: dict, hull_id: str) -> Build:
+    """Convert a loaded .variant JSON dict to a Build dataclass.
+
+    The reverse of generate_variant(). Extracts weapon assignments from
+    weaponGroups, hullmods from hullMods list, and flux from fluxVents/fluxCapacitors.
+    """
+    weapons: dict[str, str | None] = {}
+    for group in variant.get("weaponGroups", []):
+        for slot_id, weapon_id in group.get("weapons", {}).items():
+            weapons[slot_id] = weapon_id
+
+    return Build(
+        hull_id=hull_id,
+        weapon_assignments=weapons,
+        hullmods=frozenset(variant.get("hullMods", [])),
+        flux_vents=variant.get("fluxVents", 0),
+        flux_capacitors=variant.get("fluxCapacitors", 0),
+    )
+
+
+def load_stock_builds(game_dir: Path, hull_id: str) -> list[Build]:
+    """Load all stock .variant files for a hull from the game data.
+
+    Searches recursively under game_dir/data/variants/ for {hull_id}_*.variant files.
+    """
+    variants_dir = game_dir / "data" / "variants"
+    if not variants_dir.exists():
+        return []
+
+    builds = []
+    for path in sorted(variants_dir.rglob(f"{hull_id}_*.variant")):
+        try:
+            variant = load_variant_file(path)
+            builds.append(variant_to_build(variant, hull_id))
+        except Exception:
+            pass  # Skip malformed variant files
+    return builds

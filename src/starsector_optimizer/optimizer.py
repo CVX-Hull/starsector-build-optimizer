@@ -23,9 +23,9 @@ from optuna.trial import TrialState, create_trial
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
 from .models import Build, GameData, HullSize, ShipHull
+from .combat_fitness import aggregate_combat_fitness
 from .opponent_pool import (
     OpponentPool,
-    compute_fitness,
     generate_matchups,
     get_opponents,
     hp_differential,
@@ -50,6 +50,7 @@ class OptimizerConfig:
     n_ei_candidates: int = 256
     fitness_mode: str = "mean"
     eval_batch_size: int = 4
+    engagement_threshold: float = 500.0
     study_storage: str | None = None
 
 
@@ -208,11 +209,31 @@ def warm_start(
     hull: ShipHull,
     game_data: GameData,
     config: OptimizerConfig,
+    game_dir: Path | None = None,
 ) -> None:
-    """Generate diverse builds, score with heuristic, seed the study."""
+    """Seed the study with stock builds and top heuristic builds."""
     space = build_search_space(hull, game_data)
     distributions = define_distributions(space)
+    stock_count = 0
 
+    # Phase 1: Seed with stock builds (known-good, from game's .variant files)
+    if game_dir is not None:
+        from .variant import load_stock_builds
+        stock_builds = load_stock_builds(game_dir, hull.id)
+        for build in stock_builds:
+            try:
+                trial = create_trial(
+                    params=build_to_trial_params(build, space),
+                    distributions=distributions,
+                    values=[config.warm_start_scale * 2.0],
+                    state=TrialState.COMPLETE,
+                )
+                study.add_trial(trial)
+                stock_count += 1
+            except Exception:
+                pass  # Stock build may not fit distributions exactly
+
+    # Phase 2: Seed with top heuristic builds (diverse random)
     builds = generate_diverse_builds(hull, game_data, n=config.warm_start_sample_n)
     scored = [
         (b, heuristic_score(b, hull, game_data).composite_score)
@@ -231,7 +252,8 @@ def warm_start(
         study.add_trial(trial)
 
     logger.info(
-        "Warm-started study with %d heuristic trials (from %d candidates)",
+        "Warm-started study with %d stock + %d heuristic trials (from %d candidates)",
+        stock_count,
         len(top),
         len(builds),
     )
@@ -271,7 +293,7 @@ def evaluate_build(
         matchup_id_prefix=f"{hull.id}_{trial_number:06d}",
     )
     results = instance_pool.evaluate(matchups)
-    fitness = compute_fitness(results, mode=config.fitness_mode)
+    fitness = aggregate_combat_fitness(results, mode=config.fitness_mode, engagement_threshold=config.engagement_threshold)
 
     cache.put(repaired, fitness)
 
@@ -352,7 +374,7 @@ def optimize_hull(
         load_if_exists=True,
     )
 
-    warm_start(study, hull, game_data, config)
+    warm_start(study, hull, game_data, config, game_dir=instance_pool._config.game_dir)
 
     opponents = get_opponents(opponent_pool, hull.hull_size)
     cache = BuildCache()
@@ -402,7 +424,7 @@ def optimize_hull(
                         r for r in results if r.matchup_id.startswith(prefix)
                     ]
                     fitness = (
-                        compute_fitness(build_results, mode=config.fitness_mode)
+                        aggregate_combat_fitness(build_results, mode=config.fitness_mode, engagement_threshold=config.engagement_threshold)
                         if build_results
                         else -1.0
                     )

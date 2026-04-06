@@ -61,14 +61,19 @@ Flattens `Build` to Optuna param dict:
 
 Reconstructs `Build` from flat param dict. Reverses the mapping — `"empty"` → None, `True` hullmod params → `frozenset`.
 
-### `warm_start(study, hull, game_data, config) -> None`
+### `warm_start(study, hull, game_data, config, game_dir=None) -> None`
 
-1. `generate_diverse_builds(hull, game_data, n=config.warm_start_sample_n)`
-2. Score each with `heuristic_score(build, hull, game_data).composite_score`
-3. Sort descending, take top `config.warm_start_n`
-4. Add each as a completed trial: `study.add_trial(create_trial(params, distributions, values=[score * config.warm_start_scale]))`
+1. **Stock build seeding** (if `game_dir` provided): Load stock `.variant` files via `load_stock_builds(game_dir, hull.id)`. Add each as a completed trial with value `config.warm_start_scale * 2.0` (higher than random heuristic builds — stock builds are known-good starting points).
+2. `generate_diverse_builds(hull, game_data, n=config.warm_start_sample_n)`
+3. Score each with `heuristic_score(build, hull, game_data).composite_score`
+4. Sort descending, take top `config.warm_start_n`
+5. Add each as a completed trial: `study.add_trial(create_trial(params, distributions, values=[score * config.warm_start_scale]))`
 
-Warm-start trials use scaled-down heuristic scores (0.1x default) so they provide directional guidance without dominating TPE's density estimators.
+Warm-start trials use scaled-down heuristic scores (0.1x default) so they provide directional guidance without dominating TPE's density estimators. Stock builds are seeded at 2x the scale to indicate higher confidence.
+
+### Fitness Function
+
+Uses `aggregate_combat_fitness` from spec 25 (hierarchical composite score) instead of simple HP differential. This provides continuous gradient even for timeout stalemates.
 
 ### `evaluate_build(build, hull, game_data, instance_pool, opponent_pool, cache, eval_log_path=None) -> float`
 
