@@ -90,13 +90,17 @@ def load_stock_builds(game_dir: Path, hull_id: str) -> list[Build]:
     """Load all stock .variant files for a hull from the game data.
 
     Searches recursively under game_dir/data/variants/ for {hull_id}_*.variant files.
+    Excludes optimizer-generated variants (containing '_opt_', '_val_', '_inttest_').
     """
     variants_dir = game_dir / "data" / "variants"
     if not variants_dir.exists():
         return []
 
+    optimizer_markers = ("_opt_", "_val_", "_inttest_")
     builds = []
     for path in sorted(variants_dir.rglob(f"{hull_id}_*.variant")):
+        if any(marker in path.stem for marker in optimizer_markers):
+            continue
         try:
             variant = load_variant_file(path)
             builds.append(variant_to_build(variant, hull_id))
