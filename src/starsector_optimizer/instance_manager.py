@@ -500,3 +500,15 @@ class InstancePool:
         """Write a variant file to every instance's data/variants/ directory."""
         for inst in self._instances:
             write_variant_file(variant, inst.variants_dir / filename)
+
+    def clean_optimizer_variants(self) -> None:
+        """Remove optimizer-generated variant files from all instances.
+
+        Deletes real files (not symlinks) matching *_opt_* pattern from each
+        instance's data/variants/. Call between batches to prevent accumulation
+        that slows game startup.
+        """
+        for inst in self._instances:
+            for f in inst.variants_dir.glob("*_opt_*.variant"):
+                if not f.is_symlink():
+                    f.unlink()

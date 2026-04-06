@@ -443,6 +443,9 @@ def optimize_hull(
                 for vid, (j, trial, build) in variant_map.items():
                     study.tell(trial, -1.0)
 
+        # Clean up optimizer variants to prevent accumulation slowing game startup
+        instance_pool.clean_optimizer_variants()
+
         completed += batch_size
 
         if completed % 10 == 0 or completed >= config.sim_budget:
