@@ -59,6 +59,7 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 - `compute_effective_stats()` is the ONLY function that applies hullmod stat modifications
 - `HULLMOD_EFFECTS`, `INCOMPATIBLE_PAIRS`, `HULL_SIZE_RESTRICTIONS` are the ONLY locations for hardcoded hullmod game knowledge
 - All game constants (MAX_VENTS, damage multipliers, etc.) are in `hullmod_effects.py`, not scattered
+- **No magic numbers in function bodies.** Timeouts, coordinates, polling intervals, thresholds, and batch sizes must live in config dataclasses (`InstanceConfig`, `OptimizerConfig`, `CurtailmentMonitor` params) — never as literals in function bodies. This ensures values are discoverable, overridable in tests, and documented in one place.
 
 ## Project Layout
 
