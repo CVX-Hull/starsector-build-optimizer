@@ -337,6 +337,7 @@ class TestConstraintConstants:
     def test_shield_dependent_mods(self):
         assert "hardenedshieldemitter" in SHIELD_DEPENDENT_MODS
         assert "stabilizedshieldemitter" in SHIELD_DEPENDENT_MODS
+        assert "advancedshieldemitter" in SHIELD_DEPENDENT_MODS
 
 
 # --- validate_registry tests ---

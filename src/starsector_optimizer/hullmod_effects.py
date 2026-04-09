@@ -117,6 +117,7 @@ HULL_SIZE_RESTRICTIONS: dict[str, set[HullSize]] = {
 }
 
 SHIELD_DEPENDENT_MODS: set[str] = {
+    "advancedshieldemitter",
     "hardenedshieldemitter",
     "stabilizedshieldemitter",
     "adaptiveshields",

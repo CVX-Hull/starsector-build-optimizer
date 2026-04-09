@@ -101,6 +101,19 @@ class TestRepairBuild:
         repaired = repair_build(build, hull, gd)
         assert not ("shield_shunt" in repaired.hullmods and "frontshield" in repaired.hullmods)
 
+    def test_shield_shunt_removes_shield_dependent_mods(self):
+        gd = _game_data(hullmods={
+            "shield_shunt": _hullmod("shield_shunt", cost=10),
+            "advancedshieldemitter": _hullmod("advancedshieldemitter", cost=5),
+            "hardenedshieldemitter": _hullmod("hardenedshieldemitter", cost=5),
+        })
+        hull = _hull(op=100)
+        build = Build("test", {}, frozenset(["shield_shunt", "advancedshieldemitter", "hardenedshieldemitter"]), 0, 0)
+        repaired = repair_build(build, hull, gd)
+        assert "shield_shunt" in repaired.hullmods
+        assert "advancedshieldemitter" not in repaired.hullmods
+        assert "hardenedshieldemitter" not in repaired.hullmods
+
     def test_so_removed_on_capital(self):
         gd = _game_data(hullmods={"safetyoverrides": _hullmod("safetyoverrides", cost=15)})
         hull = _hull(op=100, hull_size=HullSize.CAPITAL_SHIP)

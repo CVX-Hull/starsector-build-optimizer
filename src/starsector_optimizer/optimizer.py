@@ -49,7 +49,7 @@ class OptimizerConfig:
     n_startup_trials: int = 100
     n_ei_candidates: int = 256
     fitness_mode: str = "mean"
-    eval_batch_size: int = 4
+    eval_batch_size: int = 8  # builds per batch; set to num_instances for full utilization
     engagement_threshold: float = 500.0
     study_storage: str | None = None
 

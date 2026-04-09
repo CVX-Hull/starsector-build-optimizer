@@ -60,7 +60,7 @@ class InstanceConfig:
     instance_root: Path = field(default_factory=lambda: Path("/tmp/starsector-instances"))
     num_instances: int = 4
     xvfb_base_display: int = 100
-    batch_size: int = 50
+    batch_size: int = 6  # matchups per instance; should equal opponent count
     heartbeat_timeout_seconds: float = 120.0
     startup_timeout_seconds: float = 90.0
     poll_interval_seconds: float = 1.0
