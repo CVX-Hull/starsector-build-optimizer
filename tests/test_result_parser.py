@@ -5,6 +5,7 @@ import json
 import pytest
 
 from starsector_optimizer.models import (
+    BuildSpec,
     CombatResult,
     DamageBreakdown,
     MatchupConfig,
@@ -155,10 +156,21 @@ class TestParseResultsFile:
 
 class TestWriteQueueFile:
 
+    @staticmethod
+    def _build_spec(variant_id="eagle_test", hull_id="eagle"):
+        return BuildSpec(
+            variant_id=variant_id,
+            hull_id=hull_id,
+            weapon_assignments={"WS1": "heavymauler"},
+            hullmods=("heavyarmor",),
+            flux_vents=15,
+            flux_capacitors=10,
+        )
+
     def test_single_matchup(self, tmp_path):
         mc = MatchupConfig(
             matchup_id="test_001",
-            player_variants=("eagle_test",),
+            player_builds=(self._build_spec(),),
             enemy_variants=("dominator_Assault",),
         )
         path = tmp_path / "combat_harness_queue.json.data"
@@ -167,7 +179,13 @@ class TestWriteQueueFile:
         data = json.loads(path.read_text())
         assert len(data) == 1
         assert data[0]["matchup_id"] == "test_001"
-        assert data[0]["player_variants"] == ["eagle_test"]
+        assert len(data[0]["player_builds"]) == 1
+        assert data[0]["player_builds"][0]["variant_id"] == "eagle_test"
+        assert data[0]["player_builds"][0]["hull_id"] == "eagle"
+        assert data[0]["player_builds"][0]["weapon_assignments"] == {"WS1": "heavymauler"}
+        assert data[0]["player_builds"][0]["hullmods"] == ["heavyarmor"]
+        assert data[0]["player_builds"][0]["flux_vents"] == 15
+        assert data[0]["player_builds"][0]["flux_capacitors"] == 10
         assert data[0]["enemy_variants"] == ["dominator_Assault"]
         assert data[0]["time_limit_seconds"] == 300.0
         assert data[0]["time_mult"] == 3.0
@@ -176,7 +194,7 @@ class TestWriteQueueFile:
         matchups = [
             MatchupConfig(
                 matchup_id=f"test_{i:03d}",
-                player_variants=("eagle_test",),
+                player_builds=(self._build_spec(),),
                 enemy_variants=("dominator_Assault",),
                 time_mult=5.0,
                 time_limit_seconds=60,
@@ -195,7 +213,7 @@ class TestWriteQueueFile:
     def test_custom_map_dimensions(self, tmp_path):
         mc = MatchupConfig(
             matchup_id="test_map",
-            player_variants=("wolf_test",),
+            player_builds=(self._build_spec("wolf_test", "wolf"),),
             enemy_variants=("lasher_CS",),
             map_width=16000,
             map_height=12000,
@@ -211,7 +229,7 @@ class TestWriteQueueFile:
         """Write queue → simulate Java output → parse results should be consistent IDs."""
         mc = MatchupConfig(
             matchup_id="roundtrip_001",
-            player_variants=("eagle_test", "wolf_test"),
+            player_builds=(self._build_spec("eagle_test"), self._build_spec("wolf_test", "wolf")),
             enemy_variants=("dominator_Assault",),
         )
         queue_path = tmp_path / "queue.json.data"
@@ -219,4 +237,6 @@ class TestWriteQueueFile:
 
         queue_data = json.loads(queue_path.read_text())
         assert queue_data[0]["matchup_id"] == "roundtrip_001"
-        assert queue_data[0]["player_variants"] == ["eagle_test", "wolf_test"]
+        assert len(queue_data[0]["player_builds"]) == 2
+        assert queue_data[0]["player_builds"][0]["variant_id"] == "eagle_test"
+        assert queue_data[0]["player_builds"][1]["variant_id"] == "wolf_test"

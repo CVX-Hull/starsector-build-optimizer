@@ -287,6 +287,17 @@ class Build:
 
 
 @dataclass(frozen=True)
+class BuildSpec:
+    """Build specification for matchup queue serialization. Transfer object."""
+    variant_id: str
+    hull_id: str
+    weapon_assignments: dict[str, str]
+    hullmods: tuple[str, ...]
+    flux_vents: int
+    flux_capacitors: int
+
+
+@dataclass(frozen=True)
 class EffectiveStats:
     flux_dissipation: float
     flux_capacity: float
@@ -376,7 +387,7 @@ class CombatResult:
 class MatchupConfig:
     """Configuration for a single combat matchup. Used within a matchup queue."""
     matchup_id: str
-    player_variants: tuple[str, ...]
+    player_builds: tuple[BuildSpec, ...]
     enemy_variants: tuple[str, ...]
     time_limit_seconds: float = 300.0
     time_mult: float = 3.0

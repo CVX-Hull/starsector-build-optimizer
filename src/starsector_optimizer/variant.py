@@ -7,7 +7,7 @@ import secrets
 from pathlib import Path
 
 from .parser import parse_loose_json
-from .models import Build, GameData, ShipHull
+from .models import Build, BuildSpec, GameData, ShipHull
 
 
 def assign_weapon_groups(
@@ -29,6 +29,30 @@ def assign_weapon_groups(
             "weapons": {slot_id: weapon_id},
         })
     return groups
+
+
+def build_to_build_spec(
+    build: Build,
+    hull: ShipHull,
+    game_data: GameData,
+    variant_id: str,
+) -> BuildSpec:
+    """Convert a Build to a BuildSpec for matchup queue serialization."""
+    weapons = {
+        slot_id: weapon_id
+        for slot_id, weapon_id in build.weapon_assignments.items()
+        if weapon_id is not None
+        and slot_id not in hull.built_in_weapons
+        and weapon_id in game_data.weapons
+    }
+    return BuildSpec(
+        variant_id=variant_id,
+        hull_id=build.hull_id,
+        weapon_assignments=weapons,
+        hullmods=tuple(sorted(build.hullmods)),
+        flux_vents=build.flux_vents,
+        flux_capacitors=build.flux_capacitors,
+    )
 
 
 def generate_variant(

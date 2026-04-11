@@ -4,6 +4,7 @@ import pytest
 
 from starsector_optimizer.models import (
     Build,
+    BuildSpec,
     CombatResult,
     DamageBreakdown,
     DamageType,
@@ -471,11 +472,16 @@ class TestCombatResult:
             cr.winner = "ENEMY"
 
 
+def _build_spec(variant_id="eagle_test", hull_id="eagle"):
+    return BuildSpec(variant_id=variant_id, hull_id=hull_id, weapon_assignments={},
+                     hullmods=(), flux_vents=0, flux_capacitors=0)
+
+
 class TestMatchupConfig:
     def test_construction_with_defaults(self):
         mc = MatchupConfig(
             matchup_id="eval_001",
-            player_variants=("eagle_test",),
+            player_builds=(_build_spec(),),
             enemy_variants=("dominator_Standard",),
         )
         assert mc.matchup_id == "eval_001"
@@ -487,20 +493,20 @@ class TestMatchupConfig:
     def test_construction_with_all_fields(self):
         mc = MatchupConfig(
             matchup_id="eval_002",
-            player_variants=("eagle_test", "wolf_test"),
+            player_builds=(_build_spec("eagle_test"), _build_spec("wolf_test", "wolf")),
             enemy_variants=("dominator_Standard",),
             time_limit_seconds=120.0,
             time_mult=5.0,
             map_width=16000.0,
             map_height=12000.0,
         )
-        assert len(mc.player_variants) == 2
+        assert len(mc.player_builds) == 2
         assert mc.time_mult == 5.0
 
     def test_frozen(self):
         mc = MatchupConfig(
             matchup_id="x",
-            player_variants=("a",),
+            player_builds=(_build_spec("a"),),
             enemy_variants=("b",),
         )
         with pytest.raises(AttributeError):

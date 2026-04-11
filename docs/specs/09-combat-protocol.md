@@ -15,7 +15,7 @@ All filenames use a flat `combat_harness_` prefix (subdirectories don't work wit
 
 ## Lifecycle
 
-1. Python writes `.variant` files to `data/variants/` and queue to `saves/common/`
+1. Python writes queue to `saves/common/` with build specs embedded in `player_builds` field
 2. Game launches (one launch per batch of N matchups)
 3. TitleScreenPlugin detects queue → auto-navigates to Optimizer Arena mission
 4. CombatHarnessPlugin processes matchups sequentially in one combat session
@@ -30,7 +30,16 @@ All filenames use a flat `combat_harness_` prefix (subdirectories don't work wit
 [
     {
         "matchup_id": "eval_001",
-        "player_variants": ["eagle_opt_0001"],
+        "player_builds": [
+            {
+                "variant_id": "eagle_opt_0001",
+                "hull_id": "eagle",
+                "weapon_assignments": {"WS 001": "heavymauler", "WS 002": "hveldriver"},
+                "hullmods": ["hardenedshieldemitter", "heavyarmor"],
+                "flux_vents": 20,
+                "flux_capacitors": 10
+            }
+        ],
         "enemy_variants": ["dominator_Assault"],
         "time_limit_seconds": 180,
         "time_mult": 3.0,

@@ -33,7 +33,8 @@ Get matchup config at index.
 
 - JSON must be a valid array
 - Array must be non-empty
-- Each element validated by `MatchupConfig.fromJSON()` rules (matchup_id required, variants non-empty, etc.)
+- Each element validated by `MatchupConfig.fromJSON()` rules (matchup_id required, player_builds and enemy_variants non-empty, etc.)
+- Player builds contain inline `BuildSpec` objects (see spec 10), not variant ID strings
 - If any element fails validation, the entire queue load fails
 
 ## Relationship to MatchupConfig

@@ -227,15 +227,9 @@ When `curtailment` is provided, the poll loop reads heartbeat file **content** (
 
 Called in poll loop when `inst.state == RUNNING` and heartbeat is fresh.
 
-## Variant File Placement
+## Variant File Handling
 
-`InstancePool` provides a method to write optimizer-generated variant files to all instances:
-
-```python
-def write_variant_to_all(self, variant: dict, filename: str) -> None
-```
-
-Writes a variant JSON file to every instance's `data/variants/` directory. Required because `_assign_and_launch` only writes the queue JSON — variant files must already exist in the work directory. Stock variants are symlinked at setup time; optimizer-generated variants need explicit placement before `evaluate()`.
+Stock `.variant` files (for enemy ships) are symlinked into each instance's `data/variants/` directory at setup time. Optimizer-generated builds are embedded as `BuildSpec` objects in the matchup queue JSON — no `.variant` file I/O is needed for optimizer builds.
 
 ## Launch Script Portability
 

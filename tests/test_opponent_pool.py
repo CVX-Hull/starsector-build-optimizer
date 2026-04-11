@@ -3,6 +3,7 @@
 import pytest
 
 from starsector_optimizer.models import (
+    BuildSpec,
     CombatResult,
     DamageBreakdown,
     HullSize,
@@ -108,35 +109,46 @@ class TestOpponentPool:
 
 class TestGenerateMatchups:
 
+    @staticmethod
+    def _build_spec():
+        return BuildSpec(
+            variant_id="my_build",
+            hull_id="eagle",
+            weapon_assignments={"WS1": "heavymauler"},
+            hullmods=("heavyarmor",),
+            flux_vents=15,
+            flux_capacitors=10,
+        )
+
     def test_one_matchup_per_opponent(self):
         opponents = ("dominator_Assault", "medusa_CS", "eagle_Assault")
-        matchups = generate_matchups("my_build", opponents, "trial_42")
+        matchups = generate_matchups(self._build_spec(), opponents, "trial_42")
         assert len(matchups) == 3
 
     def test_matchup_ids_unique(self):
         opponents = ("dominator_Assault", "medusa_CS")
-        matchups = generate_matchups("my_build", opponents, "trial_42")
+        matchups = generate_matchups(self._build_spec(), opponents, "trial_42")
         ids = [m.matchup_id for m in matchups]
         assert len(ids) == len(set(ids))
 
-    def test_player_variant_set_correctly(self):
+    def test_player_build_set_correctly(self):
         opponents = ("dominator_Assault",)
-        matchups = generate_matchups("my_build", opponents, "t1")
-        assert matchups[0].player_variants == ("my_build",)
+        matchups = generate_matchups(self._build_spec(), opponents, "t1")
+        assert matchups[0].player_builds[0].variant_id == "my_build"
 
     def test_enemy_variant_set_correctly(self):
         opponents = ("dominator_Assault",)
-        matchups = generate_matchups("my_build", opponents, "t1")
+        matchups = generate_matchups(self._build_spec(), opponents, "t1")
         assert matchups[0].enemy_variants == ("dominator_Assault",)
 
     def test_time_mult_propagated(self):
         opponents = ("dominator_Assault",)
-        matchups = generate_matchups("my_build", opponents, "t1", time_mult=3.0)
+        matchups = generate_matchups(self._build_spec(), opponents, "t1", time_mult=3.0)
         assert matchups[0].time_mult == 3.0
 
     def test_matchup_id_format(self):
         opponents = ("dominator_Assault",)
-        matchups = generate_matchups("my_build", opponents, "trial_42")
+        matchups = generate_matchups(self._build_spec(), opponents, "trial_42")
         assert "trial_42" in matchups[0].matchup_id
         assert "dominator_Assault" in matchups[0].matchup_id
 

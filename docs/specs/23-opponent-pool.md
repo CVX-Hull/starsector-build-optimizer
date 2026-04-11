@@ -35,13 +35,13 @@ Variant IDs match filenames in `data/variants/` (without `.variant` extension):
 
 Returns opponent variant IDs for a hull size. Raises `KeyError` if hull size not in pool.
 
-### `generate_matchups(player_variant_id, opponents, matchup_id_prefix, ...) -> list[MatchupConfig]`
+### `generate_matchups(player_build, opponents, matchup_id_prefix, ...) -> list[MatchupConfig]`
 
 Creates one `MatchupConfig` per opponent.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `player_variant_id` | `str` | required | The optimizer's generated variant ID |
+| `player_build` | `BuildSpec` | required | The optimizer-generated build specification |
 | `opponents` | `tuple[str, ...]` | required | Opponent variant IDs from pool |
 | `matchup_id_prefix` | `str` | required | Prefix for matchup IDs |
 | `time_limit_seconds` | `float` | `300.0` | Game-time limit per matchup |
@@ -49,7 +49,7 @@ Creates one `MatchupConfig` per opponent.
 
 Matchup ID format: `{prefix}_vs_{opponent_id}`.
 
-Each `MatchupConfig` has `player_variants=(player_variant_id,)` and `enemy_variants=(opponent_id,)`.
+Each `MatchupConfig` has `player_builds=(player_build,)` and `enemy_variants=(opponent_id,)`.
 
 ### `hp_differential(result) -> float`
 

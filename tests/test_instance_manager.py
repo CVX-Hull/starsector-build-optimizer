@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from starsector_optimizer.models import MatchupConfig
+from starsector_optimizer.models import BuildSpec, MatchupConfig
 from starsector_optimizer.instance_manager import (
     GameInstance,
     InstanceConfig,
@@ -200,7 +200,7 @@ class TestFileManagement:
         matchups = [
             MatchupConfig(
                 matchup_id="test_001",
-                player_variants=("eagle_test",),
+                player_builds=(BuildSpec(variant_id="eagle_test", hull_id="eagle", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                 enemy_variants=("dominator_Assault",),
             )
         ]
@@ -227,7 +227,7 @@ class TestMatchupDistribution:
         pool = InstancePool(config_small)
 
         matchups = [
-            MatchupConfig(matchup_id=f"m{i}", player_variants=("a",), enemy_variants=("b",))
+            MatchupConfig(matchup_id=f"m{i}", player_builds=(BuildSpec(variant_id="a", hull_id="a", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),), enemy_variants=("b",))
             for i in range(6)
         ]
         chunks = pool._split_into_chunks(matchups)
@@ -246,7 +246,7 @@ class TestMatchupDistribution:
         pool = InstancePool(config_small)
 
         matchups = [
-            MatchupConfig(matchup_id=f"m{i}", player_variants=("a",), enemy_variants=("b",))
+            MatchupConfig(matchup_id=f"m{i}", player_builds=(BuildSpec(variant_id="a", hull_id="a", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),), enemy_variants=("b",))
             for i in range(7)
         ]
         chunks = pool._split_into_chunks(matchups)
@@ -555,20 +555,4 @@ class TestCurtailmentIntegration:
         assert stop_file.exists()
 
 
-# --- Variant File Placement Tests ---
-
-
-class TestVariantFilePlacement:
-
-    def test_write_variant_to_all(self, pool, config):
-        """write_variant_to_all writes variant file to every instance's variants_dir."""
-        pool.setup()
-        variant = {"variantId": "test_opt_001", "hullId": "wolf", "displayName": "Test"}
-        pool.write_variant_to_all(variant, "test_opt_001.variant")
-        for inst in pool._instances:
-            vpath = inst.variants_dir / "test_opt_001.variant"
-            assert vpath.exists()
-            import json
-            data = json.loads(vpath.read_text())
-            assert data["variantId"] == "test_opt_001"
 

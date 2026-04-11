@@ -52,8 +52,8 @@ class TimeoutTuner:
 
     def predict_timeout(self, matchup: MatchupConfig, game_data: GameData) -> float:
         """Predict optimal timeout (game-time seconds) for a matchup."""
-        # Look up hulls for the first variant on each side
-        player_hull = self._lookup_hull(matchup.player_variants[0], game_data)
+        # Look up hulls for the first build/variant on each side
+        player_hull = self._lookup_hull(matchup.player_builds[0].variant_id, game_data)
         enemy_hull = self._lookup_hull(matchup.enemy_variants[0], game_data)
 
         prior = self.compute_default_timeout(
@@ -80,15 +80,15 @@ class TimeoutTuner:
         heartbeat_trajectory: list[list[float]] | None = None,
     ) -> None:
         """Append result to shared JSONL evaluation log."""
-        player_hull = self._lookup_hull(matchup.player_variants[0], game_data)
+        player_hull = self._lookup_hull(matchup.player_builds[0].variant_id, game_data)
         enemy_hull = self._lookup_hull(matchup.enemy_variants[0], game_data)
 
         record = {
             "matchup_id": result.matchup_id,
-            "player_variants": list(matchup.player_variants),
+            "player_builds": [b.variant_id for b in matchup.player_builds],
             "enemy_variants": list(matchup.enemy_variants),
             "hull_sizes": [player_hull.hull_size.value, enemy_hull.hull_size.value],
-            "ship_counts": [len(matchup.player_variants), len(matchup.enemy_variants)],
+            "ship_counts": [len(matchup.player_builds), len(matchup.enemy_variants)],
             "winner": result.winner,
             "duration": result.duration_seconds,
             "completed": result.winner in ("PLAYER", "ENEMY"),
@@ -242,11 +242,11 @@ class TimeoutTuner:
         """Predict timeout from fitted model."""
         import pandas as pd
 
-        player_hull = self._lookup_hull(matchup.player_variants[0], game_data)
+        player_hull = self._lookup_hull(matchup.player_builds[0].variant_id, game_data)
         enemy_hull = self._lookup_hull(matchup.enemy_variants[0], game_data)
 
         row = {
-            "ship_count_player": len(matchup.player_variants),
+            "ship_count_player": len(matchup.player_builds),
             "ship_count_enemy": len(matchup.enemy_variants),
         }
         for hs in ["FRIGATE", "DESTROYER", "CRUISER", "CAPITAL_SHIP"]:

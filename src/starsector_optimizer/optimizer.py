@@ -22,7 +22,7 @@ from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, CombatFitnessConfig, GameData, HullSize, ShipHull
+from .models import Build, BuildSpec, CombatFitnessConfig, GameData, HullSize, ShipHull
 from .combat_fitness import aggregate_combat_fitness
 from .opponent_pool import (
     OpponentPool,
@@ -33,7 +33,7 @@ from .opponent_pool import (
 from .repair import repair_build
 from .scorer import heuristic_score
 from .search_space import SearchSpace, build_search_space
-from .variant import generate_variant, write_variant_file
+from .variant import build_to_build_spec
 
 logger = logging.getLogger(__name__)
 
@@ -130,22 +130,20 @@ def preflight_check(
     logger.info("Preflight check passed for %s (%d opponents)", hull_id, len(opponents))
 
 
-def validate_variant(variant: dict, game_data: GameData) -> list[str]:
-    """Validate a generated variant dict against game data. Returns error strings."""
+def validate_build_spec(spec: BuildSpec, game_data: GameData) -> list[str]:
+    """Validate a BuildSpec against game data. Returns error strings."""
     errors = []
 
-    hull_id = variant.get("hullId", "")
-    if hull_id and hull_id not in game_data.hulls:
-        errors.append(f"Unknown hull: {hull_id}")
+    if spec.hull_id not in game_data.hulls:
+        errors.append(f"Unknown hull: {spec.hull_id}")
 
-    for mod_id in variant.get("hullMods", []):
+    for mod_id in spec.hullmods:
         if mod_id not in game_data.hullmods:
             errors.append(f"Unknown hullmod: {mod_id}")
 
-    for group in variant.get("weaponGroups", []):
-        for slot_id, weapon_id in group.get("weapons", {}).items():
-            if weapon_id not in game_data.weapons:
-                errors.append(f"Unknown weapon: {weapon_id} in slot {slot_id}")
+    for slot_id, weapon_id in spec.weapon_assignments.items():
+        if weapon_id not in game_data.weapons:
+            errors.append(f"Unknown weapon: {weapon_id} in slot {slot_id}")
 
     return errors
 
@@ -319,16 +317,15 @@ def evaluate_build(
         return cached
 
     variant_id = f"{hull.id}_opt_{trial_number:06d}"
-    variant = generate_variant(repaired, hull, game_data, variant_id=variant_id)
-    errors = validate_variant(variant, game_data)
+    build_spec = build_to_build_spec(repaired, hull, game_data, variant_id)
+    errors = validate_build_spec(build_spec, game_data)
     if errors:
-        logger.warning("Invalid variant %s: %s", variant_id, errors)
+        logger.warning("Invalid build spec %s: %s", variant_id, errors)
         return -1.0
-    instance_pool.write_variant_to_all(variant, f"{variant_id}.variant")
 
     opponents = get_opponents(opponent_pool, hull.hull_size)
     matchups = generate_matchups(
-        variant_id,
+        build_spec,
         opponents,
         matchup_id_prefix=f"{hull.id}_{trial_number:06d}",
     )
@@ -435,15 +432,14 @@ def optimize_hull(
                 continue
             trial_num = completed + j
             vid = f"{hull_id}_opt_{trial_num:06d}"
-            variant = generate_variant(build, hull, game_data, variant_id=vid)
-            errors = validate_variant(variant, game_data)
+            build_spec = build_to_build_spec(build, hull, game_data, vid)
+            errors = validate_build_spec(build_spec, game_data)
             if errors:
-                logger.warning("Invalid variant %s: %s", vid, errors)
+                logger.warning("Invalid build spec %s: %s", vid, errors)
                 study.tell(trial, -1.0)
                 continue
-            instance_pool.write_variant_to_all(variant, f"{vid}.variant")
             matchups = generate_matchups(
-                vid, opponents,
+                build_spec, opponents,
                 matchup_id_prefix=f"{hull_id}_{trial_num:06d}",
             )
             all_matchups.extend(matchups)
@@ -477,9 +473,6 @@ def optimize_hull(
                 )
                 for vid, (j, trial, build) in variant_map.items():
                     study.tell(trial, -1.0)
-
-        # Clean up optimizer variants to prevent accumulation slowing game startup
-        instance_pool.clean_optimizer_variants()
 
         completed += batch_size
 

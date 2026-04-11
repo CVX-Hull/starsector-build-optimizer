@@ -137,23 +137,27 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     }
 
     private void spawnShips() {
+        // Player ships: construct programmatically from build specs
         playerShips.clear();
-        for (int i = 0; i < currentConfig.playerVariants.length; i++) {
-            String variantId = currentConfig.playerVariants[i];
-            float yOffset = (i - (currentConfig.playerVariants.length - 1) / 2f) * SHIP_SPACING;
+        for (int i = 0; i < currentConfig.playerBuilds.length; i++) {
+            MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
+            float yOffset = (i - (currentConfig.playerBuilds.length - 1) / 2f) * SHIP_SPACING;
             try {
+                com.fs.starfarer.api.fleet.FleetMemberAPI member =
+                        VariantBuilder.createFleetMember(spec);
                 ShipAPI ship = engine.getFleetManager(FleetSide.PLAYER)
-                        .spawnShipOrWing(variantId, new Vector2f(-2000f, yOffset), 0f);
+                        .spawnFleetMember(member, new Vector2f(-2000f, yOffset), 0f, 0f);
                 if (ship != null) {
                     playerShips.add(ship);
                 } else {
-                    log.warn("Failed to spawn player variant: " + variantId);
+                    log.warn("Failed to spawn player build: " + spec.variantId);
                 }
             } catch (Exception e) {
-                log.error("Error spawning player variant: " + variantId, e);
+                log.error("Error spawning player build: " + spec.variantId, e);
             }
         }
 
+        // Enemy ships: use stock variant IDs
         enemyShips.clear();
         for (int i = 0; i < currentConfig.enemyVariants.length; i++) {
             String variantId = currentConfig.enemyVariants[i];

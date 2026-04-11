@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from starsector_optimizer.models import (
+    BuildSpec,
     CombatResult,
     DamageBreakdown,
     GameData,
@@ -110,7 +111,7 @@ class TestColdStartPriors:
         """Uses speeds, EHP, DPS from GameData — not magic numbers."""
         tuner = TimeoutTuner(data_dir=tmp_path)
         mc = MatchupConfig(
-            matchup_id="test", player_variants=("cruiser_slow",),
+            matchup_id="test", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
             enemy_variants=("cruiser_slow",),
         )
         timeout = tuner.predict_timeout(mc, game_data)
@@ -120,9 +121,9 @@ class TestColdStartPriors:
     def test_scales_with_hull_size(self, game_data, tmp_path):
         """Frigate pair should have shorter timeout than capital pair."""
         tuner = TimeoutTuner(data_dir=tmp_path)
-        mc_frg = MatchupConfig(matchup_id="frg", player_variants=("frigate_fast",),
+        mc_frg = MatchupConfig(matchup_id="frg", player_builds=(BuildSpec(variant_id="frigate_fast", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                                enemy_variants=("frigate_fast",))
-        mc_cap = MatchupConfig(matchup_id="cap", player_variants=("capital_heavy",),
+        mc_cap = MatchupConfig(matchup_id="cap", player_builds=(BuildSpec(variant_id="capital_heavy", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                                enemy_variants=("capital_heavy",))
         t_frg = tuner.predict_timeout(mc_frg, game_data)
         t_cap = tuner.predict_timeout(mc_cap, game_data)
@@ -140,10 +141,10 @@ class TestColdStartPriors:
         gd_slow = _make_game_data(slow_hulls)
         tuner = TimeoutTuner(data_dir=tmp_path)
 
-        mc = MatchupConfig(matchup_id="t", player_variants=("fast",), enemy_variants=("fast",))
+        mc = MatchupConfig(matchup_id="t", player_builds=(BuildSpec(variant_id="fast", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),), enemy_variants=("fast",))
         t_fast = tuner.predict_timeout(mc, gd_fast)
 
-        mc2 = MatchupConfig(matchup_id="t", player_variants=("slow",), enemy_variants=("slow",))
+        mc2 = MatchupConfig(matchup_id="t", player_builds=(BuildSpec(variant_id="slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),), enemy_variants=("slow",))
         t_slow = tuner.predict_timeout(mc2, gd_slow)
 
         # Slower ships → longer timeout (more approach time)
@@ -158,7 +159,7 @@ class TestRecording:
     def test_record_completed(self, game_data, tmp_path):
         """PLAYER/ENEMY → completed=True."""
         tuner = TimeoutTuner(data_dir=tmp_path)
-        mc = MatchupConfig(matchup_id="rec1", player_variants=("cruiser_slow",),
+        mc = MatchupConfig(matchup_id="rec1", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("cruiser_slow",))
         result = _make_combat_result("rec1", "PLAYER", 72.5)
         tuner.record_result(mc, result, game_data)
@@ -172,7 +173,7 @@ class TestRecording:
     def test_record_censored(self, game_data, tmp_path):
         """TIMEOUT/STOPPED → completed=False."""
         tuner = TimeoutTuner(data_dir=tmp_path)
-        mc = MatchupConfig(matchup_id="rec2", player_variants=("cruiser_slow",),
+        mc = MatchupConfig(matchup_id="rec2", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("cruiser_slow",), time_limit_seconds=180)
         result = _make_combat_result("rec2", "TIMEOUT", 180.0)
         tuner.record_result(mc, result, game_data)
@@ -184,7 +185,7 @@ class TestRecording:
         """Hull sizes and ship counts extracted."""
         tuner = TimeoutTuner(data_dir=tmp_path)
         mc = MatchupConfig(matchup_id="rec3",
-                           player_variants=("frigate_fast", "frigate_fast"),
+                           player_builds=(BuildSpec(variant_id="frigate_fast", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0), BuildSpec(variant_id="frigate_fast", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("capital_heavy",))
         result = _make_combat_result("rec3", "ENEMY", 100.0)
         tuner.record_result(mc, result, game_data)
@@ -201,7 +202,7 @@ class TestBlendedTransition:
     def test_blend_weight_zero(self, game_data, tmp_path):
         """0 observations → pure prior."""
         tuner = TimeoutTuner(data_dir=tmp_path)
-        mc = MatchupConfig(matchup_id="t", player_variants=("cruiser_slow",),
+        mc = MatchupConfig(matchup_id="t", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("cruiser_slow",))
         timeout = tuner.predict_timeout(mc, game_data)
         prior = TimeoutTuner.compute_default_timeout(
@@ -211,7 +212,7 @@ class TestBlendedTransition:
     def test_blend_weight_increases(self, game_data, tmp_path):
         """With 50 observations, prediction should differ from pure prior."""
         tuner = TimeoutTuner(data_dir=tmp_path, blend_scale=100)
-        mc = MatchupConfig(matchup_id="t", player_variants=("cruiser_slow",),
+        mc = MatchupConfig(matchup_id="t", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("cruiser_slow",))
 
         # Record 60 results (enough to trigger refit at threshold=50)
@@ -238,7 +239,7 @@ class TestPersistence:
     def test_round_trip(self, game_data, tmp_path):
         """Save data, recreate tuner, predictions should be consistent."""
         tuner1 = TimeoutTuner(data_dir=tmp_path)
-        mc = MatchupConfig(matchup_id="t", player_variants=("cruiser_slow",),
+        mc = MatchupConfig(matchup_id="t", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("cruiser_slow",))
         for i in range(10):
             result = _make_combat_result(f"p_{i}", "PLAYER", 50.0 + i)
@@ -253,7 +254,7 @@ class TestPersistence:
     def test_append_only_log(self, game_data, tmp_path):
         """New records appended, old preserved."""
         tuner = TimeoutTuner(data_dir=tmp_path)
-        mc = MatchupConfig(matchup_id="t", player_variants=("cruiser_slow",),
+        mc = MatchupConfig(matchup_id="t", player_builds=(BuildSpec(variant_id="cruiser_slow", hull_id="x", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
                            enemy_variants=("cruiser_slow",))
 
         tuner.record_result(mc, _make_combat_result("a", "PLAYER", 50), game_data)

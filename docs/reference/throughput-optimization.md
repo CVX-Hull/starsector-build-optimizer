@@ -283,24 +283,24 @@ Every change must be:
 
 ### Implementation Phases
 
-#### Phase T1: Programmatic Variant Creation (Java change, unblocks everything)
+#### Phase T1: Programmatic Variant Creation (IMPLEMENTED)
 
 Modify the combat harness to accept build specifications as JSON fields within the matchup queue, construct `ShipVariantAPI` objects in memory, and spawn via `spawnFleetMember()`.
 
 **MatchupConfig changes:**
 ```json
 {
-  "matchup_id": "eagle_000042_vs_dominator_Assault",
-  "player_builds": [{
-    "hull_id": "eagle",
-    "weapon_assignments": {"WS 001": "heavymauler", "WS 002": "hveldriver"},
-    "hullmods": ["hardened_shields", "expanded_missile_racks"],
-    "flux_vents": 20,
-    "flux_capacitors": 10
-  }],
-  "enemy_variants": ["dominator_Assault"],
-  "time_limit_seconds": 180,
-  "time_mult": 3.0
+"matchup_id": "eagle_000042_vs_dominator_Assault",
+"player_builds": [{
+"hull_id": "eagle",
+"weapon_assignments": {"WS 001": "heavymauler", "WS 002": "hveldriver"},
+"hullmods": ["hardened_shields", "expanded_missile_racks"],
+"flux_vents": 20,
+"flux_capacitors": 10
+}],
+"enemy_variants": ["dominator_Assault"],
+"time_limit_seconds": 180,
+"time_mult": 3.0
 }
 ```
 

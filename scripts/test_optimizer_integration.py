@@ -18,7 +18,7 @@ from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.calibration import generate_diverse_builds
 from starsector_optimizer.scorer import heuristic_score
 from starsector_optimizer.repair import repair_build
-from starsector_optimizer.variant import generate_variant
+from starsector_optimizer.variant import build_to_build_spec
 from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
 from starsector_optimizer.curtailment import CurtailmentMonitor
 from starsector_optimizer.opponent_pool import (
@@ -78,11 +78,10 @@ try:
     for idx, (build, scorer_result) in enumerate(top3):
         repaired = repair_build(build, hull, game_data)
         variant_id = f"eagle_inttest_{idx:03d}"
-        variant = generate_variant(repaired, hull, game_data, variant_id=variant_id)
-        pool.write_variant_to_all(variant, f"{variant_id}.variant")
+        build_spec = build_to_build_spec(repaired, hull, game_data, variant_id)
 
         matchups = generate_matchups(
-            variant_id, opponents,
+            build_spec, opponents,
             matchup_id_prefix=f"inttest_{idx:03d}",
             time_mult=5.0,
             time_limit_seconds=180.0,

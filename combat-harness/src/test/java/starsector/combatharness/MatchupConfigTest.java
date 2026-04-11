@@ -8,10 +8,23 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class MatchupConfigTest {
 
+    private JSONObject validBuildSpecJSON() throws Exception {
+        JSONObject spec = new JSONObject();
+        spec.put("variant_id", "eagle_opt_001");
+        spec.put("hull_id", "eagle");
+        JSONObject weapons = new JSONObject();
+        weapons.put("WS 001", "heavymauler");
+        spec.put("weapon_assignments", weapons);
+        spec.put("hullmods", new JSONArray().put("heavyarmor"));
+        spec.put("flux_vents", 15);
+        spec.put("flux_capacitors", 10);
+        return spec;
+    }
+
     private JSONObject validJSON() throws Exception {
         JSONObject json = new JSONObject();
         json.put("matchup_id", "eval_001");
-        json.put("player_variants", new JSONArray().put("eagle_test"));
+        json.put("player_builds", new JSONArray().put(validBuildSpecJSON()));
         json.put("enemy_variants", new JSONArray().put("dominator_Standard"));
         return json;
     }
@@ -27,7 +40,13 @@ class MatchupConfigTest {
         MatchupConfig config = MatchupConfig.fromJSON(json);
 
         assertEquals("eval_001", config.matchupId);
-        assertArrayEquals(new String[]{"eagle_test"}, config.playerVariants);
+        assertEquals(1, config.playerBuilds.length);
+        assertEquals("eagle_opt_001", config.playerBuilds[0].variantId);
+        assertEquals("eagle", config.playerBuilds[0].hullId);
+        assertEquals("heavymauler", config.playerBuilds[0].weaponAssignments.get("WS 001"));
+        assertArrayEquals(new String[]{"heavyarmor"}, config.playerBuilds[0].hullmods);
+        assertEquals(15, config.playerBuilds[0].fluxVents);
+        assertEquals(10, config.playerBuilds[0].fluxCapacitors);
         assertArrayEquals(new String[]{"dominator_Standard"}, config.enemyVariants);
         assertEquals(120.0f, config.timeLimitSeconds, 0.01f);
         assertEquals(5.0f, config.timeMult, 0.01f);
@@ -61,9 +80,9 @@ class MatchupConfigTest {
     }
 
     @Test
-    void emptyPlayerVariantsThrows() throws Exception {
+    void emptyPlayerBuildsThrows() throws Exception {
         JSONObject json = validJSON();
-        json.put("player_variants", new JSONArray());
+        json.put("player_builds", new JSONArray());
         assertThrows(IllegalArgumentException.class, () -> MatchupConfig.fromJSON(json));
     }
 
@@ -91,16 +110,62 @@ class MatchupConfigTest {
     }
 
     @Test
-    void multipleVariants() throws Exception {
+    void multiplePlayerBuilds() throws Exception {
         JSONObject json = validJSON();
-        json.put("player_variants", new JSONArray().put("eagle_test").put("wolf_test"));
-        json.put("enemy_variants", new JSONArray().put("dominator_Standard").put("enforcer_Assault"));
+        JSONObject spec2 = validBuildSpecJSON();
+        spec2.put("variant_id", "wolf_opt_002");
+        spec2.put("hull_id", "wolf");
+        json.put("player_builds", new JSONArray().put(validBuildSpecJSON()).put(spec2));
 
         MatchupConfig config = MatchupConfig.fromJSON(json);
 
-        assertEquals(2, config.playerVariants.length);
-        assertEquals(2, config.enemyVariants.length);
-        assertEquals("wolf_test", config.playerVariants[1]);
+        assertEquals(2, config.playerBuilds.length);
+        assertEquals("eagle_opt_001", config.playerBuilds[0].variantId);
+        assertEquals("wolf_opt_002", config.playerBuilds[1].variantId);
+    }
+
+    @Test
+    void buildSpecEmptyWeapons() throws Exception {
+        JSONObject spec = validBuildSpecJSON();
+        spec.put("weapon_assignments", new JSONObject());
+        JSONObject json = new JSONObject();
+        json.put("matchup_id", "test");
+        json.put("player_builds", new JSONArray().put(spec));
+        json.put("enemy_variants", new JSONArray().put("enemy"));
+
+        MatchupConfig config = MatchupConfig.fromJSON(json);
+        assertTrue(config.playerBuilds[0].weaponAssignments.isEmpty());
+    }
+
+    @Test
+    void buildSpecFluxDefaults() throws Exception {
+        JSONObject spec = new JSONObject();
+        spec.put("variant_id", "test");
+        spec.put("hull_id", "eagle");
+        spec.put("weapon_assignments", new JSONObject());
+        spec.put("hullmods", new JSONArray());
+        // Omit flux_vents and flux_capacitors — should default to 0
+
+        JSONObject json = new JSONObject();
+        json.put("matchup_id", "test");
+        json.put("player_builds", new JSONArray().put(spec));
+        json.put("enemy_variants", new JSONArray().put("enemy"));
+
+        MatchupConfig config = MatchupConfig.fromJSON(json);
+        assertEquals(0, config.playerBuilds[0].fluxVents);
+        assertEquals(0, config.playerBuilds[0].fluxCapacitors);
+    }
+
+    @Test
+    void buildSpecMissingHullIdThrows() throws Exception {
+        JSONObject spec = validBuildSpecJSON();
+        spec.remove("hull_id");
+        JSONObject json = new JSONObject();
+        json.put("matchup_id", "test");
+        json.put("player_builds", new JSONArray().put(spec));
+        json.put("enemy_variants", new JSONArray().put("enemy"));
+
+        assertThrows(IllegalArgumentException.class, () -> MatchupConfig.fromJSON(json));
     }
 
     @Test
@@ -113,7 +178,8 @@ class MatchupConfigTest {
         MatchupConfig config2 = MatchupConfig.fromJSON(roundTripped);
 
         assertEquals(config.matchupId, config2.matchupId);
-        assertArrayEquals(config.playerVariants, config2.playerVariants);
+        assertEquals(config.playerBuilds[0].variantId, config2.playerBuilds[0].variantId);
+        assertEquals(config.playerBuilds[0].hullId, config2.playerBuilds[0].hullId);
         assertEquals(config.timeMult, config2.timeMult, 0.01f);
     }
 }

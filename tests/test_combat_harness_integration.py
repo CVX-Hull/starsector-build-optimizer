@@ -9,10 +9,10 @@ from pathlib import Path
 
 import pytest
 
-from starsector_optimizer.models import MatchupConfig
+from starsector_optimizer.models import BuildSpec, MatchupConfig
 from starsector_optimizer.result_parser import parse_combat_result, write_queue_file
 from starsector_optimizer.calibration import generate_random_build
-from starsector_optimizer.variant import generate_variant, write_variant_file
+from starsector_optimizer.variant import build_to_build_spec, generate_variant, write_variant_file
 
 
 SAVES_COMMON = Path(__file__).parent.parent / "game" / "starsector" / "saves" / "common"
@@ -26,20 +26,25 @@ class TestQueueGeneration:
         """Generate a queue with multiple matchup configs."""
         eagle = game_data.hulls["eagle"]
         build = generate_random_build(eagle, game_data)
-        variant = generate_variant(build, eagle, game_data)
-        vid = variant["variantId"]
+        spec = build_to_build_spec(build, eagle, game_data, "eagle_test_001")
 
         queue = [
             {
                 "matchup_id": "test_001",
-                "player_variants": [vid],
+                "player_builds": [{"variant_id": spec.variant_id, "hull_id": spec.hull_id,
+                                    "weapon_assignments": dict(spec.weapon_assignments),
+                                    "hullmods": list(spec.hullmods),
+                                    "flux_vents": spec.flux_vents, "flux_capacitors": spec.flux_capacitors}],
                 "enemy_variants": ["dominator_Assault"],
                 "time_limit_seconds": 180,
                 "time_mult": 3.0,
             },
             {
                 "matchup_id": "test_002",
-                "player_variants": [vid],
+                "player_builds": [{"variant_id": spec.variant_id, "hull_id": spec.hull_id,
+                                    "weapon_assignments": dict(spec.weapon_assignments),
+                                    "hullmods": list(spec.hullmods),
+                                    "flux_vents": spec.flux_vents, "flux_capacitors": spec.flux_capacitors}],
                 "enemy_variants": ["enforcer_Assault"],
                 "time_limit_seconds": 180,
                 "time_mult": 3.0,
@@ -53,31 +58,32 @@ class TestQueueGeneration:
         assert parsed[1]["matchup_id"] == "test_002"
 
     def test_matchup_config_construction(self):
+        spec = BuildSpec(variant_id="eagle_test", hull_id="eagle", weapon_assignments={},
+                         hullmods=(), flux_vents=0, flux_capacitors=0)
         mc = MatchupConfig(
             matchup_id="eval_001",
-            player_variants=("eagle_test",),
+            player_builds=(spec,),
             enemy_variants=("dominator_Assault",),
         )
         assert mc.time_limit_seconds == 300.0
         assert mc.time_mult == 3.0
 
     def test_deploy_queue_file(self, game_data):
-        """Write queue + variant files to saves/common/ with .data extension."""
+        """Write queue file to saves/common/ with .data extension."""
         if not SAVES_COMMON.exists():
             pytest.skip("saves/common/ not found")
 
         eagle = game_data.hulls["eagle"]
         build = generate_random_build(eagle, game_data)
-        variant = generate_variant(build, eagle, game_data)
-        vid = variant["variantId"]
-
-        if VARIANT_DIR.exists():
-            write_variant_file(variant, VARIANT_DIR / f"{vid}.variant")
+        spec = build_to_build_spec(build, eagle, game_data, "eagle_inttest_001")
 
         queue = [
             {
                 "matchup_id": "integration_test",
-                "player_variants": [vid],
+                "player_builds": [{"variant_id": spec.variant_id, "hull_id": spec.hull_id,
+                                    "weapon_assignments": dict(spec.weapon_assignments),
+                                    "hullmods": list(spec.hullmods),
+                                    "flux_vents": spec.flux_vents, "flux_capacitors": spec.flux_capacitors}],
                 "enemy_variants": ["dominator_Assault"],
                 "time_limit_seconds": 120,
                 "time_mult": 3.0,

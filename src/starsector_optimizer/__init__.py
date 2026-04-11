@@ -2,6 +2,7 @@
 
 from .models import (
     Build,
+    BuildSpec,
     CombatResult,
     DamageBreakdown,
     DamageType,
@@ -27,7 +28,7 @@ from .parser import load_game_data
 from .search_space import build_search_space, SearchSpace
 from .repair import repair_build, is_feasible
 from .scorer import heuristic_score
-from .variant import generate_variant, write_variant_file, load_variant_file, variant_to_build, load_stock_builds
+from .variant import build_to_build_spec, generate_variant, write_variant_file, load_variant_file, variant_to_build, load_stock_builds
 from .calibration import generate_diverse_builds, compute_build_features
 from .result_parser import parse_combat_result, parse_results_file, write_queue_file
 from .instance_manager import InstanceConfig, InstancePool
@@ -40,11 +41,11 @@ from .opponent_pool import (
 )
 from .optimizer import (
     OptimizerConfig, BuildCache, optimize_hull, evaluate_build, warm_start,
-    preflight_check, validate_variant,
+    preflight_check, validate_build_spec,
 )
 
 __all__ = [
-    "Build", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
+    "Build", "BuildSpec", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
     "GameData", "Heartbeat", "HullMod", "HullSize", "MatchupConfig", "MountType", "ScorerResult",
     "ShieldType", "ShipCombatResult", "ShipHull", "SlotSize", "SlotType",
     "Weapon", "WeaponSlot", "WeaponType",
@@ -53,7 +54,7 @@ __all__ = [
     "build_search_space", "SearchSpace",
     "repair_build", "is_feasible",
     "heuristic_score",
-    "generate_variant", "write_variant_file", "load_variant_file",
+    "build_to_build_spec", "generate_variant", "write_variant_file", "load_variant_file",
     "generate_diverse_builds", "compute_build_features",
     "parse_combat_result", "parse_results_file", "write_queue_file",
     "InstanceConfig", "InstancePool",
@@ -62,7 +63,7 @@ __all__ = [
     "OpponentPool", "DEFAULT_OPPONENT_POOL", "get_opponents",
     "generate_matchups", "compute_fitness", "hp_differential",
     "OptimizerConfig", "BuildCache", "optimize_hull", "evaluate_build", "warm_start",
-    "preflight_check", "validate_variant",
+    "preflight_check", "validate_build_spec",
     "combat_fitness", "aggregate_combat_fitness",
     "variant_to_build", "load_stock_builds",
 ]

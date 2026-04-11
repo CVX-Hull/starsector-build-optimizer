@@ -8,10 +8,21 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class MatchupQueueTest {
 
+    private JSONObject validBuildSpec() throws Exception {
+        JSONObject spec = new JSONObject();
+        spec.put("variant_id", "eagle_test");
+        spec.put("hull_id", "eagle");
+        spec.put("weapon_assignments", new JSONObject());
+        spec.put("hullmods", new JSONArray());
+        spec.put("flux_vents", 0);
+        spec.put("flux_capacitors", 0);
+        return spec;
+    }
+
     private JSONObject validMatchup(String id) throws Exception {
         JSONObject json = new JSONObject();
         json.put("matchup_id", id);
-        json.put("player_variants", new JSONArray().put("eagle_test"));
+        json.put("player_builds", new JSONArray().put(validBuildSpec()));
         json.put("enemy_variants", new JSONArray().put("dominator_Assault"));
         return json;
     }
@@ -55,7 +66,7 @@ class MatchupQueueTest {
         // Second element has empty matchup_id — should fail
         JSONObject bad = new JSONObject();
         bad.put("matchup_id", "");
-        bad.put("player_variants", new JSONArray().put("eagle_test"));
+        bad.put("player_builds", new JSONArray().put(validBuildSpec()));
         bad.put("enemy_variants", new JSONArray().put("dominator_Assault"));
         arr.put(bad);
 

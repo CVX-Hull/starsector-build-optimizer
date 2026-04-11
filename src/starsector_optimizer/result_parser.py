@@ -59,7 +59,17 @@ def parse_results_file(path: Path) -> list[CombatResult]:
 def _matchup_to_dict(mc: MatchupConfig) -> dict:
     return {
         "matchup_id": mc.matchup_id,
-        "player_variants": list(mc.player_variants),
+        "player_builds": [
+            {
+                "variant_id": b.variant_id,
+                "hull_id": b.hull_id,
+                "weapon_assignments": dict(b.weapon_assignments),
+                "hullmods": list(b.hullmods),
+                "flux_vents": b.flux_vents,
+                "flux_capacitors": b.flux_capacitors,
+            }
+            for b in mc.player_builds
+        ],
         "enemy_variants": list(mc.enemy_variants),
         "time_limit_seconds": mc.time_limit_seconds,
         "time_mult": mc.time_mult,

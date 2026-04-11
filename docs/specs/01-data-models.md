@@ -172,6 +172,40 @@ class Build:
 
 Immutable (frozen). `hullmods` is `frozenset` for immutability and hashability. No `vent_fraction` — that is an optimizer-space parameter consumed by `repair_build()`.
 
+### BuildSpec
+
+```python
+@dataclass(frozen=True)
+class BuildSpec:
+    """Serialization-oriented build specification for matchup queue JSON."""
+    variant_id: str
+    hull_id: str
+    weapon_assignments: dict[str, str]  # slot_id -> weapon_id, empty slots omitted
+    hullmods: tuple[str, ...]           # sorted alphabetically
+    flux_vents: int
+    flux_capacitors: int
+```
+
+Transfer object for the Python-Java boundary. Unlike `Build` (which uses `frozenset` for hullmods and `None` for empty weapon slots), `BuildSpec` uses a sorted `tuple` for hullmods and omits empty slots entirely — optimized for deterministic JSON serialization.
+
+Created by `build_to_build_spec()` in `variant.py`. Embedded in `MatchupConfig.player_builds` for the matchup queue.
+
+### MatchupConfig
+
+```python
+@dataclass(frozen=True)
+class MatchupConfig:
+    matchup_id: str
+    player_builds: tuple[BuildSpec, ...]   # optimizer-generated build specs
+    enemy_variants: tuple[str, ...]        # stock variant IDs
+    time_limit_seconds: float = 300.0
+    time_mult: float = 3.0
+    map_width: float = 24000.0
+    map_height: float = 18000.0
+```
+
+Player ships are specified as inline `BuildSpec` objects (constructed programmatically by the Java harness). Enemy ships remain as stock variant ID strings (loaded from `.variant` files at game startup).
+
 ### EffectiveStats
 
 ```python

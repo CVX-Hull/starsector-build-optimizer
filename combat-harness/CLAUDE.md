@@ -13,10 +13,10 @@ Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports re
 ## Architecture
 
 Batched matchups per game launch. Flow:
-1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array of matchup configs)
-2. Python writes `.variant` files to `data/variants/`
-3. Game launches → TitleScreenPlugin detects queue → MenuNavigator auto-navigates to Optimizer Arena
-4. MissionDefinition (compiled in JAR) reads first matchup from queue via SettingsAPI
+1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array of matchup configs with build specs embedded)
+2. Game launches → TitleScreenPlugin detects queue → MenuNavigator auto-navigates to Optimizer Arena
+3. MissionDefinition (compiled in JAR) reads first matchup from queue via SettingsAPI
+4. Player ships constructed programmatically via `VariantBuilder` from `BuildSpec` data in the queue
 5. CombatHarnessPlugin state machine: INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE
 6. Per matchup: spawn ships, run combat with DamageTracker, custom win detection, entity cleanup
 7. After all matchups: ResultWriter writes `combat_harness_results.json.data` + `combat_harness_done.data`

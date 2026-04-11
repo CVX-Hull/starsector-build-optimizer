@@ -21,7 +21,6 @@ from pathlib import Path
 from .models import CombatResult, Heartbeat, MatchupConfig
 from .curtailment import CurtailmentMonitor, parse_heartbeat
 from .result_parser import parse_results_file, write_queue_file
-from .variant import write_variant_file
 
 logger = logging.getLogger(__name__)
 
@@ -494,21 +493,3 @@ class InstancePool:
         except (ValueError, OSError):
             pass  # Malformed heartbeat or file not readable
 
-    # --- Variant file placement ---
-
-    def write_variant_to_all(self, variant: dict, filename: str) -> None:
-        """Write a variant file to every instance's data/variants/ directory."""
-        for inst in self._instances:
-            write_variant_file(variant, inst.variants_dir / filename)
-
-    def clean_optimizer_variants(self) -> None:
-        """Remove optimizer-generated variant files from all instances.
-
-        Deletes real files (not symlinks) matching *_opt_* pattern from each
-        instance's data/variants/. Call between batches to prevent accumulation
-        that slows game startup.
-        """
-        for inst in self._instances:
-            for f in inst.variants_dir.glob("*_opt_*.variant"):
-                if not f.is_symlink():
-                    f.unlink()

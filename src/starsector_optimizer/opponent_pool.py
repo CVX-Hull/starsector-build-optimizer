@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .models import CombatResult, HullSize, MatchupConfig
+from .models import BuildSpec, CombatResult, HullSize, MatchupConfig
 
 
 @dataclass(frozen=True)
@@ -59,7 +59,7 @@ def get_opponents(pool: OpponentPool, hull_size: HullSize) -> tuple[str, ...]:
 
 
 def generate_matchups(
-    player_variant_id: str,
+    player_build: BuildSpec,
     opponents: tuple[str, ...],
     matchup_id_prefix: str,
     time_limit_seconds: float = 300.0,
@@ -69,7 +69,7 @@ def generate_matchups(
     return [
         MatchupConfig(
             matchup_id=f"{matchup_id_prefix}_vs_{opp}",
-            player_variants=(player_variant_id,),
+            player_builds=(player_build,),
             enemy_variants=(opp,),
             time_limit_seconds=time_limit_seconds,
             time_mult=time_mult,

@@ -18,7 +18,7 @@ from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.repair import repair_build
 from starsector_optimizer.scorer import heuristic_score
-from starsector_optimizer.variant import generate_variant
+from starsector_optimizer.variant import build_to_build_spec
 from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
 from starsector_optimizer.curtailment import CurtailmentMonitor
 from starsector_optimizer.opponent_pool import (
@@ -100,15 +100,14 @@ try:
             trials.append(trial)
             builds.append(repaired)
 
-        # Generate all variants and all matchups as one big batch
+        # Generate all build specs and all matchups as one big batch
         all_matchups = []
         variant_ids = []
         for j, build in enumerate(builds):
             build_idx = batch_idx * BUILDS_PER_BATCH + j
             vid = f"eagle_val_{build_idx:03d}"
-            variant = generate_variant(build, hull, gd, variant_id=vid)
-            pool.write_variant_to_all(variant, f"{vid}.variant")
-            matchups = generate_matchups(vid, opponents, f"val_{build_idx:03d}",
+            build_spec = build_to_build_spec(build, hull, gd, vid)
+            matchups = generate_matchups(build_spec, opponents, f"val_{build_idx:03d}",
                                          time_mult=5.0, time_limit_seconds=180.0)
             all_matchups.extend(matchups)
             variant_ids.append(vid)

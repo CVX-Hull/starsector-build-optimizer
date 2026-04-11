@@ -65,13 +65,13 @@ For the full mechanical checklist with runnable grep commands, see `.claude/skil
 
 ```
 src/starsector_optimizer/          # Python modules
-├── models.py                      # Dataclasses + enums (ShipHull, Weapon, Build, CombatFitnessConfig, etc.)
+├── models.py                      # Dataclasses + enums (ShipHull, Weapon, Build, BuildSpec, CombatFitnessConfig, etc.)
 ├── hullmod_effects.py             # Game constants, hullmod effect registry
 ├── parser.py                      # CSV + loose JSON → model objects
 ├── search_space.py                # Per-hull weapon/hullmod compatibility
 ├── repair.py                      # Constraint enforcement (optimizer→domain boundary)
 ├── scorer.py                      # Heuristic scoring → ScorerResult
-├── variant.py                     # Build ↔ .variant JSON (generate, load, stock builds)
+├── variant.py                     # Build ↔ .variant JSON / BuildSpec (generate, load, stock builds, build_to_build_spec)
 ├── calibration.py                 # Random build generation + feature extraction
 ├── estimator.py                   # Throughput + cost estimation for simulation campaigns
 ├── result_parser.py               # Parse combat result JSON ↔ Python dataclasses
@@ -87,8 +87,9 @@ combat-harness/                    # Java combat harness mod
 ├── CLAUDE.md                      # Java-specific instructions
 ├── build.gradle.kts               # Gradle build
 ├── src/main/java/starsector/combatharness/
-│   ├── MatchupConfig.java         # Single matchup config POJO
+│   ├── MatchupConfig.java         # Single matchup config POJO + BuildSpec inner class
 │   ├── MatchupQueue.java          # Batch queue — reads JSON array from saves/common/
+│   ├── VariantBuilder.java        # Programmatic ShipVariantAPI construction from BuildSpec
 │   ├── DamageTracker.java         # DamageListener — per-ship damage accumulation
 │   ├── ResultWriter.java          # Batch results + done signal via SettingsAPI
 │   ├── CombatHarnessPlugin.java   # State machine: INIT→SPAWNING→FIGHTING→CLEANING→DONE

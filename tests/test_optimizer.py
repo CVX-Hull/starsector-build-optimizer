@@ -10,6 +10,7 @@ from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.calibration import generate_random_build
 from starsector_optimizer.opponent_pool import DEFAULT_OPPONENT_POOL, OpponentPool
+from starsector_optimizer.models import BuildSpec
 from starsector_optimizer.optimizer import (
     BuildCache,
     OptimizerConfig,
@@ -18,7 +19,7 @@ from starsector_optimizer.optimizer import (
     define_distributions,
     preflight_check,
     trial_params_to_build,
-    validate_variant,
+    validate_build_spec,
     warm_start,
 )
 
@@ -341,13 +342,12 @@ class TestOptimizeHullIntegration:
         mock_pool = MagicMock()
         mock_pool._config = MagicMock()
         mock_pool._config.game_dir = Path("game/starsector")
-        mock_pool.write_variant_to_all = MagicMock()
 
         def mock_evaluate(matchups):
             results = []
             for m in matchups:
                 player_ship = ShipCombatResult(
-                    fleet_member_id="p0", variant_id=m.player_variants[0],
+                    fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
                     hull_id="wolf", destroyed=False, hull_fraction=0.7,
                     armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
                     disabled_weapons=0, flameouts=0,
@@ -496,47 +496,59 @@ class TestPreflightCheck:
             preflight_check("wolf", game_data, pool, opp_pool)
 
 
-# --- Variant Validation Tests ---
+# --- Build Spec Validation Tests ---
 
 
-class TestValidateVariant:
+class TestValidateBuildSpec:
 
-    def test_valid_variant_no_errors(self, game_data):
-        """Valid variant returns empty error list."""
-        variant = {
-            "hullId": "wolf",
-            "hullMods": ["heavyarmor", "hardenedshieldemitter"],
-            "weaponGroups": [{"weapons": {"WS0001": "heavymauler"}}],
-        }
-        errors = validate_variant(variant, game_data)
+    def test_valid_build_spec_no_errors(self, game_data):
+        """Valid BuildSpec returns empty error list."""
+        spec = BuildSpec(
+            variant_id="wolf_opt_001",
+            hull_id="wolf",
+            weapon_assignments={"WS0001": "heavymauler"},
+            hullmods=("heavyarmor", "hardenedshieldemitter"),
+            flux_vents=10,
+            flux_capacitors=5,
+        )
+        errors = validate_build_spec(spec, game_data)
         assert errors == []
 
-    def test_invalid_hullmod_detected(self, game_data):
-        """Unknown hullmod ID produces an error."""
-        variant = {
-            "hullId": "wolf",
-            "hullMods": ["heavyarmor", "fake_hullmod_xyz"],
-            "weaponGroups": [],
-        }
-        errors = validate_variant(variant, game_data)
-        assert any("fake_hullmod_xyz" in e for e in errors)
+    def test_unknown_hull(self, game_data):
+        """Unknown hull_id produces an error."""
+        spec = BuildSpec(
+            variant_id="test",
+            hull_id="nonexistent_hull",
+            weapon_assignments={},
+            hullmods=(),
+            flux_vents=0,
+            flux_capacitors=0,
+        )
+        errors = validate_build_spec(spec, game_data)
+        assert any("nonexistent_hull" in e for e in errors)
 
-    def test_invalid_weapon_detected(self, game_data):
+    def test_unknown_weapon(self, game_data):
         """Unknown weapon ID produces an error."""
-        variant = {
-            "hullId": "wolf",
-            "hullMods": [],
-            "weaponGroups": [{"weapons": {"WS0001": "nonexistent_gun"}}],
-        }
-        errors = validate_variant(variant, game_data)
+        spec = BuildSpec(
+            variant_id="test",
+            hull_id="wolf",
+            weapon_assignments={"WS0001": "nonexistent_gun"},
+            hullmods=(),
+            flux_vents=0,
+            flux_capacitors=0,
+        )
+        errors = validate_build_spec(spec, game_data)
         assert any("nonexistent_gun" in e for e in errors)
 
-    def test_corrupted_hullmod_id_detected(self, game_data):
-        """Hullmod ID with spaces/special chars produces an error."""
-        variant = {
-            "hullId": "wolf",
-            "hullMods": ['all point-defense weapons deal %s more damage to all targets."'],
-            "weaponGroups": [],
-        }
-        errors = validate_variant(variant, game_data)
-        assert len(errors) > 0
+    def test_unknown_hullmod(self, game_data):
+        """Unknown hullmod ID produces an error."""
+        spec = BuildSpec(
+            variant_id="test",
+            hull_id="wolf",
+            weapon_assignments={},
+            hullmods=("fake_hullmod_xyz",),
+            flux_vents=0,
+            flux_capacitors=0,
+        )
+        errors = validate_build_spec(spec, game_data)
+        assert any("fake_hullmod_xyz" in e for e in errors)

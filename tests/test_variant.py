@@ -10,7 +10,9 @@ from starsector_optimizer.models import (
     Build, HullSize, ShieldType, SlotSize, SlotType, MountType,
     WeaponSlot, ShipHull, Weapon, HullMod, DamageType, GameData, WeaponType,
 )
+from starsector_optimizer.models import BuildSpec
 from starsector_optimizer.variant import (
+    build_to_build_spec,
     generate_variant,
     write_variant_file,
     load_variant_file,
@@ -104,6 +106,48 @@ class TestGenerateVariant:
         build = Build("eagle", {}, frozenset(), 0, 0)
         variant = generate_variant(build, _hull(), _game_data(), variant_id="my_custom_id")
         assert variant["variantId"] == "my_custom_id"
+
+
+class TestBuildToBuildSpec:
+
+    def test_basic_conversion(self):
+        build = Build("eagle", {"WS1": "heavymauler", "WS2": "pdlaser"}, frozenset(["heavyarmor"]), 15, 10)
+        spec = build_to_build_spec(build, _hull(), _game_data(), "eagle_opt_001")
+        assert spec.variant_id == "eagle_opt_001"
+        assert spec.hull_id == "eagle"
+        assert spec.weapon_assignments == {"WS1": "heavymauler", "WS2": "pdlaser"}
+        assert spec.hullmods == ("heavyarmor",)
+        assert spec.flux_vents == 15
+        assert spec.flux_capacitors == 10
+
+    def test_empty_slots_omitted(self):
+        build = Build("eagle", {"WS1": None, "WS2": "pdlaser"}, frozenset(), 0, 0)
+        spec = build_to_build_spec(build, _hull(), _game_data(), "test")
+        assert "WS1" not in spec.weapon_assignments
+        assert spec.weapon_assignments == {"WS2": "pdlaser"}
+
+    def test_builtin_weapons_excluded(self):
+        build = Build("eagle", {"WS3": "builtin_weapon", "WS1": "heavymauler"}, frozenset(), 0, 0)
+        spec = build_to_build_spec(build, _hull(), _game_data(), "test")
+        assert "WS3" not in spec.weapon_assignments
+        assert "WS1" in spec.weapon_assignments
+
+    def test_unknown_weapons_excluded(self):
+        build = Build("eagle", {"WS1": "nonexistent_gun", "WS2": "pdlaser"}, frozenset(), 0, 0)
+        spec = build_to_build_spec(build, _hull(), _game_data(), "test")
+        assert "WS1" not in spec.weapon_assignments
+        assert "WS2" in spec.weapon_assignments
+
+    def test_hullmods_sorted(self):
+        build = Build("eagle", {}, frozenset(["targetingunit", "heavyarmor", "advancedoptics"]), 0, 0)
+        spec = build_to_build_spec(build, _hull(), _game_data(), "test")
+        assert spec.hullmods == ("advancedoptics", "heavyarmor", "targetingunit")
+
+    def test_frozen(self):
+        build = Build("eagle", {}, frozenset(), 0, 0)
+        spec = build_to_build_spec(build, _hull(), _game_data(), "test")
+        with pytest.raises(AttributeError):
+            spec.hull_id = "wolf"
 
 
 class TestWriteAndLoadVariant:

@@ -51,12 +51,14 @@ Write a list of `MatchupConfig` objects as a JSON array to the given path.
 | Python field | JSON field |
 |-------------|-----------|
 | `matchup_id` | `matchup_id` |
-| `player_variants` | `player_variants` (tuple → list) |
+| `player_builds` | `player_builds` (tuple of BuildSpec → list of dicts) |
 | `enemy_variants` | `enemy_variants` (tuple → list) |
 | `time_limit_seconds` | `time_limit_seconds` |
 | `time_mult` | `time_mult` |
 | `map_width` | `map_width` |
 | `map_height` | `map_height` |
+
+Each `BuildSpec` in `player_builds` is serialized as a dict with keys: `variant_id`, `hull_id`, `weapon_assignments` (dict), `hullmods` (list), `flux_vents` (int), `flux_capacitors` (int).
 
 - Writes JSON with indent=2 for readability
 - The caller is responsible for passing the correct path (including `.data` extension)

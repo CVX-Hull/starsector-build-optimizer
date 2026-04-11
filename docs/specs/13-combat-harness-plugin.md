@@ -20,7 +20,9 @@ INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE
 2. Apply time multiplier: `engine.getTimeMult().modifyMult("harness", config.timeMult)`
 3. Create new DamageTracker, register via `engine.getListenerManager().addListener(tracker)`
 4. If first matchup: discover already-deployed ships from `engine.getShips()` (MissionDefinition adds them)
-5. If subsequent matchup: spawn ships via `engine.getFleetManager(side).spawnShipOrWing(variantId, location, facing)`, store returned ShipAPIs
+5. If subsequent matchup:
+   - Player ships: construct via `VariantBuilder.createFleetMember(buildSpec)`, spawn via `fleetManager.spawnFleetMember(member, location, facing, 0f)`, store returned ShipAPIs
+   - Enemy ships: spawn via `fleetManager.spawnShipOrWing(variantId, location, facing)`, store returned ShipAPIs
 6. Record `spawnTime`. Set `contactMade = false`.
 7. Transition to FIGHTING
 

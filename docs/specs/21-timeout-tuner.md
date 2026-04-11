@@ -71,7 +71,7 @@ data/evaluation_log.jsonl       # Shared with Phase 7 surrogate
 
 **JSONL format (one line per matchup result):**
 ```json
-{"matchup_id": "eval_001", "player_variants": ["eagle_opt_001"],
+{"matchup_id": "eval_001", "player_builds": ["eagle_opt_001"],
  "enemy_variants": ["dominator_Assault"],
  "hull_sizes": ["CRUISER", "CRUISER"], "ship_counts": [1, 1],
  "winner": "PLAYER", "duration": 72.5, "completed": true,

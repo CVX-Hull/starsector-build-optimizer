@@ -1,6 +1,7 @@
 package data.missions.optimizer_arena;
 
 import com.fs.starfarer.api.fleet.FleetGoal;
+import com.fs.starfarer.api.fleet.FleetMemberAPI;
 import com.fs.starfarer.api.fleet.FleetMemberType;
 import com.fs.starfarer.api.mission.FleetSide;
 import com.fs.starfarer.api.mission.MissionDefinitionAPI;
@@ -9,14 +10,15 @@ import com.fs.starfarer.api.mission.MissionDefinitionPlugin;
 import starsector.combatharness.CombatHarnessPlugin;
 import starsector.combatharness.MatchupConfig;
 import starsector.combatharness.MatchupQueue;
+import starsector.combatharness.VariantBuilder;
 
 /**
  * Sets up the first matchup's ships and attaches the CombatHarnessPlugin.
  * The plugin handles subsequent matchups by spawning/removing ships mid-combat.
  *
- * The first matchup's ships MUST be added here (via addToFleet) because the game
- * shows a "No ships deployed" screen for empty fleets and won't start combat.
- * spawnShipOrWing() only works once combat is already running.
+ * The first matchup's ships MUST be added here (via addToFleet/addFleetMember) because
+ * the game shows a "No ships deployed" screen for empty fleets and won't start combat.
+ * spawnShipOrWing()/spawnFleetMember() only work once combat is already running.
  */
 public class MissionDefinition implements MissionDefinitionPlugin {
 
@@ -50,13 +52,16 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         api.setFleetTagline(FleetSide.ENEMY, "Test Opponent");
 
         // Add first matchup's ships — required for the deployment screen to work.
-        // Subsequent matchups are handled by the plugin via spawnShipOrWing().
+        // Subsequent matchups are handled by the plugin via spawnFleetMember()/spawnShipOrWing().
         MatchupConfig first = queue.get(0);
-        for (int i = 0; i < first.playerVariants.length; i++) {
-            String variantId = first.playerVariants[i];
-            api.addToFleet(FleetSide.PLAYER, variantId,
-                    FleetMemberType.SHIP, variantId, false);
+
+        // Player ships: construct programmatically from build specs
+        for (int i = 0; i < first.playerBuilds.length; i++) {
+            FleetMemberAPI member = VariantBuilder.createFleetMember(first.playerBuilds[i]);
+            api.addFleetMember(FleetSide.PLAYER, member);
         }
+
+        // Enemy ships: use stock variant IDs
         for (int i = 0; i < first.enemyVariants.length; i++) {
             String variantId = first.enemyVariants[i];
             api.addToFleet(FleetSide.ENEMY, variantId,

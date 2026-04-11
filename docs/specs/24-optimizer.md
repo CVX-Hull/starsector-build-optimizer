@@ -99,10 +99,10 @@ Uses `aggregate_combat_fitness` from spec 25 (hierarchical composite score) inst
 
 1. `repaired = repair_build(build, hull, game_data)` (idempotent)
 2. Check `cache.get(repaired)` → return if hit
-3. `variant = generate_variant(repaired, hull, game_data)` with unique variant_id
-4. `instance_pool.write_variant_to_all(variant, f"{variant_id}.variant")` — places variant in all instance work dirs
+3. `build_spec = build_to_build_spec(repaired, hull, game_data, variant_id)` — create BuildSpec for queue serialization
+4. `errors = validate_build_spec(build_spec, game_data)` — check hull/weapon/hullmod IDs exist
 5. `opponents = get_opponents(opponent_pool, hull.hull_size)`
-6. `matchups = generate_matchups(variant_id, opponents, ...)`
+6. `matchups = generate_matchups(build_spec, opponents, ...)`
 7. `results = instance_pool.evaluate(matchups)`
 8. `fitness = compute_fitness(results, mode=config.fitness_mode)`
 9. `cache.put(repaired, fitness)`
@@ -120,16 +120,16 @@ Checks:
 4. All opponent variant IDs in the pool resolve to `.variant` files under `game_dir/data/variants/`
 5. `Xvfb` and `xdotool` are installed (found on PATH via `shutil.which`)
 
-### `validate_variant(variant: dict, game_data: GameData) -> list[str]`
+### `validate_build_spec(spec: BuildSpec, game_data: GameData) -> list[str]`
 
-Validates a generated variant dict against game data. Returns list of error strings (empty = valid).
+Validates a `BuildSpec` against game data. Returns list of error strings (empty = valid). Validation errors are fatal — the Java harness cannot construct a variant from missing game data.
 
 Checks:
-1. Every hullmod ID in `hullMods` exists in `game_data.hullmods`
-2. Every weapon ID in `weaponGroups` exists in `game_data.weapons`
-3. `hullId` exists in `game_data.hulls`
+1. `spec.hull_id` exists in `game_data.hulls`
+2. Every hullmod ID in `spec.hullmods` exists in `game_data.hullmods`
+3. Every weapon ID in `spec.weapon_assignments` values exists in `game_data.weapons`
 
-Called by `evaluate_build` before writing variant files to instances.
+Called by `evaluate_build` before generating matchups.
 
 ### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config) -> Study`
 

@@ -16,7 +16,10 @@ Write JSON with indent=4.
 ### load_variant_file(path) → dict
 Parse loose JSON (reuse `parse_loose_json`).
 
-## Output Schema
+### build_to_build_spec(build, hull, game_data, variant_id) → BuildSpec
+Convert a `Build` to a `BuildSpec` for matchup queue serialization. Filters out `None` weapon slots, built-in weapon slots, and weapons not found in `game_data.weapons` (same filtering logic as `assign_weapon_groups()`). Hullmods are sorted alphabetically in the output tuple.
+
+## Output Schema (.variant JSON)
 ```json
 {
     "variantId": "...",
