@@ -33,6 +33,12 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
     private static final int WAITING_TIMEOUT_FRAMES = 3600;  // ~60s at 60fps
     private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
+    private static final float PLAYER_SPAWN_X = -2000f;
+    private static final float ENEMY_SPAWN_X = 2000f;
+    private static final float PLAYER_FACING = 0f;
+    private static final float ENEMY_FACING = 180f;
+    private static final int CLEANUP_FRAMES = 3;
+    private static final float MAX_APPROACH_TIME = 30f;  // force timeout if no contact in 30s
 
     private enum State { INIT, SPAWNING, FIGHTING, CLEANING, DONE, WAITING }
 
@@ -49,7 +55,6 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private boolean contactMade = false;
     private boolean isFirstBatch = true;  // true only for very first batch; NOT reset on WAITING→INIT
     private int waitingFrameCount = 0;
-    private static final float MAX_APPROACH_TIME = 30f;  // force timeout if no contact in 30s
     private JSONArray allResults = new JSONArray();
     private int frameCount = 0;
     private int cleanupFramesLeft = 0;
@@ -157,7 +162,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                 com.fs.starfarer.api.fleet.FleetMemberAPI member =
                         VariantBuilder.createFleetMember(spec);
                 ShipAPI ship = engine.getFleetManager(FleetSide.PLAYER)
-                        .spawnFleetMember(member, new Vector2f(-2000f, yOffset), 0f, 0f);
+                        .spawnFleetMember(member, new Vector2f(PLAYER_SPAWN_X, yOffset), PLAYER_FACING, 0f);
                 if (ship != null) {
                     playerShips.add(ship);
                     ensureCombatReady(ship, spec.cr);
@@ -176,7 +181,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             float yOffset = (i - (currentConfig.enemyVariants.length - 1) / 2f) * SHIP_SPACING;
             try {
                 ShipAPI ship = engine.getFleetManager(FleetSide.ENEMY)
-                        .spawnShipOrWing(variantId, new Vector2f(2000f, yOffset), 180f);
+                        .spawnShipOrWing(variantId, new Vector2f(ENEMY_SPAWN_X, yOffset), ENEMY_FACING);
                 if (ship != null) {
                     enemyShips.add(ship);
                 } else {
@@ -220,7 +225,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                 log.error("Failed to build result for stopped " + currentConfig.matchupId, e);
             }
             state = State.CLEANING;
-            cleanupFramesLeft = 3;
+            cleanupFramesLeft = CLEANUP_FRAMES;
             return;
         }
 
@@ -266,13 +271,13 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                 log.error("Failed to build result for " + currentConfig.matchupId, e);
             }
             state = State.CLEANING;
-            cleanupFramesLeft = 3;
+            cleanupFramesLeft = CLEANUP_FRAMES;
         }
     }
 
     private void doCleaning() {
         if (cleanupFramesLeft > 0) {
-            if (cleanupFramesLeft == 3) {
+            if (cleanupFramesLeft == CLEANUP_FRAMES) {
                 // Remove all entities
                 for (ShipAPI ship : new ArrayList<ShipAPI>(engine.getShips())) {
                     engine.removeEntity(ship);

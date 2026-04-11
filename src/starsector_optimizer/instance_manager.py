@@ -17,6 +17,7 @@ import time
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TextIO
 
 from .models import CombatResult, Heartbeat, MatchupConfig
 from .curtailment import CurtailmentMonitor, parse_heartbeat
@@ -92,6 +93,7 @@ class GameInstance:
     restart_count: int = 0
     heartbeats: list[Heartbeat] = field(default_factory=list)
     total_matchups_processed: int = 0
+    _game_log_file: TextIO | None = field(default=None, repr=False)
 
     @property
     def saves_common(self) -> Path:
@@ -472,6 +474,8 @@ class InstancePool:
                 inst.xvfb_process.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
                 inst.xvfb_process.kill()
+        if inst._game_log_file and not inst._game_log_file.closed:
+            inst._game_log_file.close()
 
     # --- Health checks ---
 

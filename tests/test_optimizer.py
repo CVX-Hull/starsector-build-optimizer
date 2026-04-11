@@ -338,9 +338,10 @@ class TestOptimizeHullIntegration:
         """Create a mock InstancePool that returns synthetic CombatResults."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
 
-        mock_pool = MagicMock()
-        mock_pool._config = MagicMock()
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool._config = MagicMock(spec=InstanceConfig)
         mock_pool._config.game_dir = Path("game/starsector")
 
         def mock_evaluate(matchups):
@@ -459,8 +460,9 @@ class TestPreflightCheck:
     def test_invalid_hull_id_raises(self, game_data):
         """Unknown hull_id raises ValueError."""
         from unittest.mock import MagicMock
-        pool = MagicMock()
-        pool._config = MagicMock()
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        pool = MagicMock(spec=InstancePool)
+        pool._config = MagicMock(spec=InstanceConfig)
         pool._config.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="not found"):
@@ -469,8 +471,9 @@ class TestPreflightCheck:
     def test_missing_mod_raises(self, game_data):
         """Missing combat harness mod raises ValueError."""
         from unittest.mock import MagicMock
-        pool = MagicMock()
-        pool._config = MagicMock()
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        pool = MagicMock(spec=InstancePool)
+        pool._config = MagicMock(spec=InstanceConfig)
         pool._config.game_dir = Path("/tmp/fake_game_dir")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="combat-harness"):
@@ -479,8 +482,9 @@ class TestPreflightCheck:
     def test_valid_config_passes(self, game_data):
         """Valid config passes without raising."""
         from unittest.mock import MagicMock
-        pool = MagicMock()
-        pool._config = MagicMock()
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        pool = MagicMock(spec=InstancePool)
+        pool._config = MagicMock(spec=InstanceConfig)
         pool._config.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         preflight_check("wolf", game_data, pool, opp_pool)  # Should not raise
@@ -488,8 +492,9 @@ class TestPreflightCheck:
     def test_missing_opponent_variant_raises(self, game_data):
         """Opponent variant not found raises ValueError."""
         from unittest.mock import MagicMock
-        pool = MagicMock()
-        pool._config = MagicMock()
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        pool = MagicMock(spec=InstancePool)
+        pool._config = MagicMock(spec=InstanceConfig)
         pool._config.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("nonexistent_variant",)})
         with pytest.raises(ValueError, match="nonexistent_variant"):

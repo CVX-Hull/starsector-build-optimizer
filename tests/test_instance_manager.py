@@ -6,6 +6,7 @@ All tests use tmp_path and mocked subprocess (no real game needed).
 import json
 import os
 import shutil
+import subprocess
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -312,7 +313,7 @@ class TestProcessManagement:
         inst = pool._instances[0]
         inst.state = InstanceState.RUNNING
 
-        mock_proc = MagicMock()
+        mock_proc = MagicMock(spec=subprocess.Popen)
         mock_proc.poll.return_value = 1  # exited with error
         inst.game_process = mock_proc
 
@@ -325,7 +326,7 @@ class TestProcessManagement:
         pool.setup()
         inst = pool._instances[0]
 
-        mock_proc = MagicMock()
+        mock_proc = MagicMock(spec=subprocess.Popen)
         mock_proc.poll.return_value = None
         inst.game_process = mock_proc
 
@@ -360,12 +361,13 @@ class TestProcessManagement:
         """Teardown kills all processes and waits for them."""
         pool.setup()
         for inst in pool._instances:
-            mock_game = MagicMock()
+            mock_game = MagicMock(spec=subprocess.Popen)
             mock_game.poll.return_value = None
             inst.game_process = mock_game
-            mock_xvfb = MagicMock()
+            mock_xvfb = MagicMock(spec=subprocess.Popen)
             mock_xvfb.poll.return_value = None
             inst.xvfb_process = mock_xvfb
+            inst._game_log_file = MagicMock(closed=False)
             inst.state = InstanceState.RUNNING
 
         pool.teardown()
@@ -375,15 +377,16 @@ class TestProcessManagement:
             inst.game_process.wait.assert_called_once()
             inst.xvfb_process.terminate.assert_called_once()
             inst.xvfb_process.wait.assert_called_once()
+            inst._game_log_file.close.assert_called_once()
             assert inst.state == InstanceState.STOPPED
 
     def test_kill_instance_waits_for_xvfb(self, pool, config):
         """_kill_instance terminates Xvfb and waits for it to exit."""
         pool.setup()
         inst = pool._instances[0]
-        mock_xvfb = MagicMock()
+        mock_xvfb = MagicMock(spec=subprocess.Popen)
         mock_xvfb.poll.return_value = None
-        mock_game = MagicMock()
+        mock_game = MagicMock(spec=subprocess.Popen)
         mock_game.poll.return_value = None
         inst.xvfb_process = mock_xvfb
         inst.game_process = mock_game
@@ -628,8 +631,8 @@ class TestPersistentSession:
         """_assign_next_batch does not touch game or xvfb processes."""
         pool.setup()
         inst = pool._instances[0]
-        mock_game = MagicMock()
-        mock_xvfb = MagicMock()
+        mock_game = MagicMock(spec=subprocess.Popen)
+        mock_xvfb = MagicMock(spec=subprocess.Popen)
         inst.game_process = mock_game
         inst.xvfb_process = mock_xvfb
 
@@ -661,9 +664,9 @@ class TestPersistentSession:
         """True when both game and Xvfb processes are alive."""
         pool.setup()
         inst = pool._instances[0]
-        mock_game = MagicMock()
+        mock_game = MagicMock(spec=subprocess.Popen)
         mock_game.poll.return_value = None
-        mock_xvfb = MagicMock()
+        mock_xvfb = MagicMock(spec=subprocess.Popen)
         mock_xvfb.poll.return_value = None
         inst.game_process = mock_game
         inst.xvfb_process = mock_xvfb
@@ -674,9 +677,9 @@ class TestPersistentSession:
         """False when game process has exited."""
         pool.setup()
         inst = pool._instances[0]
-        mock_game = MagicMock()
+        mock_game = MagicMock(spec=subprocess.Popen)
         mock_game.poll.return_value = 1  # exited
-        mock_xvfb = MagicMock()
+        mock_xvfb = MagicMock(spec=subprocess.Popen)
         mock_xvfb.poll.return_value = None
         inst.game_process = mock_game
         inst.xvfb_process = mock_xvfb
@@ -734,10 +737,10 @@ class TestPersistentSession:
         """teardown writes shutdown signals before killing running instances."""
         pool.setup()
         for inst in pool._instances:
-            mock_game = MagicMock()
+            mock_game = MagicMock(spec=subprocess.Popen)
             mock_game.poll.return_value = None
             inst.game_process = mock_game
-            mock_xvfb = MagicMock()
+            mock_xvfb = MagicMock(spec=subprocess.Popen)
             mock_xvfb.poll.return_value = None
             inst.xvfb_process = mock_xvfb
             inst.state = InstanceState.RUNNING
