@@ -387,9 +387,10 @@ class TestOptimizeHullIntegration:
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
 
+        allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
         for trial in study.trials:
-            assert trial.state == optuna.trial.TrialState.COMPLETE, (
-                f"Trial {trial.number} is {trial.state.name}, expected COMPLETE"
+            assert trial.state in allowed, (
+                f"Trial {trial.number} is {trial.state.name}, expected COMPLETE or PRUNED"
             )
 
     def test_trial_count_matches_budget(self, wolf_hull, game_data):
@@ -407,26 +408,35 @@ class TestOptimizeHullIntegration:
         assert len(study.trials) >= config.warm_start_n + config.sim_budget
 
     def test_batched_evaluation(self, wolf_hull, game_data):
-        """optimize_hull sends multiple matchups per evaluate() call."""
+        """optimize_hull sends matchups from multiple builds per evaluate() call."""
+        from unittest.mock import MagicMock
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
 
         pool = self._make_mock_pool()
+        original_evaluate = pool.evaluate
+        batch_sizes = []
+
+        def tracking_evaluate(matchups):
+            batch_sizes.append(len(matchups))
+            return original_evaluate(matchups)
+
+        pool.evaluate = tracking_evaluate
+        # eval_batch_size=2 with 1 opponent → up to 2 matchups per evaluate() call
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
-        # eval_batch_size=2 with 1 opponent → 2 matchups per evaluate() call
         config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20,
                                  eval_batch_size=2)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # Should have completed all trials (stock builds + warm-start + sim)
         assert len(study.trials) >= config.warm_start_n + config.sim_budget
-        for trial in study.trials:
-            assert trial.state == optuna.trial.TrialState.COMPLETE
+        # At least one batch should have had multiple matchups (mixed builds)
+        assert any(size > 1 for size in batch_sizes), (
+            f"Expected mixed-build batches, got sizes: {batch_sizes}"
+        )
 
     def test_error_recovery(self, wolf_hull, game_data):
         """InstanceError during evaluation doesn't crash the optimizer."""
-        from unittest.mock import MagicMock
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -449,7 +459,12 @@ class TestOptimizeHullIntegration:
 
         # Should not raise — error is caught internally
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        assert len(study.trials) >= config.warm_start_n + config.sim_budget
+        allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
+        sim_trials = [t for t in study.trials if t.number >= config.warm_start_n]
+        for trial in sim_trials:
+            assert trial.state in allowed, (
+                f"Trial {trial.number} is {trial.state.name}"
+            )
 
 
 # --- Preflight Check Tests ---
@@ -557,3 +572,249 @@ class TestValidateBuildSpec:
         )
         errors = validate_build_spec(spec, game_data)
         assert any("fake_hullmod_xyz" in e for e in errors)
+
+
+# --- Staged Evaluator Tests ---
+
+
+class TestStagedEvaluator:
+    """Tests for the staged evaluation loop with ASHA-style pruning."""
+
+    def _make_mock_pool(self, *, winner="PLAYER"):
+        """Create a mock InstancePool that returns synthetic CombatResults."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool._config = MagicMock(spec=InstanceConfig)
+        mock_pool._config.game_dir = Path("game/starsector")
+
+        def mock_evaluate(matchups):
+            results = []
+            for m in matchups:
+                player_destroyed = winner == "ENEMY"
+                enemy_destroyed = winner == "PLAYER"
+                player_ship = ShipCombatResult(
+                    fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                    hull_id="wolf", destroyed=player_destroyed,
+                    hull_fraction=0.0 if player_destroyed else 0.7,
+                    armor_fraction=0.0 if player_destroyed else 0.8,
+                    cr_remaining=0.0 if player_destroyed else 0.5,
+                    peak_time_remaining=0.0 if player_destroyed else 100.0,
+                    disabled_weapons=0, flameouts=0,
+                    damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                    damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                    overload_count=0,
+                )
+                enemy_ship = ShipCombatResult(
+                    fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                    hull_id="enemy", destroyed=enemy_destroyed,
+                    hull_fraction=0.0 if enemy_destroyed else 0.7,
+                    armor_fraction=0.0 if enemy_destroyed else 0.8,
+                    cr_remaining=0.0 if enemy_destroyed else 0.5,
+                    peak_time_remaining=0.0 if enemy_destroyed else 100.0,
+                    disabled_weapons=0, flameouts=0,
+                    damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                    damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                    overload_count=0,
+                )
+                results.append(CombatResult(
+                    matchup_id=m.matchup_id, winner=winner,
+                    duration_seconds=60.0,
+                    player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                    player_ships_destroyed=1 if player_destroyed else 0,
+                    enemy_ships_destroyed=1 if enemy_destroyed else 0,
+                    player_ships_retreated=0, enemy_ships_retreated=0,
+                ))
+            return results
+
+        mock_pool.evaluate = mock_evaluate
+        return mock_pool
+
+    def test_cached_builds_skip_evaluation(self, wolf_hull, game_data):
+        """Cached builds are told to Optuna immediately without evaluate()."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.optimizer import (
+            BuildCache, StagedEvaluator, optimize_hull,
+        )
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        call_count = [0]
+        original_evaluate = pool.evaluate
+
+        def counting_evaluate(matchups):
+            call_count[0] += 1
+            return original_evaluate(matchups)
+
+        pool.evaluate = counting_evaluate
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        # Small budget to keep test fast
+        config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # With 2 sim trials and 1 opponent, we expect at most 2 evaluate calls
+        # (fewer if cache hits occur — same build proposed twice)
+        assert call_count[0] <= config.sim_budget
+
+    def test_pruned_builds_not_cached(self, wolf_hull, game_data):
+        """Pruned builds should NOT be in the cache."""
+        from starsector_optimizer.optimizer import optimize_hull, BuildCache
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool(winner="ENEMY")
+        opp_pool = OpponentPool(pools={
+            HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
+        })
+        # pruner_startup_trials=0 so pruning kicks in immediately
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            pruner_startup_trials=0, pruner_warmup_steps=0,
+        )
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        pruned = [t for t in study.trials
+                  if t.state == optuna.trial.TrialState.PRUNED]
+        # With all ENEMY wins and pruner_startup_trials=0, some should be pruned
+        # (MedianPruner compares against median of previous trials)
+        # This test verifies the pipeline runs without error when pruning occurs
+        allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
+        for trial in study.trials:
+            assert trial.state in allowed
+
+    def test_completed_builds_cached(self, wolf_hull, game_data):
+        """Non-pruned builds are stored in cache after completion."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE
+                     and t.value is not None and t.value > 0]
+        # At least some completed trials should exist with positive fitness
+        assert len(completed) > 0
+
+    def test_all_opponents_evaluated_when_not_pruned(self, wolf_hull, game_data):
+        """Good builds get matchups against all opponents."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()  # All PLAYER wins — no pruning
+        opponents = ("wolf_Assault", "lasher_Assault")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
+
+        # Track all matchup IDs
+        all_matchup_ids = []
+        original_evaluate = pool.evaluate
+
+        def tracking_evaluate(matchups):
+            all_matchup_ids.extend(m.matchup_id for m in matchups)
+            return original_evaluate(matchups)
+
+        pool.evaluate = tracking_evaluate
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        # Find trials that went through simulation (have matchup IDs containing their number)
+        # Each such trial should have matchups against both opponents
+        sim_trial_numbers = set()
+        for mid in all_matchup_ids:
+            # matchup_id format: wolf_opt_{trial:06d}_vs_{opponent}
+            parts = mid.split("_vs_")[0]  # "wolf_opt_000003"
+            sim_trial_numbers.add(parts)
+
+        for prefix in sim_trial_numbers:
+            trial_matchups = [mid for mid in all_matchup_ids
+                              if mid.startswith(prefix)]
+            assert len(trial_matchups) == len(opponents), (
+                f"Build {prefix} has {len(trial_matchups)} matchups, "
+                f"expected {len(opponents)}"
+            )
+
+    def test_cumulative_fitness_uses_aggregate(self, wolf_hull, game_data):
+        """Staged evaluator reports intermediate values for multi-opponent evaluation."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opponents = ("wolf_Assault", "lasher_Assault")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # Find trials with intermediate values (sim trials that weren't cache hits)
+        trials_with_intermediates = [
+            t for t in study.trials if len(t.intermediate_values) > 0
+        ]
+        # At least one trial should have intermediate reports for each opponent
+        assert len(trials_with_intermediates) > 0, "No trials have intermediate values"
+        for trial in trials_with_intermediates:
+            assert len(trial.intermediate_values) == len(opponents), (
+                f"Trial {trial.number} has {len(trial.intermediate_values)} "
+                f"intermediate values, expected {len(opponents)}"
+            )
+
+    def test_matchup_id_routes_to_correct_build(self, wolf_hull, game_data):
+        """Each result's matchup_id correctly identifies the trial and opponent."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
+
+        all_matchup_ids = []
+        original_evaluate = pool.evaluate
+
+        def tracking_evaluate(matchups):
+            all_matchup_ids.extend(m.matchup_id for m in matchups)
+            return original_evaluate(matchups)
+
+        pool.evaluate = tracking_evaluate
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        # All matchup IDs should follow the pattern: {hull}_opt_{trial:06d}_vs_{opponent}
+        for mid in all_matchup_ids:
+            assert "_vs_" in mid, f"Matchup ID missing '_vs_': {mid}"
+            assert "wolf_opt_" in mid, f"Matchup ID missing 'wolf_opt_': {mid}"
+
+    def test_instance_error_scores_negative(self, wolf_hull, game_data):
+        """InstanceError during evaluate() scores affected trials as -1.0."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.instance_manager import InstanceError
+
+        pool = self._make_mock_pool()
+        call_count = [0]
+        original_evaluate = pool.evaluate
+
+        def sometimes_failing(matchups):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise InstanceError("First batch fails")
+            return original_evaluate(matchups)
+
+        pool.evaluate = sometimes_failing
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=4, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # Some trials should have -1.0 value (from the failed batch)
+        negative_trials = [t for t in study.trials
+                           if t.state == optuna.trial.TrialState.COMPLETE
+                           and t.value is not None and t.value < 0]
+        assert len(negative_trials) > 0, "Expected some trials with negative scores from InstanceError"

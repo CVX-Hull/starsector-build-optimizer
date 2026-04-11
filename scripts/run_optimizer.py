@@ -118,12 +118,17 @@ def _print_results(study, hull_id: str, game_data=None):
     Shows repaired builds when game_data is provided (accurate domain values),
     falls back to raw trial params otherwise (Baldwinian: pre-repair values).
     """
+    from optuna.trial import TrialState
     from starsector_optimizer.optimizer import trial_params_to_build
     from starsector_optimizer.repair import repair_build
 
-    trials = sorted(study.trials, key=lambda t: t.value or 0, reverse=True)
+    all_trials = study.trials
+    completed = [t for t in all_trials if t.state == TrialState.COMPLETE]
+    pruned = [t for t in all_trials if t.state == TrialState.PRUNED]
+    trials = sorted(completed, key=lambda t: t.value or 0, reverse=True)
     print(f"\n{'='*60}")
-    print(f"Top 10 builds for {hull_id} ({len(study.trials)} total trials)")
+    print(f"Top 10 builds for {hull_id} ({len(completed)} completed, "
+          f"{len(pruned)} pruned, {len(all_trials)} total)")
     print(f"{'='*60}")
     for i, trial in enumerate(trials[:10]):
         if game_data and hull_id in game_data.hulls:

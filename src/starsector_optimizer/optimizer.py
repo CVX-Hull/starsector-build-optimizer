@@ -12,7 +12,7 @@ import hashlib
 import json
 import logging
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -22,11 +22,10 @@ from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, BuildSpec, CombatFitnessConfig, GameData, HullSize, ShipHull
+from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, GameData, HullSize, MatchupConfig, ShipHull
 from .combat_fitness import aggregate_combat_fitness
 from .opponent_pool import (
     OpponentPool,
-    generate_matchups,
     get_opponents,
     hp_differential,
 )
@@ -54,6 +53,11 @@ class OptimizerConfig:
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
+    pruner_startup_trials: int = 20
+    pruner_warmup_steps: int = 0
+    matchup_time_limit: float = 300.0
+    matchup_time_mult: float = 5.0
+    log_interval: int = 10
 
 
 class BuildCache:
@@ -297,49 +301,244 @@ def warm_start(
     )
 
 
-def evaluate_build(
-    build: Build,
-    hull: ShipHull,
-    game_data: GameData,
-    instance_pool: InstancePool,
-    opponent_pool: OpponentPool,
-    cache: BuildCache,
-    config: OptimizerConfig,
-    trial_number: int = 0,
-    eval_log_path: Path | None = None,
-) -> float:
-    """Repair, deduplicate, evaluate against opponent pool, log, return fitness."""
-    repaired = repair_build(build, hull, game_data)
+@dataclass
+class _InFlightBuild:
+    """Tracks a build progressing through staged opponent evaluation."""
 
-    cached = cache.get(repaired)
-    if cached is not None:
-        logger.debug("Cache hit for trial %d", trial_number)
-        return cached
+    trial: optuna.Trial
+    build: Build
+    build_spec: BuildSpec
+    variant_id: str
+    opponents: tuple[str, ...]
+    completed_results: list[CombatResult] = field(default_factory=list)
+    next_opponent_index: int = 0
 
-    variant_id = f"{hull.id}_opt_{trial_number:06d}"
-    build_spec = build_to_build_spec(repaired, hull, game_data, variant_id)
-    errors = validate_build_spec(build_spec, game_data)
-    if errors:
-        logger.warning("Invalid build spec %s: %s", variant_id, errors)
-        return -1.0
+    @property
+    def rung(self) -> int:
+        """ASHA rung = number of opponents already evaluated."""
+        return self.next_opponent_index
 
-    opponents = get_opponents(opponent_pool, hull.hull_size)
-    matchups = generate_matchups(
-        build_spec,
-        opponents,
-        matchup_id_prefix=f"{hull.id}_{trial_number:06d}",
-    )
-    results = instance_pool.evaluate(matchups)
-    fitness = aggregate_combat_fitness(results, mode=config.fitness_mode, config=CombatFitnessConfig(engagement_threshold=config.engagement_threshold))
+    @property
+    def is_complete(self) -> bool:
+        return self.next_opponent_index >= len(self.opponents)
 
-    cache.put(repaired, fitness)
 
-    if eval_log_path:
-        _append_eval_log(
-            eval_log_path, hull.id, trial_number, repaired, results, fitness
+class StagedEvaluator:
+    """ASHA-style staged evaluator with mixed-build batching and pruning.
+
+    Evaluates opponents incrementally — poor builds are pruned early via
+    Optuna's MedianPruner, freeing slots for new builds. Each
+    InstancePool.evaluate() call contains matchups from different builds
+    at different stages.
+    """
+
+    def __init__(
+        self,
+        study: optuna.Study,
+        hull: ShipHull,
+        hull_id: str,
+        game_data: GameData,
+        instance_pool: InstancePool,
+        opponent_pool: OpponentPool,
+        cache: BuildCache,
+        config: OptimizerConfig,
+        distributions: dict[str, optuna.distributions.BaseDistribution],
+        eval_log_path: Path | None = None,
+    ) -> None:
+        self._study = study
+        self._hull = hull
+        self._hull_id = hull_id
+        self._game_data = game_data
+        self._instance_pool = instance_pool
+        self._cache = cache
+        self._config = config
+        self._distributions = distributions
+        self._eval_log_path = eval_log_path
+        self._opponents = get_opponents(opponent_pool, hull.hull_size)
+        self._fitness_config = CombatFitnessConfig(
+            engagement_threshold=config.engagement_threshold,
+        )
+        self._queue: list[_InFlightBuild] = []
+        self._in_flight: dict[str, _InFlightBuild] = {}
+        self._trials_asked = 0
+        self._trials_completed = 0
+
+    def run(self) -> None:
+        """Execute the staged evaluation loop until sim_budget is exhausted."""
+        while self._trials_completed < self._config.sim_budget or self._queue:
+            batch = self._compose_batch()
+            if not batch:
+                break
+
+            try:
+                results = self._instance_pool.evaluate(batch)
+            except InstanceError:
+                logger.error(
+                    "Instance failure at trial %d, scoring batch as -1.0",
+                    self._trials_completed,
+                )
+                failed: dict[int, _InFlightBuild] = {}
+                for matchup in batch:
+                    ifb = self._in_flight.pop(matchup.matchup_id, None)
+                    if ifb is not None and id(ifb) not in failed:
+                        failed[id(ifb)] = ifb
+                        self._study.tell(ifb.trial, -1.0)
+                        self._trials_completed += 1
+                        self._queue.remove(ifb)
+                continue
+
+            self._route_results(results)
+
+            if (self._trials_completed % self._config.log_interval == 0
+                    or self._trials_completed >= self._config.sim_budget):
+                best = self._study.best_value if self._study.best_trial else 0.0
+                logger.info(
+                    "Progress: %d/%d trials, best=%.3f",
+                    self._trials_completed, self._config.sim_budget, best,
+                )
+
+    def _compose_batch(self) -> list[MatchupConfig]:
+        """Build a batch of matchups from the priority queue + new trials."""
+        target = self._config.eval_batch_size
+        batch: list[MatchupConfig] = []
+
+        # Phase 1: Promote existing builds (highest rung first)
+        for ifb in sorted(self._queue, key=lambda x: -x.rung):
+            if len(batch) >= target:
+                break
+            matchup = self._make_matchup(ifb)
+            batch.append(matchup)
+            self._in_flight[matchup.matchup_id] = ifb
+
+        # Phase 2: Fill with new trials
+        while len(batch) < target and self._trials_asked < self._config.sim_budget:
+            ifb = self._ask_new_trial()
+            if ifb is None:
+                continue  # cache hit, already told Optuna
+            self._queue.append(ifb)
+            matchup = self._make_matchup(ifb)
+            batch.append(matchup)
+            self._in_flight[matchup.matchup_id] = ifb
+
+        return batch
+
+    def _route_results(self, results: list[CombatResult]) -> None:
+        """Route results to their trials, handle pruning/completion."""
+        builds_with_results: dict[int, _InFlightBuild] = {}
+        for result in results:
+            ifb = self._in_flight.pop(result.matchup_id, None)
+            if ifb is None:
+                logger.warning("Unrecognized matchup_id: %s", result.matchup_id)
+                continue
+            ifb.completed_results.append(result)
+            ifb.next_opponent_index += 1
+            builds_with_results[id(ifb)] = ifb
+
+        for ifb in builds_with_results.values():
+            cum_fitness = self._cumulative_fitness(ifb)
+            ifb.trial.report(cum_fitness, step=ifb.rung - 1)
+
+            if ifb.is_complete:
+                self._finalize_build(ifb)
+                self._queue.remove(ifb)
+                self._trials_completed += 1
+            elif ifb.trial.should_prune():
+                self._prune_build(ifb)
+                self._queue.remove(ifb)
+                self._trials_completed += 1
+            # else: stays in queue for next batch
+
+    def _ask_new_trial(self) -> _InFlightBuild | None:
+        """Ask Optuna for a new trial, repair, check cache.
+
+        Returns None if the build was resolved immediately (cache hit or
+        invalid spec) — the caller should not add it to the queue.
+        """
+        trial = self._study.ask(self._distributions)
+        self._trials_asked += 1
+
+        build = repair_build(
+            trial_params_to_build(
+                trial.params, self._hull_id,
+                fixed_params=self._config.fixed_params,
+            ),
+            self._hull, self._game_data,
         )
 
-    return fitness
+        cached = self._cache.get(build)
+        if cached is not None:
+            logger.debug("Cache hit for trial %d", trial.number)
+            self._study.tell(trial, cached)
+            self._trials_completed += 1
+            return None
+
+        variant_id = f"{self._hull_id}_opt_{trial.number:06d}"
+        build_spec = build_to_build_spec(
+            build, self._hull, self._game_data, variant_id,
+        )
+        errors = validate_build_spec(build_spec, self._game_data)
+        if errors:
+            logger.warning("Invalid build spec %s: %s", variant_id, errors)
+            self._study.tell(trial, -1.0)
+            self._trials_completed += 1
+            return None
+
+        return _InFlightBuild(
+            trial=trial,
+            build=build,
+            build_spec=build_spec,
+            variant_id=variant_id,
+            opponents=self._opponents,
+        )
+
+    def _finalize_build(self, ifb: _InFlightBuild) -> None:
+        """Compute final fitness, tell Optuna, cache, log."""
+        fitness = aggregate_combat_fitness(
+            ifb.completed_results,
+            mode=self._config.fitness_mode,
+            config=self._fitness_config,
+        )
+        self._cache.put(ifb.build, fitness)
+        self._study.tell(ifb.trial, fitness)
+
+        if self._eval_log_path:
+            _append_eval_log(
+                self._eval_log_path, self._hull_id, ifb.trial.number,
+                ifb.build, ifb.completed_results, fitness,
+                pruned=False, opponents_total=len(ifb.opponents),
+            )
+
+    def _prune_build(self, ifb: _InFlightBuild) -> None:
+        """Tell Optuna PRUNED, log partial results."""
+        self._study.tell(ifb.trial, state=TrialState.PRUNED)
+
+        if self._eval_log_path:
+            cum = self._cumulative_fitness(ifb)
+            _append_eval_log(
+                self._eval_log_path, self._hull_id, ifb.trial.number,
+                ifb.build, ifb.completed_results, cum,
+                pruned=True, opponents_total=len(ifb.opponents),
+            )
+
+    def _cumulative_fitness(self, ifb: _InFlightBuild) -> float:
+        """Running aggregate fitness from completed results so far."""
+        return aggregate_combat_fitness(
+            ifb.completed_results,
+            mode=self._config.fitness_mode,
+            config=self._fitness_config,
+        )
+
+    def _make_matchup(self, ifb: _InFlightBuild) -> MatchupConfig:
+        """Create one matchup for the next opponent."""
+        opp = ifb.opponents[ifb.next_opponent_index]
+        matchup_id = f"{ifb.variant_id}_vs_{opp}"
+        return MatchupConfig(
+            matchup_id=matchup_id,
+            player_builds=(ifb.build_spec,),
+            enemy_variants=(opp,),
+            time_limit_seconds=self._config.matchup_time_limit,
+            time_mult=self._config.matchup_time_mult,
+        )
 
 
 def _append_eval_log(
@@ -347,8 +546,11 @@ def _append_eval_log(
     hull_id: str,
     trial_number: int,
     build: Build,
-    results: list,
+    results: list[CombatResult],
     fitness: float,
+    *,
+    pruned: bool = False,
+    opponents_total: int = 0,
 ) -> None:
     """Append one JSONL record to the evaluation log."""
     record = {
@@ -372,6 +574,9 @@ def _append_eval_log(
             }
             for r in results
         ],
+        "opponents_evaluated": len(results),
+        "opponents_total": opponents_total,
+        "pruned": pruned,
         "fitness": fitness,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -397,9 +602,14 @@ def optimize_hull(
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     sampler = _create_sampler(config)
+    pruner = optuna.pruners.MedianPruner(
+        n_startup_trials=config.pruner_startup_trials,
+        n_warmup_steps=config.pruner_warmup_steps,
+    )
 
     study = optuna.create_study(
         sampler=sampler,
+        pruner=pruner,
         direction="maximize",
         storage=config.study_storage,
         study_name=hull_id,
@@ -408,77 +618,18 @@ def optimize_hull(
 
     warm_start(study, hull, game_data, config, game_dir=instance_pool._config.game_dir)
 
-    opponents = get_opponents(opponent_pool, hull.hull_size)
-    cache = BuildCache()
-    completed = 0
-
-    while completed < config.sim_budget:
-        batch_size = min(config.eval_batch_size, config.sim_budget - completed)
-
-        # Ask batch_size trials (constant_liar handles pending trials)
-        trials = [study.ask(distributions) for _ in range(batch_size)]
-        builds = [
-            repair_build(trial_params_to_build(t.params, hull_id, fixed_params=config.fixed_params), hull, game_data)
-            for t in trials
-        ]
-
-        # Check cache, collect matchups for uncached builds
-        all_matchups = []
-        variant_map: dict[str, tuple[int, object, Build]] = {}
-        for j, (trial, build) in enumerate(zip(trials, builds)):
-            cached = cache.get(build)
-            if cached is not None:
-                study.tell(trial, cached)
-                continue
-            trial_num = completed + j
-            vid = f"{hull_id}_opt_{trial_num:06d}"
-            build_spec = build_to_build_spec(build, hull, game_data, vid)
-            errors = validate_build_spec(build_spec, game_data)
-            if errors:
-                logger.warning("Invalid build spec %s: %s", vid, errors)
-                study.tell(trial, -1.0)
-                continue
-            matchups = generate_matchups(
-                build_spec, opponents,
-                matchup_id_prefix=f"{hull_id}_{trial_num:06d}",
-            )
-            all_matchups.extend(matchups)
-            variant_map[vid] = (j, trial, build)
-
-        # Evaluate all uncached matchups in one batch
-        if all_matchups:
-            try:
-                results = instance_pool.evaluate(all_matchups)
-                for vid, (j, trial, build) in variant_map.items():
-                    prefix = vid.replace(f"{hull_id}_opt_", f"{hull_id}_")
-                    build_results = [
-                        r for r in results if r.matchup_id.startswith(prefix)
-                    ]
-                    fitness = (
-                        aggregate_combat_fitness(build_results, mode=config.fitness_mode, config=CombatFitnessConfig(engagement_threshold=config.engagement_threshold))
-                        if build_results
-                        else -1.0
-                    )
-                    cache.put(build, fitness)
-                    study.tell(trial, fitness)
-
-                    if eval_log_path:
-                        _append_eval_log(
-                            eval_log_path, hull_id, completed + j,
-                            build, build_results, fitness,
-                        )
-            except InstanceError:
-                logger.error(
-                    "Instance failure at trial %d, scoring batch as -1.0", completed
-                )
-                for vid, (j, trial, build) in variant_map.items():
-                    study.tell(trial, -1.0)
-
-        completed += batch_size
-
-        if completed % 10 == 0 or completed >= config.sim_budget:
-            best = study.best_value if study.best_trial else 0.0
-            logger.info("Progress: %d/%d trials, best=%.3f",
-                        completed, config.sim_budget, best)
+    evaluator = StagedEvaluator(
+        study=study,
+        hull=hull,
+        hull_id=hull_id,
+        game_data=game_data,
+        instance_pool=instance_pool,
+        opponent_pool=opponent_pool,
+        cache=BuildCache(),
+        config=config,
+        distributions=distributions,
+        eval_log_path=eval_log_path,
+    )
+    evaluator.run()
 
     return study

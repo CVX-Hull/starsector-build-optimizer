@@ -40,7 +40,7 @@ from .opponent_pool import (
     generate_matchups, compute_fitness, hp_differential,
 )
 from .optimizer import (
-    OptimizerConfig, BuildCache, optimize_hull, evaluate_build, warm_start,
+    OptimizerConfig, BuildCache, StagedEvaluator, optimize_hull, warm_start,
     preflight_check, validate_build_spec,
 )
 
@@ -62,7 +62,7 @@ __all__ = [
     "TimeoutTuner",
     "OpponentPool", "DEFAULT_OPPONENT_POOL", "get_opponents",
     "generate_matchups", "compute_fitness", "hp_differential",
-    "OptimizerConfig", "BuildCache", "optimize_hull", "evaluate_build", "warm_start",
+    "OptimizerConfig", "BuildCache", "StagedEvaluator", "optimize_hull", "warm_start",
     "preflight_check", "validate_build_spec",
     "combat_fitness", "aggregate_combat_fitness",
     "variant_to_build", "load_stock_builds",
