@@ -220,11 +220,14 @@ class EffectiveStats:
     has_shields: bool
     max_speed: float
     weapon_range_bonus: float
-    weapon_range_cap: float | None
+    weapon_range_threshold: float | None  # Ranges above this are compressed (e.g., Safety Overrides)
+    weapon_range_compression: float       # Multiplier for excess range above threshold
     peak_performance_time: float
 ```
 
 Computed by `compute_effective_stats()` in `hullmod_effects.py`.
+
+Range compression: when `weapon_range_threshold` is set, effective range = `threshold + (raw_range - threshold) * compression`. E.g., Safety Overrides with threshold=450, compression=0.25: a 700-range weapon becomes 450 + 250*0.25 = 512.5.
 
 ### ScorerResult
 

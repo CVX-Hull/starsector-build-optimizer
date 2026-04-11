@@ -59,6 +59,8 @@ class InstanceConfig:
     instance_root: Path = field(default_factory=lambda: Path("/tmp/starsector-instances"))
     num_instances: int = 4
     xvfb_base_display: int = 100
+    xvfb_screen: str = "1920x1080x24"
+    xvfb_poll_interval_seconds: float = 0.1
     batch_size: int = 6  # matchups per instance; should equal opponent count
     heartbeat_timeout_seconds: float = 120.0
     startup_timeout_seconds: float = 90.0
@@ -66,6 +68,8 @@ class InstanceConfig:
     max_restarts: int = 3
     process_kill_timeout_seconds: float = 5.0
     launcher_timeout_seconds: float = 30.0
+    launcher_poll_interval_seconds: float = 0.5
+    launcher_click_settle_seconds: float = 0.3
     launcher_x: int = 297  # "Play Starsector" button, calibrated for 1920x1080
     launcher_y: int = 255
 
@@ -328,12 +332,12 @@ class InstancePool:
         socket_file.unlink(missing_ok=True)
 
         inst.xvfb_process = subprocess.Popen(
-            ["Xvfb", f":{inst.display_num}", "-screen", "0", "1920x1080x24",
-             "-nolisten", "tcp"],
+            ["Xvfb", f":{inst.display_num}", "-screen", "0",
+             self._config.xvfb_screen, "-nolisten", "tcp"],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
         # Wait for socket file (what clients actually connect to)
-        poll_interval = 0.1
+        poll_interval = self._config.xvfb_poll_interval_seconds
         max_polls = int(timeout / poll_interval)
         for _ in range(max_polls):
             if socket_file.exists() and inst.xvfb_process.poll() is None:
@@ -362,7 +366,7 @@ class InstancePool:
         display = f":{inst.display_num}"
         env = {**os.environ, "DISPLAY": display}
         launcher_timeout = self._config.launcher_timeout_seconds
-        poll_interval = 0.5
+        poll_interval = self._config.launcher_poll_interval_seconds
         max_polls = int(launcher_timeout / poll_interval)
 
         # Poll for launcher window
@@ -379,7 +383,7 @@ class InstancePool:
                 pass
             time.sleep(poll_interval)
 
-        time.sleep(poll_interval)  # brief settle after window appears
+        time.sleep(self._config.launcher_click_settle_seconds)
         try:
             lx, ly = self._config.launcher_x, self._config.launcher_y
             subprocess.run(
@@ -387,7 +391,7 @@ class InstancePool:
                 env=env, timeout=self._config.process_kill_timeout_seconds,
                 capture_output=True,
             )
-            time.sleep(0.3)
+            time.sleep(self._config.launcher_click_settle_seconds)
             subprocess.run(
                 ["xdotool", "click", "1"],
                 env=env, timeout=self._config.process_kill_timeout_seconds,

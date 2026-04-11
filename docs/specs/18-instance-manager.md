@@ -14,11 +14,19 @@ Frozen dataclass configuring the instance pool.
 | `instance_root` | `Path` | `/tmp/starsector-instances` | Root for per-instance work directories |
 | `num_instances` | `int` | 4 | Number of parallel game instances |
 | `xvfb_base_display` | `int` | 100 | First Xvfb display number (instances use base+0, base+1, ...) |
-| `batch_size` | `int` | 50 | Matchups per game launch |
+| `xvfb_screen` | `str` | `"1920x1080x24"` | Xvfb screen geometry (WxHxD) |
+| `xvfb_poll_interval_seconds` | `float` | 0.1 | Poll interval for Xvfb socket readiness |
+| `batch_size` | `int` | 6 | Matchups per instance per game launch |
 | `heartbeat_timeout_seconds` | `float` | 120.0 | Kill instance if no heartbeat for this long |
 | `startup_timeout_seconds` | `float` | 90.0 | Kill instance if no heartbeat within this after launch |
 | `poll_interval_seconds` | `float` | 1.0 | How often to check heartbeat/done files |
 | `max_restarts` | `int` | 3 | Max restarts per instance before raising error |
+| `process_kill_timeout_seconds` | `float` | 5.0 | Timeout for process termination and xdotool commands |
+| `launcher_timeout_seconds` | `float` | 30.0 | Max wait for launcher window to appear |
+| `launcher_poll_interval_seconds` | `float` | 0.5 | Poll interval for launcher window search |
+| `launcher_click_settle_seconds` | `float` | 0.3 | Settle time before/after clicking launcher |
+| `launcher_x` | `int` | 297 | "Play Starsector" button X coordinate (calibrated for 1920x1080) |
+| `launcher_y` | `int` | 255 | "Play Starsector" button Y coordinate (calibrated for 1920x1080) |
 
 ### `InstanceState`
 
