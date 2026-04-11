@@ -131,7 +131,7 @@ Since we use Optuna TPE (not BoTorch GP), the prior-mean approach is implemented
 
 ---
 
-## 5. Neural Surrogate Features (Phase 6 Preparation)
+## 5. Neural Surrogate Features (Phase 7 Preparation)
 
 ### Heartbeat Trajectory Features
 
@@ -193,7 +193,7 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 
 ## 7. Open Questions
 
-1. **Heuristic calibration**: Can we improve R² above 0.75 by calibrating heuristic weights against simulation results? If yes, switch to full MFBO. Integration test confirmed the gap is large: heuristic top-3 all had negative sim fitness (logistics hullmod spam scores well heuristically but fails in combat). This is a Phase 6 task.
+1. **Heuristic calibration**: Can we improve R² above 0.75 by calibrating heuristic weights against simulation results? If yes, switch to full MFBO. Integration test confirmed the gap is large: heuristic top-3 all had negative sim fitness (logistics hullmod spam scores well heuristically but fails in combat). This is a Phase 7 task.
 
 2. **Repair collision rate**: **Resolved — 0% collisions.** Measured: 50,000 random builds on Wolf (smallest hull, 70D), all unique after repair. 2,000 builds each on Eagle (77D) and Onslaught (86D) also 0% collisions. The search space is so vast that the greedy OP-drop repair produces sufficiently diverse outputs. The BuildCache is retained as a safety net but won't save sim budget in practice. No need for priority-list encoding.
 
@@ -229,6 +229,21 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 - Added CatCMAwM as first-class sampler option via `--sampler catcma` (spec 24)
 - Added parameter importance analysis via fANOVA and `--fix-params` support (spec 26)
 - Analysis notebooks: `experiments/eagle_200/eagle_200_analysis.ipynb`, `experiments/eagle_200/timeout_strategy_benchmark.ipynb`
+
+### Signal Quality Analysis (Phase 5 Research Input)
+
+Post-experiment analysis of the 203-trial evaluation log revealed several noise characteristics that motivated Phase 5 signal quality research:
+
+**Per-opponent signal quality:**
+- dominator_XIV_Elite has **negative correlation** with overall fitness (ρ = -0.225) — builds that do well against it tend to do worse overall
+- doom_Strike has the highest within-outcome variance (STOPPED: std = 0.547)
+- Inter-opponent correlations are near-zero (ρ = 0.0–0.2) — orthogonal but noisy
+
+**Effect size:** Cohen's d = 3.30 between best build and median. The optimizer finds real signal, but the 0.4% win rate means it navigates "shades of losing" — fitness differences within the TIMEOUT/STOPPED engagement-score tier.
+
+**Leave-one-out opponent analysis:** Dropping dominator_XIV_Elite *improves* rank correlation with full fitness (0.578). Dropping doom_Strike hurts most (0.355).
+
+These findings drove the Phase 5 research into opponent normalization, multi-fidelity evaluation (Hyperband over opponents), multi-objective decomposition, and curriculum learning. See `docs/reference/phase5-signal-quality.md` for the full Phase 5 research and recommendations.
 
 ---
 
@@ -297,7 +312,7 @@ CCX33 is sufficient: Starsector is single-threaded per instance, Xvfb is near-ze
 
 **constant_liar works correctly after transfer.** It operates on RUNNING trials — after transfer, all trials are COMPLETE or FAILED. Clean up any zombie RUNNING trials before resuming.
 
-**Each hull gets its own study.** No cross-machine coordination needed. Results also logged to shared JSONL for Phase 6 surrogate training.
+**Each hull gets its own study.** No cross-machine coordination needed. Results also logged to shared JSONL for Phase 7 surrogate training.
 
 ### Concrete Search Space Dimensions (from real game data)
 

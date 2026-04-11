@@ -99,7 +99,7 @@ for _ in range(sim_budget):
 
 ### When to Upgrade to Full MFBO
 
-If heuristic calibration improves R² above 0.75 (after Phase 6 surrogate correction), switch to BoTorch's `SingleTaskMultiFidelityGP` with `qMultiFidelityKnowledgeGradient`. The infrastructure is the same — just swap the acquisition function.
+If heuristic calibration improves R² above 0.75 (after Phase 7 surrogate correction), switch to BoTorch's `SingleTaskMultiFidelityGP` with `qMultiFidelityKnowledgeGradient`. The infrastructure is the same — just swap the acquisition function.
 
 ---
 
@@ -166,12 +166,41 @@ Total per hull: ~3-4 hours, ~1000-1700 sims, ~$11
 
 ## Comparison: Old Pipeline vs New Pipeline
 
-| Aspect | Old (3-tier) | New (2-tier + curtailment) |
+| Aspect | Old (3-tier) | Current (2-tier + curtailment) |
 |---|---|---|
 | Fidelity levels | Heuristic → Short sim → Full sim | Heuristic → Full sim + curtailment |
 | Short sim risk | 100% timeout rate at 15s → corrupted signal | Eliminated |
 | Time savings mechanism | Short sim screening | Curtailment (12-24%) |
 | Warm-start method | Feed short-sim survivors to full-sim | Feed heuristic top-500 directly to TPE |
-| Opponent strategy | Not specified | Fixed diverse pool (5-6 archetypes) |
+| Opponent strategy | Not specified | Fixed diverse pool (5 archetypes) |
 | Budget per hull | ~500-2000 sims + 500-2000 short sims | ~1000-1700 sims total |
 | Wall-clock per hull | ~4-8 hours | ~3-4 hours |
+
+---
+
+## Phase 5 Evolution: Hyperband Over Opponents
+
+Phase 5 research (see `docs/reference/phase5-signal-quality.md`) identified a third fidelity dimension: **number of opponents evaluated**. The 203-trial Eagle experiment showed that opponents have vastly different informativeness, and bad builds can be identified after 1-2 opponents.
+
+### Sequential Opponent Evaluation
+
+Instead of evaluating all 5 opponents in parallel, evaluate sequentially and report intermediate fitness to Optuna's HyperbandPruner:
+
+```
+Step 1: HEURISTIC SCREENING (unchanged)
+Step 2: SEQUENTIAL OPPONENT EVALUATION (new)
+    For each build:
+      Evaluate against most discriminating opponent → report intermediate
+      If pruned: stop (save 60-80% of remaining eval cost)
+      Evaluate against opponent 2 → report intermediate
+      If pruned: stop
+      ... continue to all 5 opponents → report final
+Step 3: RACING VALIDATION (unchanged)
+```
+
+This turns the opponent pool into a natural multi-fidelity hierarchy:
+- **Fidelity 1**: 1 opponent (~10s) — screens obviously bad builds
+- **Fidelity 3**: 3 opponents (~30s) — filters mediocre builds
+- **Fidelity 5**: all 5 opponents (~50s) — full evaluation for promising builds
+
+Average evaluation cost drops from 5 matchups per build to ~2.5. Combined with opponent normalization (z-score per opponent), this provides cleaner signal with higher budget efficiency.

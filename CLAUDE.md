@@ -7,6 +7,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
 - **Phase 3.5** (complete): Stochastic curtailment (TTD-ratio extrapolation + stalemate detection) + data-driven timeout tuning (Weibull AFT).
 - **Phase 4** (complete): Optimizer integration — Optuna TPE/CatCMAwM, opponent pool, heuristic warm-start, parameter importance.
+- **Phase 5** (research complete): Signal quality — opponent normalization, multi-fidelity evaluation, multi-objective decomposition, curriculum learning.
 
 ## Commands
 
@@ -46,7 +47,7 @@ For Starsector Java modding specifics (sandbox, file I/O, Janino, combat plugin 
 
 5. **Forward compatibility — warn, don't crash.** Unknown enum values from future game versions: `from_str()` returns `None`, parser logs warning and skips the record. Never crash on unknown game data.
 
-6. **Structured scorer output.** `heuristic_score()` returns `ScorerResult` with all component metrics. These become Phase 5 behavior descriptors and Phase 6 features without refactoring.
+6. **Structured scorer output.** `heuristic_score()` returns `ScorerResult` with all component metrics. These become Phase 6 behavior descriptors and Phase 7 features without refactoring.
 
 7. **Verify game facts against actual game files, never assume.** The game data files at `game/starsector/data/` are the ground truth. Specific pitfalls: hullmod IDs are non-obvious (check `hull_mods.csv`), `weapon_data.csv` `type` is damage type not weapon type, `ship_data.csv` `designation` is a role string not hull size. See `.claude/skills/starsector-modding.md` for the full list.
 

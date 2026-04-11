@@ -26,14 +26,18 @@ Is this a single-build optimization or archetype discovery?
 ├── Single-build optimization
 │   ├── Budget < 200 evals? → Optuna TPE + heuristic warm-start
 │   ├── Budget 200-1000 evals? → Optuna TPE or CatCMAwM (via --sampler catcma)
+│   │   ├── Noisy signal? → Add opponent normalization + control variates (Phase 5A)
+│   │   └── Budget-constrained? → Sequential eval + Hyperband pruning (Phase 5B)
 │   ├── Need refinement after TPE? → CatCMAwM sampler (via OptunaHub)
-│   └── Need multi-objective? → Optuna NSGA-II (Pareto per opponent)
+│   └── Need multi-objective? → Optuna NSGA-II with 3 combat objectives (Phase 5C)
 │
 └── Archetype discovery (QD)
     ├── Heuristic evaluation only? → CMA-MAE via pyribs (200K+ evals)
     ├── Simulation budget 1K-5K? → DSA-ME pattern (surrogate-assisted)
     └── Full pipeline? → Phase A heuristic illumination → Phase B sim validation
 ```
+
+**Signal quality improvements (Phase 5):** Opponent normalization, control variates, Hyperband pruning, and multi-objective decomposition can be applied on top of any sampler choice. See `docs/reference/phase5-signal-quality.md` for full details.
 
 ---
 
@@ -137,7 +141,7 @@ Formula: `lambda = 4 + floor(3 * ln(N_co + N_ca))`. At d=60: lambda ≈ 16-17. T
 ### When to Use
 
 - **As Optuna sampler**: For refinement after TPE has identified promising regions
-- **As pyribs emitter**: For quality-diversity (Phase 5) — natural batch parallelism matches instance count
+- **As pyribs emitter**: For quality-diversity (Phase 6) — natural batch parallelism matches instance count
 - **NOT as primary optimizer**: Only tested up to ~40D, requires 1000-5000 evaluations (too many for expensive sim)
 
 ### Implementation via OptunaHub
@@ -301,7 +305,7 @@ Select 5-6 stock opponents per hull size, covering archetypes:
 ### Recommendation Summary
 
 1. **Use Optuna TPE** as primary optimizer with warm-start, repair, deduplication
-2. **Use CatCMAwM** as MAP-Elites emitter (Phase 5) and optional refinement sampler
+2. **Use CatCMAwM** as MAP-Elites emitter (Phase 6) and optional refinement sampler
 3. **Use SMAC3** only if we discover conditional parameter spaces that repair cannot handle
 4. **Keep Bounce** as reference for benchmarking discussions only
 5. **Benchmark on heuristic proxy first** before committing simulation budget

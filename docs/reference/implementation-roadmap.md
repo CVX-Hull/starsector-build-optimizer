@@ -11,10 +11,20 @@ Phase 1:   Data Layer + Heuristic ──────────── ✓ COMPL
 Phase 2:   Java Combat Harness Mod ─────────── ✓ COMPLETE (37 tests)
 Phase 3:   Instance Manager ────────────────── ✓ COMPLETE (38 tests)
 Phase 3.5: Curtailment + Timeout Tuning ────── ✓ COMPLETE (21 tests)
-Phase 4:   Optimizer Integration ───────────── Connects everything (Optuna)
-Phase 5:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
-Phase 6:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost)
+Phase 4:   Optimizer Integration ───────────── ✓ COMPLETE (407 tests)
+
+Throughput (T1-T4): Cross-cutting ─────────── Persistent sessions, programmatic variants, ASHA scheduling
+  T1: Programmatic variant creation (Java)     Eliminates .variant file I/O
+  T2: Persistent game session (Java)           Eliminates JVM restart overhead
+  T3: Mixed-build batching / StagedEvaluator   ASHA scheduling for Phase 5B
+  T4: Cloud deployment (Docker + spot)         Linear scaling to 32-64 instances
+
+Phase 5:   Signal Quality ─────────────────── Evaluation noise reduction + budget efficiency
+Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
+Phase 7:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost)
 ```
+
+**Throughput phases (T1-T4)** are cross-cutting infrastructure improvements documented in `docs/reference/throughput-optimization.md`. They can be implemented independently but Phase 5B (sequential evaluation) requires T1-T3. Research complete.
 
 Each phase is independently useful and can be shipped/tested before proceeding.
 
@@ -187,15 +197,18 @@ Complete. 11 curtailment tests + 10 timeout tuner tests passing. Enriched heartb
 
 ---
 
-## Phase 4: Optimizer Integration
+## Phase 4: Optimizer Integration ✓ COMPLETE
 
 ### Goal
 Connect the Optuna optimizer framework to the evaluation pipeline with a diverse opponent pool, heuristic warm-starting, and proper constraint handling.
 
+### Status
+Complete. 407 tests passing across all test files. End-to-end tested: 203-trial Eagle optimization campaign (4.3h, 47.6 trials/hour). See `experiments/eagle_200/` for data and analysis notebooks.
+
 ### Dependencies
 - Phase 1 (data layer, search space, repair operator, variant generator)
 - Phase 2 + 3 (combat harness + instance manager) for simulation evaluation
-- Python libraries: optuna, cmaes (for CatCMAwM sampler via OptunaHub)
+- Python libraries: optuna, cmaes (for CatCMAwM sampler via OptunaHub), optunahub, scikit-learn (for fANOVA)
 
 ### Key Design Decisions (from Phase 4 Research)
 
@@ -256,7 +269,7 @@ Connect the Optuna optimizer framework to the evaluation pipeline with a diverse
    - Final output: ranked builds with confidence intervals and per-opponent matchup profiles
 
 7. **Result logging and visualization**
-   - Append-only JSONL log (feeds both TimeoutTuner and Phase 6 surrogate)
+   - Append-only JSONL log (feeds both TimeoutTuner and Phase 7 surrogate)
    - Per-trial: build spec, repaired build, all opponent scores, heartbeat trajectories
    - Convergence curves, per-opponent win rates, build comparison table
 
@@ -289,7 +302,58 @@ With $30: optimize 2-3 hulls fully, or 5+ hulls with reduced racing.
 
 ---
 
-## Phase 5: Quality-Diversity
+## Phase 5: Signal Quality
+
+### Goal
+Improve the signal-to-noise ratio of combat fitness evaluations and increase evaluation budget efficiency through opponent normalization, multi-fidelity evaluation, and richer objectives.
+
+### Status
+Research complete. See `docs/reference/phase5-signal-quality.md` for full research findings and recommended approach.
+
+### Motivation (from Phase 4 Eagle Experiment)
+The 203-trial Eagle experiment achieved Cohen's d = 3.30 (the optimizer finds real signal) but win rate was only 0.4% — the optimizer navigates "shades of losing." Per-opponent analysis revealed dominator_XIV_Elite has *negative* correlation with fitness (ρ = -0.225), inter-opponent correlations are near-zero, and within-outcome variance is high (doom_Strike STOPPED: std = 0.547). The evaluation pipeline spends equal budget on clearly bad and potentially good builds.
+
+### Dependencies
+- Phase 4 (optimizer integration, opponent pool, evaluation pipeline)
+- Throughput optimization (Phases T1-T3) — Phase 5B requires persistent sessions + mixed-build batching for efficient sequential evaluation. See `docs/reference/throughput-optimization.md`.
+- No new external libraries required (Optuna's built-in MedianPruner, NSGAIISampler)
+
+### Deliverables (Phased)
+
+**Phase A — Quick Signal Improvements (no pipeline change):**
+1. **Opponent normalization** — Z-score per opponent using running statistics
+2. **Control variate correction** — Adjust fitness using heuristic scorer correlation
+3. **Rank-based fitness shaping** — Report quantile rank instead of raw composite score
+
+**Phase B — Sequential Evaluation Pipeline (main architectural change):**
+1. **Opponent ordering** — Most discriminating opponent first (learned from data)
+2. **MedianPruner** — Intermediate reporting after each opponent via `trial.report()`, Optuna prunes bad builds (MedianPruner with `n_startup_trials=20` — 5 steps is too few for HyperbandPruner's bracket structure)
+3. **Mixed-build batching** — ASHA-style rung-priority scheduling via `StagedEvaluator`. Each game launch gets matchups from different builds at different stages, maximizing instance utilization even with aggressive pruning.
+
+**Phase C — Richer Objectives (optional, bigger conceptual change):**
+1. **Multi-objective decomposition** — 3 objectives (engagement, damage efficiency, survivability) via NSGAIISampler
+2. **Curriculum learning** — Start against weaker opponents, ramp difficulty as win rate improves
+
+**Phase D — If Java Modification Is Feasible:**
+1. **Common Random Numbers** — Seed-controlled combat for 80–94% variance reduction on paired comparisons
+
+### Expected Impact
+
+| Metric | Phase 4 Baseline | After Phase A | After Phase B |
+|--------|-------------------|---------------|---------------|
+| Evals per build | 5 (fixed) | 5 (cleaner) | ~2.5 avg |
+| Signal quality (CoV) | 0.41 | ~0.25 | ~0.15 |
+| Budget efficiency | 1× | 1× | 2–3× |
+
+### Testing
+- Replay 203-trial evaluation log under new scoring (normalization, control variate) — measure rank correlation preservation
+- Benchmark Hyperband pruning accuracy: do pruned builds have lower full-evaluation fitness?
+- Multi-objective: verify Pareto front covers diverse build strategies
+- Curriculum: verify win rate increases against weaker opponents, builds transfer to harder opponents
+
+---
+
+## Phase 6: Quality-Diversity
 
 ### Goal
 Discover the full map of viable build archetypes using MAP-Elites.
@@ -320,7 +384,7 @@ Discover the full map of viable build archetypes using MAP-Elites.
    - Re-rank elites by simulation fitness; fills ~60-80% of heuristic-optimal cells
 
 4. **Surrogate refinement (DSA-ME pattern)**
-   - Train correction model on Phase B sim results (TabPFN or CatBoost from Phase 6)
+   - Train correction model on Phase B sim results (TabPFN or CatBoost from Phase 7)
    - Re-illuminate with `heuristic + correction` as fitness
    - Validate new/changed elites with simulation
    - 2-3 refinement rounds until archive stabilizes
@@ -339,7 +403,7 @@ Discover the full map of viable build archetypes using MAP-Elites.
 
 ---
 
-## Phase 6: Neural Surrogate
+## Phase 7: Neural Surrogate
 
 ### Goal
 Train ML models that predict combat outcomes from build parameters, reducing simulation dependency by ~70%.
@@ -453,11 +517,11 @@ Selected from game's built-in .variant files per hull size class:
 
 Validate pool locally: run all opponents against each other (15-30 matchups, ~15 min on 2 instances). Verify they span archetypes and produce diverse outcomes.
 
-### Phase 4-6 Development Workflow
+### Phase 4-7 Development Workflow
 
 #### Stage 1: Local — Code Development (no simulation cost)
 
-All Phase 4-6 code written and tested against heuristic proxy:
+All Phase 4-7 code written and tested against heuristic proxy:
 
 1. **Optuna integration** — ask-tell loop, repair, deduplication
 2. **Opponent pool** — definition, matchup generation, fitness aggregation
@@ -481,7 +545,7 @@ Wire curtailment into poll loop, then validate end-to-end with real combat:
 3. **Eagle optimization** — 30 builds × 5 opponents = 150 sims (~1.5 hours)
 4. **Verify results** — compare optimizer output to known community builds
 
-**Collects ~400 sim results** — enough to start Phase 6 surrogate training (TabPFN at N<300).
+**Collects ~400 sim results** — enough to start Phase 7 surrogate training (TabPFN at N<300).
 
 **Estimated time:** 1 day. Zero cloud cost.
 
@@ -510,11 +574,11 @@ sim-worker-2: Capital hulls (8 instances)
 | Priority hulls | 10 | 1 × CCX33 | ~10K | ~12h | ~$1.30 |
 | All cruisers+capitals | 40 | 3 × CCX33 | ~38K | ~16h | ~$5.30 |
 | All combat-relevant | 118 | 3 × CCX33 | ~112K | ~47h | ~$15.50 |
-| + QD validation (Phase 5) | 118 | 3 × CCX33 | ~150K | ~63h | ~$20.80 |
+| + QD validation (Phase 6) | 118 | 3 × CCX33 | ~150K | ~63h | ~$20.80 |
 
 **Machine setup:** ~2 minutes per machine (parallel). Game dir is only 361MB.
 
-#### Stage 4: Local — Analysis + Phase 6 Training
+#### Stage 4: Local — Analysis + Phase 7 Training
 
 Collect results from cloud machines. With 10K+ sim results accumulated:
 1. Train CatBoost surrogate on full dataset
@@ -531,7 +595,7 @@ Local: create study.db → heuristic warm-start → small sim validation
   ↓ scp study.db
 Cloud: load_study → heavy simulation (n_jobs=8)
   ↓ scp study.db + evaluation_log.jsonl
-Local: load_study → analysis + Phase 6 training
+Local: load_study → analysis + Phase 7 training
 ```
 
 Each hull gets its own study. No cross-machine coordination needed — machines run independent hulls.
@@ -564,10 +628,13 @@ See `docs/specs/22-cloud-deployment.md` for deployment scripts, cloud-init confi
 3. **Phase 3** connects Phases 1 and 2 into a working pipeline
 4. **Phase 3.5** adds curtailment (12-24% time savings) and timeout tuning (optimizer quality)
 5. **Phase 4** adds intelligence (optimization) to the pipeline — Optuna framework
-6. **Phase 5** is the most exciting output (build archetype maps) but needs the pipeline
-7. **Phase 6** improves efficiency (~70% sim reduction) but is optional — the system works without it
+6. **Throughput T1-T3** before Phase 5 — Phase 5B (sequential evaluation) requires persistent sessions and mixed-build batching. Without them, sequential evaluation has 78% startup overhead and is worse than the current approach.
+7. **Phase 5** improves signal quality and budget efficiency — the optimizer works without it but converges faster with it
+8. **Throughput T4** (cloud) when local isn't enough — linear scaling to 32-64 instances
+9. **Phase 6** discovers build archetypes (MAP-Elites) — the most exciting output but needs the pipeline
+10. **Phase 7** improves efficiency (~70% sim reduction) via neural surrogate — optional, the system works without it
 
-Each phase is independently testable and shippable. Phase 1 alone produces a useful heuristic analysis tool. Phases 1-3 produce a batch simulation framework. Phases 1-4 produce an optimizer. Phases 1-5 produce a complete build discovery system.
+Each phase is independently testable and shippable. Phase 1 alone produces a useful heuristic analysis tool. Phases 1-3 produce a batch simulation framework. Phases 1-4 produce an optimizer. Phases 1-4 + T1-T3 + Phase 5 produce a complete build discovery system.
 
 ### Development Timeline Estimate
 
@@ -576,6 +643,6 @@ Each phase is independently testable and shippable. Phase 1 alone produces a use
 | Stage 1: Local code dev | Phase 4-6 Python code, tests, heuristic validation | Phases 1-3.5 complete | 2-3 days |
 | Stage 2: Local sim validation | End-to-end with 2 instances, opponent pool validation | Stage 1 | 1 day |
 | Stage 3: Cloud full optimization | 10-118 hulls on Hetzner CCX33 | Stage 2, Hetzner account | 12-63h wall-clock |
-| Stage 4: Analysis + surrogate | Phase 6 training, visualization | Stage 3 results | 1 day |
+| Stage 4: Analysis + surrogate | Phase 7 training, visualization | Stage 3 results | 1 day |
 
 **Total: ~5 days of active development + 1-3 days of cloud compute wall-clock.**

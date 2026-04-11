@@ -66,7 +66,7 @@ Smooth transition avoids abrupt jumps when switching from prior to model.
 ## Persistence
 
 ```
-data/evaluation_log.jsonl       # Shared with Phase 6 surrogate
+data/evaluation_log.jsonl       # Shared with Phase 7 surrogate
 ```
 
 **JSONL format (one line per matchup result):**
@@ -80,9 +80,9 @@ data/evaluation_log.jsonl       # Shared with Phase 6 surrogate
 ```
 
 - Append-only: each `record_result()` call appends one line
-- Shared with Phase 6 neural surrogate (same data, no duplication)
+- Shared with Phase 7 neural surrogate (same data, no duplication)
 - TimeoutTuner reads: duration, completed, hull_sizes, ship_counts
-- Phase 6 reads: all fields including heartbeat_trajectory
+- Phase 7 reads: all fields including heartbeat_trajectory
 
 **Model persistence:**
 ```
