@@ -29,8 +29,12 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private static final Logger log = Logger.getLogger(CombatHarnessPlugin.class);
     private static final float SHIP_SPACING = 800f;
     private static final String STOP_FILE = MatchupConfig.COMMON_PREFIX + "stop";
+    private static final String NEW_QUEUE_FILE = MatchupConfig.COMMON_PREFIX + "new_queue";
+    private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
+    private static final int WAITING_TIMEOUT_FRAMES = 3600;  // ~60s at 60fps
+    private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
 
-    private enum State { INIT, SPAWNING, FIGHTING, CLEANING, DONE }
+    private enum State { INIT, SPAWNING, FIGHTING, CLEANING, DONE, WAITING }
 
     private CombatEngineAPI engine;
     private State state = State.INIT;
@@ -43,6 +47,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private float spawnTime;              // when ships were spawned (for approach timeout)
     private float matchupStartTime;       // when fleets made contact (for combat timeout)
     private boolean contactMade = false;
+    private boolean isFirstBatch = true;  // true only for very first batch; NOT reset on WAITING→INIT
+    private int waitingFrameCount = 0;
     private static final float MAX_APPROACH_TIME = 30f;  // force timeout if no contact in 30s
     private JSONArray allResults = new JSONArray();
     private int frameCount = 0;
@@ -75,6 +81,9 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             case DONE:
                 doDone();
                 break;
+            case WAITING:
+                doWaiting();
+                break;
         }
     }
 
@@ -106,15 +115,13 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         currentTracker = new DamageTracker();
         engine.getListenerManager().addListener(currentTracker);
 
-        if (currentIndex == 0) {
-            // First matchup: MissionDefinition added placeholder ships for the
-            // deployment screen. Remove them and spawn the real builds.
+        if (isFirstBatch) {
+            // Very first matchup of game session: MissionDefinition added
+            // placeholder ships for the deployment screen. Remove them.
             removePlaceholderShips();
-            spawnShips();
-        } else {
-            // Subsequent matchups: spawn ships mid-combat.
-            spawnShips();
+            isFirstBatch = false;
         }
+        spawnShips();
 
         spawnTime = engine.getTotalElapsedTime(false);
         matchupStartTime = 0f;
@@ -185,8 +192,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         // Center camera on midpoint between player and enemy ships
         updateCamera();
 
-        // Heartbeat every 60 frames (enriched with HP fractions)
-        if (frameCount % 60 == 0) {
+        // Heartbeat every HEARTBEAT_INTERVAL_FRAMES (enriched with HP fractions)
+        if (frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
             ResultWriter.writeHeartbeat(
                     engine.getTotalElapsedTime(false),
                     computeAggregateHp(playerShips),
@@ -302,11 +309,53 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         try {
             ResultWriter.writeAllResults(allResults);
             ResultWriter.writeDoneSignal();
-            log.info("All " + queue.size() + " matchups complete. Results written.");
+            log.info("All " + queue.size() + " matchups complete. Results written. Entering WAITING state.");
         } catch (Exception e) {
             log.error("Failed to write final results", e);
+            System.exit(1);
+            return;
         }
-        System.exit(0);
+        waitingFrameCount = 0;
+        state = State.WAITING;
+    }
+
+    private void doWaiting() {
+        // Heartbeat to prove liveness (zeros = no ships in combat)
+        if (frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
+            ResultWriter.writeHeartbeat(engine.getTotalElapsedTime(false), 0f, 0f, 0, 0);
+        }
+
+        // Check shutdown signal (priority over new queue)
+        if (Global.getSettings().fileExistsInCommon(SHUTDOWN_FILE)) {
+            try {
+                Global.getSettings().deleteTextFileFromCommon(SHUTDOWN_FILE);
+            } catch (Exception e) {
+                log.warn("Failed to delete shutdown signal", e);
+            }
+            log.info("Shutdown signal received, exiting.");
+            System.exit(0);
+        }
+
+        // Check new queue signal
+        if (Global.getSettings().fileExistsInCommon(NEW_QUEUE_FILE)) {
+            try {
+                Global.getSettings().deleteTextFileFromCommon(NEW_QUEUE_FILE);
+            } catch (Exception e) {
+                log.warn("Failed to delete new queue signal", e);
+            }
+            allResults = new JSONArray();
+            currentIndex = 0;
+            state = State.INIT;
+            log.info("New queue signal received, loading next batch.");
+            return;
+        }
+
+        // Timeout — exit cleanly if no work arrives
+        waitingFrameCount++;
+        if (waitingFrameCount > WAITING_TIMEOUT_FRAMES) {
+            log.info("Waiting timeout (" + WAITING_TIMEOUT_FRAMES + " frames), exiting.");
+            System.exit(0);
+        }
     }
 
     private int countAlive(List<ShipAPI> ships) {

@@ -7,7 +7,12 @@ Extends `BaseEveryFrameCombatPlugin`. Attached by `MissionDefinition` via `api.a
 ## State Machine
 
 ```
-INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE
+INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE → WAITING
+                                                           ↑        |
+                                                           |  (new queue signal)
+                                                           └────────┘
+                                                                    |
+                                                           (shutdown/timeout → exit)
 ```
 
 ### State: INIT (first advance() call)
@@ -19,7 +24,7 @@ INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE
 1. Get `queue.get(currentIndex)` → `currentConfig`
 2. Apply time multiplier: `engine.getTimeMult().modifyMult("harness", config.timeMult)`
 3. Create new DamageTracker, register via `engine.getListenerManager().addListener(tracker)`
-4. If first matchup: remove placeholder ships (MissionDefinition adds stock placeholders for the deployment screen), then spawn real builds via `spawnFleetMember()`
+4. If `isFirstBatch`: remove placeholder ships (MissionDefinition adds stock placeholders for the deployment screen), then spawn real builds via `spawnFleetMember()`. Set `isFirstBatch = false`. This flag is `true` only for the very first batch of the game session and is NOT reset on WAITING→INIT transitions.
 5. All matchups (including first):
    - Player ships: construct via `VariantBuilder.createFleetMember(buildSpec)`, spawn via `fleetManager.spawnFleetMember(member, location, facing, 0f)`, ensure CR via `ensureCombatReady()`, store returned ShipAPIs
    - Enemy ships: spawn via `fleetManager.spawnShipOrWing(variantId, location, facing)`, store returned ShipAPIs
@@ -32,13 +37,14 @@ INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE
 Per-frame:
 1. **Camera:** Center viewport on midpoint of all tracked ships via `ViewportAPI.setExternalControl(true)` + `viewport.set()`. This ensures the fight is visible.
 2. **Heartbeat** every 60 frames
-3. **Contact detection:** If `!contactMade`:
+3. **Stop signal check:** If `fileExistsInCommon("combat_harness_stop")` → delete signal, build result with winner="STOPPED", transition to CLEANING. (Curtailment monitor writes this signal from Python.)
+4. **Contact detection:** If `!contactMade`:
    - If `engine.isFleetsInContact()` → start combat timer (`matchupStartTime = now`), log contact
    - Else if `(now - spawnTime) > 30s` → force combat timer start (approach timeout for evasive AI)
-4. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins.
-5. **Timeout check:** If `contactMade` and `(now - matchupStartTime) > timeLimitSeconds` → TIMEOUT
-6. On end: build result via `ResultWriter.buildMatchupResult()`, add to `allResults` array
-7. Transition to CLEANING
+5. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins.
+6. **Timeout check:** If `contactMade` and `(now - matchupStartTime) > timeLimitSeconds` → TIMEOUT
+7. On end: build result via `ResultWriter.buildMatchupResult()`, add to `allResults` array
+8. Transition to CLEANING
 
 **Timer logic:** The time limit only counts combat time, not approach time. Ships may take several seconds to fly toward each other after spawning. If one side is evasive and never engages, the 30-second approach timeout forces the combat timer to start anyway.
 
@@ -53,7 +59,25 @@ Per-frame:
 1. `ResultWriter.writeAllResults(allResults)` — write all results as JSON array
 2. `ResultWriter.writeDoneSignal()` — write done signal file
 3. Log completion
-4. `System.exit(0)`
+4. Set `waitingFrameCount = 0`, transition to WAITING
+
+### State: WAITING
+
+Polls for signals from Python. Continues writing heartbeats to prove liveness.
+
+Per-frame:
+1. **Heartbeat** every `HEARTBEAT_INTERVAL_FRAMES` (60) frames — write heartbeat with zeros (0 HP, 0 alive) since no ships exist. This keeps Python's heartbeat timeout from firing.
+2. **Shutdown signal check** (priority): If `fileExistsInCommon("combat_harness_shutdown")` → delete signal, `System.exit(0)`
+3. **New queue signal check**: If `fileExistsInCommon("combat_harness_new_queue")` → delete signal, reset batch state (`allResults = new JSONArray()`, `currentIndex = 0`), transition to INIT (which reloads queue and transitions to SPAWNING)
+4. **Timeout**: Increment `waitingFrameCount`. If `> WAITING_TIMEOUT_FRAMES (3600, ~60s at 60fps)` → `System.exit(0)` for clean shutdown
+
+**Constants:**
+```java
+private static final String NEW_QUEUE_FILE = MatchupConfig.COMMON_PREFIX + "new_queue";
+private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
+private static final int WAITING_TIMEOUT_FRAMES = 3600;
+private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
+```
 
 ## Custom Win Detection
 
@@ -71,7 +95,8 @@ With `setDoNotEndCombat(true)`, `engine.isCombatOver()` stays false. We detect m
 
 ## Error Handling
 
-- Queue load failure → log error, `System.exit(1)`
+- Queue load failure (INIT or WAITING→INIT) → log error, `System.exit(1)`
 - Ship spawn failure → log warning, skip ship
 - Result write failure → log error, `System.exit(1)`
+- Signal file deletion failure → log warning, continue (best effort)
 - Always null-check engine in `advance()`

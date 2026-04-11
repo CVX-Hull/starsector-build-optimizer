@@ -27,6 +27,7 @@ Frozen dataclass configuring the instance pool.
 | `launcher_click_settle_seconds` | `float` | 0.3 | Settle time before/after clicking launcher |
 | `launcher_x` | `int` | 297 | "Play Starsector" button X coordinate (calibrated for 1920x1080) |
 | `launcher_y` | `int` | 255 | "Play Starsector" button Y coordinate (calibrated for 1920x1080) |
+| `clean_restart_matchups` | `int` | 200 | Force full game restart after N total matchups per instance (prevents memory accumulation) |
 
 ### `InstanceState`
 
@@ -57,6 +58,7 @@ Mutable dataclass tracking a single game instance.
 | `last_heartbeat_time` | `float` | `time.monotonic()` of last heartbeat detection |
 | `launch_time` | `float` | `time.monotonic()` when game was launched |
 | `restart_count` | `int` | Number of restarts for current batch |
+| `total_matchups_processed` | `int` | Cumulative matchups across batches for this process (for clean restart threshold) |
 
 **Properties:**
 
@@ -66,6 +68,8 @@ Mutable dataclass tracking a single game instance.
 - `results_path` → `saves_common / "combat_harness_results.json.data"`
 - `done_path` → `saves_common / "combat_harness_done.data"`
 - `heartbeat_path` → `saves_common / "combat_harness_heartbeat.txt.data"`
+- `new_queue_signal_path` → `saves_common / "combat_harness_new_queue.data"`
+- `shutdown_signal_path` → `saves_common / "combat_harness_shutdown.data"`
 
 ### `InstancePool`
 
@@ -79,6 +83,10 @@ class InstancePool:
     def evaluate(self, matchups: list[MatchupConfig]) -> list[CombatResult]: ...
     def __enter__(self) -> InstancePool: ...
     def __exit__(self, *args) -> None: ...
+    # Persistent session methods (internal)
+    def _is_instance_reusable(self, inst: GameInstance) -> bool: ...
+    def _assign_next_batch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None: ...
+    def _write_shutdown_signal(self, inst: GameInstance) -> None: ...
 ```
 
 ## Per-Instance Work Directory
@@ -129,27 +137,43 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 ### `evaluate(matchups)`
 
 1. Split matchups into chunks of `batch_size`
-2. Assign initial chunks to idle instances
-3. Per assigned instance:
-   - Clean old protocol files (queue, results, done, heartbeat)
-   - Write optimizer `.variant` files to `data/variants/`
-   - Write queue file via `write_queue_file()`
-   - Start Xvfb: `Xvfb :{display_num} -screen 0 1920x1080x24 -nolisten tcp`
-   - Start game: `./starsector.sh` with `DISPLAY=:{display_num}`, cwd=work_dir
-   - Set state to STARTING, record launch_time
-4. Poll loop (every `poll_interval_seconds`):
+2. Assign initial chunks to instances:
+   - If `_is_instance_reusable(inst)` (game+Xvfb processes still alive from previous evaluate): use `_assign_next_batch()` (persistent session reuse — no process creation)
+   - Otherwise: use `_assign_and_launch()` (full Xvfb + game launch)
+3. Poll loop (every `poll_interval_seconds`):
    - For each active instance:
-     - **Process check:** If game process exited and done signal exists → DONE. If exited without done → FAILED.
+     - **Done check:** If done file exists → DONE. Parse results. Track `total_matchups_processed += len(assigned_matchups)`. If more chunks:
+       - If `total_matchups_processed >= clean_restart_matchups` or process exited: kill instance, reset counter, `_assign_and_launch()` (clean restart)
+       - Otherwise: `_assign_next_batch()` (persistent session reuse)
+     - **Process check:** If game process exited without done signal → FAILED.
      - **Heartbeat check:** If STARTING and `now - launch_time > startup_timeout` → FAILED. If RUNNING and heartbeat file mtime stale > `heartbeat_timeout` → FAILED. If heartbeat fresh and STARTING → RUNNING.
-     - **Done check:** If done file exists → DONE.
-   - For DONE instances: read results, assign next chunk if available
-   - For FAILED instances: restart (up to `max_restarts`), re-queue same chunk
-5. Return all results ordered by `matchup_id`
+   - For FAILED instances: kill, restart (up to `max_restarts`), re-queue same chunk, reset `total_matchups_processed`
+   - Instances with no remaining work stay alive in IDLE (game in WAITING state for potential reuse in next `evaluate()` call)
+4. Return all results ordered by `matchup_id`
+
+### `_is_instance_reusable(inst)`
+
+Returns `True` if both `game_process` and `xvfb_process` are alive (`poll() is None`). Used to detect instances from prior `evaluate()` calls that can accept new work without a full restart.
+
+### `_assign_next_batch(inst, chunk)`
+
+Sends a new batch to an already-running persistent game instance:
+1. Reset instance state: `assigned_matchups`, `results`, `heartbeats`, `restart_count`
+2. Clean protocol files (removes stale done/heartbeat/results/signals)
+3. Write new queue file
+4. Write `combat_harness_new_queue.data` signal (triggers Java WAITING → INIT transition)
+5. Set state to RUNNING, reset `last_heartbeat_time`
+
+### `_write_shutdown_signal(inst)`
+
+Write `combat_harness_shutdown.data` to request clean game exit. Used by `teardown()` and clean restart logic.
 
 ### `teardown()`
 
-1. For each instance: terminate game process (SIGTERM, wait 5s, SIGKILL if needed), terminate Xvfb (SIGTERM, wait 5s, SIGKILL if needed)
-2. Set state to STOPPED
+1. For each instance with a running game process: write shutdown signal (gives Java a chance to exit cleanly)
+2. Wait `poll_interval_seconds` for clean exits
+3. For each instance: terminate game process (SIGTERM, wait 5s, SIGKILL if needed), terminate Xvfb (SIGTERM, wait 5s, SIGKILL if needed)
+4. Set state to STOPPED
 
 ## Xvfb Display
 

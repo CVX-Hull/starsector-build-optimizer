@@ -20,7 +20,7 @@ Batched matchups per game launch. Flow:
 5. CombatHarnessPlugin state machine: INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE
 6. Per matchup: spawn ships, run combat with DamageTracker, custom win detection, entity cleanup
 7. After all matchups: ResultWriter writes `combat_harness_results.json.data` + `combat_harness_done.data`
-8. `System.exit(0)`
+8. Enter WAITING state — poll for `combat_harness_new_queue` (load next batch) or `combat_harness_shutdown` (exit cleanly). Self-exits after ~60s timeout if no signal.
 
 ## File Protocol
 
@@ -30,6 +30,8 @@ Batched matchups per game launch. Flow:
 | `saves/common/combat_harness_results.json.data` | `combat_harness_results.json` | Java | Array of combat results |
 | `saves/common/combat_harness_done.data` | `combat_harness_done` | Java | Completion signal |
 | `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java | Liveness (every ~1s) |
+| `saves/common/combat_harness_new_queue.data` | `combat_harness_new_queue` | Python | Signal: new queue ready |
+| `saves/common/combat_harness_shutdown.data` | `combat_harness_shutdown` | Python | Signal: exit cleanly |
 
 ## File I/O — Security Sandbox
 

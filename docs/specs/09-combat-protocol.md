@@ -12,15 +12,34 @@ All filenames use a flat `combat_harness_` prefix (subdirectories don't work wit
 | Results | `saves/common/combat_harness_results.json.data` | `combat_harness_results.json` | Java | Array of combat results |
 | Done | `saves/common/combat_harness_done.data` | `combat_harness_done` | Java | Signal: all matchups complete |
 | Heartbeat | `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java | Liveness: timestamp + elapsed |
+| New Queue | `saves/common/combat_harness_new_queue.data` | `combat_harness_new_queue` | Python | Signal: new queue ready for persistent session |
+| Shutdown | `saves/common/combat_harness_shutdown.data` | `combat_harness_shutdown` | Python | Signal: exit cleanly |
 
 ## Lifecycle
 
+### First Batch
 1. Python writes queue to `saves/common/` with build specs embedded in `player_builds` field
-2. Game launches (one launch per batch of N matchups)
+2. Game launches (Xvfb + launcher click + ~30s startup)
 3. TitleScreenPlugin detects queue → auto-navigates to Optimizer Arena mission
 4. CombatHarnessPlugin processes matchups sequentially in one combat session
-5. After all matchups: writes results array + done signal, calls `System.exit(0)`
-6. Python polls for done signal, reads results
+5. After all matchups: writes results array + done signal, enters WAITING state
+
+### Subsequent Batches (Persistent Session)
+1. Python detects done signal, reads results
+2. Python cleans protocol files, writes new queue file
+3. Python writes `combat_harness_new_queue.data` signal
+4. Java detects signal in WAITING state, loads new queue, resumes SPAWNING
+5. After all matchups: writes results + done signal, re-enters WAITING
+
+### Clean Restart (After N Matchups)
+1. Python writes `combat_harness_shutdown.data` instead of new queue signal
+2. Java detects shutdown signal, calls `System.exit(0)`
+3. Python launches fresh game instance (back to First Batch flow)
+
+### Idle Timeout
+1. Game self-exits after ~60s in WAITING without any signal
+2. Python detects process exit via heartbeat timeout
+3. Next `evaluate()` call launches fresh game instance
 
 ## Queue Input Schema
 
@@ -101,7 +120,7 @@ Ship data is collected from tracked ShipAPI references (not fleet manager, which
 
 ## Heartbeat
 
-`combat_harness_heartbeat.txt.data` — updated every ~60 frames with `<timestamp_ms> <combat_elapsed_seconds>`. Used for liveness monitoring.
+`combat_harness_heartbeat.txt.data` — updated every ~60 frames with 6 space-separated fields: `<timestamp_ms> <elapsed_seconds> <player_hp_fraction> <enemy_hp_fraction> <player_alive_count> <enemy_alive_count>`. Used for liveness monitoring and curtailment. During WAITING state, HP fractions and alive counts are all zero.
 
 ## Python Dataclasses
 

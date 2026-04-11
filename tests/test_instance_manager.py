@@ -19,6 +19,7 @@ from starsector_optimizer.instance_manager import (
     InstanceError,
     InstancePool,
     InstanceState,
+    PROTOCOL_FILES,
 )
 
 
@@ -169,28 +170,18 @@ class TestWorkDirCreation:
 class TestFileManagement:
 
     def test_clean_protocol_files(self, pool, config):
-        """Old queue/results/done/heartbeat files are removed before new batch."""
+        """All protocol + signal files are removed before new batch."""
         pool.setup()
         inst = pool._instances[0]
         common = inst.saves_common
 
-        # Create old files
-        for name in [
-            "combat_harness_queue.json.data",
-            "combat_harness_results.json.data",
-            "combat_harness_done.data",
-            "combat_harness_heartbeat.txt.data",
-        ]:
+        # Create all 6 protocol files (including new signal files)
+        for name in PROTOCOL_FILES:
             (common / name).write_text("old")
 
         pool._clean_protocol_files(inst)
 
-        for name in [
-            "combat_harness_queue.json.data",
-            "combat_harness_results.json.data",
-            "combat_harness_done.data",
-            "combat_harness_heartbeat.txt.data",
-        ]:
+        for name in PROTOCOL_FILES:
             assert not (common / name).exists()
 
     def test_write_queue(self, pool, config):
@@ -555,4 +546,208 @@ class TestCurtailmentIntegration:
         assert stop_file.exists()
 
 
+# --- Persistent Session Tests ---
+
+
+def _make_matchups(n):
+    """Helper: create n minimal MatchupConfig objects."""
+    return [
+        MatchupConfig(
+            matchup_id=f"m{i}",
+            player_builds=(BuildSpec(variant_id="a", hull_id="a",
+                                     weapon_assignments={}, hullmods=(),
+                                     flux_vents=0, flux_capacitors=0),),
+            enemy_variants=("b",),
+        )
+        for i in range(n)
+    ]
+
+
+class TestPersistentSession:
+
+    def test_new_queue_signal_path_property(self, pool, config):
+        """new_queue_signal_path returns correct saves/common path."""
+        pool.setup()
+        inst = pool._instances[0]
+        expected = inst.saves_common / "combat_harness_new_queue.data"
+        assert inst.new_queue_signal_path == expected
+
+    def test_shutdown_signal_path_property(self, pool, config):
+        """shutdown_signal_path returns correct saves/common path."""
+        pool.setup()
+        inst = pool._instances[0]
+        expected = inst.saves_common / "combat_harness_shutdown.data"
+        assert inst.shutdown_signal_path == expected
+
+    def test_protocol_files_includes_new_signals(self):
+        """PROTOCOL_FILES list has all 6 files including new signals."""
+        assert "combat_harness_new_queue.data" in PROTOCOL_FILES
+        assert "combat_harness_shutdown.data" in PROTOCOL_FILES
+        assert len(PROTOCOL_FILES) == 6
+
+    def test_clean_protocol_files_removes_new_signals(self, pool, config):
+        """_clean_protocol_files removes new signal files too."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.new_queue_signal_path.write_text("1")
+        inst.shutdown_signal_path.write_text("1")
+
+        pool._clean_protocol_files(inst)
+
+        assert not inst.new_queue_signal_path.exists()
+        assert not inst.shutdown_signal_path.exists()
+
+    def test_assign_next_batch_writes_queue_and_signal(self, pool, config):
+        """_assign_next_batch writes queue file + new_queue signal, no process creation."""
+        pool.setup()
+        inst = pool._instances[0]
+        matchups = _make_matchups(3)
+
+        pool._assign_next_batch(inst, matchups)
+
+        assert inst.queue_path.exists()
+        assert inst.new_queue_signal_path.exists()
+        data = json.loads(inst.queue_path.read_text())
+        assert len(data) == 3
+
+    def test_assign_next_batch_cleans_protocol_files(self, pool, config):
+        """_assign_next_batch removes old done/heartbeat/results files first."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.done_path.write_text("old")
+        inst.heartbeat_path.write_text("old")
+        inst.results_path.write_text("old")
+
+        pool._assign_next_batch(inst, _make_matchups(1))
+
+        assert not inst.done_path.exists()
+        assert not inst.heartbeat_path.exists()
+        assert not inst.results_path.exists()
+
+    def test_assign_next_batch_preserves_processes(self, pool, config):
+        """_assign_next_batch does not touch game or xvfb processes."""
+        pool.setup()
+        inst = pool._instances[0]
+        mock_game = MagicMock()
+        mock_xvfb = MagicMock()
+        inst.game_process = mock_game
+        inst.xvfb_process = mock_xvfb
+
+        pool._assign_next_batch(inst, _make_matchups(1))
+
+        # Processes should be the exact same objects, untouched
+        assert inst.game_process is mock_game
+        assert inst.xvfb_process is mock_xvfb
+        mock_game.terminate.assert_not_called()
+        mock_xvfb.terminate.assert_not_called()
+
+    def test_assign_next_batch_resets_instance_state(self, pool, config):
+        """_assign_next_batch clears results, heartbeats, restart_count; sets RUNNING."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.results = [MagicMock()]
+        inst.heartbeats = [MagicMock()]
+        inst.restart_count = 2
+
+        pool._assign_next_batch(inst, _make_matchups(2))
+
+        assert inst.results == []
+        assert inst.heartbeats == []
+        assert inst.restart_count == 0
+        assert inst.state == InstanceState.RUNNING
+        assert inst.assigned_matchups == _make_matchups(2)
+
+    def test_is_instance_reusable_running(self, pool, config):
+        """True when both game and Xvfb processes are alive."""
+        pool.setup()
+        inst = pool._instances[0]
+        mock_game = MagicMock()
+        mock_game.poll.return_value = None
+        mock_xvfb = MagicMock()
+        mock_xvfb.poll.return_value = None
+        inst.game_process = mock_game
+        inst.xvfb_process = mock_xvfb
+
+        assert pool._is_instance_reusable(inst)
+
+    def test_is_instance_reusable_dead_game(self, pool, config):
+        """False when game process has exited."""
+        pool.setup()
+        inst = pool._instances[0]
+        mock_game = MagicMock()
+        mock_game.poll.return_value = 1  # exited
+        mock_xvfb = MagicMock()
+        mock_xvfb.poll.return_value = None
+        inst.game_process = mock_game
+        inst.xvfb_process = mock_xvfb
+
+        assert not pool._is_instance_reusable(inst)
+
+    def test_is_instance_reusable_no_process(self, pool, config):
+        """False when game_process is None (never launched)."""
+        pool.setup()
+        inst = pool._instances[0]
+        assert inst.game_process is None
+        assert not pool._is_instance_reusable(inst)
+
+    def test_total_matchups_tracking(self, pool, config):
+        """total_matchups_processed starts at 0 and is tracked per instance."""
+        pool.setup()
+        inst = pool._instances[0]
+        assert inst.total_matchups_processed == 0
+
+    def test_clean_restart_after_threshold(self, config):
+        """When total >= clean_restart_matchups, needs_restart is true."""
+        cfg = InstanceConfig(
+            game_dir=config.game_dir,
+            instance_root=config.instance_root,
+            num_instances=1,
+            clean_restart_matchups=10,
+        )
+        pool = InstancePool(cfg)
+        pool.setup()
+        inst = pool._instances[0]
+        inst.total_matchups_processed = 10
+
+        # Should trigger clean restart
+        assert inst.total_matchups_processed >= cfg.clean_restart_matchups
+
+    def test_clean_restart_resets_counter(self, pool, config):
+        """After a full restart, total_matchups_processed resets to 0."""
+        pool.setup()
+        inst = pool._instances[0]
+        inst.total_matchups_processed = 150
+        # Simulate what evaluate() does on clean restart
+        inst.total_matchups_processed = 0
+        assert inst.total_matchups_processed == 0
+
+    def test_write_shutdown_signal(self, pool, config):
+        """_write_shutdown_signal creates the shutdown signal file."""
+        pool.setup()
+        inst = pool._instances[0]
+        pool._write_shutdown_signal(inst)
+        assert inst.shutdown_signal_path.exists()
+        content = inst.shutdown_signal_path.read_text()
+        assert content  # non-empty timestamp
+
+    def test_teardown_writes_shutdown_signals(self, pool, config):
+        """teardown writes shutdown signals before killing running instances."""
+        pool.setup()
+        for inst in pool._instances:
+            mock_game = MagicMock()
+            mock_game.poll.return_value = None
+            inst.game_process = mock_game
+            mock_xvfb = MagicMock()
+            mock_xvfb.poll.return_value = None
+            inst.xvfb_process = mock_xvfb
+            inst.state = InstanceState.RUNNING
+
+        pool.teardown()
+
+        for inst in pool._instances:
+            # Shutdown signal should have been written
+            assert inst.shutdown_signal_path.exists()
+            # Processes should still be terminated
+            inst.game_process.terminate.assert_called_once()
+            assert inst.state == InstanceState.STOPPED
 

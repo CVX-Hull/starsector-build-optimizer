@@ -37,6 +37,10 @@ Get matchup config at index.
 - Player builds contain inline `BuildSpec` objects (see spec 10), not variant ID strings
 - If any element fails validation, the entire queue load fails
 
+## Persistent Session Reloading
+
+In persistent game sessions (Phase T2), `loadFromCommon()` is called multiple times per game process — once per batch. The queue file is rewritten by Python between batches. Java detects the new queue via a separate `combat_harness_new_queue` signal file (see spec 13, WAITING state), then calls `loadFromCommon()` to reload.
+
 ## Relationship to MatchupConfig
 
 `MatchupQueue` is a container of `MatchupConfig` objects. `MatchupConfig` remains the single-matchup POJO. The `loadFromCommon()`/`existsInCommon()` static methods on `MatchupConfig` are superseded by `MatchupQueue`'s equivalents.

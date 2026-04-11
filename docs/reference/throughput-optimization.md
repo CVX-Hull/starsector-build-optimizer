@@ -312,7 +312,7 @@ Player builds are constructed programmatically. Enemy variants (stock opponents)
 - Include build specs in matchup queue JSON instead of variant file references
 - `InstancePool._create_work_dir()` no longer needs variant directory management
 
-#### Phase T2: Persistent Game Session (Java change, highest throughput impact)
+#### Phase T2: Persistent Game Session (Java change, highest throughput impact) — IMPLEMENTED
 
 Replace `System.exit(0)` in `CombatHarnessPlugin.doDone()` with WAITING state. Add periodic clean restart via Robot-click re-entry.
 

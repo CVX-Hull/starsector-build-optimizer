@@ -30,6 +30,8 @@ PROTOCOL_FILES = [
     "combat_harness_results.json.data",
     "combat_harness_done.data",
     "combat_harness_heartbeat.txt.data",
+    "combat_harness_new_queue.data",
+    "combat_harness_shutdown.data",
 ]
 
 # Top-level game directory entries that should be symlinked (not copied)
@@ -72,6 +74,7 @@ class InstanceConfig:
     launcher_click_settle_seconds: float = 0.3
     launcher_x: int = 297  # "Play Starsector" button, calibrated for 1920x1080
     launcher_y: int = 255
+    clean_restart_matchups: int = 200  # force full game restart after N total matchups
 
 
 @dataclass
@@ -88,6 +91,7 @@ class GameInstance:
     launch_time: float = 0.0
     restart_count: int = 0
     heartbeats: list[Heartbeat] = field(default_factory=list)
+    total_matchups_processed: int = 0
 
     @property
     def saves_common(self) -> Path:
@@ -112,6 +116,14 @@ class GameInstance:
     @property
     def heartbeat_path(self) -> Path:
         return self.saves_common / "combat_harness_heartbeat.txt.data"
+
+    @property
+    def new_queue_signal_path(self) -> Path:
+        return self.saves_common / "combat_harness_new_queue.data"
+
+    @property
+    def shutdown_signal_path(self) -> Path:
+        return self.saves_common / "combat_harness_shutdown.data"
 
 
 class InstancePool:
@@ -141,7 +153,11 @@ class InstancePool:
             self._instances.append(inst)
 
     def teardown(self) -> None:
-        """Kill all processes and mark instances as stopped."""
+        """Signal all instances to shut down, then kill processes."""
+        for inst in self._instances:
+            if inst.game_process and inst.game_process.poll() is None:
+                self._write_shutdown_signal(inst)
+        time.sleep(self._config.poll_interval_seconds)
         for inst in self._instances:
             self._kill_instance(inst)
             inst.state = InstanceState.STOPPED
@@ -152,10 +168,13 @@ class InstancePool:
         chunk_queue = list(chunks)  # remaining chunks to assign
         all_results: list[CombatResult] = []
 
-        # Assign initial chunks to idle instances
+        # Assign initial chunks to instances (reuse persistent sessions when possible)
         for inst in self._instances:
             if chunk_queue:
-                self._assign_and_launch(inst, chunk_queue.pop(0))
+                if self._is_instance_reusable(inst):
+                    self._assign_next_batch(inst, chunk_queue.pop(0))
+                else:
+                    self._assign_and_launch(inst, chunk_queue.pop(0))
 
         # Poll loop
         while any(inst.state in (InstanceState.STARTING, InstanceState.RUNNING,
@@ -177,12 +196,22 @@ class InstancePool:
                                      inst.instance_id, e)
                         inst.results = []
                     all_results.extend(inst.results)
-                    self._kill_instance(inst)
+                    inst.total_matchups_processed += len(inst.assigned_matchups)
                     inst.state = InstanceState.IDLE
 
-                    # Assign next chunk if available
+                    # Assign next chunk: reuse persistent session or full restart
                     if chunk_queue:
-                        self._assign_and_launch(inst, chunk_queue.pop(0))
+                        needs_restart = (
+                            inst.total_matchups_processed >= self._config.clean_restart_matchups
+                            or not self._is_instance_reusable(inst)
+                        )
+                        if needs_restart:
+                            self._kill_instance(inst)
+                            inst.total_matchups_processed = 0
+                            self._assign_and_launch(inst, chunk_queue.pop(0))
+                        else:
+                            self._assign_next_batch(inst, chunk_queue.pop(0))
+                    # else: leave instance alive in IDLE for reuse in next evaluate()
                     continue
 
                 # Check for process exit without done signal (crash)
@@ -286,6 +315,33 @@ class InstancePool:
     def _write_queue(self, inst: GameInstance, matchups: list[MatchupConfig]) -> None:
         """Write matchup queue to instance's saves/common/."""
         write_queue_file(matchups, inst.queue_path)
+
+    def _is_instance_reusable(self, inst: GameInstance) -> bool:
+        """Check if instance has running game+Xvfb processes for persistent reuse."""
+        return (inst.game_process is not None
+                and inst.game_process.poll() is None
+                and inst.xvfb_process is not None
+                and inst.xvfb_process.poll() is None)
+
+    def _assign_next_batch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None:
+        """Send a new batch to an already-running persistent instance."""
+        inst.assigned_matchups = chunk
+        inst.results = []
+        inst.heartbeats = []
+        inst.restart_count = 0
+
+        self._clean_protocol_files(inst)
+        self._write_queue(inst, chunk)
+        inst.new_queue_signal_path.write_text(str(int(time.time() * 1000)))
+
+        inst.state = InstanceState.RUNNING
+        inst.last_heartbeat_time = time.monotonic()
+        logger.info("Instance %d: sent batch (%d matchups) to persistent session",
+                    inst.instance_id, len(chunk))
+
+    def _write_shutdown_signal(self, inst: GameInstance) -> None:
+        """Write shutdown signal to request clean game exit."""
+        inst.shutdown_signal_path.write_text(str(int(time.time() * 1000)))
 
     # --- Matchup distribution ---
 
@@ -465,6 +521,7 @@ class InstancePool:
             self._write_queue(inst, inst.assigned_matchups)
             self._start_xvfb(inst)
             self._start_game(inst)
+            inst.total_matchups_processed = 0
             inst.state = InstanceState.STARTING
             inst.launch_time = time.monotonic()
             inst.last_heartbeat_time = time.monotonic()
