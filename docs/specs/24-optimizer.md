@@ -39,6 +39,9 @@ Frozen dataclass configuring the optimization run.
 | `log_interval` | `int` | `10` | Log progress every N completed trials |
 | `failure_score` | `float` | `-1.0` | Score assigned to failed/invalid builds (InstanceError or validation failure) |
 | `stock_build_scale_mult` | `float` | `2.0` | Multiplier for stock build warm-start values relative to heuristic (stock value = `warm_start_scale * stock_build_scale_mult`) |
+| `cv_min_samples` | `int` | `30` | Evaluations before estimating control variate correlation |
+| `cv_rho_threshold` | `float` | `0.3` | Minimum \|ρ\| to activate control variate correction |
+| `cv_recalc_interval` | `int` | `10` | Re-estimate control variate parameters every N completions |
 
 ### `BuildCache`
 
@@ -64,6 +67,8 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 | `variant_id` | `str` | required | Unique variant ID (`{hull_id}_opt_{trial.number:06d}`) |
 | `opponents` | `tuple[str, ...]` | required | Full opponent list |
 | `completed_results` | `list[CombatResult]` | `[]` | Results accumulated so far |
+| `raw_scores` | `list[float]` | `[]` | Per-opponent raw `combat_fitness()` values (parallel to `completed_results`) |
+| `heuristic_val` | `float` | `0.0` | Heuristic composite score for control variate (A2) |
 | `next_opponent_index` | `int` | `0` | Which opponent to evaluate next |
 
 **Properties:**
@@ -100,6 +105,12 @@ class StagedEvaluator:
 - `_trials_completed: int` — trials told to Optuna (COMPLETE + PRUNED)
 - `_opponents: tuple[str, ...]` — opponent list for this hull size
 - `_fitness_config: CombatFitnessConfig` — from config.engagement_threshold
+- `_opponent_stats: list[RunningStats]` — per-opponent running mean/std for A1 z-score normalization (index i = opponent i)
+- `_cv_pairs: list[tuple[float, float]]` — (heuristic_val, z_fitness) pairs for A2 correlation estimation
+- `_cv_coefficient: float` — A2 control variate coefficient c = Cov(f,h)/Var(h)
+- `_cv_heuristic_mean: float` — A2 running mean of heuristic scores
+- `_cv_active: bool` — A2 active when |ρ| > cv_rho_threshold
+- `_completed_fitness_values: list[float]` — post-A1/A2 fitness values for A3 rank shaping
 
 **`run()` algorithm:**
 
@@ -110,8 +121,9 @@ class StagedEvaluator:
 3. Send batch to `instance_pool.evaluate()`
 4. Route results via `_route_results()`:
    - Match each result to its `_InFlightBuild` via `matchup_id`
-   - Report cumulative fitness to Optuna: `trial.report(fitness, step=opponent_index)`
-   - If complete: finalize (cache, tell Optuna, log)
+   - A1: Compute raw `combat_fitness()` score, update `_opponent_stats[opp_idx]`, store on `ifb.raw_scores`
+   - Report z-scored cumulative fitness to Optuna: `trial.report(z_fitness, step=opponent_index)`
+   - If complete: finalize via A1→A2→A3 pipeline (rank-shape, cache, tell Optuna, log)
    - If `trial.should_prune()`: tell Optuna PRUNED, log
    - Otherwise: build stays in queue for next batch
 5. On `InstanceError`: tell all affected in-flight builds -1.0
@@ -119,6 +131,18 @@ class StagedEvaluator:
 **Batch composition:** Each batch contains one matchup per in-flight build. This maximizes pruning granularity — after each opponent result, the build can be pruned. Builds at higher rungs (more opponents evaluated) are scheduled first per ASHA priority.
 
 **Opponents are evaluated in fixed tuple order** from `get_opponents()`. This ensures `step=0` always means the same opponent across all trials, which is critical for `MedianPruner` comparison.
+
+### `RunningStats`
+
+Private utility class in `optimizer.py` implementing Welford's online algorithm for streaming mean/variance. Used by `StagedEvaluator` for A1 opponent normalization.
+
+| Method/Property | Signature | Description |
+|----------------|-----------|-------------|
+| `update` | `(x: float) -> None` | Add observation, update running mean and M2 |
+| `z_score` | `(x: float, min_samples: int = 2) -> float` | Z-score x against running stats. Returns 0.0 if n < min_samples or std < ε |
+| `n` | `-> int` | Number of observations |
+| `mean` | `-> float` | Running mean |
+| `std` | `-> float` | Sample standard deviation (Bessel-corrected, n-1). Returns 0.0 if n < 2 |
 
 ## Functions
 
@@ -147,7 +171,7 @@ Reconstructs `Build` from flat param dict. Reverses the mapping — `"empty"` �
 
 ### `warm_start(study, hull, game_data, config, game_dir=None) -> None`
 
-1. **Stock build seeding** (if `game_dir` provided): Load stock `.variant` files via `load_stock_builds(game_dir, hull.id)`. Add each as a completed trial with value `config.warm_start_scale * 2.0` (higher than random heuristic builds — stock builds are known-good starting points).
+1. **Stock build seeding** (if `game_dir` provided): Load stock `.variant` files via `load_stock_builds(game_dir, hull.id)`. Add each as a completed trial with value `config.warm_start_scale * config.stock_build_scale_mult` (higher than random heuristic builds — stock builds are known-good starting points).
 2. `generate_diverse_builds(hull, game_data, n=config.warm_start_sample_n)`
 3. Score each with `heuristic_score(build, hull, game_data).composite_score`
 4. Sort descending, take top `config.warm_start_n`
@@ -174,9 +198,28 @@ CatCMAwM uses population-based parallelism rather than constant_liar — it natu
 
 `MedianPruner(n_startup_trials=config.pruner_startup_trials, n_warmup_steps=config.pruner_warmup_steps)` — the first `n_startup_trials` trials are never pruned, giving the pruner a baseline distribution. With only 5 opponent steps, Hyperband's bracket structure is inappropriate; MedianPruner is simpler and effective at this scale.
 
-### Fitness Function
+### Fitness Function — Signal Quality Pipeline (A1→A2→A3)
 
-Uses `aggregate_combat_fitness` from spec 25 (hierarchical composite score) for both intermediate reports and final scoring. The same `fitness_mode` ("mean" or "minimax") is used for intermediate `trial.report()` values and the final `study.tell()` value, ensuring `MedianPruner` comparisons are on a consistent scale.
+Raw per-matchup scores from `combat_fitness()` (spec 25) pass through three composable transformations before reaching Optuna:
+
+```
+raw combat_fitness score
+  → A1: z-score per opponent (RunningStats)
+  → aggregate (mean or minimax per fitness_mode)
+  → A2: control variate correction (if active)
+  → A3: rank-based fitness shaping (finalization only)
+  → study.tell()
+```
+
+**A1 — Opponent Normalization:** Each opponent's raw scores are tracked by a `RunningStats` instance (Welford's online algorithm). When computing cumulative fitness, stored raw scores are z-scored against the current opponent statistics, then aggregated by `fitness_mode`. Stats are updated from ALL trials (including pruned) so the normalizer learns from every observation. Cold start: z_score returns 0.0 when n<2 per opponent — overlaps with `pruner_startup_trials` warm-up.
+
+**A2 — Control Variate Correction:** `fitness_adj = z_fitness - c * (heuristic_score - E[heuristic])`. Correlation ρ estimated from `(heuristic_val, z_fitness)` pairs after `cv_min_samples` completions. Applied only when |ρ| > `cv_rho_threshold`. Re-estimated every `cv_recalc_interval` completions. The `heuristic_score` is computed per-build at trial creation time in `_ask_new_trial` (cheap CPU-only computation).
+
+**A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
+
+**Intermediate `trial.report()` values** use A1 z-scored aggregates only (no A2/A3). `MedianPruner` compares report values at the same step across trials — it does NOT mix intermediate report values with final `study.tell()` values. The different scales (z-scores for intermediates, ranks for finals) are safe because the pruner only compares like with like.
+
+**Failure scores** (-1.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
 
 ### `preflight_check(hull_id, game_data, instance_pool, opponent_pool) -> None`
 
@@ -237,12 +280,13 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
   "opponents_evaluated": 2,
   "opponents_total": 5,
   "pruned": true,
-  "fitness": -0.35,
+  "raw_fitness": -0.35,
+  "fitness": 0.23,
   "timestamp": "2026-04-11T14:32:15"
 }
 ```
 
-For pruned builds, `fitness` is the cumulative fitness at time of pruning. `opponents_evaluated < opponents_total` indicates early termination.
+For completed builds, `fitness` is the rank-shaped value (quantile in [0, 1]) told to Optuna; `raw_fitness` is the z-scored + CV-corrected value before rank shaping (for analysis). For pruned builds, both `fitness` and `raw_fitness` are the z-scored cumulative at prune time (no rank shaping). `opponents_evaluated < opponents_total` indicates early termination.
 
 ## Study Persistence
 

@@ -23,7 +23,7 @@ from optuna.trial import TrialState, create_trial
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
 from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, GameData, HullSize, MatchupConfig, ShipHull
-from .combat_fitness import aggregate_combat_fitness
+from .combat_fitness import combat_fitness
 from .opponent_pool import (
     OpponentPool,
     get_opponents,
@@ -35,6 +35,41 @@ from .search_space import SearchSpace, build_search_space
 from .variant import build_to_build_spec
 
 logger = logging.getLogger(__name__)
+
+_EPSILON = 1e-12  # Guard for near-zero std in z-scoring and correlation estimation
+
+
+class RunningStats:
+    """Welford's online mean/variance for a single stream."""
+
+    def __init__(self) -> None:
+        self._n: int = 0
+        self._mean: float = 0.0
+        self._m2: float = 0.0
+
+    @property
+    def n(self) -> int:
+        return self._n
+
+    @property
+    def mean(self) -> float:
+        return self._mean
+
+    @property
+    def std(self) -> float:
+        return (self._m2 / (self._n - 1)) ** 0.5 if self._n >= 2 else 0.0
+
+    def update(self, x: float) -> None:
+        self._n += 1
+        delta = x - self._mean
+        self._mean += delta / self._n
+        self._m2 += delta * (x - self._mean)
+
+    def z_score(self, x: float, min_samples: int = 2) -> float:
+        """Return z-score, or 0.0 if insufficient samples or std near zero."""
+        if self._n < min_samples or self.std < _EPSILON:
+            return 0.0
+        return (x - self._mean) / self.std
 
 
 @dataclass(frozen=True)
@@ -60,6 +95,9 @@ class OptimizerConfig:
     log_interval: int = 10
     failure_score: float = -1.0
     stock_build_scale_mult: float = 2.0
+    cv_min_samples: int = 30
+    cv_rho_threshold: float = 0.3
+    cv_recalc_interval: int = 10
 
 
 class BuildCache:
@@ -318,7 +356,9 @@ class _InFlightBuild:
     build_spec: BuildSpec
     variant_id: str
     opponents: tuple[str, ...]
+    heuristic_val: float = 0.0
     completed_results: list[CombatResult] = field(default_factory=list)
+    raw_scores: list[float] = field(default_factory=list)
     next_opponent_index: int = 0
 
     @property
@@ -370,6 +410,17 @@ class StagedEvaluator:
         self._in_flight: dict[str, _InFlightBuild] = {}
         self._trials_asked = 0
         self._trials_completed = 0
+        # A1: Per-opponent running statistics for z-score normalization
+        self._opponent_stats: list[RunningStats] = [
+            RunningStats() for _ in self._opponents
+        ]
+        # A2: Control variate estimation state
+        self._cv_pairs: list[tuple[float, float]] = []
+        self._cv_coefficient: float = 0.0
+        self._cv_heuristic_mean: float = 0.0
+        self._cv_active: bool = False
+        # A3: Completed fitness values for rank-based shaping
+        self._completed_fitness_values: list[float] = []
 
     def run(self) -> None:
         """Execute the staged evaluation loop until sim_budget is exhausted."""
@@ -438,6 +489,11 @@ class StagedEvaluator:
             if ifb is None:
                 logger.warning("Unrecognized matchup_id: %s", result.matchup_id)
                 continue
+            # A1: Compute raw score and update opponent running stats
+            opp_idx = ifb.next_opponent_index
+            raw = combat_fitness(result, config=self._fitness_config)
+            self._opponent_stats[opp_idx].update(raw)
+            ifb.raw_scores.append(raw)
             ifb.completed_results.append(result)
             ifb.next_opponent_index += 1
             builds_with_results[id(ifb)] = ifb
@@ -491,28 +547,38 @@ class StagedEvaluator:
             self._trials_completed += 1
             return None
 
+        h_val = heuristic_score(
+            build, self._hull, self._game_data,
+        ).composite_score
         return _InFlightBuild(
             trial=trial,
             build=build,
             build_spec=build_spec,
             variant_id=variant_id,
             opponents=self._opponents,
+            heuristic_val=h_val,
         )
 
     def _finalize_build(self, ifb: _InFlightBuild) -> None:
-        """Compute final fitness, tell Optuna, cache, log."""
-        fitness = aggregate_combat_fitness(
-            ifb.completed_results,
-            mode=self._config.fitness_mode,
-            config=self._fitness_config,
-        )
-        self._cache.put(ifb.build, fitness)
-        self._study.tell(ifb.trial, fitness)
+        """Compute final fitness via A1→A2→A3 pipeline, tell Optuna, cache, log."""
+        # A1: z-scored aggregate
+        z_fitness = self._cumulative_fitness(ifb)
+        # A2: control variate correction
+        cv_fitness = self._apply_control_variate(z_fitness, ifb.heuristic_val)
+        self._cv_pairs.append((ifb.heuristic_val, z_fitness))
+        self._maybe_update_cv()
+        # A3: rank-based shaping
+        self._completed_fitness_values.append(cv_fitness)
+        ranked_fitness = self._rank_fitness(cv_fitness)
+
+        self._cache.put(ifb.build, ranked_fitness)
+        self._study.tell(ifb.trial, ranked_fitness)
 
         if self._eval_log_path:
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
-                ifb.build, ifb.completed_results, fitness,
+                ifb.build, ifb.completed_results, ranked_fitness,
+                raw_fitness=cv_fitness,
                 pruned=False, opponents_total=len(ifb.opponents),
             )
 
@@ -529,12 +595,16 @@ class StagedEvaluator:
             )
 
     def _cumulative_fitness(self, ifb: _InFlightBuild) -> float:
-        """Running aggregate fitness from completed results so far."""
-        return aggregate_combat_fitness(
-            ifb.completed_results,
-            mode=self._config.fitness_mode,
-            config=self._fitness_config,
-        )
+        """Running aggregate of z-scored per-opponent fitness (A1)."""
+        if not ifb.raw_scores:
+            return 0.0
+        z_scores = [
+            self._opponent_stats[i].z_score(raw)
+            for i, raw in enumerate(ifb.raw_scores)
+        ]
+        if self._config.fitness_mode == "minimax":
+            return min(z_scores)
+        return sum(z_scores) / len(z_scores)
 
     def _make_matchup(self, ifb: _InFlightBuild) -> MatchupConfig:
         """Create one matchup for the next opponent."""
@@ -548,6 +618,53 @@ class StagedEvaluator:
             time_mult=self._config.matchup_time_mult,
         )
 
+    def _apply_control_variate(
+        self, sim_fitness: float, heuristic_val: float,
+    ) -> float:
+        """A2: Adjust fitness using heuristic as control variate."""
+        if not self._cv_active:
+            return sim_fitness
+        return sim_fitness - self._cv_coefficient * (
+            heuristic_val - self._cv_heuristic_mean
+        )
+
+    def _maybe_update_cv(self) -> None:
+        """A2: Re-estimate control variate parameters if enough data."""
+        n = len(self._cv_pairs)
+        if n < self._config.cv_min_samples:
+            return
+        if n % self._config.cv_recalc_interval != 0 and self._cv_active:
+            return
+        hs = [p[0] for p in self._cv_pairs]
+        fs = [p[1] for p in self._cv_pairs]
+        h_mean = sum(hs) / n
+        f_mean = sum(fs) / n
+        h_var = sum((h - h_mean) ** 2 for h in hs) / (n - 1)
+        f_var = sum((f - f_mean) ** 2 for f in fs) / (n - 1)
+        h_std = h_var ** 0.5
+        f_std = f_var ** 0.5
+        if h_std < _EPSILON or f_std < _EPSILON:
+            self._cv_active = False
+            return
+        cov = sum(
+            (h - h_mean) * (f - f_mean) for h, f in self._cv_pairs
+        ) / (n - 1)
+        rho = cov / (h_std * f_std)
+        if abs(rho) > self._config.cv_rho_threshold:
+            self._cv_coefficient = cov / h_var
+            self._cv_heuristic_mean = h_mean
+            self._cv_active = True
+        else:
+            self._cv_active = False
+
+    def _rank_fitness(self, fitness: float) -> float:
+        """A3: Convert fitness to quantile rank in [0, 1]."""
+        n = len(self._completed_fitness_values)
+        if n <= 1:
+            return 0.5
+        rank = sum(1 for v in self._completed_fitness_values if v <= fitness)
+        return rank / n
+
 
 def _append_eval_log(
     path: Path,
@@ -557,6 +674,7 @@ def _append_eval_log(
     results: list[CombatResult],
     fitness: float,
     *,
+    raw_fitness: float | None = None,
     pruned: bool = False,
     opponents_total: int = 0,
 ) -> None:
@@ -585,6 +703,7 @@ def _append_eval_log(
         "opponents_evaluated": len(results),
         "opponents_total": opponents_total,
         "pruned": pruned,
+        "raw_fitness": raw_fitness if raw_fitness is not None else fitness,
         "fitness": fitness,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
