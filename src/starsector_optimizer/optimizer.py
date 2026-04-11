@@ -107,8 +107,9 @@ class BuildCache:
         self._cache: dict[str, float] = {}
 
     def hash_build(self, build: Build) -> str:
-        """Stable hash from weapon assignments + hullmods + vents + caps."""
+        """Stable hash from hull_id + weapon assignments + hullmods + vents + caps."""
         parts = (
+            build.hull_id,
             repr(sorted(build.weapon_assignments.items())),
             repr(sorted(build.hullmods)),
             repr(build.flux_vents),
@@ -139,7 +140,7 @@ def preflight_check(
                          f"Available: {sorted(list(game_data.hulls.keys())[:10])}...")
 
     hull = game_data.hulls[hull_id]
-    game_dir = instance_pool._config.game_dir
+    game_dir = instance_pool.game_dir
 
     # Combat harness mod deployed
     mod_jar = game_dir / "mods" / "combat-harness" / "jars" / "combat-harness.jar"
@@ -743,7 +744,7 @@ def optimize_hull(
         load_if_exists=True,
     )
 
-    warm_start(study, hull, game_data, config, game_dir=instance_pool._config.game_dir)
+    warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)
 
     evaluator = StagedEvaluator(
         study=study,

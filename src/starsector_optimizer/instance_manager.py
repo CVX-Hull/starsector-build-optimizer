@@ -143,6 +143,11 @@ class InstancePool:
         self._curtailment = curtailment
         self._instances: list[GameInstance] = []
 
+    @property
+    def game_dir(self) -> Path:
+        """Public accessor for the game directory path."""
+        return self._config.game_dir
+
     def setup(self) -> None:
         """Create per-instance work directories with symlink structure."""
         self._config.instance_root.mkdir(parents=True, exist_ok=True)

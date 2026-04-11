@@ -241,7 +241,7 @@ Checks:
 2. Every hullmod ID in `spec.hullmods` exists in `game_data.hullmods`
 3. Every weapon ID in `spec.weapon_assignments` values exists in `game_data.weapons`
 
-### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config) -> Study`
+### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config, eval_log_path=None) -> Study`
 
 Main entry point.
 
@@ -249,14 +249,15 @@ Main entry point.
 2. Look up `hull = game_data.hulls[hull_id]`
 3. `space = build_search_space(hull, game_data)`
 4. `distributions = define_distributions(space, fixed_params=config.fixed_params)`
-5. `sampler = _create_sampler(config)` — creates TPE or CatCMAwM based on `config.sampler`
-6. `pruner = MedianPruner(n_startup_trials=config.pruner_startup_trials, n_warmup_steps=config.pruner_warmup_steps)`
-7. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
-8. `warm_start(study, hull, game_data, config)`
-9. `cache = BuildCache()`
-10. Create `StagedEvaluator(study, hull, hull_id, game_data, instance_pool, opponent_pool, cache, config, distributions, eval_log_path)`
-11. `evaluator.run()` — staged evaluation loop until `sim_budget` exhausted
-12. Return study
+5. `optuna.logging.set_verbosity(optuna.logging.WARNING)` — suppress verbose Optuna output
+6. `sampler = _create_sampler(config)` — creates TPE or CatCMAwM based on `config.sampler`
+7. `pruner = MedianPruner(n_startup_trials=config.pruner_startup_trials, n_warmup_steps=config.pruner_warmup_steps)`
+8. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
+9. `warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)`
+10. `cache = BuildCache()`
+11. Create `StagedEvaluator(study, hull, hull_id, game_data, instance_pool, opponent_pool, cache, config, distributions, eval_log_path)`
+12. `evaluator.run()` — staged evaluation loop until `sim_budget` exhausted
+13. Return study
 
 ## JSONL Evaluation Log
 

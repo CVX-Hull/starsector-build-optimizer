@@ -401,8 +401,7 @@ class TestOptimizeHullIntegration:
         from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
 
         mock_pool = MagicMock(spec=InstancePool)
-        mock_pool._config = MagicMock(spec=InstanceConfig)
-        mock_pool._config.game_dir = Path("game/starsector")
+        mock_pool.game_dir = Path("game/starsector")
 
         def mock_evaluate(matchups):
             results = []
@@ -537,8 +536,7 @@ class TestPreflightCheck:
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
         pool = MagicMock(spec=InstancePool)
-        pool._config = MagicMock(spec=InstanceConfig)
-        pool._config.game_dir = Path("game/starsector")
+        pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="not found"):
             preflight_check("nonexistent_hull", game_data, pool, opp_pool)
@@ -548,8 +546,7 @@ class TestPreflightCheck:
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
         pool = MagicMock(spec=InstancePool)
-        pool._config = MagicMock(spec=InstanceConfig)
-        pool._config.game_dir = Path("/tmp/fake_game_dir")
+        pool.game_dir = Path("/tmp/fake_game_dir")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="combat-harness"):
             preflight_check("wolf", game_data, pool, opp_pool)
@@ -565,8 +562,7 @@ class TestPreflightCheck:
         enabled_mods = tmp_path / "mods" / "enabled_mods.json"
         enabled_mods.write_text('{"enabledMods": ["other_mod"]}')
         pool = MagicMock(spec=InstancePool)
-        pool._config = MagicMock(spec=InstanceConfig)
-        pool._config.game_dir = tmp_path
+        pool.game_dir = tmp_path
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="combat_harness"):
             preflight_check("wolf", game_data, pool, opp_pool)
@@ -576,8 +572,7 @@ class TestPreflightCheck:
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
         pool = MagicMock(spec=InstancePool)
-        pool._config = MagicMock(spec=InstanceConfig)
-        pool._config.game_dir = Path("game/starsector")
+        pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         preflight_check("wolf", game_data, pool, opp_pool)  # Should not raise
 
@@ -586,8 +581,7 @@ class TestPreflightCheck:
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
         pool = MagicMock(spec=InstancePool)
-        pool._config = MagicMock(spec=InstanceConfig)
-        pool._config.game_dir = Path("game/starsector")
+        pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("nonexistent_variant",)})
         with pytest.raises(ValueError, match="nonexistent_variant"):
             preflight_check("wolf", game_data, pool, opp_pool)
@@ -664,8 +658,7 @@ class TestStagedEvaluator:
         from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
 
         mock_pool = MagicMock(spec=InstancePool)
-        mock_pool._config = MagicMock(spec=InstanceConfig)
-        mock_pool._config.game_dir = Path("game/starsector")
+        mock_pool.game_dir = Path("game/starsector")
 
         def mock_evaluate(matchups):
             results = []
