@@ -37,6 +37,8 @@ Frozen dataclass configuring the optimization run.
 | `matchup_time_limit` | `float` | `300.0` | Per-matchup time limit in seconds |
 | `matchup_time_mult` | `float` | `5.0` | Game-time speed multiplier |
 | `log_interval` | `int` | `10` | Log progress every N completed trials |
+| `failure_score` | `float` | `-1.0` | Score assigned to failed/invalid builds (InstanceError or validation failure) |
+| `stock_build_scale_mult` | `float` | `2.0` | Multiplier for stock build warm-start values relative to heuristic (stock value = `warm_start_scale * stock_build_scale_mult`) |
 
 ### `BuildCache`
 
@@ -162,7 +164,7 @@ The optimizer supports multiple Optuna samplers via a factory function.
 | Sampler | When to Use | Library | Config |
 |---------|------------|---------|--------|
 | `"tpe"` | Default. Good for high-D exploration with warm-start. | `optuna.samplers.TPESampler` | `multivariate=True`, `constant_liar=True`, `n_ei_candidates`, `n_startup_trials` from config |
-| `"catcma"` | Refinement after TPE, or when cross-variable correlations matter. Better for reduced search spaces (after fixing params). | `optunahub` + `cmaes` | `CatCMAwMSampler` loaded via `optunahub.load_module("samplers/catcmawm")` |
+| `"catcma"` | Refinement after TPE, or when cross-variable correlations matter. Better for reduced search spaces (after fixing params). | `optunahub` + `cmaes` | `CatCmawmSampler` loaded via `optunahub.load_module("samplers/catcmawm")` |
 
 Unknown `sampler` value raises `ValueError`.
 

@@ -58,6 +58,8 @@ class OptimizerConfig:
     matchup_time_limit: float = 300.0
     matchup_time_mult: float = 5.0
     log_interval: int = 10
+    failure_score: float = -1.0
+    stock_build_scale_mult: float = 2.0
 
 
 class BuildCache:
@@ -109,10 +111,16 @@ def preflight_check(
             f"Run: cd combat-harness && ./gradlew deploy"
         )
 
-    # enabled_mods.json exists
+    # enabled_mods.json exists and contains combat_harness
     enabled_mods = game_dir / "mods" / "enabled_mods.json"
     if not enabled_mods.exists():
         raise ValueError(f"enabled_mods.json not found at {enabled_mods}")
+    enabled_mods_data = json.loads(enabled_mods.read_text())
+    if "combat_harness" not in enabled_mods_data.get("enabledMods", []):
+        raise ValueError(
+            f"combat_harness not found in enabledMods array in {enabled_mods}. "
+            f"Enable it via the Starsector launcher."
+        )
 
     # Opponent variants exist
     opponents = get_opponents(opponent_pool, hull.hull_size)
@@ -267,7 +275,7 @@ def warm_start(
                 trial = create_trial(
                     params=build_to_trial_params(build, space),
                     distributions=distributions,
-                    values=[config.warm_start_scale * 2.0],
+                    values=[config.warm_start_scale * config.stock_build_scale_mult],
                     state=TrialState.COMPLETE,
                 )
                 study.add_trial(trial)
@@ -374,15 +382,15 @@ class StagedEvaluator:
                 results = self._instance_pool.evaluate(batch)
             except InstanceError:
                 logger.error(
-                    "Instance failure at trial %d, scoring batch as -1.0",
-                    self._trials_completed,
+                    "Instance failure at trial %d, scoring batch as %s",
+                    self._trials_completed, self._config.failure_score,
                 )
                 failed: dict[int, _InFlightBuild] = {}
                 for matchup in batch:
                     ifb = self._in_flight.pop(matchup.matchup_id, None)
                     if ifb is not None and id(ifb) not in failed:
                         failed[id(ifb)] = ifb
-                        self._study.tell(ifb.trial, -1.0)
+                        self._study.tell(ifb.trial, self._config.failure_score)
                         self._trials_completed += 1
                         self._queue.remove(ifb)
                 continue
@@ -479,7 +487,7 @@ class StagedEvaluator:
         errors = validate_build_spec(build_spec, self._game_data)
         if errors:
             logger.warning("Invalid build spec %s: %s", variant_id, errors)
-            self._study.tell(trial, -1.0)
+            self._study.tell(trial, self._config.failure_score)
             self._trials_completed += 1
             return None
 

@@ -494,6 +494,23 @@ class TestPreflightCheck:
         with pytest.raises(ValueError, match="combat-harness"):
             preflight_check("wolf", game_data, pool, opp_pool)
 
+    def test_enabled_mods_missing_combat_harness(self, game_data, tmp_path):
+        """enabled_mods.json without combat_harness raises ValueError."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        # Set up fake game dir with mod jar but wrong enabled_mods
+        mods_dir = tmp_path / "mods" / "combat-harness" / "jars"
+        mods_dir.mkdir(parents=True)
+        (mods_dir / "combat-harness.jar").touch()
+        enabled_mods = tmp_path / "mods" / "enabled_mods.json"
+        enabled_mods.write_text('{"enabledMods": ["other_mod"]}')
+        pool = MagicMock(spec=InstancePool)
+        pool._config = MagicMock(spec=InstanceConfig)
+        pool._config.game_dir = tmp_path
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        with pytest.raises(ValueError, match="combat_harness"):
+            preflight_check("wolf", game_data, pool, opp_pool)
+
     def test_valid_config_passes(self, game_data):
         """Valid config passes without raising."""
         from unittest.mock import MagicMock
