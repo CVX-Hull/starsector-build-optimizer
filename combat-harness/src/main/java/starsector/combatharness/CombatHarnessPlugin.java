@@ -107,9 +107,10 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         engine.getListenerManager().addListener(currentTracker);
 
         if (currentIndex == 0) {
-            // First matchup: ships already deployed by MissionDefinition.
-            // Discover them from the engine's ship list.
-            discoverDeployedShips();
+            // First matchup: MissionDefinition added placeholder ships for the
+            // deployment screen. Remove them and spawn the real builds.
+            removePlaceholderShips();
+            spawnShips();
         } else {
             // Subsequent matchups: spawn ships mid-combat.
             spawnShips();
@@ -123,16 +124,21 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         state = State.FIGHTING;
     }
 
-    private void discoverDeployedShips() {
-        playerShips.clear();
-        enemyShips.clear();
+    private void removePlaceholderShips() {
         for (ShipAPI ship : engine.getShips()) {
             if (ship.isFighter()) continue;
             if (ship.getOwner() == 0) {
-                playerShips.add(ship);
-            } else if (ship.getOwner() == 1) {
-                enemyShips.add(ship);
+                engine.removeEntity(ship);
             }
+        }
+    }
+
+    private static final float DEFAULT_CR = 0.7f;
+
+    private void ensureCombatReady(ShipAPI ship) {
+        if (ship.getCurrentCR() < DEFAULT_CR) {
+            ship.setCurrentCR(DEFAULT_CR);
+            ship.setCRAtDeployment(DEFAULT_CR);
         }
     }
 
@@ -149,6 +155,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                         .spawnFleetMember(member, new Vector2f(-2000f, yOffset), 0f, 0f);
                 if (ship != null) {
                     playerShips.add(ship);
+                    ensureCombatReady(ship);
                 } else {
                     log.warn("Failed to spawn player build: " + spec.variantId);
                 }

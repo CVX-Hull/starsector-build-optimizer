@@ -1,7 +1,7 @@
 package data.missions.optimizer_arena;
 
+import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.fleet.FleetGoal;
-import com.fs.starfarer.api.fleet.FleetMemberAPI;
 import com.fs.starfarer.api.fleet.FleetMemberType;
 import com.fs.starfarer.api.mission.FleetSide;
 import com.fs.starfarer.api.mission.MissionDefinitionAPI;
@@ -10,7 +10,6 @@ import com.fs.starfarer.api.mission.MissionDefinitionPlugin;
 import starsector.combatharness.CombatHarnessPlugin;
 import starsector.combatharness.MatchupConfig;
 import starsector.combatharness.MatchupQueue;
-import starsector.combatharness.VariantBuilder;
 
 /**
  * Sets up the first matchup's ships and attaches the CombatHarnessPlugin.
@@ -55,10 +54,13 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         // Subsequent matchups are handled by the plugin via spawnFleetMember()/spawnShipOrWing().
         MatchupConfig first = queue.get(0);
 
-        // Player ships: construct programmatically from build specs
+        // Player ships: add placeholders so the deployment screen has something to show.
+        // The plugin will remove these and spawn the real builds via spawnFleetMember().
         for (int i = 0; i < first.playerBuilds.length; i++) {
-            FleetMemberAPI member = VariantBuilder.createFleetMember(first.playerBuilds[i]);
-            api.addFleetMember(FleetSide.PLAYER, member);
+            String hullId = first.playerBuilds[i].hullId;
+            String placeholderVariant = findAnyVariantForHull(hullId);
+            api.addToFleet(FleetSide.PLAYER, placeholderVariant,
+                    FleetMemberType.SHIP, placeholderVariant, false);
         }
 
         // Enemy ships: use stock variant IDs
@@ -75,5 +77,19 @@ public class MissionDefinition implements MissionDefinitionPlugin {
 
         // Attach plugin — handles combat monitoring and subsequent matchups
         api.addPlugin(new CombatHarnessPlugin());
+    }
+
+    /**
+     * Find any stock variant ID for a given hull ID.
+     * Used to create placeholder ships for the deployment screen.
+     */
+    private static String findAnyVariantForHull(String hullId) {
+        for (String vid : Global.getSettings().getAllVariantIds()) {
+            if (vid.startsWith(hullId + "_")) {
+                return vid;
+            }
+        }
+        // Fallback: use hull_id + "_Standard" convention
+        return hullId + "_Standard";
     }
 }

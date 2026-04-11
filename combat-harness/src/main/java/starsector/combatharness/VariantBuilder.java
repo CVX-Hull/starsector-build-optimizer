@@ -16,6 +16,9 @@ import com.fs.starfarer.api.combat.ShipHullSpecAPI;
  */
 public class VariantBuilder {
 
+    /** Standard deployment CR (70%). Matches stock mission setup behavior. */
+    private static final float DEPLOYMENT_CR = 0.7f;
+
     /**
      * Create a ShipVariantAPI in memory from a build specification.
      *
@@ -51,12 +54,15 @@ public class VariantBuilder {
 
     /**
      * Create a FleetMemberAPI from a build specification.
+     * Sets CR to max so the ship deploys combat-ready.
      *
      * @param spec build specification
-     * @return FleetMemberAPI wrapping the programmatically created variant
+     * @return FleetMemberAPI wrapping the programmatically created variant, at max CR
      */
     public static FleetMemberAPI createFleetMember(MatchupConfig.BuildSpec spec) {
         ShipVariantAPI variant = createVariant(spec);
-        return Global.getSettings().createFleetMember(FleetMemberType.SHIP, variant);
+        FleetMemberAPI member = Global.getSettings().createFleetMember(FleetMemberType.SHIP, variant);
+        member.getRepairTracker().setCR(DEPLOYMENT_CR);
+        return member;
     }
 }
