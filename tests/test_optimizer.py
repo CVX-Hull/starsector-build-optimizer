@@ -13,6 +13,7 @@ from starsector_optimizer.opponent_pool import DEFAULT_OPPONENT_POOL, OpponentPo
 from starsector_optimizer.optimizer import (
     BuildCache,
     OptimizerConfig,
+    _create_sampler,
     build_to_trial_params,
     define_distributions,
     preflight_check,
@@ -93,6 +94,21 @@ class TestBuildConversion:
         params = build_to_trial_params(build, wolf_space)
         reconstructed = trial_params_to_build(params, "wolf")
         assert reconstructed.hullmods == build.hullmods
+
+    def test_trial_params_to_build_with_fixed_params(self, wolf_space):
+        """Fixed params are merged into the build."""
+        # Create params with all empty weapons and no hullmods
+        params = {f"weapon_{sid}": "empty" for sid in wolf_space.weapon_options}
+        for mod_id in wolf_space.eligible_hullmods:
+            params[f"hullmod_{mod_id}"] = False
+        params["flux_vents"] = 5
+        params["flux_capacitors"] = 3
+
+        # Fix a hullmod to True
+        fixed = {f"hullmod_{wolf_space.eligible_hullmods[0]}": True, "flux_vents": 10}
+        build = trial_params_to_build(params, "wolf", fixed_params=fixed)
+        assert wolf_space.eligible_hullmods[0] in build.hullmods
+        assert build.flux_vents == 10  # fixed overrides the 5
 
 
 # --- Build Cache Tests ---
@@ -209,6 +225,66 @@ class TestDefineDistributions:
         dists = define_distributions(wolf_space)
         expected = len(wolf_space.weapon_options) + len(wolf_space.eligible_hullmods) + 2
         assert len(dists) == expected
+
+    def test_fixed_params_excluded_from_distributions(self, wolf_space):
+        """Fixed hullmod param is excluded from distributions."""
+        mod_id = wolf_space.eligible_hullmods[0]
+        fixed = {f"hullmod_{mod_id}": True}
+        dists = define_distributions(wolf_space, fixed_params=fixed)
+        assert f"hullmod_{mod_id}" not in dists
+        # Total count reduced by 1
+        expected = len(wolf_space.weapon_options) + len(wolf_space.eligible_hullmods) + 2 - 1
+        assert len(dists) == expected
+
+    def test_fixed_weapon_excluded(self, wolf_space):
+        """Fixed weapon slot is excluded from distributions."""
+        slot_id = next(iter(wolf_space.weapon_options))
+        weapon_id = wolf_space.weapon_options[slot_id][1]  # first non-empty option
+        fixed = {f"weapon_{slot_id}": weapon_id}
+        dists = define_distributions(wolf_space, fixed_params=fixed)
+        assert f"weapon_{slot_id}" not in dists
+
+    def test_fixed_flux_excluded(self, wolf_space):
+        """Fixed flux_vents is excluded from distributions."""
+        fixed = {"flux_vents": 15}
+        dists = define_distributions(wolf_space, fixed_params=fixed)
+        assert "flux_vents" not in dists
+
+    def test_fixed_params_none_is_no_op(self, wolf_space):
+        """fixed_params=None returns all distributions."""
+        dists_none = define_distributions(wolf_space, fixed_params=None)
+        dists_default = define_distributions(wolf_space)
+        assert len(dists_none) == len(dists_default)
+
+
+# --- Sampler Factory Tests ---
+
+
+class TestSamplerFactory:
+
+    def test_tpe_sampler_creation(self):
+        """sampler='tpe' creates a TPESampler."""
+        config = OptimizerConfig(sampler="tpe")
+        sampler = _create_sampler(config)
+        assert isinstance(sampler, optuna.samplers.TPESampler)
+
+    def test_catcma_sampler_creation(self):
+        """sampler='catcma' creates a CatCMAwM sampler."""
+        config = OptimizerConfig(sampler="catcma")
+        sampler = _create_sampler(config)
+        # CatCMAwMSampler is loaded dynamically, just check it's a BaseSampler
+        assert isinstance(sampler, optuna.samplers.BaseSampler)
+
+    def test_invalid_sampler_raises(self):
+        """Unknown sampler value raises ValueError."""
+        config = OptimizerConfig(sampler="invalid")
+        with pytest.raises(ValueError, match="Unknown sampler"):
+            _create_sampler(config)
+
+    def test_default_sampler_is_tpe(self):
+        """Default sampler is 'tpe'."""
+        config = OptimizerConfig()
+        assert config.sampler == "tpe"
 
 
 # --- Warm Start Tests ---

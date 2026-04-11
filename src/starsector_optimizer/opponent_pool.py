@@ -39,7 +39,6 @@ DEFAULT_OPPONENT_POOL = OpponentPool(
             "dominator_Assault",
             "dominator_XIV_Elite",
             "aurora_Assault",
-            "heron_Attack",
             "doom_Strike",
             "eagle_Assault",
         ),

@@ -393,3 +393,25 @@ class Heartbeat:
     enemy_hp: float
     player_alive: int
     enemy_alive: int
+
+
+@dataclass(frozen=True)
+class CombatFitnessConfig:
+    """Tunable coefficients for the hierarchical combat fitness function."""
+    shield_damage_weight: float = 0.3
+    engagement_threshold: float = 500.0
+    engagement_penalty: float = -0.5
+    engagement_scale: float = 0.5
+    loss_engagement_scale: float = 0.3
+    speed_bonus_weight: float = 0.04
+    hp_bonus_weight: float = 0.03
+    overload_bonus_base: float = 0.02
+    overload_penalty_per: float = 0.005
+    armor_bonus_weight: float = 0.01
+    time_limit: float = 180.0
+
+
+@dataclass(frozen=True)
+class ImportanceResult:
+    """Parameter importance analysis result from fANOVA."""
+    importances: dict[str, float]  # param_name -> importance (0.0–1.0, sums to ~1.0)

@@ -24,8 +24,14 @@ def main():
     parser.add_argument("--sim-budget", type=int, default=50, help="Number of build evaluations")
     parser.add_argument("--study-db", type=str, default=None, help="SQLite path for study persistence")
     parser.add_argument("--fitness-mode", choices=["mean", "minimax"], default="mean")
+    parser.add_argument("--sampler", choices=["tpe", "catcma"], default="tpe",
+                        help="Optimization sampler: tpe (default) or catcma")
     parser.add_argument("--heuristic-only", action="store_true",
                         help="Use heuristic score instead of simulation (for testing)")
+    parser.add_argument("--analyze-importance", action="store_true",
+                        help="Run fANOVA importance analysis on existing study and exit")
+    parser.add_argument("--fix-params", type=Path, default=None,
+                        help="JSON file mapping param names to fixed values")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -47,9 +53,35 @@ def main():
     print(f"Hull size: {hull.hull_size.name}, opponents: {len(opponents)}")
 
     storage = f"sqlite:///{args.study_db}" if args.study_db else None
+
+    # Load fixed params if provided
+    fixed_params = None
+    if args.fix_params:
+        import json
+        with open(args.fix_params) as f:
+            fixed_params = json.load(f)
+        if not isinstance(fixed_params, dict):
+            print("Error: --fix-params JSON must be a dict mapping param names to values")
+            sys.exit(1)
+        print(f"Fixed params: {len(fixed_params)} parameters frozen")
+
+    # Analyze importance mode
+    if args.analyze_importance:
+        if not args.study_db:
+            print("Error: --analyze-importance requires --study-db")
+            sys.exit(1)
+        import optuna
+        from starsector_optimizer.importance import analyze_importance, print_importance_report
+        study = optuna.load_study(study_name=args.hull, storage=storage)
+        result = analyze_importance(study)
+        print(print_importance_report(result))
+        return
+
     config = OptimizerConfig(
         sim_budget=args.sim_budget,
         fitness_mode=args.fitness_mode,
+        sampler=args.sampler,
+        fixed_params=fixed_params,
         study_storage=storage,
     )
 

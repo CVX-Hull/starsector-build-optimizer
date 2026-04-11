@@ -19,9 +19,29 @@ Three tiers with non-overlapping ranges guarantee a total ordering:
 
 No timeout score exceeds any win score. No loss score exceeds the worst timeout.
 
+## Classes
+
+### `CombatFitnessConfig`
+
+Frozen dataclass in `models.py`. Externalizes all tunable coefficients (no magic numbers in function bodies).
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `shield_damage_weight` | `float` | `0.3` | Weight for recoverable shield damage (vs 1.0 for armor/hull) |
+| `engagement_threshold` | `float` | `500.0` | Minimum total weighted damage to count as "engaged" |
+| `engagement_penalty` | `float` | `-0.5` | Score when ships never meaningfully fought |
+| `engagement_scale` | `float` | `0.5` | Scales damage ratio to [-scale, +scale] |
+| `loss_engagement_scale` | `float` | `0.3` | Compresses engagement score into loss tier |
+| `speed_bonus_weight` | `float` | `0.04` | Weight for kill speed bonus |
+| `hp_bonus_weight` | `float` | `0.03` | Weight for hull HP preserved bonus |
+| `overload_bonus_base` | `float` | `0.02` | Base bonus for low overloads |
+| `overload_penalty_per` | `float` | `0.005` | Penalty per player overload |
+| `armor_bonus_weight` | `float` | `0.01` | Weight for armor preserved bonus |
+| `time_limit` | `float` | `180.0` | Game-time limit for speed bonus normalization |
+
 ## Functions
 
-### `combat_fitness(result, time_limit, engagement_threshold) -> float`
+### `combat_fitness(result, config) -> float`
 
 Single-matchup fitness from `CombatResult`.
 
@@ -29,30 +49,29 @@ Single-matchup fitness from `CombatResult`.
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `result` | `CombatResult` | required | Single matchup result |
-| `time_limit` | `float` | `180.0` | Game-time limit (for speed bonus normalization) |
-| `engagement_threshold` | `float` | `500.0` | Minimum total permanent damage to count as "engaged" |
+| `config` | `CombatFitnessConfig` | `CombatFitnessConfig()` | All tunable coefficients |
 
 **Engagement score** (for timeouts and loss gradient):
 
-Computes weighted damage: `armor_dmg + hull_dmg + shield_dmg * 0.3`. Shield damage weighted at 0.3x because it regenerates (soft flux vents passively). Armor + hull damage is permanent.
+Computes weighted damage: `armor_dmg + hull_dmg + shield_dmg * config.shield_damage_weight`. Shield damage weighted at 0.3x because it regenerates (soft flux vents passively). Armor + hull damage is permanent.
 
-If total weighted damage < `engagement_threshold`: return -0.5 (ships never meaningfully fought — build cannot close to range).
+If total weighted damage < `config.engagement_threshold`: return `config.engagement_penalty` (ships never meaningfully fought — build cannot close to range).
 
-Otherwise: damage ratio `(player_dmg - enemy_dmg) / total_dmg` scaled to [-0.5, +0.5].
+Otherwise: damage ratio `(player_dmg - enemy_dmg) / total_dmg` scaled to [-scale, +scale].
 
 **Efficiency bonus** (wins only, range [0.0, 0.1]):
 
-- Speed: `max(0, 1 - duration / time_limit) * 0.04` — faster kills
-- HP preserved: `mean(hull_fraction for player ships) * 0.03` — margin of victory
-- Low overloads: `max(0, 0.02 - player_overload_count * 0.005)` — flux management
-- Armor preserved: `mean(armor_fraction for player ships) * 0.01` — efficient engagement
+- Speed: `max(0, 1 - duration / config.time_limit) * config.speed_bonus_weight` — faster kills
+- HP preserved: `mean(hull_fraction for player ships) * config.hp_bonus_weight` — margin of victory
+- Low overloads: `max(0, config.overload_bonus_base - player_overload_count * config.overload_penalty_per)` — flux management
+- Armor preserved: `mean(armor_fraction for player ships) * config.armor_bonus_weight` — efficient engagement
 
 **Combined:**
 - PLAYER win: `1.0 + efficiency_bonus` → [1.0, 1.1]
-- ENEMY win: `-1.0 + (engagement_score + 0.5) * 0.3` → [-1.0, -0.85]
+- ENEMY win: `-1.0 + (engagement_score + 0.5) * config.loss_engagement_scale` → [-1.0, -0.85]
 - TIMEOUT/STOPPED: `engagement_score` → [-0.5, +0.5]
 
-### `aggregate_combat_fitness(results, mode, time_limit, engagement_threshold) -> float`
+### `aggregate_combat_fitness(results, mode, config) -> float`
 
 Aggregates `combat_fitness` across multiple matchup results.
 
@@ -60,8 +79,7 @@ Aggregates `combat_fitness` across multiple matchup results.
 |-----------|------|---------|-------------|
 | `results` | `list[CombatResult]` | required | Results from opponent pool |
 | `mode` | `str` | `"mean"` | `"mean"` (average) or `"minimax"` (minimum) |
-| `time_limit` | `float` | `180.0` | Passed to `combat_fitness` |
-| `engagement_threshold` | `float` | `500.0` | Passed to `combat_fitness` |
+| `config` | `CombatFitnessConfig` | `CombatFitnessConfig()` | Passed to `combat_fitness` |
 
 Raises `ValueError` if `results` is empty.
 

@@ -92,6 +92,16 @@ class TestOpponentPool:
         with pytest.raises(KeyError):
             get_opponents(pool, HullSize.FRIGATE)
 
+    def test_cruiser_pool_has_five_opponents(self):
+        """CRUISER pool has exactly 5 opponents after heron_Attack removal."""
+        opponents = get_opponents(DEFAULT_OPPONENT_POOL, HullSize.CRUISER)
+        assert len(opponents) == 5
+
+    def test_cruiser_pool_excludes_heron(self):
+        """heron_Attack removed from CRUISER pool — kiting carrier produces no fitness gradient."""
+        opponents = get_opponents(DEFAULT_OPPONENT_POOL, HullSize.CRUISER)
+        assert "heron_Attack" not in opponents
+
 
 # --- Generate Matchups Tests ---
 

@@ -80,26 +80,46 @@ Frozen dataclass parsed from heartbeat file content.
 class CurtailmentMonitor:
     def __init__(
         self,
-        min_time: float = 30.0,      # game-time seconds before curtailment allowed
-        ttd_ratio: float = 3.0,      # TTD ratio threshold for stopping
-        window: int = 10,            # heartbeat window for rate estimation
-        max_ttd: float = 60.0,       # faster-dying side must die within this (game-time)
+        min_time: float = 30.0,              # game-time seconds before TTD curtailment allowed
+        ttd_ratio: float = 3.0,              # TTD ratio threshold for stopping
+        window: int = 10,                    # heartbeat window for rate estimation
+        max_ttd: float = 60.0,               # faster-dying side must die within this (game-time)
+        stalemate_min_time: float = 60.0,    # game-time seconds before stalemate check activates
+        stalemate_threshold: float = 0.01,   # max HP fraction loss rate per second per side
     ) -> None: ...
 
     def should_stop(self, heartbeats: list[Heartbeat]) -> tuple[bool, str | None]:
-        """Returns (should_stop, predicted_winner). Winner is 'PLAYER' or 'ENEMY'."""
+        """Returns (should_stop, predicted_winner).
+
+        Winner is 'PLAYER', 'ENEMY', or None (stalemate — no predicted winner).
+        The predicted_winner is for logging/curtailment only — the Java harness
+        independently determines the actual CombatResult.winner ('PLAYER', 'ENEMY',
+        'TIMEOUT', or 'STOPPED'). A None winner from stalemate detection means
+        'no predicted winner' and the Java side will record 'STOPPED'.
+        """
 
     @staticmethod
     def write_stop_signal(saves_common: Path) -> None:
         """Write stop signal file to instance's saves/common/."""
 ```
 
-## Future: Empirical Probability Calibration
+## Stalemate Detection
 
-After accumulating 500+ completed fight results with heartbeat trajectories, the ad-hoc TTD ratio threshold can be upgraded to a statistically calibrated stopping rule:
+The TTD-ratio algorithm handles asymmetric fights (one side dying much faster). It misses symmetric stalemates where both sides have near-zero HP loss rates — e.g., shield/flux equilibrium where neither ship can overload the other, creating infinite disengage/vent/reengage cycles.
 
-1. At each `(time_fraction, ttd_ratio)` pair from historical fights, record the actual outcome
-2. Build a lookup table: `P(winner=A | ttd_ratio=R, time_fraction=T)`
-3. Stop when `P(outcome unchanged) > 0.95`
+**Algorithm:** Using the same sliding window rates computed by the TTD-ratio check:
 
-This is a Phase 2 improvement — the initial TTD ratio heuristic is sufficient for Phase 3.5.
+1. If `elapsed < stalemate_min_time`: skip (allow fights time to develop)
+2. If BOTH `rate_player < stalemate_threshold` AND `rate_enemy < stalemate_threshold`: return `(True, None)`
+3. The `None` winner signals a stalemate with no predicted winner
+
+The stalemate check runs AFTER the TTD-ratio check fails. When both rates are below `eps` (0.001), both TTDs are infinity, so the TTD-ratio check never triggers — the two checks are complementary with no conflict.
+
+**Parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `stalemate_min_time` | `60.0` | Game-time seconds before stalemate detection activates. Protects fights that start slow but develop (e.g., long approach times). |
+| `stalemate_threshold` | `0.01` | Max HP fraction loss rate per second per side. Below this, the side is considered "not taking meaningful damage." 0.01 = less than 1% of total HP per second. |
+
+**Benchmark justification:** Replaying the 203-trial Eagle evaluation log (`experiments/eagle_200/timeout_strategy_benchmark.ipynb`), stalemate detection at 60s with threshold 0.01 saves **41.9% of combat time** while preserving **rho=0.987 Spearman rank correlation**, **10/10 top-10 overlap**, with only **2 decisive fights lost**.

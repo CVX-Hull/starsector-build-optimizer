@@ -18,7 +18,7 @@ Frozen dataclass mapping hull sizes to stock variant IDs.
 
 ### `DEFAULT_OPPONENT_POOL`
 
-Module-level constant. Single `OpponentPool` instance with curated opponents covering archetypes: shield tank, armor tank, kiter, carrier, phase.
+Module-level constant. Single `OpponentPool` instance with curated opponents covering archetypes: shield tank, armor tank, kiter, phase. Carrier coverage exists at CAPITAL_SHIP tier (astral_Elite) — cruiser-class carriers like heron were removed because they kite outside engagement range of most cruisers, producing timeouts with no fitness gradient (74% timeout rate, near-zero HP differential in 200-trial Eagle experiment).
 
 Variant IDs match filenames in `data/variants/` (without `.variant` extension):
 
@@ -26,7 +26,7 @@ Variant IDs match filenames in `data/variants/` (without `.variant` extension):
 |-----------|-----------|
 | FRIGATE | `wolf_Assault`, `lasher_Assault`, `hyperion_Attack`, `shade_Assault` |
 | DESTROYER | `hammerhead_Elite`, `medusa_Attack`, `enforcer_Assault`, `sunder_Assault` |
-| CRUISER | `dominator_Assault`, `dominator_XIV_Elite`, `aurora_Assault`, `heron_Attack`, `doom_Strike`, `eagle_Assault` |
+| CRUISER | `dominator_Assault`, `dominator_XIV_Elite`, `aurora_Assault`, `doom_Strike`, `eagle_Assault` |
 | CAPITAL_SHIP | `onslaught_Standard`, `onslaught_xiv_Elite`, `legion_xiv_Elite`, `astral_Elite`, `conquest_Elite` |
 
 ## Functions

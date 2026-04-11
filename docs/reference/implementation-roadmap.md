@@ -233,24 +233,29 @@ Connect the Optuna optimizer framework to the evaluation pipeline with a diverse
    - Score = continuous HP differential (not binary win/loss) averaged across opponents
    - Log to shared JSONL (`evaluation_log.jsonl`)
 
-3. **Optuna integration**
-   - `TPESampler(multivariate=True, constant_liar=True, n_ei_candidates=256, n_startup_trials=100)`
+3. **Optuna integration with sampler selection**
+   - Default: `TPESampler(multivariate=True, constant_liar=True, n_ei_candidates=256, n_startup_trials=100)`
+   - Alternative: `CatCmawmSampler` via OptunaHub (`--sampler catcma`) for cross-variable correlation modeling
    - Ask-tell loop: `study.ask()` → repair → evaluate against opponent pool → `study.add_trial()` with repaired params (Lamarckian)
    - Report OP budget violation via `constraints_func` (biases TPE away from infeasible regions)
-   - Swappable sampler: start TPE, option to switch to CatCMAwM via OptunaHub for refinement
 
-4. **Heuristic warm-start pipeline**
+4. **Parameter importance analysis**
+   - fANOVA via `optuna.importance.get_param_importances()` to identify low-impact parameters
+   - Fixed-parameter support: `--fix-params` freezes chosen parameters, reducing effective dimensionality
+   - Workflow: initial run → analyze importance → freeze bottom-50% params → re-run in reduced space
+
+5. **Heuristic warm-start pipeline**
    - Stage 1: Generate 50K-100K random builds via `generate_diverse_builds()`, score with heuristic (~seconds)
    - Stage 2: Select top-500 as initial study trials via `study.add_trial()` with heuristic scores
    - Stage 3: Run 20-50 simulation evaluations on top heuristic builds (calibrate GP / TPE model)
    - Stage 4: Full optimizer-guided simulation search with informed model
 
-5. **Racing for final validation**
+6. **Racing for final validation**
    - Top-10 candidates get 5-10 replays per opponent for variance reduction
    - Friedman test eliminates statistically inferior builds
    - Final output: ranked builds with confidence intervals and per-opponent matchup profiles
 
-6. **Result logging and visualization**
+7. **Result logging and visualization**
    - Append-only JSONL log (feeds both TimeoutTuner and Phase 6 surrogate)
    - Per-trial: build spec, repaired build, all opponent scores, heartbeat trajectories
    - Convergence curves, per-opponent win rates, build comparison table

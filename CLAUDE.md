@@ -5,8 +5,8 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - **Phase 1** (complete): Data layer — game data parsing, search space, constraint repair, heuristic scoring, variant generation.
 - **Phase 2** (complete): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
 - **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
-- **Phase 3.5** (complete): Stochastic curtailment (TTD-ratio extrapolation) + data-driven timeout tuning (Weibull AFT).
-- **Phase 4** (complete): Optimizer integration — Optuna TPE, opponent pool, heuristic warm-start.
+- **Phase 3.5** (complete): Stochastic curtailment (TTD-ratio extrapolation + stalemate detection) + data-driven timeout tuning (Weibull AFT).
+- **Phase 4** (complete): Optimizer integration — Optuna TPE/CatCMAwM, opponent pool, heuristic warm-start, parameter importance.
 
 ## Commands
 
@@ -20,17 +20,27 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - Game data location: `game/starsector/data/` (gitignored, not in repo)
 - See `combat-harness/CLAUDE.md` for Java-specific instructions
 
-## Workflow — DDD + TDD
+## Workflow Gates
 
-For every module: write spec doc (`docs/specs/`) first, then tests, then implementation. Never implement without a spec and failing tests first.
+For every module: spec first (`docs/specs/`), then tests, then implementation. The four skills in `.claude/skills/` enforce quality at each gate:
+
+| Gate | When | Skill |
+|------|------|-------|
+| **Planning** | Before any non-trivial implementation | Enter plan mode. Follow `ddd-tdd` lifecycle. |
+| **Plan review** | Before calling ExitPlanMode | Run the `plan-review` checklist: self-review + 3 parallel audit sub-agents. |
+| **Implementation** | During coding | Follow `ddd-tdd` step 3: one concern per change, verify after each module. |
+| **Post-implementation** | After all implementation tasks complete | Run the `post-impl-audit` checklist: mechanical checks + 3 parallel audit sub-agents. |
+| **Invariant check** | When reviewing any code change | Reference `design-invariants` for the full checklist. |
+
+For Starsector Java modding specifics (sandbox, file I/O, Janino, combat plugin patterns), see `.claude/skills/starsector-modding.md`.
 
 ## Design Principles
 
 1. **Single source of truth for game knowledge.** All hardcoded hullmod effects, incompatibilities, and game constants live in `hullmod_effects.py`. Never duplicate hullmod logic in scorer, repair, or search_space.
 
-2. **Immutable domain models.** `Build`, `EffectiveStats`, `ScorerResult` are frozen dataclasses. Repair returns new instances. `Build.hullmods` is `frozenset`.
+2. **Immutable domain models.** `Build`, `EffectiveStats`, `ScorerResult`, `CombatFitnessConfig`, `ImportanceResult` are frozen dataclasses. Repair returns new instances. `Build.hullmods` is `frozenset`.
 
-3. **Optimizer-space vs domain-space boundary.** Raw optimizer proposals (with `vent_fraction`, potentially infeasible) go through `repair_build()` to produce valid `Build` objects. Everything downstream of repair works with concrete, valid Builds.
+3. **Optimizer-space vs domain-space boundary.** Raw optimizer proposals (potentially infeasible) go through `repair_build()` to produce valid `Build` objects. Everything downstream of repair works with concrete, valid Builds.
 
 4. **Data-driven over logic-driven.** Hullmod effects are a declarative `HULLMOD_EFFECTS` registry dict, not scattered if-else chains. Adding a hullmod effect = one dict entry.
 
@@ -38,20 +48,7 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 
 6. **Structured scorer output.** `heuristic_score()` returns `ScorerResult` with all component metrics. These become Phase 5 behavior descriptors and Phase 6 features without refactoring.
 
-7. **Verify game facts against actual game files, never assume.** The game data files at `game/starsector/data/` are the ground truth. When working with game-specific knowledge (hullmod IDs, effect values, CSV column meanings, slot types, damage formulas, tag conventions), always verify against the actual data files before hardcoding or referencing. The reference docs in `docs/reference/` are secondary and may be stale. Specific pitfalls encountered:
-   - Hullmod IDs are non-obvious (e.g., `hardenedshieldemitter` not `hardenedshields`, `frontshield` not `makeshift_shield_generator`). Look up in `data/hullmods/hull_mods.csv`.
-   - The `type` column in `weapon_data.csv` is **damage type** (KINETIC, HE, ENERGY, FRAG), NOT weapon type. Weapon type (BALLISTIC/ENERGY/MISSILE) comes from `.wpn` files.
-   - The `designation` column in `ship_data.csv` is a role string (e.g., "Battleship"), NOT hull size. Hull size comes from `hullSize` in `.ship` JSON files.
-   - Hullmod effects like Safety Overrides have non-obvious formulas (range compression, not a hard cap). Check the wiki or game code when adding hullmod effects.
-   - Tag conventions change between game versions (e.g., logistics detection uses `"Logistics"` in `uiTags`, not `"logistics"` in `tags`).
-
-8. **Verify bundled library versions, never assume modern semantics.** The game bundles old versions of common libraries (e.g., `json.jar` is an ancient org.json with checked `JSONException` on `put()`/`getString()`). When writing Java code against game-bundled libraries, check the actual JAR for method signatures and exception types. Do not assume the modern version's API. Similarly, Starsector API methods inherited from parent interfaces (e.g., `getHullLevel()` on `CombatEntityAPI`) may not appear in the child interface's source — check the full inheritance chain.
-
-9. **Cross-check spec against implementation field-by-field.** When a spec defines a JSON schema (e.g., result.json), every field in the schema must appear in both the Java writer and the Python dataclass. Schema drift between spec, Java, and Python is easy to miss — especially optional/aggregate fields like retreat counts. Reference the spec document during implementation, don't rely on memory.
-
-10. **Starsector's security sandbox blocks `java.io.File`.** All mod file I/O must use `Global.getSettings()` methods: `readTextFileFromCommon(name)`, `writeTextFileToCommon(name, data)`, `fileExistsInCommon(name)`. Files go to `<starsector>/saves/common/` and the game **appends `.data`** to all filenames. Python must write files with the `.data` extension for the game to find them. Use flat filenames with a `combat_harness_` prefix (subdirectories may not work).
-
-11. **Starsector compiles loose `.java` files via Janino, but Janino can't resolve JAR classes.** If a mission script imports classes from your mod JAR, Janino compilation fails. Solution: put the MissionDefinition class in the JAR with the correct package (`data.missions.<name>`) — the game detects "already loaded from jar file" and skips Janino compilation.
+7. **Verify game facts against actual game files, never assume.** The game data files at `game/starsector/data/` are the ground truth. Specific pitfalls: hullmod IDs are non-obvious (check `hull_mods.csv`), `weapon_data.csv` `type` is damage type not weapon type, `ship_data.csv` `designation` is a role string not hull size. See `.claude/skills/starsector-modding.md` for the full list.
 
 ## Design Invariants
 
@@ -59,13 +56,15 @@ For every module: write spec doc (`docs/specs/`) first, then tests, then impleme
 - `compute_effective_stats()` is the ONLY function that applies hullmod stat modifications
 - `HULLMOD_EFFECTS`, `INCOMPATIBLE_PAIRS`, `HULL_SIZE_RESTRICTIONS` are the ONLY locations for hardcoded hullmod game knowledge
 - All game constants (MAX_VENTS, damage multipliers, etc.) are in `hullmod_effects.py`, not scattered
-- **No magic numbers in function bodies.** Timeouts, coordinates, polling intervals, thresholds, and batch sizes must live in config dataclasses (`InstanceConfig`, `OptimizerConfig`, `CurtailmentMonitor` params) — never as literals in function bodies. This ensures values are discoverable, overridable in tests, and documented in one place.
+- **No magic numbers in function bodies.** Timeouts, coordinates, polling intervals, thresholds, and batch sizes must live in config dataclasses (`InstanceConfig`, `OptimizerConfig`, `CombatFitnessConfig`, `CurtailmentMonitor` params) — never as literals in function bodies.
+
+For the full mechanical checklist with runnable grep commands, see `.claude/skills/design-invariants.md`.
 
 ## Project Layout
 
 ```
 src/starsector_optimizer/          # Python modules
-├── models.py                      # Dataclasses + enums (ShipHull, Weapon, Build, etc.)
+├── models.py                      # Dataclasses + enums (ShipHull, Weapon, Build, CombatFitnessConfig, etc.)
 ├── hullmod_effects.py             # Game constants, hullmod effect registry
 ├── parser.py                      # CSV + loose JSON → model objects
 ├── search_space.py                # Per-hull weapon/hullmod compatibility
@@ -76,10 +75,11 @@ src/starsector_optimizer/          # Python modules
 ├── estimator.py                   # Throughput + cost estimation for simulation campaigns
 ├── result_parser.py               # Parse combat result JSON ↔ Python dataclasses
 ├── instance_manager.py            # Manage N parallel Starsector game instances
-├── curtailment.py                 # Stochastic curtailment (TTD-ratio extrapolation)
+├── curtailment.py                 # Stochastic curtailment (TTD-ratio + stalemate detection)
 ├── timeout_tuner.py               # Data-driven timeout prediction (Weibull AFT)
 ├── combat_fitness.py              # Hierarchical composite combat fitness score
 ├── opponent_pool.py               # Diverse opponent pool per hull size
+├── importance.py                  # Parameter importance analysis (fANOVA) + fixed params
 └── optimizer.py                   # Optuna integration, ask-tell loop, warm-start
 
 combat-harness/                    # Java combat harness mod
@@ -108,4 +108,11 @@ combat-harness/                    # Java combat harness mod
 docs/
 ├── specs/                         # DDD module specifications (drive implementation)
 └── reference/                     # Background research and game mechanics reference
+
+.claude/skills/                    # Quality gate skills
+├── ddd-tdd.md                     # Spec → test → impl → verify lifecycle
+├── design-invariants.md           # Full invariant checklist with mechanical checks
+├── plan-review.md                 # Pre-approval review (self-review + 3 audit agents)
+├── post-impl-audit.md             # Post-implementation verification (checks + 3 audit agents)
+└── starsector-modding.md          # Java modding pitfalls (sandbox, file I/O, Janino, etc.)
 ```

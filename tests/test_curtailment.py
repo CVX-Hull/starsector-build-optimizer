@@ -1,4 +1,4 @@
-"""Tests for curtailment monitor — heartbeat parsing and TTD-ratio stopping."""
+"""Tests for curtailment monitor — heartbeat parsing, TTD-ratio stopping, and stalemate detection."""
 
 from pathlib import Path
 
@@ -140,6 +140,107 @@ class TestCurtailmentDecisions:
         assert stop
         assert winner == "ENEMY"
 
+
+
+# --- Stalemate detection tests ---
+
+
+class TestStalemateDetection:
+
+    def test_stalemate_detected_when_both_sides_flat(self):
+        """Both sides losing < 0.01 HP/s over window, elapsed > 60s → stalemate."""
+        monitor = CurtailmentMonitor(stalemate_min_time=60.0, stalemate_threshold=0.01)
+        # Both sides lose 0.001/s — well below 0.01 threshold
+        hbs = _make_heartbeats(
+            [(0.95 - i * 0.001, 0.90 - i * 0.001) for i in range(15)],
+            start_elapsed=55.0,
+        )
+        stop, winner = monitor.should_stop(hbs)
+        assert stop
+        assert winner is None
+
+    def test_no_stalemate_before_min_time(self):
+        """Same flat rates but elapsed < 60s → no stalemate."""
+        monitor = CurtailmentMonitor(stalemate_min_time=60.0, stalemate_threshold=0.01)
+        hbs = _make_heartbeats(
+            [(0.95 - i * 0.001, 0.90 - i * 0.001) for i in range(15)],
+            start_elapsed=40.0,  # all before 60s
+        )
+        stop, winner = monitor.should_stop(hbs)
+        assert not stop
+
+    def test_no_stalemate_when_one_side_losing(self):
+        """Player losing HP significantly → not a stalemate."""
+        monitor = CurtailmentMonitor(
+            min_time=0.0, stalemate_min_time=0.0, stalemate_threshold=0.01,
+        )
+        # Player losing 0.03/s (above threshold), enemy losing 0.001/s
+        hbs = _make_heartbeats(
+            [(0.95 - i * 0.03, 0.90 - i * 0.001) for i in range(15)],
+            start_elapsed=35.0,
+        )
+        stop, winner = monitor.should_stop(hbs)
+        # Either TTD-ratio triggers (with a winner) or no stop at all
+        if stop:
+            assert winner is not None  # TTD-ratio, not stalemate
+
+    def test_stalemate_min_time_configurable(self):
+        """Custom stalemate_min_time=90 → no trigger at 70s, trigger at 95s."""
+        flat_pairs = [(0.95 - i * 0.001, 0.90 - i * 0.001) for i in range(15)]
+
+        m90 = CurtailmentMonitor(stalemate_min_time=90.0, stalemate_threshold=0.01)
+
+        # At elapsed=70 → should not trigger
+        hbs_early = _make_heartbeats(flat_pairs, start_elapsed=60.0)
+        stop_early, _ = m90.should_stop(hbs_early)
+        assert not stop_early
+
+        # At elapsed=95 → should trigger
+        hbs_late = _make_heartbeats(flat_pairs, start_elapsed=90.0)
+        stop_late, winner_late = m90.should_stop(hbs_late)
+        assert stop_late
+        assert winner_late is None
+
+    def test_stalemate_threshold_configurable(self):
+        """Tighter threshold=0.005 catches slower stalemates."""
+        monitor = CurtailmentMonitor(
+            stalemate_min_time=0.0, stalemate_threshold=0.005,
+        )
+        # Rate of 0.003/s — below 0.005 threshold
+        hbs = _make_heartbeats(
+            [(0.95 - i * 0.003, 0.90 - i * 0.003) for i in range(15)],
+            start_elapsed=35.0,
+        )
+        stop, winner = monitor.should_stop(hbs)
+        assert stop
+        assert winner is None
+
+    def test_stalemate_returns_none_winner(self):
+        """Stalemate winner is None, not 'PLAYER' or 'ENEMY'."""
+        monitor = CurtailmentMonitor(
+            stalemate_min_time=0.0, stalemate_threshold=0.01,
+        )
+        hbs = _make_heartbeats(
+            [(0.95, 0.90)] * 15,  # perfectly flat
+            start_elapsed=35.0,
+        )
+        stop, winner = monitor.should_stop(hbs)
+        assert stop
+        assert winner is None
+
+    def test_ttd_ratio_takes_priority(self):
+        """One side dying 3x faster → TTD-ratio fires first with a winner."""
+        monitor = CurtailmentMonitor(
+            min_time=0.0, window=5,
+            stalemate_min_time=0.0, stalemate_threshold=0.01,
+        )
+        hbs = _make_heartbeats(
+            [(1.0 - i * 0.005, 0.5 - i * 0.03) for i in range(15)],
+            start_elapsed=35.0,
+        )
+        stop, winner = monitor.should_stop(hbs)
+        assert stop
+        assert winner is not None  # TTD-ratio gives PLAYER, not None
 
 
 # --- Stop signal tests ---

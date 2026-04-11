@@ -26,5 +26,13 @@ combat-harness/mod/workdir/matchup.json
 combat-harness/mod/workdir/result.json
 combat-harness/mod/workdir/heartbeat.txt
 
+# Active run artifacts (future runs write here, committed data lives in experiments/)
+data/
+*.db
+!experiments/**/*.db
+
+# Notebook outputs (re-generated on execution)
+experiments/**/eagle_200_report.html
+
 # Claude
 .claude/

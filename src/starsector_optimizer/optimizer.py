@@ -1,6 +1,6 @@
 """Optimizer — Optuna-based build optimization with heuristic warm-start.
 
-Ask-tell loop with TPE sampler, Baldwinian repair recording,
+Ask-tell loop with TPE/CatCMAwM sampler, Baldwinian repair recording,
 and hash-based deduplication.
 
 See spec 24 for design rationale.
@@ -22,7 +22,7 @@ from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, GameData, HullSize, ShipHull
+from .models import Build, CombatFitnessConfig, GameData, HullSize, ShipHull
 from .combat_fitness import aggregate_combat_fitness
 from .opponent_pool import (
     OpponentPool,
@@ -51,6 +51,8 @@ class OptimizerConfig:
     fitness_mode: str = "mean"
     eval_batch_size: int = 8  # builds per batch; set to num_instances for full utilization
     engagement_threshold: float = 500.0
+    sampler: str = "tpe"
+    fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
 
 
@@ -148,8 +150,32 @@ def validate_variant(variant: dict, game_data: GameData) -> list[str]:
     return errors
 
 
-def define_distributions(space: SearchSpace) -> dict[str, optuna.distributions.BaseDistribution]:
-    """Convert SearchSpace to Optuna distribution dict."""
+def _create_sampler(config: OptimizerConfig) -> optuna.samplers.BaseSampler:
+    """Create Optuna sampler instance from config."""
+    if config.sampler == "tpe":
+        return optuna.samplers.TPESampler(
+            multivariate=True,
+            constant_liar=True,
+            n_ei_candidates=config.n_ei_candidates,
+            n_startup_trials=config.n_startup_trials,
+        )
+    if config.sampler == "catcma":
+        import optunahub
+
+        mod = optunahub.load_module("samplers/catcmawm")
+        return mod.CatCmawmSampler()
+    raise ValueError(f"Unknown sampler: {config.sampler!r}")
+
+
+def define_distributions(
+    space: SearchSpace,
+    fixed_params: dict[str, bool | int | str] | None = None,
+) -> dict[str, optuna.distributions.BaseDistribution]:
+    """Convert SearchSpace to Optuna distribution dict.
+
+    When fixed_params is provided, those parameters are excluded from
+    distributions — they are not suggested by the sampler.
+    """
     dists: dict[str, optuna.distributions.BaseDistribution] = {}
 
     for slot_id, options in space.weapon_options.items():
@@ -160,6 +186,9 @@ def define_distributions(space: SearchSpace) -> dict[str, optuna.distributions.B
 
     dists["flux_vents"] = IntDistribution(0, space.max_vents)
     dists["flux_capacitors"] = IntDistribution(0, space.max_capacitors)
+
+    if fixed_params:
+        dists = {k: v for k, v in dists.items() if k not in fixed_params}
 
     return dists
 
@@ -181,8 +210,19 @@ def build_to_trial_params(build: Build, space: SearchSpace) -> dict:
     return params
 
 
-def trial_params_to_build(params: dict, hull_id: str) -> Build:
-    """Reconstruct a Build from an Optuna param dict."""
+def trial_params_to_build(
+    params: dict,
+    hull_id: str,
+    fixed_params: dict[str, bool | int | str] | None = None,
+) -> Build:
+    """Reconstruct a Build from an Optuna param dict.
+
+    When fixed_params is provided, those values are merged into params
+    before reconstruction — fixed values always override sampler values.
+    """
+    if fixed_params:
+        params = {**params, **fixed_params}
+
     weapons: dict[str, str | None] = {}
     hullmods: set[str] = set()
 
@@ -293,7 +333,7 @@ def evaluate_build(
         matchup_id_prefix=f"{hull.id}_{trial_number:06d}",
     )
     results = instance_pool.evaluate(matchups)
-    fitness = aggregate_combat_fitness(results, mode=config.fitness_mode, engagement_threshold=config.engagement_threshold)
+    fitness = aggregate_combat_fitness(results, mode=config.fitness_mode, config=CombatFitnessConfig(engagement_threshold=config.engagement_threshold))
 
     cache.put(repaired, fitness)
 
@@ -355,16 +395,11 @@ def optimize_hull(
     preflight_check(hull_id, game_data, instance_pool, opponent_pool)
     hull = game_data.hulls[hull_id]
     space = build_search_space(hull, game_data)
-    distributions = define_distributions(space)
+    distributions = define_distributions(space, fixed_params=config.fixed_params)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    sampler = optuna.samplers.TPESampler(
-        multivariate=True,
-        constant_liar=True,
-        n_ei_candidates=config.n_ei_candidates,
-        n_startup_trials=config.n_startup_trials,
-    )
+    sampler = _create_sampler(config)
 
     study = optuna.create_study(
         sampler=sampler,
@@ -386,7 +421,7 @@ def optimize_hull(
         # Ask batch_size trials (constant_liar handles pending trials)
         trials = [study.ask(distributions) for _ in range(batch_size)]
         builds = [
-            repair_build(trial_params_to_build(t.params, hull_id), hull, game_data)
+            repair_build(trial_params_to_build(t.params, hull_id, fixed_params=config.fixed_params), hull, game_data)
             for t in trials
         ]
 
@@ -424,7 +459,7 @@ def optimize_hull(
                         r for r in results if r.matchup_id.startswith(prefix)
                     ]
                     fitness = (
-                        aggregate_combat_fitness(build_results, mode=config.fitness_mode, engagement_threshold=config.engagement_threshold)
+                        aggregate_combat_fitness(build_results, mode=config.fitness_mode, config=CombatFitnessConfig(engagement_threshold=config.engagement_threshold))
                         if build_results
                         else -1.0
                     )

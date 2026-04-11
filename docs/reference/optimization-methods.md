@@ -10,7 +10,7 @@ This document covers each optimization method in depth: how it works, when to us
 
 1. [Method Selection Decision Tree](#1-method-selection-decision-tree)
 2. [Optuna TPE — Primary Optimizer](#2-optuna-tpe--primary-optimizer)
-3. [CatCMAwM — Evolutionary Alternative / QD Emitter](#3-catcmawm--evolutionary-alternative--qd-emitter)
+3. [CatCMAwM — Evolutionary Alternative / Primary Sampler Option](#3-catcmawm--evolutionary-alternative--primary-sampler-option)
 4. [SMAC3 — When Constraints Need ConfigSpace](#4-smac3--when-constraints-need-configspace)
 5. [Bounce — Reference Only](#5-bounce--reference-only)
 6. [Constraint Handling Strategy](#6-constraint-handling-strategy)
@@ -25,7 +25,7 @@ This document covers each optimization method in depth: how it works, when to us
 Is this a single-build optimization or archetype discovery?
 ├── Single-build optimization
 │   ├── Budget < 200 evals? → Optuna TPE + heuristic warm-start
-│   ├── Budget 200-1000 evals? → Optuna TPE (multivariate, constant_liar)
+│   ├── Budget 200-1000 evals? → Optuna TPE or CatCMAwM (via --sampler catcma)
 │   ├── Need refinement after TPE? → CatCMAwM sampler (via OptunaHub)
 │   └── Need multi-objective? → Optuna NSGA-II (Pareto per opponent)
 │
@@ -124,7 +124,7 @@ for _ in range(budget):
 
 ---
 
-## 3. CatCMAwM — Evolutionary Alternative / QD Emitter
+## 3. CatCMAwM — Evolutionary Alternative / Primary Sampler Option
 
 ### How It Works
 
