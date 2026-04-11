@@ -28,6 +28,7 @@ Player builds are specified as inline `BuildSpec` objects. The Java harness cons
 | `hullmods` | `String[]` | `hullmods` | yes | — |
 | `fluxVents` | `int` | `flux_vents` | no | `0` |
 | `fluxCapacitors` | `int` | `flux_capacitors` | no | `0` |
+| `cr` | `float` | `cr` | no | `0.7` |
 
 All fields `public final`. `weaponAssignments` wrapped in `Collections.unmodifiableMap()`. Keys are weapon slot IDs (e.g. `"WS 001"`), values are weapon IDs. Empty slots are omitted (no null values). Can be empty `{}`.
 
@@ -35,6 +36,7 @@ All fields `public final`. `weaponAssignments` wrapped in `Collections.unmodifia
 
 - `variantId` and `hullId` must be non-null and non-empty
 - `fluxVents` and `fluxCapacitors` must be >= 0
+- `cr` clamped to `[0.0, 1.0]`
 
 ## Validation Rules
 

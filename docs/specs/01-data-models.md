@@ -184,6 +184,7 @@ class BuildSpec:
     hullmods: tuple[str, ...]           # sorted alphabetically
     flux_vents: int
     flux_capacitors: int
+    cr: float = 0.7                     # combat readiness at deployment (0.0–1.0)
 ```
 
 Transfer object for the Python-Java boundary. Unlike `Build` (which uses `frozenset` for hullmods and `None` for empty weapon slots), `BuildSpec` uses a sorted `tuple` for hullmods and omits empty slots entirely — optimized for deterministic JSON serialization.

@@ -110,22 +110,27 @@ public class MatchupConfig {
      * Embedded in matchup queue JSON under player_builds.
      */
     public static class BuildSpec {
+        /** Standard deployment CR (70%). Used when cr is not specified in JSON. */
+        public static final float DEFAULT_CR = 0.7f;
+
         public final String variantId;
         public final String hullId;
         public final Map<String, String> weaponAssignments;
         public final String[] hullmods;
         public final int fluxVents;
         public final int fluxCapacitors;
+        public final float cr;
 
         private BuildSpec(String variantId, String hullId,
                           Map<String, String> weaponAssignments, String[] hullmods,
-                          int fluxVents, int fluxCapacitors) {
+                          int fluxVents, int fluxCapacitors, float cr) {
             this.variantId = variantId;
             this.hullId = hullId;
             this.weaponAssignments = Collections.unmodifiableMap(weaponAssignments);
             this.hullmods = hullmods;
             this.fluxVents = fluxVents;
             this.fluxCapacitors = fluxCapacitors;
+            this.cr = cr;
         }
 
         public static BuildSpec fromJSON(JSONObject json) throws JSONException {
@@ -161,8 +166,11 @@ public class MatchupConfig {
                 throw new IllegalArgumentException("flux_capacitors must be >= 0");
             }
 
+            float cr = (float) json.optDouble("cr", DEFAULT_CR);
+            cr = Math.max(0f, Math.min(1f, cr));
+
             return new BuildSpec(variantId, hullId, weaponAssignments, hullmods,
-                    fluxVents, fluxCapacitors);
+                    fluxVents, fluxCapacitors, cr);
         }
 
         public JSONObject toJSON() throws JSONException {
@@ -177,6 +185,7 @@ public class MatchupConfig {
             json.put("hullmods", new JSONArray(hullmods));
             json.put("flux_vents", fluxVents);
             json.put("flux_capacitors", fluxCapacitors);
+            json.put("cr", cr);
             return json;
         }
 

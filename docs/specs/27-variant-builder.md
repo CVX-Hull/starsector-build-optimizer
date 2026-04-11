@@ -30,12 +30,13 @@ Constructs a ship variant in memory from a build specification.
 |------|-----------|
 | 1 | Call `createVariant(spec)` |
 | 2 | `Global.getSettings().createFleetMember(FleetMemberType.SHIP, variant)` |
-| 3 | Return `FleetMemberAPI` |
+| 3 | `member.getRepairTracker().setCR(spec.cr)` — set CR from build spec |
+| 4 | Return `FleetMemberAPI` |
 
 ## Usage
 
-- **MissionDefinition** (first matchup): `VariantBuilder.createFleetMember(spec)` → `api.addFleetMember(FleetSide.PLAYER, member)`
-- **CombatHarnessPlugin** (subsequent matchups): `VariantBuilder.createFleetMember(spec)` → `fleetManager.spawnFleetMember(member, location, facing, 0f)`
+- **MissionDefinition** (first matchup): adds stock placeholder via `addToFleet()` for the deployment screen
+- **CombatHarnessPlugin** (all matchups): `VariantBuilder.createFleetMember(spec)` → `fleetManager.spawnFleetMember(member, location, facing, 0f)` → `ensureCombatReady(ship, spec.cr)`
 - Enemy ships are unchanged — still use stock variant IDs via `addToFleet()` / `spawnShipOrWing()`
 
 ## Design Rationale

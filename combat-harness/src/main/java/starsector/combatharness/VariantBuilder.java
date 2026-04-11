@@ -16,8 +16,6 @@ import com.fs.starfarer.api.combat.ShipHullSpecAPI;
  */
 public class VariantBuilder {
 
-    /** Standard deployment CR (70%). Matches stock mission setup behavior. */
-    private static final float DEPLOYMENT_CR = 0.7f;
 
     /**
      * Create a ShipVariantAPI in memory from a build specification.
@@ -62,7 +60,7 @@ public class VariantBuilder {
     public static FleetMemberAPI createFleetMember(MatchupConfig.BuildSpec spec) {
         ShipVariantAPI variant = createVariant(spec);
         FleetMemberAPI member = Global.getSettings().createFleetMember(FleetMemberType.SHIP, variant);
-        member.getRepairTracker().setCR(DEPLOYMENT_CR);
+        member.getRepairTracker().setCR(spec.cr);
         return member;
     }
 }

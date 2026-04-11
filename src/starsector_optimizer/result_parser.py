@@ -67,6 +67,7 @@ def _matchup_to_dict(mc: MatchupConfig) -> dict:
                 "hullmods": list(b.hullmods),
                 "flux_vents": b.flux_vents,
                 "flux_capacitors": b.flux_capacitors,
+                "cr": b.cr,
             }
             for b in mc.player_builds
         ],

@@ -295,6 +295,7 @@ class BuildSpec:
     hullmods: tuple[str, ...]
     flux_vents: int
     flux_capacitors: int
+    cr: float = 0.7  # Combat readiness at deployment (0.0–1.0)
 
 
 @dataclass(frozen=True)

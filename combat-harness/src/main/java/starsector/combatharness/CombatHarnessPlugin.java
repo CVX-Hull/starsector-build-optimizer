@@ -133,12 +133,10 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
     }
 
-    private static final float DEFAULT_CR = 0.7f;
-
-    private void ensureCombatReady(ShipAPI ship) {
-        if (ship.getCurrentCR() < DEFAULT_CR) {
-            ship.setCurrentCR(DEFAULT_CR);
-            ship.setCRAtDeployment(DEFAULT_CR);
+    private void ensureCombatReady(ShipAPI ship, float cr) {
+        if (ship.getCurrentCR() < cr) {
+            ship.setCurrentCR(cr);
+            ship.setCRAtDeployment(cr);
         }
     }
 
@@ -155,7 +153,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                         .spawnFleetMember(member, new Vector2f(-2000f, yOffset), 0f, 0f);
                 if (ship != null) {
                     playerShips.add(ship);
-                    ensureCombatReady(ship);
+                    ensureCombatReady(ship, spec.cr);
                 } else {
                     log.warn("Failed to spawn player build: " + spec.variantId);
                 }
