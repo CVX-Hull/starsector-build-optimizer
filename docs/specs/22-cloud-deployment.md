@@ -1,6 +1,6 @@
 # Cloud Deployment Specification
 
-Automates provisioning, deployment, and teardown of Hetzner Cloud machines for batch combat simulation. Defined in `scripts/cloud/`.
+Automates provisioning, deployment, and teardown of cloud machines for batch combat simulation. Defined in `scripts/cloud/`.
 
 ## Overview
 
@@ -8,22 +8,47 @@ Local-first development with cloud burst for expensive simulation. Optuna studie
 
 ```
 Local machine (dev + heuristic + small sim)
-  ��� scp study.db + game + optimizer to cloud
+  ↑ scp study.db + game + optimizer to cloud
   → Cloud machines run parallel sim
-  ��� scp study.db + results back
+  ↑ scp study.db + results back
   → Local analysis + visualization
 ```
 
-## Machine Sizing
+## GPU Requirement
 
-| Machine | vCPUs | RAM | Game Instances | Cost/hr | Use |
-|---------|-------|-----|----------------|---------|-----|
-| CCX33 | 8 | 32GB | 8 | ~$0.11 | **Default.** 1 core + ~2GB per instance. |
-| CCX43 | 16 | 64GB | 16 | ~$0.22 | If 8 instances bottleneck on CPU. |
+**Starsector requires hardware OpenGL for acceptable simulation speed.** Tested 2026-04-12: a Hetzner CCX33 (CPU-only, software Mesa/llvmpipe rendering) produced only 26s of game-time in 120s wall-clock — ~10-50x slower than local with a GPU. Xvfb provides the X11 display server, but LWJGL rendering needs a real GPU driver for the 5x time-multiplied simulation speeds.
 
-Starsector is single-threaded per instance. Xvfb is near-zero CPU. 8 instances on 8 vCPUs is sufficient. The game directory is 361MB (not 2GB as earlier estimated).
+**Implication:** CPU-only cloud providers (Hetzner Cloud CCX, most basic VMs) are not viable. Cloud deployment requires either:
+- GPU instances (AWS g4dn with T4, ~$0.16-0.25/hr spot)
+- Or local execution with a real GPU
 
-## Cloud-Init Script
+For most optimization runs, **local execution is recommended** (simpler, free, fast with host GPU).
+
+## Local Machine Sizing (Recommended)
+
+Measured 2026-04-12 on dev machine (12-core, 64GB RAM, RTX 4090):
+
+| Metric | Value | Notes |
+|--------|-------|-------|
+| Threads per instance | 67 (1 dominant) | Effectively single-threaded main loop |
+| CPU per instance | ~1 core | Main thread pegs one core at 100% |
+| RAM per instance | ~3.4 GB | JVM heap 2GB + native/LWJGL + Xvfb |
+| GPU per instance | Minimal | Shared OpenGL context, trivial for modern GPUs |
+| **Recommended instances** | **8** | 12 cores - 2 for OS/Python - 2 headroom |
+
+64GB RAM → 8 instances × 3.4GB = 27GB, well within limits. RTX 4090 handles 8+ instances trivially.
+
+## Cloud Machine Sizing (GPU Required)
+
+| Machine | vCPUs | RAM | GPU | Instances | Spot Cost/hr | Use |
+|---------|-------|-----|-----|-----------|-------------|-----|
+| AWS g4dn.xlarge | 4 | 16GB | T4 | 4 | ~$0.16 | Minimum viable |
+| AWS g4dn.2xlarge | 8 | 32GB | T4 | 8 | ~$0.25 | **Recommended** |
+| AWS g4dn.4xlarge | 16 | 64GB | T4 | 12 | ~$0.36 | High throughput |
+
+Hetzner CCX (no GPU) is **not viable** — software rendering is too slow.
+
+## Cloud-Init Script (GPU Instance)
 
 ```yaml
 #cloud-config
@@ -39,66 +64,39 @@ packages:
   - libxrender1
   - libxtst6
   - libxrandr2
-  - openjdk-17-jre-headless
+  - libxcursor1
+  - libxxf86vm1
+  - libopenal1
 
 runcmd:
   - curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Null ALSA config for headless audio (prevents OpenAL error dialog)
+  - |
+    cat > /etc/asound.conf << 'EOF'
+    pcm.!default { type null }
+    ctl.!default { type null }
+    EOF
   - touch /tmp/cloud-init-done
 ```
 
+**Key packages discovered during testing (2026-04-12):**
+- `libxcursor1`, `libxxf86vm1` — required by LWJGL native libraries (`liblwjgl64.so`)
+- `libopenal1` — OpenAL audio (without it, game shows blocking error dialog)
+- `libasound2t64` — ALSA base (with null config above, prevents sound card errors)
+- **No `openjdk`** — game bundles its own JRE (`jre_linux/`), system Java is unnecessary and can interfere
+
 ## Deployment Script
 
+See `scripts/cloud/deploy.sh`. Key details:
+
+- **Game directory**: Must use project's `game/starsector/` (contains combat-harness mod), not a separate installation
+- **rsync `--delete`**: Required to prevent stale files from a different game version causing JRE crashes (e.g., leftover `lib/ext/` directory)
+- **Game activation**: Copy `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (contains serial key) to cloud machine
+- **SSH key**: `~/.ssh/starsector-opt` (ed25519, uploaded to cloud provider as `starsector-opt`)
+
 ```bash
-#!/bin/bash
-# scripts/cloud/deploy.sh
-# Usage: ./deploy.sh [num_machines] [server_type]
-
-NUM_MACHINES=${1:-1}
-SERVER_TYPE=${2:-ccx33}
-SSH_KEY_NAME="starsector-opt"
-
-GAME_DIR="$HOME/bin/starsector"
-OPTIMIZER_DIR="$HOME/ClaudeCode"
-PREFS_FILE="$HOME/.java/.userPrefs/com/fs/starfarer/prefs.xml"
-CLOUD_INIT="scripts/cloud/cloud-init.yaml"
-
-# Create machines in parallel
-for i in $(seq 0 $((NUM_MACHINES - 1))); do
-  hcloud server create \
-    --name "sim-worker-${i}" \
-    --type "$SERVER_TYPE" \
-    --image ubuntu-24.04 \
-    --ssh-key "$SSH_KEY_NAME" \
-    --location fsn1 \
-    --user-data-from-file "$CLOUD_INIT" &
-done
-wait
-
-# Deploy to all machines in parallel
-for i in $(seq 0 $((NUM_MACHINES - 1))); do
-  IP=$(hcloud server describe "sim-worker-${i}" -o format='{{.PublicNet.IPv4.IP}}')
-  (
-    echo "[$i] Waiting for cloud-init on $IP..."
-    ssh -o StrictHostKeyChecking=no root@$IP "cloud-init status --wait" 2>/dev/null
-
-    echo "[$i] Syncing game directory (361MB)..."
-    rsync -az "$GAME_DIR/" root@$IP:/opt/starsector/
-
-    echo "[$i] Syncing optimizer code..."
-    rsync -az --exclude='.git' --exclude='game/' "$OPTIMIZER_DIR/" root@$IP:/opt/optimizer/
-
-    echo "[$i] Copying game activation..."
-    ssh root@$IP "mkdir -p /root/.java/.userPrefs/com/fs/starfarer/"
-    scp "$PREFS_FILE" root@$IP:/root/.java/.userPrefs/com/fs/starfarer/prefs.xml
-
-    echo "[$i] Installing Python dependencies..."
-    ssh root@$IP "cd /opt/optimizer && /root/.local/bin/uv sync"
-
-    echo "[$i] Ready."
-  ) &
-done
-wait
-echo "All $NUM_MACHINES machines deployed."
+# Usage: ./deploy.sh [num_machines] [server_type] [location]
+scripts/cloud/deploy.sh 1 g4dn.2xlarge us-east-1
 ```
 
 ## Work Distribution
@@ -106,48 +104,16 @@ echo "All $NUM_MACHINES machines deployed."
 Each machine gets a list of hull IDs to optimize. The local orchestrator partitions hulls across machines.
 
 ```bash
-#!/bin/bash
-# scripts/cloud/run_optimization.sh
-# Usage: ./run_optimization.sh <hull_list_file> <study_db>
-
-HULL_LIST=$1
-STUDY_DB=$2
-
-# Copy study to machine
-IP=$(hcloud server describe sim-worker-0 -o format='{{.PublicNet.IPv4.IP}}')
-scp "$STUDY_DB" root@$IP:/opt/optimizer/study.db
-
-# Start optimization (backgrounded)
-ssh root@$IP "cd /opt/optimizer && nohup uv run python scripts/run_optimizer.py \
-  --hulls $(cat $HULL_LIST | tr '\n' ',') \
-  --study-db study.db \
-  --game-dir /opt/starsector \
-  --num-instances 8 \
-  > /opt/optimizer/run.log 2>&1 &"
+# Start optimization (backgrounded on remote)
+scripts/cloud/run.sh hammerhead 0 --sim-budget 200 --active-opponents 10
 ```
 
 ## Result Collection
 
 ```bash
-#!/bin/bash
-# scripts/cloud/collect.sh
-
-for i in $(seq 0 $((NUM_MACHINES - 1))); do
-  IP=$(hcloud server describe "sim-worker-${i}" -o format='{{.PublicNet.IPv4.IP}}')
-  scp root@$IP:/opt/optimizer/study.db "./results/study_worker_${i}.db"
-  scp root@$IP:/opt/optimizer/data/evaluation_log.jsonl "./results/eval_log_worker_${i}.jsonl"
-done
-```
-
-## Teardown
-
-```bash
-#!/bin/bash
-# scripts/cloud/teardown.sh
-
-for i in $(seq 0 $((NUM_MACHINES - 1))); do
-  hcloud server delete "sim-worker-${i}" --poll
-done
+scripts/cloud/collect.sh    # pulls study.db + eval logs
+scripts/cloud/status.sh     # check if optimizer is running
+scripts/cloud/teardown.sh   # delete machines
 ```
 
 ## Optuna Study Persistence
@@ -173,7 +139,7 @@ for trial in study.trials:
 
 | Step | Time |
 |------|------|
-| `hcloud server create` | ~10s |
+| Machine creation | ~10-30s |
 | Server boot + cloud-init | ~60-90s |
 | rsync game dir (361MB over 1Gbps) | ~5-10s |
 | rsync optimizer code | ~3s |
@@ -183,11 +149,27 @@ for trial in study.trials:
 
 ## Cost Estimates
 
+### Local (Recommended)
+| Scenario | Instances | Sims | Wall-clock | Cost |
+|----------|-----------|------|------------|------|
+| 1 hull (hammerhead) | 8 | ~1000 | ~1.5h | $0 |
+| 3 dev hulls | 8 | ~3000 | ~4.5h | $0 |
+| 10 priority hulls | 8 | ~10K | ~15h | $0 |
+
+### Cloud (GPU instances, when local isn't enough)
 | Scenario | Machines | Instances | Sims | Wall-clock | Cost |
 |----------|----------|-----------|------|------------|------|
-| 3 dev hulls (local validation) | 0 | 2 local | ~600 | ~5h | $0 |
-| 10 priority hulls | 1 × CCX33 | 8 | ~10K | ~8h | ~$0.90 |
-| 50 hulls (all combat-relevant) | 3 × CCX33 | 24 | ~50K | ~14h | ~$4.60 |
-| 50 hulls + QD validation | 3 × CCX33 | 24 | ~65K | ~18h | ~$6.00 |
+| 10 priority hulls | 1 × g4dn.2xl | 8 | ~10K | ~15h | ~$3.75 |
+| 50 hulls | 3 × g4dn.2xl | 24 | ~50K | ~20h | ~$15 |
+| 50 hulls + QD | 3 × g4dn.2xl | 24 | ~65K | ~26h | ~$20 |
 
 All well within $30 budget. Dominant cost is development time, not compute.
+
+## Lessons Learned (2026-04-12 Hetzner Test)
+
+1. **Software rendering is a dealbreaker.** Mesa/llvmpipe on CPU-only VMs makes Starsector unplayably slow. The game loop ties simulation speed to frame rendering — slow frames = slow simulation.
+2. **Missing native libraries cause silent failures.** LWJGL needs `libxcursor1` and `libxxf86vm1` beyond the obvious X11 libs. Without them, the game crashes with `UnsatisfiedLinkError` in `liblwjgl64.so`.
+3. **OpenAL error blocks the launcher.** Missing audio produces a modal dialog that prevents the "Play Starsector" click from working. Fix: install `libopenal1` + null ALSA config.
+4. **rsync without `--delete` leaves stale files.** If a different game version was previously synced, leftover files (e.g., `jre_linux/lib/ext/`) cause JRE startup failures.
+5. **Game bundles its own JRE.** Installing system Java is unnecessary and the `JAVA_HOME` can interfere with the bundled JRE.
+6. **Game activation via prefs.xml works.** Copying `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (contains `serial` key) transfers activation to new machines.

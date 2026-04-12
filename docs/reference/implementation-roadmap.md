@@ -17,7 +17,7 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
   T1: Programmatic variant creation (Java)     Eliminates .variant file I/O
   T2: Persistent game session (Java)           Eliminates JVM restart overhead
   T3: Mixed-build batching / StagedEvaluator   ASHA scheduling for Phase 5B
-  T4: Cloud deployment (Docker + spot)         Linear scaling to 32-64 instances
+  T4: Cloud deployment (GPU instances)          Linear scaling to 32-64 instances (requires GPU)
 
 Phase 5:   Signal Quality ─────────────────── Evaluation noise reduction + budget efficiency
 Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
@@ -542,34 +542,33 @@ Validate end-to-end with real combat:
 
 **Estimated time:** 1 day. Zero cloud cost.
 
-#### Stage 3: Cloud — Full Optimization (3 × CCX33 machines)
+#### Stage 3: Full Optimization (local 8 instances, or cloud GPU)
 
-Transfer Optuna studies via SQLite file. Each machine handles one hull size class.
+**Local is recommended** — GPU acceleration makes local execution fast and free. Cloud requires GPU instances (AWS g4dn); CPU-only VMs (Hetzner CCX) are too slow due to software OpenGL rendering (tested 2026-04-12).
 
+**Local (8 instances on dev machine):**
 ```
-sim-worker-0: Frigate+Destroyer hulls (8 instances)
-sim-worker-1: Cruiser hulls (8 instances)
-sim-worker-2: Capital hulls (8 instances)
+Single machine: all hulls sequential (8 parallel game instances)
 ```
 
 **Per hull (full pipeline):**
-| Step | Sims | Wall-clock |
+| Step | Sims | Wall-clock (8 inst) |
 |---|---|---|
 | Warm-start (50 builds × 5 opponents) | 250 | ~50min |
 | BO exploration (150 builds × ~3 avg opponents) | ~450 | ~1.5h |
 | Racing (10 builds × 5 opponents × 5 replays) | 250 | ~50min |
 | **Total** | **~950** | **~3.5h** |
 
-**Campaign options (within $30 budget):**
+**Campaign options:**
 
-| Scope | Hulls | Machines | Sims | Wall-clock | Cost |
+| Scope | Hulls | Setup | Sims | Wall-clock | Cost |
 |---|---|---|---|---|---|
-| Priority hulls | 10 | 1 × CCX33 | ~10K | ~12h | ~$1.30 |
-| All cruisers+capitals | 40 | 3 × CCX33 | ~38K | ~16h | ~$5.30 |
-| All combat-relevant | 118 | 3 × CCX33 | ~112K | ~47h | ~$15.50 |
-| + QD validation (Phase 6) | 118 | 3 × CCX33 | ~150K | ~63h | ~$20.80 |
+| Priority hulls | 10 | Local (8 inst) | ~10K | ~35h | $0 |
+| All cruisers+capitals | 40 | Local (8 inst) | ~38K | ~133h | $0 |
+| All combat-relevant | 118 | 3 × g4dn.2xl | ~112K | ~47h | ~$35 |
+| + QD validation (Phase 6) | 118 | 3 × g4dn.2xl | ~150K | ~63h | ~$47 |
 
-**Machine setup:** ~2 minutes per machine (parallel). Game dir is only 361MB.
+**Machine setup (cloud):** ~2 minutes per machine (parallel). Game dir is 361MB.
 
 #### Stage 4: Local — Analysis + Phase 7 Training
 

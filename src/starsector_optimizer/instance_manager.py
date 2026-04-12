@@ -304,6 +304,12 @@ class InstancePool:
         (wd / "saves" / "common").mkdir(parents=True)
         (wd / "screenshots").mkdir()
 
+        # Null ALSA config — disables audio per-instance to avoid OpenAL
+        # errors on headless displays without affecting the host system
+        (wd / "asound_null.conf").write_text(
+            "pcm.!default { type null }\nctl.!default { type null }\n"
+        )
+
     # --- File management ---
 
     def _clean_protocol_files(self, inst: GameInstance) -> None:
@@ -397,6 +403,9 @@ class InstancePool:
         """Launch game process with DISPLAY set to instance's Xvfb."""
         env = os.environ.copy()
         env["DISPLAY"] = f":{inst.display_num}"
+        # Disable audio — null ALSA + null OpenAL, without affecting host
+        env["ALSA_CONFIG_PATH"] = str(inst.work_dir / "asound_null.conf")
+        env["ALSOFT_DRIVERS"] = "null"
         log_path = inst.work_dir / "game_stdout.log"
         inst._game_log_file = open(log_path, "w")
         inst.game_process = subprocess.Popen(

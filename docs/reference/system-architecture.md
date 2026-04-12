@@ -356,8 +356,8 @@ WORKDIR=workdir/instance_${i}/
 ln -s /path/to/starsector ${WORKDIR}/starsector
 cp -r mod_data ${WORKDIR}/mods/build-optimizer/
 
-# Launch Xvfb
-Xvfb :${10+i} -screen 0 1024x768x24 &
+# Launch Xvfb (must be 1920x1080 to match MenuNavigator's Robot coordinates)
+Xvfb :${10+i} -screen 0 1920x1080x24 -nolisten tcp &
 
 # Launch Starsector
 cd ${WORKDIR} && DISPLAY=:${10+i} ./starsector.sh &
@@ -367,12 +367,12 @@ cd ${WORKDIR} && DISPLAY=:${10+i} ./starsector.sh &
 
 | Component | Per Instance |
 |---|---|
-| JVM heap | ~1-2 GB (configurable in vmparams) |
-| LWJGL/native | ~200-400 MB |
+| JVM heap | ~2 GB (configured in starsector.sh: -Xms2048m -Xmx2048m) |
+| LWJGL/native + JVM overhead | ~1-1.4 GB |
 | Xvfb framebuffer | ~50-100 MB |
-| **Total** | **~1.5-2.5 GB** |
+| **Total (measured)** | **~3.4 GB** |
 
-32 GB machine → ~12-16 instances. 64 GB → ~25-30.
+Measured 2026-04-12: `ps` reports ~3.4GB RSS per Java game process (67 threads, 1 dominant core). 64 GB machine → 8-10 instances (leaving headroom for OS + Python optimizer).
 
 ### Throughput Estimates
 

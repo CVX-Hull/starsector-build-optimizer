@@ -21,9 +21,10 @@ class CloudProvider:
 
 
 DEFAULT_PROVIDERS: list[CloudProvider] = [
-    CloudProvider("Hetzner CCX43", cost_per_hour=0.22, max_instances=8),
-    CloudProvider("Hetzner CCX53", cost_per_hour=0.40, max_instances=16),
-    CloudProvider("AWS c7i.4xl spot", cost_per_hour=0.25, max_instances=8),
+    # GPU required — CPU-only VMs (Hetzner CCX) are too slow for LWJGL rendering
+    CloudProvider("AWS g4dn.xlarge spot", cost_per_hour=0.16, max_instances=4),
+    CloudProvider("AWS g4dn.2xlarge spot", cost_per_hour=0.25, max_instances=8),
+    CloudProvider("AWS g4dn.4xlarge spot", cost_per_hour=0.36, max_instances=12),
 ]
 
 

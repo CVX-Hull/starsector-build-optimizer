@@ -241,7 +241,7 @@ else:
 
 **Key findings:**
 
-**No GPU needed.** The current local setup already uses Xvfb + Mesa/llvmpipe (CPU software rendering). Starsector is CPU-bound for simulation logic; rendering is secondary. GPU instances cost 3-10x more for zero benefit.
+**GPU required for cloud.** Local Xvfb instances benefit from the host GPU for OpenGL rendering (LWJGL uses the system's OpenGL driver even through Xvfb). Cloud VMs without GPUs fall back to Mesa/llvmpipe software rendering, which makes the game run ~10-50x slower — combat that takes 30s locally takes minutes on a CPU-only cloud VM. Tested 2026-04-12: Hetzner CCX33 (no GPU) produced only 26s of game-time in 120s wall-clock. GPU cloud instances (e.g., AWS g4dn with T4) would work but cost 3-10x more than CPU instances.
 
 **ARM instances won't work.** Starsector ships its own x86_64 JRE (`jre_linux/`) and native LWJGL libraries. Running on ARM (AWS Graviton, etc.) would require replacing the JRE and native libraries — not practical.
 
@@ -253,11 +253,11 @@ else:
 
 | Approach | Viable | Recommendation |
 |----------|--------|----------------|
-| Xvfb (current) | Yes | **Use this.** Proven, lightweight. |
+| Xvfb (current) | Yes (with GPU) | **Use this locally.** Proven, lightweight. Requires host GPU for hardware OpenGL. |
 | Xdummy | Yes | No advantage over Xvfb. |
 | EGL headless | Theoretically | LWJGL/Starsector expects GLX, would require patching. |
 | No display server | No | LWJGL requires a display context. |
-| VirtualGL + GPU | Overkill | GPU cost for zero benefit. |
+| VirtualGL + GPU | Required for cloud | Needed if cloud VMs lack local GPU. Software rendering is too slow. |
 
 **Cloud cost estimates (per single-hull optimization run, ~1500 matchups):**
 
@@ -467,10 +467,10 @@ Before full implementation, two tests should be run:
 - `constant_liar=True` — handles concurrent pending trials in mixed-build batching
 
 ### Cloud / Headless Rendering
-- Mesa/LLVMpipe — CPU software rendering for OpenGL, sufficient for Starsector
-- Xvfb — virtual framebuffer, standard approach for headless X11 applications
+- Mesa/LLVMpipe — CPU software rendering for OpenGL. **Too slow for Starsector** (tested: ~10-50x slower than GPU). Only viable for CI tests, not production simulation.
+- Xvfb — virtual framebuffer, standard approach for headless X11 applications. Works well with host GPU for hardware OpenGL acceleration.
 - `utensils/docker-opengl` — Docker base image for Mesa + LLVMpipe + Xvfb
-- AWS c7i family (Sapphire Rapids) — x86_64 compute-optimized, supports AVX-512 for JVM flags
+- AWS g4dn family (T4 GPU) — needed for cloud deployment, ~$0.16-0.25/hr spot. CPU-only instances (c7i, Hetzner CCX) are too slow for rendering.
 
 ### Game AI Infrastructure Patterns
 - OpenAI Five (Dota 2) — 128K CPU cores, native headless mode

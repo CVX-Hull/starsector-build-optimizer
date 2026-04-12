@@ -1,0 +1,34 @@
+#cloud-config
+# Cloud-init for Starsector optimizer simulation machines.
+# Requires GPU instance (e.g., AWS g4dn) — CPU-only VMs are too slow.
+package_update: true
+packages:
+  - xvfb
+  - xdotool
+  - rsync
+  - curl
+  # LWJGL native library dependencies
+  - libgl1
+  - libasound2t64
+  - libxi6
+  - libxrender1
+  - libxtst6
+  - libxrandr2
+  - libxcursor1
+  - libxxf86vm1
+  # OpenAL audio (prevents blocking error dialog)
+  - libopenal1
+  # Screenshot tools (debugging)
+  - x11-apps
+  - imagemagick-6.q16
+  # NOTE: No openjdk — game bundles its own JRE (jre_linux/)
+
+runcmd:
+  - curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Null ALSA config for headless audio
+  - |
+    cat > /etc/asound.conf << 'EOF'
+    pcm.!default { type null }
+    ctl.!default { type null }
+    EOF
+  - touch /tmp/cloud-init-done

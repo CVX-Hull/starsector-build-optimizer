@@ -33,13 +33,15 @@ Computed from actual game data via `build_search_space()`:
 | `sims_per_hull` | 1000 | Combat evaluations per hull (after heuristic screening) |
 | `num_hulls` | 50 | Combat-relevant hulls to optimize |
 
-### Cloud Pricing
+### Cloud Pricing (GPU Required)
 
-| Provider | $/hr | vCPUs | RAM | Instances it supports |
-|----------|------|-------|-----|----------------------|
-| Hetzner CCX43 | 0.22 | 16 | 64 GB | ~8 |
-| Hetzner CCX53 | 0.40 | 32 | 128 GB | ~16 |
-| AWS c7i.4xlarge spot | 0.25 | 16 | 32 GB | ~8 |
+GPU instances required — CPU-only VMs (Hetzner CCX) are too slow due to software OpenGL rendering.
+
+| Provider | $/hr (spot) | vCPUs | RAM | GPU | Instances |
+|----------|-------------|-------|-----|-----|-----------|
+| AWS g4dn.xlarge | 0.16 | 4 | 16 GB | T4 | ~4 |
+| AWS g4dn.2xlarge | 0.25 | 8 | 32 GB | T4 | ~8 |
+| AWS g4dn.4xlarge | 0.36 | 16 | 64 GB | T4 | ~12 |
 
 ## Computed Outputs
 
