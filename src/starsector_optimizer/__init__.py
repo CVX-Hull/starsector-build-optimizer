@@ -32,7 +32,6 @@ from .variant import build_to_build_spec, generate_variant, write_variant_file, 
 from .calibration import generate_diverse_builds, compute_build_features
 from .result_parser import parse_combat_result, parse_results_file, write_queue_file
 from .instance_manager import InstanceConfig, InstancePool
-from .curtailment import CurtailmentMonitor, parse_heartbeat
 from .timeout_tuner import TimeoutTuner
 from .combat_fitness import combat_fitness, aggregate_combat_fitness
 from .opponent_pool import (
@@ -58,7 +57,6 @@ __all__ = [
     "generate_diverse_builds", "compute_build_features",
     "parse_combat_result", "parse_results_file", "write_queue_file",
     "InstanceConfig", "InstancePool",
-    "CurtailmentMonitor", "parse_heartbeat",
     "TimeoutTuner",
     "OpponentPool", "discover_opponent_pool", "get_opponents",
     "generate_matchups", "compute_fitness", "hp_differential",

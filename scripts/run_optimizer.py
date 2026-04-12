@@ -11,7 +11,6 @@ from pathlib import Path
 
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
-from starsector_optimizer.curtailment import CurtailmentMonitor
 from starsector_optimizer.opponent_pool import discover_opponent_pool, get_opponents
 from starsector_optimizer.optimizer import OptimizerConfig, optimize_hull
 
@@ -30,8 +29,6 @@ def main():
                         help="Use heuristic score instead of simulation (for testing)")
     parser.add_argument("--analyze-importance", action="store_true",
                         help="Run fANOVA importance analysis on existing study and exit")
-    parser.add_argument("--pruner-type", choices=["median", "hyperband"], default="median",
-                        help="Pruner algorithm: median (default) or hyperband")
     parser.add_argument("--active-opponents", type=int, default=10,
                         help="Max opponents per build (default 10, selects top-K from pool)")
     parser.add_argument("--fix-params", type=Path, default=None,
@@ -86,7 +83,6 @@ def main():
         sim_budget=args.sim_budget,
         fitness_mode=args.fitness_mode,
         sampler=args.sampler,
-        pruner_type=args.pruner_type,
         active_opponents=args.active_opponents,
         fixed_params=fixed_params,
         study_storage=storage,
@@ -106,9 +102,7 @@ def main():
         game_dir=args.game_dir,
         num_instances=args.num_instances,
     )
-    curtailment = CurtailmentMonitor()
-
-    with InstancePool(instance_config, curtailment=curtailment) as pool:
+    with InstancePool(instance_config) as pool:
         pool.setup()
         study = optimize_hull(
             args.hull, game_data, pool, opponent_pool, config,

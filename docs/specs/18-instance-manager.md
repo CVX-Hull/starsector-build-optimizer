@@ -76,7 +76,7 @@ Main class managing N parallel game instances. Acts as a resource manager — pr
 
 ```python
 class InstancePool:
-    def __init__(self, config: InstanceConfig, curtailment: CurtailmentMonitor | None = None) -> None: ...
+    def __init__(self, config: InstanceConfig) -> None: ...
     def setup(self) -> None: ...
     def teardown(self) -> None: ...
     def run_matchup(self, instance_id: int, matchup: MatchupConfig) -> CombatResult: ...
@@ -145,7 +145,7 @@ Run a single matchup on the specified instance. Blocks until complete. Thread-sa
 3. Poll loop (every `poll_interval_seconds`):
    - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. Set state IDLE. Return `results[0]`.
    - **Process check:** If game process exited without done signal → FAILED. Call `_restart_or_raise()`. Continue polling.
-   - **Heartbeat check:** If STARTING and heartbeat fresh → RUNNING. If STARTING and startup timed out → FAILED, `_restart_or_raise()`. If RUNNING and heartbeat fresh → update timestamp, check curtailment. If RUNNING and heartbeat stale > timeout → FAILED, `_restart_or_raise()`.
+   - **Heartbeat check:** If STARTING and heartbeat fresh → RUNNING. If STARTING and startup timed out → FAILED, `_restart_or_raise()`. If RUNNING and heartbeat fresh → update timestamp. If RUNNING and heartbeat stale > timeout → FAILED, `_restart_or_raise()`.
 4. Instance stays alive in IDLE after returning (game in WAITING state for reuse in next `run_matchup()` call).
 
 ### `num_instances` (property)
@@ -163,7 +163,7 @@ Returns `True` if both `game_process` and `xvfb_process` are alive (`poll() is N
 ### `_assign_next_batch(inst, chunk)`
 
 Sends a new batch to an already-running persistent game instance:
-1. Reset instance state: `assigned_matchups`, `results`, `heartbeats`, `restart_count`
+1. Reset instance state: `assigned_matchups`, `results`, `restart_count`
 2. Clean protocol files (removes stale done/heartbeat/results/signals)
 3. Write new queue file
 4. Write `combat_harness_new_queue.data` signal (triggers Java WAITING → INIT transition)
@@ -231,38 +231,6 @@ for _ in range(30):  # up to 15 seconds
 ## Per-Instance Game Logging
 
 Game stdout/stderr captured to `{work_dir}/game_stdout.log` instead of `/dev/null`. Essential for debugging crashes.
-
-## Enriched Heartbeat Parsing
-
-Parse 6-field heartbeat content (not just file mtime) for curtailment integration:
-```
-<timestamp_ms> <elapsed_seconds> <player_hp> <enemy_hp> <player_alive> <enemy_alive>
-```
-
-Requires all 6 fields. Invalid formats raise an error.
-
-## Curtailment Integration
-
-`InstancePool` accepts an optional `CurtailmentMonitor`:
-
-```python
-InstancePool(config: InstanceConfig, curtailment: CurtailmentMonitor | None = None)
-```
-
-When `curtailment` is provided, the poll loop reads heartbeat file **content** (not just mtime) for RUNNING instances, accumulates `list[Heartbeat]` per instance, and calls `should_stop()` each cycle.
-
-**`GameInstance` additions:**
-- `heartbeats: list[Heartbeat]` — accumulated heartbeats for current batch, cleared on new batch assignment
-
-**`_read_and_check_curtailment(inst)` method:**
-1. Read `inst.heartbeat_path` content
-2. Parse with `parse_heartbeat(line)` → `Heartbeat`
-3. **Deduplicate:** if `inst.heartbeats` is non-empty and the parsed heartbeat's `timestamp_ms` equals the last accumulated heartbeat's `timestamp_ms`, skip (the game overwrites the file each cycle but the Python poll loop may read it multiple times before it changes)
-4. Append to `inst.heartbeats`
-5. Call `self._curtailment.should_stop(inst.heartbeats)`
-6. If `(True, winner)`: call `CurtailmentMonitor.write_stop_signal(inst.saves_common)`
-
-Called in poll loop when `inst.state == RUNNING` and heartbeat is fresh.
 
 ## Variant File Handling
 

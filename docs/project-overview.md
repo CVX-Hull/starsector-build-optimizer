@@ -84,7 +84,7 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | Optimizer | Python (Optuna, cmaes) |
 | Quality-diversity | Python (pyribs, cmaes library) |
 | Neural surrogate | Python (TabPFN, CatBoost, scikit-learn) |
-| Multi-fidelity | Heuristic warm-start + full sim with curtailment |
+| Multi-fidelity | Heuristic warm-start + full sim |
 | Instance management | Python + Bash (Xvfb for virtual displays) |
 | Visualization | Python (matplotlib, plotly) |
 

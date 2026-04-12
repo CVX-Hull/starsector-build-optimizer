@@ -32,7 +32,6 @@ Each game instance runs on its own Xvfb virtual display (1920x1080x24) with Mesa
 | `combat_harness_results.json.data` | Java | Python | Combat results array |
 | `combat_harness_done.data` | Java | Python | Completion signal |
 | `combat_harness_heartbeat.txt.data` | Java | Python | Liveness + HP telemetry |
-| `combat_harness_stop.data` | Python | Java | Curtailment stop signal |
 
 ### Per-Instance Work Directory
 
@@ -48,7 +47,7 @@ Symlinks to shared game files (~20GB read-only), real directories for `saves/`, 
 | Menu navigation (Robot clicks) | ~5s | Missions → scroll → Arena → Play Mission |
 | Mission setup | ~1s | MissionDefinition + first spawn |
 | **Total startup overhead** | **~25-35s** | Steps 2-6, repeated every batch |
-| Combat per matchup | ~10s | Wall-clock at 3x speed with curtailment |
+| Combat per matchup | ~10s | Wall-clock at 3x speed |
 | Combat per batch (6 matchups) | ~60s | One build × 5 opponents |
 | **Total per batch** | **~85-95s** | 35s startup + 60s combat |
 | **Startup overhead fraction** | **~37%** | 35 / 95 of wall-clock time |

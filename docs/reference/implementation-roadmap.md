@@ -10,7 +10,7 @@ Phased build plan with dependencies, technology choices, and build order.
 Phase 1:   Data Layer + Heuristic ──────────── ✓ COMPLETE (300+ tests)
 Phase 2:   Java Combat Harness Mod ─────────── ✓ COMPLETE (37 tests)
 Phase 3:   Instance Manager ────────────────── ✓ COMPLETE (38 tests)
-Phase 3.5: Curtailment + Timeout Tuning ────── ✓ COMPLETE (21 tests)
+Phase 3.5: Timeout Tuning ─────────────────── ✓ COMPLETE (10 tests)
 Phase 4:   Optimizer Integration ───────────── ✓ COMPLETE (407 tests)
 
 Throughput (T1-T4): Cross-cutting ─────────── Persistent sessions, programmatic variants, ASHA scheduling
@@ -95,7 +95,7 @@ Complete. 300+ tests passing across 15 test files. All modules implemented with 
 A Starsector mod that runs one automated AI-vs-AI combat matchup per game launch and exports results as JSON. Phase 3 (Instance Manager) handles orchestration and parallelism.
 
 ### Status
-Complete. 37 JUnit tests passing. Live-tested: Eagle vs Dominator Assault, result.json produced with full per-ship damage/flux/armor stats. Enriched heartbeat (6-field) and stop signal protocol added in Phase 3.5.
+Complete. 37 JUnit tests passing. Live-tested: Eagle vs Dominator Assault, result.json produced with full per-ship damage/flux/armor stats. Enriched heartbeat (6-field) protocol added in Phase 3.5.
 
 ### Design Decisions
 - **One matchup per launch.** No API to chain missions. Game exits after writing results.
@@ -171,29 +171,22 @@ Complete. 24 unit tests + 14 result parser tests passing. Integration-tested: 2 
 
 ---
 
-## Phase 3.5: Stochastic Curtailment + Instance Hardening ✓ COMPLETE
+## Phase 3.5: Timeout Tuning ✓ COMPLETE
 
 ### Goal
-Monitor mid-fight HP trajectories and stop matchups early when outcome is determined. Data-driven timeout tuning.
+Data-driven timeout tuning for combat matchups.
 
 ### Status
-Complete. 11 curtailment tests + 10 timeout tuner tests passing. Enriched heartbeat confirmed in integration test (6-field format). Curtailment module ready for poll loop integration.
+Complete. 10 timeout tuner tests passing. Enriched heartbeat confirmed in integration test (6-field format).
 
 ### Implementation
 
 **Modules:**
-- `src/starsector_optimizer/curtailment.py` — `CurtailmentMonitor` with TTD-ratio extrapolation
 - `src/starsector_optimizer/timeout_tuner.py` — `TimeoutTuner` with data-driven priors + Weibull AFT
-
-**Curtailment (TTD-ratio, NOT Lanchester):** Compute HP loss rate over sliding window → estimate time-to-death per side → stop when ratio > 3:1 AND faster-dying side TTD < 60s AND elapsed > min_time (30s, protects phase ships). Simulation-verified: 0% false positives, 12-24% time savings.
 
 **Timeout tuner:** Data-driven priors from GameData (no magic numbers): `approach_time(speeds) + combat_estimate(EHP, DPS) * safety_mult`. Blends with lifelines WeibullAFTFitter as data accumulates.
 
 **Enriched heartbeat:** 6 fields: `<timestamp_ms> <elapsed> <player_hp> <enemy_hp> <player_alive> <enemy_alive>`
-
-**Stop signal:** Python writes `combat_harness_stop.data`, Java checks once per frame, deletes and ends matchup as STOPPED.
-
-**Note:** Curtailment module is built and tested but NOT yet wired into `InstancePool.evaluate()`'s poll loop. This integration should be completed before Phase 4 optimization runs.
 
 ---
 
@@ -220,7 +213,7 @@ Complete. 407 tests passing across all test files. End-to-end tested: 203-trial 
 **No "short sim" fidelity level.** Phase 3.5 research proved:
 - 60s timeout = 100% timeout rate for cruisers → flat fitness landscape → +20% optimizer iterations
 - Short sims (15-30s) are even worse — approach time alone is ~6s wall-clock at 5x
-- Curtailment already handles decisive fights (12-24% savings), so full sim + curtailment IS the right fidelity
+- Between-trial pruning via WilcoxonPruner handles budget efficiency, so full sim IS the right fidelity
 
 **Fixed diverse opponent pool, not single opponent.** Starsector has strong RPS dynamics (kinetic 200% vs shields, HE 200% vs armor). Single-opponent fitness produces counter-builds, not robust builds.
 
@@ -311,7 +304,7 @@ Improve the signal-to-noise ratio of combat fitness evaluations and increase eva
 Research complete. See `docs/reference/phase5-signal-quality.md` for full research findings and recommended approach.
 
 ### Motivation (from Phase 4 Eagle Experiment)
-The 203-trial Eagle experiment achieved Cohen's d = 3.30 (the optimizer finds real signal) but win rate was only 0.4% — the optimizer navigates "shades of losing." Per-opponent analysis revealed dominator_XIV_Elite has *negative* correlation with fitness (ρ = -0.225), inter-opponent correlations are near-zero, and within-outcome variance is high (doom_Strike STOPPED: std = 0.547). The evaluation pipeline spends equal budget on clearly bad and potentially good builds.
+The 203-trial Eagle experiment achieved Cohen's d = 3.30 (the optimizer finds real signal) but win rate was only 0.4% — the optimizer navigates "shades of losing." Per-opponent analysis revealed dominator_XIV_Elite has *negative* correlation with fitness (ρ = -0.225), inter-opponent correlations are near-zero, and within-outcome variance is high (doom_Strike TIMEOUT: std = 0.547). The evaluation pipeline spends equal budget on clearly bad and potentially good builds.
 
 ### Dependencies
 - Phase 4 (optimizer integration, opponent pool, evaluation pipeline)
@@ -436,7 +429,7 @@ Train ML models that predict combat outcomes from build parameters, reducing sim
      - HP loss rates (linear slope over sliding windows)
      - HP differential mean, std, final value
      - Momentum reversals (sign changes in `player_hp - enemy_hp`)
-     - Fight duration, whether ended by kill/timeout/curtailment
+     - Fight duration, whether ended by kill/timeout
    - Total: ~50-60 numeric features per (build, opponent) pair
 
 2. **Model training**
@@ -481,7 +474,7 @@ Train ML models that predict combat outcomes from build parameters, reducing sim
 | Primary optimizer | Optuna TPESampler | CatCMAwM (OptunaHub), BoTorch qNEI |
 | Constraint handling | repair_build() + constraints_func (c-TPE) | — |
 | Quality-diversity | pyribs + cmaes (CatCMAwM emitter) | QDax (GPU) |
-| Multi-fidelity | Heuristic warm-start + full sim w/ curtailment | BoTorch prior-mean GP (if R² improves) |
+| Multi-fidelity | Heuristic warm-start + full sim | BoTorch prior-mean GP (if R² improves) |
 | Neural surrogate | TabPFN v2 (N<300), CatBoost (N>300) | RF ensemble |
 | Instance management | Python subprocess + Xvfb | Docker (heavier) |
 | Visualization | matplotlib, plotly | — |
@@ -538,7 +531,7 @@ All Phase 4-7 code written and tested against heuristic proxy:
 
 #### Stage 2: Local — Small-Scale Simulation Validation (2 Xvfb instances)
 
-Wire curtailment into poll loop, then validate end-to-end with real combat:
+Validate end-to-end with real combat:
 
 1. **Opponent pool validation** — 30 matchups across opponent pool (~30 min)
 2. **Wolf optimization** — 50 builds × 5 opponents = 250 sims (~2 hours)
@@ -626,7 +619,7 @@ See `docs/specs/22-cloud-deployment.md` for deployment scripts, cloud-init confi
 1. **Phase 1 first** because everything depends on it, and it requires no game integration
 2. **Phase 2 next** because it's the most novel engineering (Java mod)
 3. **Phase 3** connects Phases 1 and 2 into a working pipeline
-4. **Phase 3.5** adds curtailment (12-24% time savings) and timeout tuning (optimizer quality)
+4. **Phase 3.5** adds timeout tuning (optimizer quality)
 5. **Phase 4** adds intelligence (optimization) to the pipeline — Optuna framework
 6. **Throughput T1-T3** before Phase 5 — Phase 5B (sequential evaluation) requires persistent sessions and mixed-build batching. Without them, sequential evaluation has 78% startup overhead and is worse than the current approach.
 7. **Phase 5** improves signal quality and budget efficiency — the optimizer works without it but converges faster with it

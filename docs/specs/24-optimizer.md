@@ -9,7 +9,7 @@ The optimizer proposes ship builds via Optuna's TPE sampler, repairs them to fea
 - **Heuristic warm-start:** 50K random builds scored by heuristic, top-500 seed the study
 - **Baldwinian recording:** Raw params recorded with repaired score via tell
 - **Build cache:** Hash-based deduplication prevents wasted simulation budget
-- **Staged evaluation:** Opponents evaluated incrementally with MedianPruner — poor builds pruned early, freeing slots for new builds
+- **Staged evaluation:** Opponents evaluated incrementally with WilcoxonPruner — poor builds pruned early, freeing slots for new builds
 - **Async parallel dispatch:** Each instance runs 1 matchup at a time via `InstancePool.run_matchup()`. A ThreadPoolExecutor coordinator dispatches work to all instances in parallel, processing results as they arrive (promote-on-arrival, async ASHA)
 
 ## Classes
@@ -27,26 +27,21 @@ Frozen dataclass configuring the optimization run.
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
 | `n_ei_candidates` | `int` | `256` | EI candidates per sample |
 | `fitness_mode` | `str` | `"mean"` | `"mean"` or `"minimax"` |
-| `engagement_threshold` | `float` | `500.0` | Minimum total permanent damage for "engaged" status in combat fitness. |
+| `engagement_threshold` | `float` | `500.0` | Minimum total raw damage (all types, all ships) for "engaged" status in combat fitness. |
 | `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
-| `pruner_startup_trials` | `int` | `20` | MedianPruner n_startup_trials (no pruning until this many trials complete) |
-| `pruner_warmup_steps` | `int` | `0` | MedianPruner n_warmup_steps (report at step 0+) |
+| `wilcoxon_p_threshold` | `float` | `0.1` | WilcoxonPruner p-value threshold for signed-rank test |
+| `wilcoxon_n_startup_steps` | `int` | `2` | WilcoxonPruner minimum steps before pruning eligible |
 | `matchup_time_limit` | `float` | `300.0` | Per-matchup time limit in seconds |
 | `matchup_time_mult` | `float` | `5.0` | Game-time speed multiplier |
 | `log_interval` | `int` | `10` | Log progress every N completed trials |
-| `failure_score` | `float` | `-1.0` | Score assigned to failed/invalid builds (InstanceError or validation failure) |
+| `failure_score` | `float` | `-2.0` | Score assigned to failed/invalid builds (InstanceError or validation failure). Must be ≤ `CombatFitnessConfig.no_engagement_score` to prevent crashes from scoring above non-engagement. |
 | `stock_build_scale_mult` | `float` | `2.0` | Multiplier for stock build warm-start values relative to heuristic (stock value = `warm_start_scale * stock_build_scale_mult`) |
 | `cv_min_samples` | `int` | `30` | Evaluations before estimating control variate correlation |
 | `cv_rho_threshold` | `float` | `0.3` | Minimum \|ρ\| to activate control variate correction |
 | `cv_recalc_interval` | `int` | `10` | Re-estimate control variate parameters every N completions |
-| `pruner_type` | `str` | `"median"` | Pruner algorithm: `"median"` or `"hyperband"` |
-| `hyperband_reduction_factor` | `int` | `3` | Hyperband successive halving reduction factor |
-| `hyperband_min_resource` | `int` | `1` | Hyperband minimum resource (steps before first prune eligible) |
-| `ordering_recompute_interval` | `int` | `20` | Recompute opponent ordering every N non-pruned completions. First recompute coincides with `pruner_startup_trials` ending. Subsequent recomputes adapt ordering as the build distribution evolves. |
-| `active_opponents` | `int` | `10` | Maximum opponents evaluated per build. Selects the top-K from B1-ordered pool. If pool has fewer than K opponents, all are used. Determines `max_resource` for HyperbandPruner. |
-| `opponent_shuffle_seed` | `int` | `42` | Deterministic seed for initial opponent ordering shuffle (exploration before B1 data). |
+| `active_opponents` | `int` | `10` | Maximum opponents evaluated per build. If pool has fewer than K opponents, all are used. |
 
 ### `BuildCache`
 
@@ -70,7 +65,7 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 | `build` | `Build` | required | Repaired build |
 | `build_spec` | `BuildSpec` | required | Serializable build spec |
 | `variant_id` | `str` | required | Unique variant ID (`{hull_id}_opt_{trial.number:06d}`) |
-| `opponents` | `tuple[str, ...]` | required | Active opponent subset (top-K from B1 ordering) |
+| `opponents` | `tuple[str, ...]` | required | Active opponent subset (randomly shuffled per-trial for reproducibility) |
 | `completed_results` | `list[CombatResult]` | `[]` | Results accumulated so far |
 | `raw_scores` | `list[float]` | `[]` | Per-opponent raw `combat_fitness()` values (parallel to `completed_results`) |
 | `heuristic_val` | `float` | `0.0` | Heuristic composite score for control variate (A2) |
@@ -82,7 +77,7 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 
 ### `StagedEvaluator`
 
-Async ASHA-style staged evaluator with parallel instance dispatch and configurable pruning (MedianPruner or HyperbandPruner). Uses coordinator-worker pattern: main thread owns all Optuna/optimizer state; worker threads (one per instance) do blocking I/O via `run_matchup()`.
+Async ASHA-style staged evaluator with parallel instance dispatch and WilcoxonPruner. Uses coordinator-worker pattern: main thread owns all Optuna/optimizer state; worker threads (one per instance) do blocking I/O via `run_matchup()`.
 
 ```python
 class StagedEvaluator:
@@ -109,15 +104,14 @@ class StagedEvaluator:
 - `_trials_asked: int` — trials asked from Optuna
 - `_trials_completed: int` — trials told to Optuna (COMPLETE + PRUNED)
 - `_opponents: tuple[str, ...]` — opponent list for this hull size
-- `_fitness_config: CombatFitnessConfig` — from config.engagement_threshold
+- `_fitness_config: CombatFitnessConfig` — constructed from config.engagement_threshold (7 fields; see spec 25)
 - `_opponent_stats: dict[str, RunningStats]` — per-opponent running mean/std for A1 z-score normalization, keyed by opponent variant ID
 - `_cv_pairs: list[tuple[float, float]]` — (heuristic_val, z_fitness) pairs for A2 correlation estimation
 - `_cv_coefficient: float` — A2 control variate coefficient c = Cov(f,h)/Var(h)
 - `_cv_heuristic_mean: float` — A2 running mean of heuristic scores
 - `_cv_active: bool` — A2 active when |ρ| > cv_rho_threshold
 - `_completed_fitness_values: list[float]` — post-A1/A2 fitness values for A3 rank shaping
-- `_ordered_opponents: tuple[str, ...]` — current opponent ordering (initially shuffled via `opponent_shuffle_seed` for exploration, reordered by B1 discriminative power periodically)
-- `_finalized_z_scores: list[list[tuple[str, float]]]` — per-build z-score records for discriminative power computation (accumulated between recompute intervals, cleared after each recompute)
+- `_opponent_step_map: dict[str, int]` — maps opponent variant ID to stable sorted integer for WilcoxonPruner step pairing
 
 **`run()` algorithm (async coordinator):**
 
@@ -132,13 +126,13 @@ class StagedEvaluator:
 
 **`_next_matchup()`:** Returns the single highest-priority matchup. Phase 1: promote existing builds (highest rung first, skip `_dispatched`). Phase 2: ask Optuna for new trial (if `_trials_asked < sim_budget`). Returns None if no work available.
 
-**`_handle_result(ifb, result)`:** Processes one matchup result. A1: compute raw `combat_fitness()` score, update `_opponent_stats[opp_id]`, store on `ifb.raw_scores`. Report z-scored cumulative fitness to Optuna: `trial.report(z_fitness, step=rung-1)`. If complete: finalize via A1→A2→A3 pipeline. If `trial.should_prune()`: tell Optuna PRUNED. Otherwise: build stays in queue for next dispatch.
+**`_handle_result(ifb, result)`:** Processes one matchup result. A1: compute raw `combat_fitness()` score, update `_opponent_stats[opp_id]`, store on `ifb.raw_scores`. Report raw fitness to Optuna: `trial.report(raw, step=opp_step)` where `opp_step` is the stable opponent step ID from `_opponent_step_map`. WilcoxonPruner pairs values at the same step across trials via signed-rank test. If complete: finalize via A1→A2→A3 pipeline (A1 z-score normalization still used for `_cumulative_fitness` at finalization). If `trial.should_prune()`: tell Optuna PRUNED. Otherwise: build stays in queue for next dispatch.
 
 **`_fill_instances(executor, pending, free_instances)`:** Dispatch matchups to all free instances until no work or no free instances. Each instance gets exactly 1 matchup — finest pruning granularity.
 
 **Instance parallelism:** Each instance independently cycles: dispatch → combat → result → dispatch. No synchronization barrier between instances. Pruning decisions are immediate after every opponent result. Concurrency = `instance_pool.num_instances`.
 
-**Opponent Pool & Active Selection:** The discovered pool (typically 36-71 per hull size) is a reservoir. Each build evaluates only the top `active_opponents` (default 10) from the B1-ordered pool. The initial ordering is a deterministic shuffle (seeded by `opponent_shuffle_seed`) for exploration. After `ordering_recompute_interval` non-pruned completions, discriminative power is recomputed: `|Pearson correlation|` between each opponent's z-score and the leave-one-out aggregate. Opponents are reordered descending by discriminative power. B1 reorders within the evaluated opponents; opponents outside the active K accumulate no data and stay at the bottom. The initial random shuffle determines which opponents are evaluated; B1 optimizes the ordering within that set. `_finalized_z_scores` uses a windowed approach — cleared after each recompute, so correlations reflect the recent build distribution. Z-scores are computed using `_opponent_stats` (all-history Welford stats), giving well-calibrated normalization with adaptive correlations. In-flight builds keep their ordering snapshot; only new trials use the reordered/re-selected top-K. Since z-scores are standardized per opponent (~N(0,1) after warm-up), step-N values from different opponents are comparable.
+**Opponent Pool & Active Selection:** The discovered pool (typically 36-71 per hull size) is a reservoir. Each build evaluates up to `active_opponents` (default 10) from the pool. Opponents are shuffled independently per trial via `random.Random(trial.number).shuffle()` for reproducibility. WilcoxonPruner handles discriminative instance matching internally via signed-rank test pairing — each opponent has a stable step ID from `_opponent_step_map` (sorted opponent variant IDs mapped to consecutive integers), so the pruner can pair the same opponent across trials regardless of evaluation order.
 
 ### `RunningStats`
 
@@ -204,12 +198,9 @@ CatCMAwM uses population-based parallelism rather than constant_liar — it natu
 
 ### Pruner
 
-Created via `_create_pruner(config, n_opponents)` factory. Two pruner types:
+Created via `_create_pruner(config)` factory:
 
-- **`"median"` (default):** `MedianPruner(n_startup_trials=config.pruner_startup_trials, n_warmup_steps=config.pruner_warmup_steps)`. The first `n_startup_trials` trials are never pruned, giving the pruner a baseline distribution. Compares each trial's intermediate value against the median at the same step. Can prune after step 0. Simpler and more aggressive at 5 steps.
-- **`"hyperband"`:** `HyperbandPruner(min_resource=config.hyperband_min_resource, max_resource=n_opponents, reduction_factor=config.hyperband_reduction_factor)`. Bracket-based successive halving. With 5 opponents and reduction_factor=3: bracket 0 (min_resource=5, no pruning) and bracket 1 (min_resource=2). Limited brackets at this scale but available for empirical comparison with MedianPruner.
-
-Unknown `pruner_type` raises `ValueError`.
+`WilcoxonPruner(p_threshold=config.wilcoxon_p_threshold, n_startup_steps=config.wilcoxon_n_startup_steps)`. Uses a Wilcoxon signed-rank test to compare a trial's intermediate values against the best trial's values at the same steps. The step IDs correspond to stable opponent IDs from `_opponent_step_map`, so the signed-rank test naturally pairs the same opponent across trials regardless of evaluation order. No `n_opponents` parameter needed.
 
 ### Fitness Function — Signal Quality Pipeline (A1→A2→A3)
 
@@ -224,13 +215,13 @@ raw combat_fitness score
   → study.tell()
 ```
 
-**A1 — Opponent Normalization:** Each opponent's raw scores are tracked by a `RunningStats` instance (Welford's online algorithm). When computing cumulative fitness, stored raw scores are z-scored against the current opponent statistics, then aggregated by `fitness_mode`. Stats are updated from ALL trials (including pruned) so the normalizer learns from every observation. Cold start: z_score returns 0.0 when n<2 per opponent — overlaps with `pruner_startup_trials` warm-up.
+**A1 — Opponent Normalization:** Each opponent's raw scores are tracked by a `RunningStats` instance (Welford's online algorithm). When computing cumulative fitness, stored raw scores are z-scored against the current opponent statistics, then aggregated by `fitness_mode`. Stats are updated from ALL trials (including pruned) so the normalizer learns from every observation. Cold start: z_score returns 0.0 when n<2 per opponent — overlaps with `wilcoxon_n_startup_steps` warm-up.
 
 **A2 — Control Variate Correction:** `fitness_adj = z_fitness - c * (heuristic_score - E[heuristic])`. Correlation ρ estimated from `(heuristic_val, z_fitness)` pairs after `cv_min_samples` completions. Applied only when |ρ| > `cv_rho_threshold`. Re-estimated every `cv_recalc_interval` completions. The `heuristic_score` is computed per-build at trial creation time in `_ask_new_trial` (cheap CPU-only computation).
 
 **A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
 
-**Intermediate `trial.report()` values** use A1 z-scored aggregates only (no A2/A3). `MedianPruner` compares report values at the same step across trials — it does NOT mix intermediate report values with final `study.tell()` values. The different scales (z-scores for intermediates, ranks for finals) are safe because the pruner only compares like with like.
+**Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the opponent's stable step ID (no A1/A2/A3). `WilcoxonPruner` pairs values at the same step across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences (same opponent across trials), making per-opponent scale differences irrelevant.
 
 **Failure scores** (-1.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
 
@@ -264,7 +255,7 @@ Main entry point.
 4. `distributions = define_distributions(space, fixed_params=config.fixed_params)`
 5. `optuna.logging.set_verbosity(optuna.logging.WARNING)` — suppress verbose Optuna output
 6. `sampler = _create_sampler(config)` — creates TPE or CatCMAwM based on `config.sampler`
-7. `n_active = min(config.active_opponents, len(get_opponents(opponent_pool, hull.hull_size)))` then `pruner = _create_pruner(config, n_opponents=n_active)` — pruner brackets sized for the active opponent count (default 10), not the full pool.
+7. `pruner = _create_pruner(config)` — WilcoxonPruner with configured p-threshold and startup steps.
 8. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
 9. `warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)`
 10. `cache = BuildCache()`

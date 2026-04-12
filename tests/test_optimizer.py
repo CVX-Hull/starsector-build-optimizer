@@ -709,17 +709,17 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={
             HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
         })
-        # pruner_startup_trials=0 so pruning kicks in immediately
+        # wilcoxon_n_startup_steps=0 so pruning kicks in immediately
         config = OptimizerConfig(
             sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
-            pruner_startup_trials=0, pruner_warmup_steps=0,
+            wilcoxon_n_startup_steps=0,
         )
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
         pruned = [t for t in study.trials
                   if t.state == optuna.trial.TrialState.PRUNED]
-        # With all ENEMY wins and pruner_startup_trials=0, some should be pruned
-        # (MedianPruner compares against median of previous trials)
+        # With all ENEMY wins and wilcoxon_n_startup_steps=0, some should be pruned
+        # (WilcoxonPruner compares against best trial via signed-rank test)
         # This test verifies the pipeline runs without error when pruning occurs
         allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
         for trial in study.trials:
@@ -880,30 +880,27 @@ class TestStagedEvaluator:
         for trial in completed:
             assert len(trial.intermediate_values) == len(opponents)
 
-    def test_z_scored_intermediate_reports(self, wolf_hull, game_data):
-        """Intermediate trial.report() values use z-scored aggregate, not raw."""
+    def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data):
+        """Intermediate trial.report() values are raw combat_fitness at stable opponent step IDs."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
 
         pool = self._make_mock_pool()
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault")})
-        # Use enough trials so z-scoring has data
         config = OptimizerConfig(sim_budget=10, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
 
-        # With uniform PLAYER wins, z-scores should converge toward 0 as all
-        # results are similar. Check that later trials have small intermediate values.
         trials_with_iv = [t for t in study.trials if len(t.intermediate_values) > 0]
         assert len(trials_with_iv) > 2
-        # After enough data, z-scores of uniform results should be near 0
-        last_trials = trials_with_iv[-3:]
-        for trial in last_trials:
+        # With all PLAYER wins from mock, raw scores in [1.0, 1.5]
+        # Step IDs are stable opponent indices (not sequential rungs)
+        for trial in trials_with_iv:
             for step, val in trial.intermediate_values.items():
-                assert abs(val) < 5.0, (
-                    f"Trial {trial.number} step {step} has z-score {val}, "
-                    f"expected near 0 for uniform results"
+                assert 1.0 <= val <= 1.5, (
+                    f"Trial {trial.number} step {step} has value {val}, "
+                    f"expected raw PLAYER win score in [1.0, 1.5]"
                 )
 
     def test_control_variate_activates(self, wolf_hull, game_data):
@@ -977,8 +974,8 @@ class TestStagedEvaluator:
             f"Rank-shaped values should spread: got {values}"
         )
 
-    def test_intermediate_reports_not_rank_shaped(self, wolf_hull, game_data):
-        """Intermediate trial.report() values are z-scored, not rank-shaped."""
+    def test_intermediate_reports_are_raw_scores(self, wolf_hull, game_data):
+        """Intermediate trial.report() values are raw combat_fitness, not cumulative z-scores."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -992,27 +989,18 @@ class TestStagedEvaluator:
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
         trials_with_iv = [t for t in study.trials if len(t.intermediate_values) > 0]
         assert len(trials_with_iv) > 0
-        # Intermediate values are z-scores (unbounded, centered ~0),
-        # not rank-shaped (would be in (0, 1])
-        for trial in trials_with_iv:
-            for step, val in trial.intermediate_values.items():
-                # Z-scores can be negative or exceed 1.0 — rank values cannot be negative
-                # With uniform PLAYER wins, z-scores converge toward 0
-                # Key: they should NOT all be in (0, 1] — at least some should be <= 0
-                pass  # Structural check: they exist and pipeline completes
-        # With enough uniform data, z-scores should converge near 0 (some ≤ 0)
+        # Raw combat_fitness scores: PLAYER wins are in [1.0, 1.5],
+        # ENEMY losses in [-1.0, -0.5], timeouts in [-0.49, 0.49]
         all_intermediates = [
             val for t in trials_with_iv
             for val in t.intermediate_values.values()
         ]
-        has_non_positive = any(v <= 0.0 for v in all_intermediates)
-        has_any = len(all_intermediates) > 0
-        # With uniform results, z-scores are either 0 or near-0
-        assert has_any, "Should have intermediate values"
-        # Z-scores of uniform data converge to 0.0 — verify not all positive (rank would be)
-        assert has_non_positive or all(abs(v) < 0.1 for v in all_intermediates), (
-            f"Intermediate values look rank-shaped, not z-scored: {all_intermediates}"
-        )
+        assert len(all_intermediates) > 0, "Should have intermediate values"
+        # With all PLAYER wins from mock, raw scores should be in [1.0, 1.5]
+        for v in all_intermediates:
+            assert 1.0 <= v <= 1.5, (
+                f"Raw score {v} outside PLAYER win range [1.0, 1.5]"
+            )
 
     def test_failure_score_bypasses_transformations(self, wolf_hull, game_data):
         """Invalid builds get raw config.failure_score, not transformed."""
@@ -1058,126 +1046,6 @@ class TestStagedEvaluator:
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
-    def test_opponent_ordering_shuffled_before_threshold(self, wolf_hull, game_data, tmp_path):
-        """Before ordering_recompute_interval, opponent_order is shuffled (not alphabetical)."""
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        import json
-
-        pool = self._make_mock_pool()
-        # Use 6+ real opponents so shuffle reliably changes order
-        opponents = (
-            "brawler_Assault", "cerberus_Standard", "hound_Standard",
-            "lasher_Assault", "vigilance_Standard", "wolf_Assault",
-        )
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        log_path = tmp_path / "eval.jsonl"
-        config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
-            ordering_recompute_interval=50,
-
-        )
-
-        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
-
-        records = [json.loads(line) for line in log_path.read_text().splitlines()]
-        for rec in records:
-            order = rec["opponent_order"]
-            assert set(order) == set(opponents[:len(order)])
-        # At least one record should have non-alphabetical order
-        orders = [tuple(r["opponent_order"]) for r in records]
-        sorted_prefix = tuple(sorted(opponents))[:len(orders[0])]
-        assert any(o != sorted_prefix for o in orders), "Expected shuffled order, got alphabetical"
-
-    def test_opponent_ordering_recomputed_after_threshold(self, wolf_hull, game_data, tmp_path):
-        """After enough completions, opponent ordering may change from default."""
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
-        from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool
-        import json
-        import random
-
-        # Mock pool that returns different difficulties per opponent
-        mock_pool = MagicMock(spec=InstancePool)
-        mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = 1
-        rng = random.Random(42)
-
-        def mock_run_matchup(instance_id, matchup):
-            m = matchup
-            enemy_id = m.enemy_variants[0]
-            # wolf_Assault: always easy (player wins) — low discriminative power
-            # lasher_Assault: variable (sometimes win, sometimes lose) — high discriminative power
-            if enemy_id == "wolf_Assault":
-                winner = "PLAYER"
-                p_hull = 0.9
-                e_hull = 0.0
-            else:
-                if rng.random() < 0.5:
-                    winner = "PLAYER"
-                    p_hull = 0.6
-                    e_hull = 0.0
-                else:
-                    winner = "ENEMY"
-                    p_hull = 0.0
-                    e_hull = 0.5
-            player_destroyed = winner == "ENEMY"
-            enemy_destroyed = winner == "PLAYER"
-            player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=player_destroyed,
-                hull_fraction=p_hull, armor_fraction=0.5,
-                cr_remaining=0.5, peak_time_remaining=100.0,
-                disabled_weapons=0, flameouts=0,
-                damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
-                damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
-                overload_count=0,
-            )
-            enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=enemy_destroyed,
-                hull_fraction=e_hull, armor_fraction=0.5,
-                cr_remaining=0.5, peak_time_remaining=100.0,
-                disabled_weapons=0, flameouts=0,
-                damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
-                damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
-                overload_count=0,
-            )
-            return CombatResult(
-                matchup_id=m.matchup_id, winner=winner,
-                duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                player_ships_destroyed=1 if player_destroyed else 0,
-                enemy_ships_destroyed=1 if enemy_destroyed else 0,
-                player_ships_retreated=0, enemy_ships_retreated=0,
-            )
-
-        mock_pool.run_matchup = mock_run_matchup
-        opponents = ("wolf_Assault", "lasher_Assault")
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        log_path = tmp_path / "eval.jsonl"
-        config = OptimizerConfig(
-            sim_budget=30, warm_start_n=3, warm_start_sample_n=20,
-            ordering_recompute_interval=10,
-
-        )
-
-        optimize_hull("wolf", game_data, mock_pool, opp_pool, config, eval_log_path=log_path)
-
-        records = [json.loads(line) for line in log_path.read_text().splitlines()]
-        # After enough builds, ordering should have been computed
-        assert len(records) > 10
-        # Check that at least some later records have a different opponent order
-        # (lasher_Assault is more discriminative due to variable outcomes)
-        orders = [tuple(r["opponent_order"]) for r in records]
-        # We can't guarantee the order changes with random mock data,
-        # but we verify the field is present and valid
-        for order in orders:
-            assert set(order) == set(opponents)
-            assert len(order) == len(opponents)
-
     def test_opponent_stats_keyed_by_id(self, wolf_hull, game_data):
         """Dict-keyed opponent stats work correctly (regression test for list→dict refactor)."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -1193,125 +1061,6 @@ class TestStagedEvaluator:
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and len(t.intermediate_values) > 0]
         assert len(completed) > 0
-
-    def test_discriminative_power_computation(self, wolf_hull, game_data):
-        """_compute_opponent_ordering ranks more predictive opponents first."""
-        from starsector_optimizer.optimizer import StagedEvaluator, BuildCache
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool
-
-        pool = MagicMock(spec=InstancePool)
-        pool.game_dir = Path("game/starsector")
-        opponents = ("opp_a", "opp_b", "opp_c")
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
-            ordering_recompute_interval=5,
-        )
-        study = optuna.create_study(direction="maximize")
-        distributions = define_distributions(
-            build_search_space(wolf_hull, game_data),
-        )
-        cache = BuildCache()
-        evaluator = StagedEvaluator(
-            study, wolf_hull, "wolf", game_data, pool, opp_pool,
-            cache, config, distributions,
-        )
-
-        # Populate _finalized_z_scores with known data:
-        # opp_a: z-scores [1, -1, 1, -1, 1] — strongly correlated with aggregate
-        # opp_b: z-scores [0.1, 0.1, 0.1, 0.1, 0.1] — near constant, no discrimination
-        # opp_c: z-scores [0.5, -0.5, 0.5, -0.5, 0.5] — moderately correlated
-        for i in range(5):
-            sign = 1 if i % 2 == 0 else -1
-            evaluator._finalized_z_scores.append([
-                ("opp_a", sign * 1.0),
-                ("opp_b", 0.1),
-                ("opp_c", sign * 0.5),
-            ])
-
-        order = evaluator._compute_opponent_ordering()
-        # opp_a has highest correlation with leave-one-out aggregate
-        # opp_b has near-zero correlation
-        assert order[0] == "opp_a", f"Expected opp_a first, got {order}"
-        assert order[-1] == "opp_b", f"Expected opp_b last, got {order}"
-
-    def test_in_flight_builds_keep_original_ordering(self, wolf_hull, game_data, tmp_path):
-        """Builds created before reordering keep their original opponent tuple."""
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        import json
-
-        pool = self._make_mock_pool()
-        opponents = ("wolf_Assault", "lasher_Assault")
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        log_path = tmp_path / "eval.jsonl"
-        # Very low threshold so ordering computed early
-        config = OptimizerConfig(
-            sim_budget=30, warm_start_n=3, warm_start_sample_n=20,
-            ordering_recompute_interval=3,
-
-        )
-
-        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
-
-        records = [json.loads(line) for line in log_path.read_text().splitlines()]
-        # All records should have valid opponent_order field
-        for rec in records:
-            assert "opponent_order" in rec
-            assert set(rec["opponent_order"]) == set(opponents)
-
-    def test_ordering_recomputed_periodically(self, wolf_hull, game_data, tmp_path):
-        """Ordering recomputes every ordering_recompute_interval, not just once."""
-        from starsector_optimizer.optimizer import StagedEvaluator, BuildCache
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool
-
-        pool = MagicMock(spec=InstancePool)
-        pool.game_dir = Path("game/starsector")
-        opponents = ("opp_a", "opp_b", "opp_c")
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
-            ordering_recompute_interval=3,
-        )
-        study = optuna.create_study(direction="maximize")
-        distributions = define_distributions(
-            build_search_space(wolf_hull, game_data),
-        )
-        cache = BuildCache()
-        evaluator = StagedEvaluator(
-            study, wolf_hull, "wolf", game_data, pool, opp_pool,
-            cache, config, distributions,
-        )
-
-        # First window: 3 records → triggers recompute, clears buffer
-        for i in range(3):
-            sign = 1 if i % 2 == 0 else -1
-            evaluator._finalized_z_scores.append([
-                ("opp_a", sign * 1.0),
-                ("opp_b", 0.1),
-                ("opp_c", sign * 0.5),
-            ])
-        order1 = evaluator._compute_opponent_ordering()
-        evaluator._ordered_opponents = order1
-        evaluator._finalized_z_scores.clear()
-
-        # Second window: 3 more records with different pattern → recompute again
-        for i in range(3):
-            sign = 1 if i % 2 == 0 else -1
-            evaluator._finalized_z_scores.append([
-                ("opp_a", 0.1),  # now opp_a is uninformative
-                ("opp_b", sign * 1.0),  # now opp_b is most informative
-                ("opp_c", sign * 0.5),
-            ])
-        order2 = evaluator._compute_opponent_ordering()
-
-        # Orders should differ — opp_a was first, now opp_b should be first
-        assert order1[0] == "opp_a", f"Expected opp_a first in window 1, got {order1}"
-        assert order2[0] == "opp_b", f"Expected opp_b first in window 2, got {order2}"
 
     def test_active_opponents_limits_rungs(self, wolf_hull, game_data, tmp_path):
         """With active_opponents=3 and pool of 5, builds complete after 3 opponents."""
@@ -1360,34 +1109,6 @@ class TestStagedEvaluator:
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:
             assert rec["opponents_total"] == 3
-
-    def test_initial_ordering_shuffled(self, wolf_hull, game_data, tmp_path):
-        """Initial opponent ordering is shuffled, not alphabetical."""
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        import json
-
-        pool = self._make_mock_pool()
-        opponents = (
-            "brawler_Assault", "cerberus_Standard", "hound_Standard",
-            "kite_Standard", "lasher_Assault", "monitor_Escort",
-            "vigilance_Standard", "wolf_Assault",
-        )
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        log_path = tmp_path / "eval.jsonl"
-        config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
-            active_opponents=6,
-
-        )
-
-        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
-
-        records = [json.loads(line) for line in log_path.read_text().splitlines()]
-        first_order = tuple(records[0]["opponent_order"])
-        # Should not be alphabetical (shuffled with seed 42)
-        alphabetical = tuple(sorted(opponents))[:len(first_order)]
-        assert first_order != alphabetical, f"Expected shuffled order, got alphabetical: {first_order}"
 
 
 class TestParallelDispatch:
@@ -1533,27 +1254,34 @@ class TestParallelDispatch:
             )
 
 
-class TestPrunerFactory:
-    """Tests for _create_pruner factory function."""
+class TestWilcoxonPruner:
+    """Tests for WilcoxonPruner integration and per-trial shuffling."""
 
-    def test_median_pruner_is_default(self):
-        """Default pruner_type='median' creates MedianPruner."""
-        config = OptimizerConfig()
-        pruner = _create_pruner(config, n_opponents=5)
-        assert isinstance(pruner, optuna.pruners.MedianPruner)
+    def test_wilcoxon_pruner_created(self):
+        """_create_pruner returns WilcoxonPruner with config params."""
+        config = OptimizerConfig(wilcoxon_p_threshold=0.05, wilcoxon_n_startup_steps=3)
+        pruner = _create_pruner(config)
+        assert isinstance(pruner, optuna.pruners.WilcoxonPruner)
+        assert pruner._p_threshold == 0.05
+        assert pruner._n_startup_steps == 3
 
-    def test_hyperband_pruner_creation(self):
-        """pruner_type='hyperband' creates HyperbandPruner with correct params."""
-        config = OptimizerConfig(
-            pruner_type="hyperband",
-            hyperband_reduction_factor=3,
-            hyperband_min_resource=1,
-        )
-        pruner = _create_pruner(config, n_opponents=5)
-        assert isinstance(pruner, optuna.pruners.HyperbandPruner)
+    def test_stable_opponent_step_ids(self):
+        """Same opponent always maps to same integer step ID regardless of order."""
+        opponents = ("fury_Attack", "aurora_Assault", "dominator_AntiCV")
+        step_map = {opp: i for i, opp in enumerate(sorted(opponents))}
+        # Sorted: aurora_Assault=0, dominator_AntiCV=1, fury_Attack=2
+        assert step_map["aurora_Assault"] == 0
+        assert step_map["dominator_AntiCV"] == 1
+        assert step_map["fury_Attack"] == 2
 
-    def test_invalid_pruner_type_raises(self):
-        """Unknown pruner_type raises ValueError."""
-        config = OptimizerConfig(pruner_type="unknown")
-        with pytest.raises(ValueError, match="Unknown pruner_type"):
-            _create_pruner(config, n_opponents=5)
+    def test_per_trial_opponent_shuffle(self):
+        """Different trial numbers produce different opponent orderings."""
+        import random as _random
+        opponents = list(range(10))
+        orders = set()
+        for trial_num in range(20):
+            shuffled = list(opponents)
+            _random.Random(trial_num).shuffle(shuffled)
+            orders.add(tuple(shuffled))
+        # With 20 different seeds and 10 items, we should get many distinct orderings
+        assert len(orders) >= 10

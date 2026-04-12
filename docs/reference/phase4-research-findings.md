@@ -110,7 +110,7 @@ Single-opponent fitness → counter-builds, not robust builds.
 Phase 3.5 simulation proved short timeouts corrupt the optimizer:
 - 60s timeout → 100% timeout rate for cruisers → flat fitness → +20% optimizer iterations
 - Approach time alone is ~6s wall-clock at 5x speed
-- Curtailment already saves 12-24% on decisive fights — replaces the need for short sim
+- Between-trial pruning via WilcoxonPruner handles budget efficiency — replaces the need for short sim
 
 ### Why Not Full MFBO
 
@@ -215,16 +215,14 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 
 ### Key Findings
 
-**Timeout waste:** 30% of matchups (363/1218) hit the 300s timeout, consuming 56% of total combat time (30.2h out of 53.6h). The existing TTD-ratio curtailment missed these because they were symmetric stalemates — both sides at near-zero HP loss rates due to shield/flux equilibrium.
+**Timeout waste:** 30% of matchups (363/1218) hit the 300s timeout, consuming 56% of total combat time (30.2h out of 53.6h). Symmetric stalemates (both sides at near-zero HP loss rates due to shield/flux equilibrium) were the primary cause.
 
 **heron_Attack is noise:** 74% timeout rate with near-zero HP differential (0.0% player wins, 0.0% player losses). The Eagle cannot engage a kiting carrier in 1v1. Removed from CRUISER opponent pool.
 
-**Stalemate detection benchmark:** Replaying the evaluation log under different timeout strategies (`experiments/eagle_200/timeout_strategy_benchmark.ipynb`), stalemate detection at 60s with threshold 0.01 saves **41.9% of combat time** while preserving **rho=0.987 Spearman rank correlation** and **10/10 top-10 overlap**, with only 2 decisive fights lost. This outperformed flat timeout reduction (22.5% savings at rho=0.958 for 200s flat cap) and opponent-specific caps (15.3% savings).
-
-**Wall-clock impact:** The straggler effect (batch waits for slowest instance) dominated. Stalemate detection reduces estimated wall clock from 16.75h to 10.71h (36% reduction) by cutting the longest fights in each batch.
+**Timeout strategy benchmark:** Replaying the evaluation log under different timeout strategies (`experiments/eagle_200/timeout_strategy_benchmark.ipynb`), a 200s flat cap saves **22.5% of combat time** at rho=0.958 Spearman rank correlation. Shorter timeouts corrupt rankings. Between-trial pruning via WilcoxonPruner (dropping bad builds after 2-3 opponents) is a more effective budget-saving strategy than mid-fight timeout manipulation.
 
 ### Actions Taken
-- Added `_check_stalemate()` to `CurtailmentMonitor` (spec 20)
+- Timeout strategy analysis informed between-trial pruning approach
 - Removed `heron_Attack` from CRUISER `DEFAULT_OPPONENT_POOL` (spec 23)
 - Added CatCMAwM as first-class sampler option via `--sampler catcma` (spec 24)
 - Added parameter importance analysis via fANOVA and `--fix-params` support (spec 26)
@@ -236,10 +234,10 @@ Post-experiment analysis of the 203-trial evaluation log revealed several noise 
 
 **Per-opponent signal quality:**
 - dominator_XIV_Elite has **negative correlation** with overall fitness (ρ = -0.225) — builds that do well against it tend to do worse overall
-- doom_Strike has the highest within-outcome variance (STOPPED: std = 0.547)
+- doom_Strike has the highest within-outcome variance (TIMEOUT: std = 0.547)
 - Inter-opponent correlations are near-zero (ρ = 0.0–0.2) — orthogonal but noisy
 
-**Effect size:** Cohen's d = 3.30 between best build and median. The optimizer finds real signal, but the 0.4% win rate means it navigates "shades of losing" — fitness differences within the TIMEOUT/STOPPED engagement-score tier.
+**Effect size:** Cohen's d = 3.30 between best build and median. The optimizer finds real signal, but the 0.4% win rate means it navigates "shades of losing" — fitness differences within the TIMEOUT margin tier.
 
 **Leave-one-out opponent analysis:** Dropping dominator_XIV_Elite *improves* rank correlation with full fitness (0.578). Dropping doom_Strike hurts most (0.355).
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import random as _random
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -87,22 +88,17 @@ class OptimizerConfig:
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
-    pruner_startup_trials: int = 20
-    pruner_warmup_steps: int = 0
+    wilcoxon_p_threshold: float = 0.1
+    wilcoxon_n_startup_steps: int = 2
     matchup_time_limit: float = 300.0
     matchup_time_mult: float = 5.0
     log_interval: int = 10
-    failure_score: float = -1.0
+    failure_score: float = -2.0
     stock_build_scale_mult: float = 2.0
     cv_min_samples: int = 30
     cv_rho_threshold: float = 0.3
     cv_recalc_interval: int = 10
-    pruner_type: str = "median"
-    hyperband_reduction_factor: int = 3
-    hyperband_min_resource: int = 1
-    ordering_recompute_interval: int = 20
     active_opponents: int = 10
-    opponent_shuffle_seed: int = 42
 
 
 class BuildCache:
@@ -236,22 +232,16 @@ def _pearson_r(xs: list[float], ys: list[float]) -> float:
     return cov / (x_std * y_std)
 
 
-def _create_pruner(
-    config: OptimizerConfig, n_opponents: int,
-) -> optuna.pruners.BasePruner:
-    """Create Optuna pruner instance from config."""
-    if config.pruner_type == "median":
-        return optuna.pruners.MedianPruner(
-            n_startup_trials=config.pruner_startup_trials,
-            n_warmup_steps=config.pruner_warmup_steps,
-        )
-    if config.pruner_type == "hyperband":
-        return optuna.pruners.HyperbandPruner(
-            min_resource=config.hyperband_min_resource,
-            max_resource=n_opponents,
-            reduction_factor=config.hyperband_reduction_factor,
-        )
-    raise ValueError(f"Unknown pruner_type: {config.pruner_type!r}")
+def _create_pruner(config: OptimizerConfig) -> optuna.pruners.BasePruner:
+    """Create WilcoxonPruner for between-opponent statistical pruning.
+
+    WilcoxonPruner performs a signed-rank test between the current trial
+    and the best trial, using per-opponent raw scores at stable step IDs.
+    """
+    return optuna.pruners.WilcoxonPruner(
+        p_threshold=config.wilcoxon_p_threshold,
+        n_startup_steps=config.wilcoxon_n_startup_steps,
+    )
 
 
 def define_distributions(
@@ -453,13 +443,11 @@ class StagedEvaluator:
         self._opponent_stats: dict[str, RunningStats] = {
             opp: RunningStats() for opp in self._opponents
         }
-        # B1: Opponent ordering (shuffled initially for exploration, recomputed periodically)
-        import random as _random
-        _rng = _random.Random(config.opponent_shuffle_seed)
-        _initial_order = list(self._opponents)
-        _rng.shuffle(_initial_order)
-        self._ordered_opponents: tuple[str, ...] = tuple(_initial_order)
-        self._finalized_z_scores: list[list[tuple[str, float]]] = []
+        # Stable opponent → integer step mapping for WilcoxonPruner
+        # (sorted for determinism; same opponent always gets same step ID across trials)
+        self._opponent_step_map: dict[str, int] = {
+            opp: i for i, opp in enumerate(sorted(self._opponents))
+        }
         # A2: Control variate estimation state
         self._cv_pairs: list[tuple[float, float]] = []
         self._cv_coefficient: float = 0.0
@@ -579,7 +567,9 @@ class StagedEvaluator:
         ifb.next_opponent_index += 1
 
         cum_fitness = self._cumulative_fitness(ifb)
-        ifb.trial.report(cum_fitness, step=ifb.rung - 1)
+        # Report raw per-opponent score at stable step ID (WilcoxonPruner semantics)
+        opp_step = self._opponent_step_map[opp_id]
+        ifb.trial.report(raw, step=opp_step)
 
         logger.info(
             "  Trial %d rung %d/%d vs %s: %s (raw=%.3f, cum=%.3f)",
@@ -639,12 +629,15 @@ class StagedEvaluator:
         h_val = heuristic_score(
             build, self._hull, self._game_data,
         ).composite_score
+        # Per-trial reproducible shuffle for unbiased WilcoxonPruner coverage
+        active = list(self._opponents[:self._config.active_opponents])
+        _random.Random(trial.number).shuffle(active)
         return _InFlightBuild(
             trial=trial,
             build=build,
             build_spec=build_spec,
             variant_id=variant_id,
-            opponents=self._ordered_opponents[:self._config.active_opponents],
+            opponents=tuple(active),
             heuristic_val=h_val,
         )
 
@@ -659,21 +652,6 @@ class StagedEvaluator:
         # A3: rank-based shaping
         self._completed_fitness_values.append(cv_fitness)
         ranked_fitness = self._rank_fitness(cv_fitness)
-
-        # B1: Record per-opponent z-scores for ordering computation
-        z_records = [
-            (ifb.opponents[i], self._opponent_stats[ifb.opponents[i]].z_score(raw))
-            for i, raw in enumerate(ifb.raw_scores)
-        ]
-        self._finalized_z_scores.append(z_records)
-
-        # B1: Recompute ordering periodically
-        if len(self._finalized_z_scores) >= self._config.ordering_recompute_interval:
-            new_order = self._compute_opponent_ordering()
-            if new_order != self._ordered_opponents:
-                logger.info("Opponent ordering updated: %s", new_order)
-                self._ordered_opponents = new_order
-            self._finalized_z_scores.clear()
 
         self._cache.put(ifb.build, ranked_fitness)
         self._study.tell(ifb.trial, ranked_fitness)
@@ -768,31 +746,6 @@ class StagedEvaluator:
         rank = sum(1 for v in self._completed_fitness_values if v <= fitness)
         return rank / n
 
-    def _compute_opponent_ordering(self) -> tuple[str, ...]:
-        """Compute opponent order by discriminative power (|correlation| with aggregate)."""
-        if len(self._finalized_z_scores) < self._config.ordering_recompute_interval:
-            return self._opponents
-
-        opp_correlations: dict[str, float] = {}
-        for opp in self._opponents:
-            opp_scores: list[float] = []
-            aggregates: list[float] = []
-            for record in self._finalized_z_scores:
-                opp_z = next((z for oid, z in record if oid == opp), None)
-                if opp_z is None:
-                    continue
-                others = [z for oid, z in record if oid != opp]
-                if not others:
-                    continue
-                agg = sum(others) / len(others)
-                opp_scores.append(opp_z)
-                aggregates.append(agg)
-            opp_correlations[opp] = abs(_pearson_r(opp_scores, aggregates))
-
-        return tuple(sorted(
-            self._opponents, key=lambda o: -opp_correlations.get(o, 0.0),
-        ))
-
 
 def _append_eval_log(
     path: Path,
@@ -861,7 +814,7 @@ def optimize_hull(
     sampler = _create_sampler(config)
     opponents = get_opponents(opponent_pool, hull.hull_size)
     n_active = min(config.active_opponents, len(opponents))
-    pruner = _create_pruner(config, n_opponents=n_active)
+    pruner = _create_pruner(config)
 
     study = optuna.create_study(
         sampler=sampler,

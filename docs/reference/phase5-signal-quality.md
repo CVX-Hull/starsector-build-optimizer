@@ -13,7 +13,7 @@ The optimizer discovers effective ship builds for Starsector via Bayesian optimi
 1. **Propose** a build (weapon loadout, hullmods, flux allocation) via Optuna TPE/CatCMAwM
 2. **Repair** to feasibility (OP budget, hullmod compatibility)
 3. **Evaluate** by running AI-vs-AI combat simulation against 5 diverse opponents
-4. **Score** using a hierarchical composite fitness: wins [1.0, 1.1], timeouts [-0.5, +0.5], losses [-1.0, -0.85]
+4. **Score** using a hierarchical composite fitness: wins [1.0, 1.5], timeouts [-0.49, +0.49], losses [-1.0, -0.5]
 5. **Aggregate** per-opponent scores into a single mean fitness
 6. **Report** to Optuna, which uses the score to guide future proposals
 
@@ -27,11 +27,11 @@ A 203-trial Eagle cruiser experiment (4.3 hours, 47.6 trials/hour) revealed that
 |--------|-------|-------------|
 | Win rate | 0.4% (4/1015 matchups) | The primary signal (wins) barely exists |
 | Cohen's d (best vs median) | 3.30 | The optimizer IS finding real signal — best build is 3.3σ above median |
-| Fitness range | [-0.65, +0.38] | Everything lives in the engagement-score band, not the win tier |
+| Fitness range | [-0.65, +0.38] | Everything lives in the timeout margin band, not the win tier (pre-redesign data) |
 | Coefficient of variation | 0.41 | High noise relative to signal |
 | Builds evaluated >1 time | 0 | Cannot measure within-build replay variance |
 
-**The optimizer navigates "shades of losing."** Almost all builds lose every matchup. The fitness signal comes entirely from engagement quality differences within the TIMEOUT/STOPPED tier — small differences in HP differential that are easily overwhelmed by combat stochasticity.
+**The optimizer navigates "shades of losing."** Almost all builds lose every matchup. The fitness signal comes entirely from hull-fraction margin differences within the TIMEOUT tier — small differences in kill-progress that are easily overwhelmed by combat stochasticity.
 
 ### Per-Opponent Analysis
 
@@ -47,7 +47,7 @@ The 5 opponents (after removing the noise-only heron_Attack in Phase 4) test ort
 
 Key findings:
 - **dominator_XIV_Elite has negative correlation with fitness** (ρ = -0.225). Builds that do well against it tend to do worse overall — it actively hurts ranking quality.
-- **doom_Strike has the highest within-outcome variance** (STOPPED outcomes: std = 0.547). Bimodal: either the build survives or gets destroyed by mines.
+- **doom_Strike has the highest within-outcome variance** (TIMEOUT outcomes: std = 0.547). Bimodal: either the build survives or gets destroyed by mines.
 - **Inter-opponent correlations are near-zero** (ρ = 0.0–0.2). Each opponent tests genuinely orthogonal capabilities, but this means averaging them adds independent noise.
 - **Leave-one-out**: Dropping dominator_XIV_Elite improves rank correlation to 0.578 (from 1.000 full). Dropping doom_Strike hurts most (0.355).
 
@@ -89,7 +89,7 @@ Evaluate sequentially, statistically eliminate inferior builds early. F-Race use
 ### 2.3 Richer Objectives (Multi-Objective / Reward Shaping Literature)
 
 **Multi-Objective Decomposition**
-Instead of collapsing per-opponent telemetry into one composite score, report 3–4 objectives to Optuna: (a) engagement score, (b) damage efficiency ratio, (c) survivability (HP preserved), (d) flux management quality. Use Optuna's built-in `NSGAIISampler` or MOTPE. The Pareto front naturally explores different strategies (tanky, DPS, kiting) without requiring hand-crafted weights.
+Instead of collapsing per-opponent telemetry into one composite score, report 3–4 objectives to Optuna: (a) kill-progress margin, (b) survival (hull fraction preserved), (c) damage output, (d) flux management quality. Use Optuna's built-in `NSGAIISampler` or MOTPE. The Pareto front naturally explores different strategies (tanky, DPS, kiting) without requiring hand-crafted weights.
 - *Ref: Optuna multi-objective tutorial; helper-objective literature (Jensen, 2005)*
 - *Impact: High. Effort: Low (Optuna supports natively). Extra evals: None.*
 

@@ -37,14 +37,13 @@ INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE → WA
 Per-frame:
 1. **Camera:** Center viewport on midpoint of all tracked ships via `ViewportAPI.setExternalControl(true)` + `viewport.set()`. This ensures the fight is visible.
 2. **Heartbeat** every 60 frames
-3. **Stop signal check:** If `fileExistsInCommon("combat_harness_stop")` → delete signal, build result with winner="STOPPED", transition to CLEANING. (Curtailment monitor writes this signal from Python.)
-4. **Contact detection:** If `!contactMade`:
+3. **Contact detection:** If `!contactMade`:
    - If `engine.isFleetsInContact()` → start combat timer (`matchupStartTime = now`), log contact
    - Else if `(now - spawnTime) > 30s` → force combat timer start (approach timeout for evasive AI)
-5. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins.
-6. **Timeout check:** If `contactMade` and `(now - matchupStartTime) > timeLimitSeconds` → TIMEOUT
-7. On end: build result via `ResultWriter.buildMatchupResult()`, add to `allResults` array
-8. Transition to CLEANING
+4. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins.
+5. **Timeout check:** If `contactMade` and `(now - matchupStartTime) > timeLimitSeconds` → TIMEOUT
+6. On end: build result via `ResultWriter.buildMatchupResult()`, add to `allResults` array
+7. Transition to CLEANING
 
 **Timer logic:** The time limit only counts combat time, not approach time. Ships may take several seconds to fly toward each other after spawning. If one side is evasive and never engages, the 30-second approach timeout forces the combat timer to start anyway.
 

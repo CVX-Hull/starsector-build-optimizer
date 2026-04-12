@@ -448,7 +448,6 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 2. No QD-based exploration of game build archetypes with combat simulation
 3. No heuristic-as-prior-mean combined with Optuna TPE for warm-starting expensive game simulation BO
 4. No CatCMA-based emitter inside MAP-Elites for mixed-variable game build discovery
-5. No curtailment system using model-free TTD-ratio extrapolation for game combat simulation
-6. No opponent-pool-based fitness evaluation with WilcoxonPruner for sample-efficient build optimization
+5. No opponent-pool-based fitness evaluation with WilcoxonPruner for sample-efficient build optimization
 
 Our project would be novel work at the intersection of mixed-variable BO, quality-diversity, multi-fidelity optimization, and game build optimization. The opponent pool strategy with WilcoxonPruner is particularly novel — it addresses the RPS dynamics inherent in combat games while remaining sample-efficient.

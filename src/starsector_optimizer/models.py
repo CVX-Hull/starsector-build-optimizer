@@ -374,7 +374,7 @@ class ShipCombatResult:
 class CombatResult:
     """Full result from a single combat matchup."""
     matchup_id: str
-    winner: str  # "PLAYER", "ENEMY", "TIMEOUT", or "STOPPED"
+    winner: str  # "PLAYER", "ENEMY", or "TIMEOUT"
     duration_seconds: float
     player_ships: tuple[ShipCombatResult, ...]
     enemy_ships: tuple[ShipCombatResult, ...]
@@ -409,18 +409,19 @@ class Heartbeat:
 
 @dataclass(frozen=True)
 class CombatFitnessConfig:
-    """Tunable coefficients for the hierarchical combat fitness function."""
-    shield_damage_weight: float = 0.3
+    """Tunable coefficients for the hierarchical combat fitness function.
+
+    Tier ranges (at defaults): wins [1.0, 1.5], timeouts [-0.49, +0.49],
+    losses [-1.0, -0.5], no engagement = -2.0.
+    Invariant: win_base > timeout_scale > -(loss_base + loss_bonus_scale) > no_engagement_score.
+    """
+    win_base: float = 1.0
+    loss_base: float = -1.0
+    win_bonus_scale: float = 0.5
+    loss_bonus_scale: float = 0.5
+    timeout_scale: float = 0.49
+    no_engagement_score: float = -2.0
     engagement_threshold: float = 500.0
-    engagement_penalty: float = -0.5
-    engagement_scale: float = 0.5
-    loss_engagement_scale: float = 0.3
-    speed_bonus_weight: float = 0.04
-    hp_bonus_weight: float = 0.03
-    overload_bonus_base: float = 0.02
-    overload_penalty_per: float = 0.005
-    armor_bonus_weight: float = 0.01
-    time_limit: float = 180.0
 
 
 @dataclass(frozen=True)

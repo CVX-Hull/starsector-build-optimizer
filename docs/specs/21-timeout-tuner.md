@@ -49,7 +49,7 @@ Use data-driven priors from GameData. No model fitting needed.
 ### Warm (50+ observations)
 Fit `lifelines.WeibullAFTFitter` across all accumulated data:
 - Duration column: actual fight duration (game-time seconds)
-- Event column: 1 = fight completed (PLAYER/ENEMY win), 0 = censored (TIMEOUT/STOPPED)
+- Event column: 1 = fight completed (PLAYER/ENEMY win), 0 = censored (TIMEOUT)
 - Features: max hull size per side (one-hot), ship count per side, median speed per side
 - Prediction: `aft.predict_percentile(features, p=0.98)` → per-matchup timeout
 

@@ -19,8 +19,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TextIO
 
-from .models import CombatResult, Heartbeat, MatchupConfig
-from .curtailment import CurtailmentMonitor, parse_heartbeat
+from .models import CombatResult, MatchupConfig
 from .result_parser import parse_results_file, write_queue_file
 
 logger = logging.getLogger(__name__)
@@ -90,7 +89,6 @@ class GameInstance:
     last_heartbeat_time: float = 0.0
     launch_time: float = 0.0
     restart_count: int = 0
-    heartbeats: list[Heartbeat] = field(default_factory=list)
     total_matchups_processed: int = 0
     _game_log_file: TextIO | None = field(default=None, repr=False)
 
@@ -138,9 +136,8 @@ class InstancePool:
             result = pool.run_matchup(0, matchup)  # blocks until complete
     """
 
-    def __init__(self, config: InstanceConfig, curtailment: CurtailmentMonitor | None = None) -> None:
+    def __init__(self, config: InstanceConfig) -> None:
         self._config = config
-        self._curtailment = curtailment
         self._instances: list[GameInstance] = []
 
     @property
@@ -235,7 +232,6 @@ class InstancePool:
             elif inst.state == InstanceState.RUNNING:
                 if self._is_heartbeat_fresh(inst):
                     inst.last_heartbeat_time = time.monotonic()
-                    self._read_and_check_curtailment(inst)
                 elif (time.monotonic() - inst.last_heartbeat_time
                       > self._config.heartbeat_timeout_seconds):
                     logger.warning("Instance %d heartbeat timed out",
@@ -331,7 +327,6 @@ class InstancePool:
         """Send a new batch to an already-running persistent instance."""
         inst.assigned_matchups = chunk
         inst.results = []
-        inst.heartbeats = []
         inst.restart_count = 0
 
         self._clean_protocol_files(inst)
@@ -355,7 +350,6 @@ class InstancePool:
         inst.assigned_matchups = chunk
         inst.results = []
         inst.restart_count = 0
-        inst.heartbeats = []
 
         self._clean_protocol_files(inst)
         self._write_queue(inst, chunk)
@@ -519,25 +513,4 @@ class InstancePool:
                     inst.instance_id, inst.restart_count,
                     self._config.max_restarts)
         self._assign_and_launch(inst, [matchup])
-
-    # --- Curtailment integration ---
-
-    def _read_and_check_curtailment(self, inst: GameInstance) -> None:
-        """Read heartbeat content and check if curtailment should trigger."""
-        if self._curtailment is None:
-            return
-        try:
-            content = inst.heartbeat_path.read_text().strip()
-            if not content:
-                return
-            hb = parse_heartbeat(content)
-            # Deduplicate: skip if same timestamp as last heartbeat
-            if inst.heartbeats and inst.heartbeats[-1].timestamp_ms == hb.timestamp_ms:
-                return
-            inst.heartbeats.append(hb)
-            should_stop, _ = self._curtailment.should_stop(inst.heartbeats)
-            if should_stop:
-                CurtailmentMonitor.write_stop_signal(inst.saves_common)
-        except (ValueError, OSError):
-            pass  # Malformed heartbeat or file not readable
 

@@ -18,7 +18,7 @@ Complete design for the Starsector Ship Build Optimizer system, covering all com
 │         │                  │                      │              │
 │  ┌──────┴──────────────────┴──────────────────────┴───────────┐ │
 │  │                    Evaluation Pipeline                      │ │
-│  │  Heuristic (0ms) → Full Sim + Curtailment (22-35s)        │ │
+│  │  Heuristic (0ms) → Full Sim (22-35s)                      │ │
 │  └────────────────────────────┬────────────────────────────────┘ │
 │                               │                                  │
 │  ┌────────────────────────────┴────────────────────────────────┐ │
@@ -483,7 +483,7 @@ for _ in range(n_generations):
 
 ### Mode 3: Full Parallel Production
 - N Starsector instances with Xvfb
-- Heuristic warm-start → Full sim with curtailment
+- Heuristic warm-start → Full sim
 - Optuna TPE with constant_liar (batch size = N instances)
 - Full throughput
 

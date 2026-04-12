@@ -120,7 +120,7 @@ Ship data is collected from tracked ShipAPI references (not fleet manager, which
 
 ## Heartbeat
 
-`combat_harness_heartbeat.txt.data` — updated every ~60 frames with 6 space-separated fields: `<timestamp_ms> <elapsed_seconds> <player_hp_fraction> <enemy_hp_fraction> <player_alive_count> <enemy_alive_count>`. Used for liveness monitoring and curtailment. During WAITING state, HP fractions and alive counts are all zero.
+`combat_harness_heartbeat.txt.data` — updated every ~60 frames with 6 space-separated fields: `<timestamp_ms> <elapsed_seconds> <player_hp_fraction> <enemy_hp_fraction> <player_alive_count> <enemy_alive_count>`. Used for liveness monitoring. During WAITING state, HP fractions and alive counts are all zero.
 
 ## Python Dataclasses
 

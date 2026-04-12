@@ -20,7 +20,6 @@ from starsector_optimizer.scorer import heuristic_score
 from starsector_optimizer.repair import repair_build
 from starsector_optimizer.variant import build_to_build_spec
 from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
-from starsector_optimizer.curtailment import CurtailmentMonitor
 from starsector_optimizer.opponent_pool import (
     OpponentPool, generate_matchups, compute_fitness, hp_differential, get_opponents,
 )
@@ -56,15 +55,14 @@ top3 = scored[:3]
 print(f"   Generated 1000 builds, top-3 heuristic scores: "
       f"{[f'{s.composite_score:.3f}' for _, s in top3]}")
 
-# Setup instance pool with curtailment
+# Setup instance pool
 print("\n3. Setting up 2 Xvfb instances...")
 config = InstanceConfig(
     game_dir=GAME_DIR,
     num_instances=2,
     xvfb_base_display=200,
 )
-curtailment = CurtailmentMonitor(min_time=30.0, ttd_ratio=3.0)
-pool = InstancePool(config, curtailment=curtailment)
+pool = InstancePool(config)
 pool.setup()
 
 try:

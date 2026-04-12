@@ -28,7 +28,6 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private static final Logger log = Logger.getLogger(CombatHarnessPlugin.class);
     private static final float SHIP_SPACING = 800f;
-    private static final String STOP_FILE = MatchupConfig.COMMON_PREFIX + "stop";
     private static final String NEW_QUEUE_FILE = MatchupConfig.COMMON_PREFIX + "new_queue";
     private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
     private static final int WAITING_TIMEOUT_FRAMES = 3600;  // ~60s at 60fps
@@ -205,28 +204,6 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                     computeAggregateHp(enemyShips),
                     countAlive(playerShips),
                     countAlive(enemyShips));
-        }
-
-        // Check for stop signal from Python curtailment monitor
-        if (Global.getSettings().fileExistsInCommon(STOP_FILE)) {
-            try {
-                Global.getSettings().deleteTextFileFromCommon(STOP_FILE);
-            } catch (Exception e) {
-                // Best effort cleanup
-            }
-            float elapsed = contactMade ? engine.getTotalElapsedTime(false) - matchupStartTime : 0f;
-            try {
-                allResults.put(ResultWriter.buildMatchupResult(
-                        currentConfig, playerShips, enemyShips,
-                        currentTracker, "STOPPED", elapsed));
-                log.info("Matchup " + currentConfig.matchupId
-                        + " stopped by curtailment, duration=" + elapsed + "s");
-            } catch (Exception e) {
-                log.error("Failed to build result for stopped " + currentConfig.matchupId, e);
-            }
-            state = State.CLEANING;
-            cleanupFramesLeft = CLEANUP_FRAMES;
-            return;
         }
 
         // Start timer only once fleets engage (approach time doesn't count)

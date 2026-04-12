@@ -2,7 +2,7 @@
 
 This document covers the two-tier evaluation pipeline, surrogate model design, noise handling, and adaptive replication strategies.
 
-**Updated based on Phase 3.5 + Phase 4 research findings.** Key change: "short sim" fidelity level removed — empirically shown to corrupt optimizer signal. Pipeline is now heuristic + full sim with curtailment.
+**Updated based on Phase 3.5 + Phase 4 research findings.** Key change: "short sim" fidelity level removed — empirically shown to corrupt optimizer signal. Pipeline is now heuristic + full sim.
 
 ---
 
@@ -11,7 +11,7 @@ This document covers the two-tier evaluation pipeline, surrogate model design, n
 | Fidelity | Method | Cost | Accuracy | Use |
 |---|---|---|---|---|
 | **0 — Heuristic** | Static metrics from game data | ~0ms | R² ≈ 0.49 with sim | Screen 100K+ candidates/second |
-| **1 — Full Sim** | 180s game time, 5x speed, curtailment | ~22-35s wall-clock | Ground truth (noisy) | Optimization + validation |
+| **1 — Full Sim** | 180s game time, 5x speed | ~22-35s wall-clock | Ground truth (noisy) | Optimization + validation |
 
 ### Why NOT Three Tiers (No Short Sim)
 
@@ -26,7 +26,7 @@ Phase 3.5 research proved short simulations corrupt the optimizer:
 
 A "short sim" at 15-30s game time would have near-100% timeout rate, producing a flat fitness landscape. The approach time alone (ships closing from 4000 units) consumes ~6s wall-clock at 5x. By the time ships engage, there's barely time for meaningful combat.
 
-**Curtailment replaces short sim for time savings.** Decisive fights (Onslaught vs Lasher) end naturally in ~47s game-time. Curtailment stops one-sided fights 12-24% faster. The fights that run long are the close, interesting ones where you *need* the full duration for a meaningful signal.
+**Between-trial pruning replaces short sim for budget savings.** Decisive fights (Onslaught vs Lasher) end naturally in ~47s game-time. WilcoxonPruner drops bad builds after 1-2 opponents, saving 60-80% of remaining evaluation cost. The fights that run long are the close, interesting ones where you *need* the full duration for a meaningful signal.
 
 ### Where the Heuristic Works and Fails
 
@@ -166,11 +166,11 @@ Total per hull: ~3-4 hours, ~1000-1700 sims, ~$11
 
 ## Comparison: Old Pipeline vs New Pipeline
 
-| Aspect | Old (3-tier) | Current (2-tier + curtailment) |
+| Aspect | Old (3-tier) | Current (2-tier) |
 |---|---|---|
-| Fidelity levels | Heuristic → Short sim → Full sim | Heuristic → Full sim + curtailment |
+| Fidelity levels | Heuristic → Short sim → Full sim | Heuristic → Full sim |
 | Short sim risk | 100% timeout rate at 15s → corrupted signal | Eliminated |
-| Time savings mechanism | Short sim screening | Curtailment (12-24%) |
+| Time savings mechanism | Short sim screening | Between-trial pruning via WilcoxonPruner |
 | Warm-start method | Feed short-sim survivors to full-sim | Feed heuristic top-500 directly to TPE |
 | Opponent strategy | Not specified | Fixed diverse pool (5 archetypes) |
 | Budget per hull | ~500-2000 sims + 500-2000 short sims | ~1000-1700 sims total |

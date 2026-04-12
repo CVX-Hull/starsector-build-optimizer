@@ -192,7 +192,7 @@ If implementing a custom CatCMA emitter is too complex initially:
 
 ### The Data Efficiency Problem
 
-MAP-Elites needs many evaluations to fill a large archive. With 5000 cells and simulation at ~25s each (wall-clock, with curtailment), filling even 50% of cells with 5 evals each = 12,500 simulations = ~90 hours on 8 instances.
+MAP-Elites needs many evaluations to fill a large archive. With 5000 cells and simulation at ~25s each (wall-clock), filling even 50% of cells with 5 evals each = 12,500 simulations = ~90 hours on 8 instances.
 
 ### Solution: Two-Phase Approach
 

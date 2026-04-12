@@ -125,12 +125,11 @@ Not a hard constraint, but affects surrogate accuracy:
 f(build) = E[combat_score(build, enemy, scenario)]
 ```
 
-where `combat_score` is computed from simulation results and may include:
-- Win/loss (binary)
-- Damage dealt
-- Time to kill
-- Flux efficiency during combat
-- Hull/armor remaining at combat end
+where `combat_score` is a hierarchical composite based on outcome tier and hull-fraction metrics:
+- Wins: [1.0, 1.5] — base score plus survival bonus (player hull_fraction)
+- Timeouts: [-0.49, +0.49] — kill-progress minus death-progress margin
+- Losses: [-1.0, -0.5] — base score plus kill-progress bonus (enemy hull_fraction reduction)
+- No engagement: -2.0 floor
 
 The expectation is over stochastic simulation runs (AI decisions, weapon spread, timing).
 

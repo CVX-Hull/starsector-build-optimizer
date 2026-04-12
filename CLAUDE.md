@@ -5,7 +5,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - **Phase 1** (complete): Data layer — game data parsing, search space, constraint repair, heuristic scoring, variant generation.
 - **Phase 2** (complete): Java combat harness mod — automated AI-vs-AI combat simulation with JSON result export.
 - **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
-- **Phase 3.5** (complete): Stochastic curtailment (TTD-ratio extrapolation + stalemate detection) + data-driven timeout tuning (Weibull AFT).
+- **Phase 3.5** (complete): Data-driven timeout tuning (Weibull AFT).
 - **Phase 4** (complete): Optimizer integration — Optuna TPE/CatCMAwM, opponent pool, heuristic warm-start, parameter importance.
 - **Phase 5** (research complete): Signal quality — opponent normalization, multi-fidelity evaluation, multi-objective decomposition, curriculum learning.
 
@@ -57,7 +57,7 @@ For Starsector Java modding specifics (sandbox, file I/O, Janino, combat plugin 
 - `compute_effective_stats()` is the ONLY function that applies hullmod stat modifications
 - `HULLMOD_EFFECTS`, `INCOMPATIBLE_PAIRS`, `HULL_SIZE_RESTRICTIONS` are the ONLY locations for hardcoded hullmod game knowledge
 - All game constants (MAX_VENTS, damage multipliers, etc.) are in `hullmod_effects.py`, not scattered
-- **No magic numbers in function bodies.** Timeouts, coordinates, polling intervals, thresholds, and batch sizes must live in config dataclasses (`InstanceConfig`, `OptimizerConfig`, `CombatFitnessConfig`, `CurtailmentMonitor` params) — never as literals in function bodies.
+- **No magic numbers in function bodies.** Timeouts, coordinates, polling intervals, thresholds, and batch sizes must live in config dataclasses (`InstanceConfig`, `OptimizerConfig`, `CombatFitnessConfig`) — never as literals in function bodies.
 
 For the full mechanical checklist with runnable grep commands, see `.claude/skills/design-invariants.md`.
 
@@ -76,7 +76,6 @@ src/starsector_optimizer/          # Python modules
 ├── estimator.py                   # Throughput + cost estimation for simulation campaigns
 ├── result_parser.py               # Parse combat result JSON ↔ Python dataclasses
 ├── instance_manager.py            # Manage N parallel Starsector game instances
-├── curtailment.py                 # Stochastic curtailment (TTD-ratio + stalemate detection)
 ├── timeout_tuner.py               # Data-driven timeout prediction (Weibull AFT)
 ├── combat_fitness.py              # Hierarchical composite combat fitness score
 ├── opponent_pool.py               # Diverse opponent pool per hull size
