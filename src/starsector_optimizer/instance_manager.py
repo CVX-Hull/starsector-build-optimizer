@@ -64,7 +64,6 @@ class InstanceConfig:
     xvfb_base_display: int = 100
     xvfb_screen: str = "1920x1080x24"
     xvfb_poll_interval_seconds: float = 0.1
-    batch_size: int = 6  # matchups per instance; should equal opponent count
     heartbeat_timeout_seconds: float = 120.0
     startup_timeout_seconds: float = 90.0
     poll_interval_seconds: float = 1.0
@@ -129,13 +128,14 @@ class GameInstance:
 
 
 class InstancePool:
-    """Manages N parallel game instances for batch combat evaluation.
+    """Manages N parallel game instances for combat evaluation.
 
     Usage::
 
         config = InstanceConfig(game_dir=Path("game/starsector"), num_instances=4)
         with InstancePool(config) as pool:
-            results = pool.evaluate(matchups)
+            pool.setup()
+            result = pool.run_matchup(0, matchup)  # blocks until complete
     """
 
     def __init__(self, config: InstanceConfig, curtailment: CurtailmentMonitor | None = None) -> None:
@@ -147,6 +147,11 @@ class InstancePool:
     def game_dir(self) -> Path:
         """Public accessor for the game directory path."""
         return self._config.game_dir
+
+    @property
+    def num_instances(self) -> int:
+        """Number of managed game instances."""
+        return len(self._instances)
 
     def setup(self) -> None:
         """Create per-instance work directories with symlink structure."""
@@ -169,86 +174,78 @@ class InstancePool:
             self._kill_instance(inst)
             inst.state = InstanceState.STOPPED
 
-    def evaluate(self, matchups: list[MatchupConfig]) -> list[CombatResult]:
-        """Submit matchups for evaluation, block until all complete, return results."""
-        chunks = self._split_into_chunks(matchups)
-        chunk_queue = list(chunks)  # remaining chunks to assign
-        all_results: list[CombatResult] = []
+    def run_matchup(self, instance_id: int, matchup: MatchupConfig) -> CombatResult:
+        """Run a single matchup on the specified instance. Blocks until complete.
 
-        # Assign initial chunks to instances (reuse persistent sessions when possible)
-        for inst in self._instances:
-            if chunk_queue:
-                if self._is_instance_reusable(inst):
-                    self._assign_next_batch(inst, chunk_queue.pop(0))
-                else:
-                    self._assign_and_launch(inst, chunk_queue.pop(0))
+        Thread-safe per instance_id (each id called from at most one thread).
+        Raises InstanceError if the instance fails unrecoverably.
+        """
+        inst = self._instances[instance_id]
 
-        # Poll loop
-        while any(inst.state in (InstanceState.STARTING, InstanceState.RUNNING,
-                                  InstanceState.PREPARING)
-                  for inst in self._instances):
+        # Clean restart if memory threshold exceeded
+        if inst.total_matchups_processed >= self._config.clean_restart_matchups:
+            self._kill_instance(inst)
+            inst.total_matchups_processed = 0
+
+        # Dispatch: reuse persistent session or full launch
+        if self._is_instance_reusable(inst):
+            self._assign_next_batch(inst, [matchup])
+        else:
+            self._assign_and_launch(inst, [matchup])
+
+        # Poll for completion
+        _ACTIVE_STATES = (InstanceState.PREPARING, InstanceState.STARTING,
+                          InstanceState.RUNNING)
+        while True:
             time.sleep(self._config.poll_interval_seconds)
 
-            for inst in self._instances:
-                if inst.state not in (InstanceState.STARTING, InstanceState.RUNNING):
-                    continue
+            if inst.state not in _ACTIVE_STATES:
+                break
 
-                # Check for done signal first
-                if self._is_done(inst):
-                    inst.state = InstanceState.DONE
-                    try:
-                        inst.results = parse_results_file(inst.results_path)
-                    except Exception as e:
-                        logger.error("Failed to parse results for instance %d: %s",
-                                     inst.instance_id, e)
-                        inst.results = []
-                    all_results.extend(inst.results)
-                    inst.total_matchups_processed += len(inst.assigned_matchups)
-                    inst.state = InstanceState.IDLE
+            if self._is_done(inst):
+                try:
+                    results = parse_results_file(inst.results_path)
+                except Exception as e:
+                    logger.error("Instance %d: failed to parse results: %s",
+                                 inst.instance_id, e)
+                    results = []
+                inst.total_matchups_processed += 1
+                inst.state = InstanceState.IDLE
+                if not results:
+                    raise InstanceError(
+                        f"Instance {instance_id}: no results parsed")
+                return results[0]
 
-                    # Assign next chunk: reuse persistent session or full restart
-                    if chunk_queue:
-                        needs_restart = (
-                            inst.total_matchups_processed >= self._config.clean_restart_matchups
-                            or not self._is_instance_reusable(inst)
-                        )
-                        if needs_restart:
-                            self._kill_instance(inst)
-                            inst.total_matchups_processed = 0
-                            self._assign_and_launch(inst, chunk_queue.pop(0))
-                        else:
-                            self._assign_next_batch(inst, chunk_queue.pop(0))
-                    # else: leave instance alive in IDLE for reuse in next evaluate()
-                    continue
+            if self._is_process_exited(inst):
+                logger.warning("Instance %d crashed", inst.instance_id)
+                inst.state = InstanceState.FAILED
+                self._restart_or_raise(inst, matchup)
+                continue
 
-                # Check for process exit without done signal (crash)
-                if self._is_process_exited(inst):
-                    logger.warning("Instance %d crashed (process exited without done signal)",
+            if inst.state == InstanceState.STARTING:
+                if self._is_heartbeat_fresh(inst):
+                    inst.state = InstanceState.RUNNING
+                    inst.last_heartbeat_time = time.monotonic()
+                elif self._is_startup_timed_out(inst):
+                    logger.warning("Instance %d startup timed out",
                                    inst.instance_id)
                     inst.state = InstanceState.FAILED
-                    self._handle_failure(inst, chunk_queue, all_results)
+                    self._restart_or_raise(inst, matchup)
+                    continue
+            elif inst.state == InstanceState.RUNNING:
+                if self._is_heartbeat_fresh(inst):
+                    inst.last_heartbeat_time = time.monotonic()
+                    self._read_and_check_curtailment(inst)
+                elif (time.monotonic() - inst.last_heartbeat_time
+                      > self._config.heartbeat_timeout_seconds):
+                    logger.warning("Instance %d heartbeat timed out",
+                                   inst.instance_id)
+                    inst.state = InstanceState.FAILED
+                    self._restart_or_raise(inst, matchup)
                     continue
 
-                # Check heartbeat
-                if inst.state == InstanceState.STARTING:
-                    if self._is_heartbeat_fresh(inst):
-                        inst.state = InstanceState.RUNNING
-                        inst.last_heartbeat_time = time.monotonic()
-                    elif self._is_startup_timed_out(inst):
-                        logger.warning("Instance %d startup timed out", inst.instance_id)
-                        inst.state = InstanceState.FAILED
-                        self._handle_failure(inst, chunk_queue, all_results)
-
-                elif inst.state == InstanceState.RUNNING:
-                    if self._is_heartbeat_fresh(inst):
-                        inst.last_heartbeat_time = time.monotonic()
-                        self._read_and_check_curtailment(inst)
-                    elif time.monotonic() - inst.last_heartbeat_time > self._config.heartbeat_timeout_seconds:
-                        logger.warning("Instance %d heartbeat timed out", inst.instance_id)
-                        inst.state = InstanceState.FAILED
-                        self._handle_failure(inst, chunk_queue, all_results)
-
-        return sorted(all_results, key=lambda r: r.matchup_id)
+        raise InstanceError(
+            f"Instance {instance_id} in unexpected state: {inst.state}")
 
     def __enter__(self) -> InstancePool:
         return self
@@ -349,13 +346,6 @@ class InstancePool:
     def _write_shutdown_signal(self, inst: GameInstance) -> None:
         """Write shutdown signal to request clean game exit."""
         inst.shutdown_signal_path.write_text(str(int(time.time() * 1000)))
-
-    # --- Matchup distribution ---
-
-    def _split_into_chunks(self, matchups: list[MatchupConfig]) -> list[list[MatchupConfig]]:
-        """Split matchups into chunks of batch_size."""
-        bs = self._config.batch_size
-        return [matchups[i:i + bs] for i in range(0, len(matchups), bs)]
 
     # --- Process management ---
 
@@ -514,33 +504,21 @@ class InstancePool:
 
     # --- Failure handling ---
 
-    def _handle_failure(
-        self,
-        inst: GameInstance,
-        chunk_queue: list[list[MatchupConfig]],
-        all_results: list[CombatResult],
+    def _restart_or_raise(
+        self, inst: GameInstance, matchup: MatchupConfig,
     ) -> None:
-        """Handle a failed instance: restart or give up."""
+        """Restart instance or raise InstanceError if max restarts exceeded."""
         self._kill_instance(inst)
-        if self._can_restart(inst):
-            inst.restart_count += 1
-            logger.info("Instance %d: restarting (attempt %d/%d)",
-                        inst.instance_id, inst.restart_count, self._config.max_restarts)
-            self._clean_protocol_files(inst)
-            self._write_queue(inst, inst.assigned_matchups)
-            self._start_xvfb(inst)
-            self._start_game(inst)
-            inst.total_matchups_processed = 0
-            inst.state = InstanceState.STARTING
-            inst.launch_time = time.monotonic()
-            inst.last_heartbeat_time = time.monotonic()
-        else:
-            logger.error("Instance %d: max restarts exceeded, giving up on %d matchups",
-                         inst.instance_id, len(inst.assigned_matchups))
-            inst.state = InstanceState.IDLE
+        if not self._can_restart(inst):
             raise InstanceError(
-                f"Instance {inst.instance_id} failed after {inst.restart_count} restarts"
+                f"Instance {inst.instance_id} failed after "
+                f"{inst.restart_count} restarts"
             )
+        inst.restart_count += 1
+        logger.info("Instance %d: restarting (attempt %d/%d)",
+                    inst.instance_id, inst.restart_count,
+                    self._config.max_restarts)
+        self._assign_and_launch(inst, [matchup])
 
     # --- Curtailment integration ---
 

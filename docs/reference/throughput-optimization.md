@@ -53,14 +53,19 @@ Symlinks to shared game files (~20GB read-only), real directories for `saves/`, 
 | **Total per batch** | **~85-95s** | 35s startup + 60s combat |
 | **Startup overhead fraction** | **~37%** | 35 / 95 of wall-clock time |
 
-### Current Throughput
+### Current Throughput (async parallel dispatch)
 
-| Metric | Value |
-|--------|-------|
-| Matchups per instance per hour | ~60 (accounting for startup) |
-| Trials per hour (8 instances) | ~47 (from 203-trial Eagle experiment) |
-| Instance utilization | ~63% (37% spent on startup/teardown) |
-| Variant file I/O per batch | 8 writes (one per instance) + cleanup |
+Measured on wolf hull, 10 trials, 5 active opponents (2026-04-12):
+
+| Instances | Wall time | Sim-only time | Sim speedup | Efficiency |
+|-----------|-----------|---------------|-------------|------------|
+| 1 | 5m07s | 272s | 1.0x | — |
+| 2 | 3m34s | 182s | 1.49x | 75% |
+| 4 | 2m52s | 139s | 1.96x | 49% |
+
+Instance dispatch is perfectly balanced (equal matchups per instance). Sub-linear scaling at 4 instances is due to limited queue depth with 10 trials — at most 2-3 builds in queue simultaneously. Larger budgets (200+ trials) keep the queue fuller, improving efficiency toward 3-4x.
+
+Previous serial design (batch `evaluate()`) used only 1 of 4 instances: 210 trials in 14 hours (~15 trials/hour). Async dispatch expected to deliver ~40-60 trials/hour with 4 instances.
 
 ---
 
@@ -68,11 +73,9 @@ Symlinks to shared game files (~20GB read-only), real directories for `saves/`, 
 
 ### Bottleneck 1: Game Restart Per Batch (37% overhead)
 
-Every batch of matchups requires a full game restart: JVM initialization, asset loading, launcher GUI, menu navigation. With `InstanceConfig.batch_size=6` and 5 opponents per build, each build evaluation triggers one game restart per instance.
+Each game instance persists across matchups via the `new_queue` signal protocol. The instance processes one matchup at a time, signaling done after each. The coordinator dispatches the next matchup immediately via `run_matchup()`. A clean restart (`clean_restart_matchups=200`) is forced periodically to prevent memory accumulation.
 
-**Phase 5 makes this critical.** Sequential opponent evaluation (Phase 5B) evaluates opponents one at a time with Hyperband pruning. If each opponent requires a separate game launch:
-- 1 matchup per launch: 35s startup + 10s combat = 45s → **78% startup overhead**
-- This is worse than the current approach — throughput drops rather than improves
+**Persistent sessions eliminate restart overhead.** With `run_matchup()`, each matchup is dispatched to an already-running game instance. The file I/O overhead (queue write + signal + poll) is ~ms, negligible vs 10-120s combat time.
 
 ### Bottleneck 2: Variant File I/O
 

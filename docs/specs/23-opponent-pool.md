@@ -16,20 +16,33 @@ Frozen dataclass mapping hull sizes to stock variant IDs.
 |-------|------|-------------|
 | `pools` | `dict[HullSize, tuple[str, ...]]` | Maps hull size to opponent variant IDs |
 
-### `DEFAULT_OPPONENT_POOL`
-
-Module-level constant. Single `OpponentPool` instance with curated opponents covering archetypes: shield tank, armor tank, kiter, phase. Carrier coverage exists at CAPITAL_SHIP tier (astral_Elite) — cruiser-class carriers like heron were removed because they kite outside engagement range of most cruisers, producing timeouts with no fitness gradient (74% timeout rate, near-zero HP differential in 200-trial Eagle experiment).
-
-Variant IDs match filenames in `data/variants/` (without `.variant` extension):
-
-| Hull Size | Opponents |
-|-----------|-----------|
-| FRIGATE | `wolf_Assault`, `lasher_Assault`, `hyperion_Attack`, `shade_Assault` |
-| DESTROYER | `hammerhead_Elite`, `medusa_Attack`, `enforcer_Assault`, `sunder_Assault` |
-| CRUISER | `dominator_Assault`, `dominator_XIV_Elite`, `aurora_Assault`, `doom_Strike`, `eagle_Assault` |
-| CAPITAL_SHIP | `onslaught_Standard`, `onslaught_xiv_Elite`, `legion_xiv_Elite`, `astral_Elite`, `conquest_Elite` |
-
 ## Functions
+
+### `discover_stock_variant_ids(game_dir) -> list[tuple[str, str]]`
+
+Defined in `variant.py`. Scans `game_dir/data/variants/` recursively for all `.variant` files. Returns `(variant_id, hull_id)` pairs. Uses `load_variant_file()` to handle Starsector's loose JSON format. Excludes optimizer-generated variants (containing `_opt_`, `_val_`, `_inttest_` in the filename stem). Silently skips malformed files.
+
+### `discover_opponent_pool(game_dir, game_data) -> OpponentPool`
+
+Builds the opponent pool dynamically from all stock variants in the game data directory.
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `game_dir` | `Path` | Path to Starsector installation root |
+| `game_data` | `GameData` | Parsed game data (for hull_id → hull_size mapping) |
+
+Algorithm:
+1. Call `discover_stock_variant_ids(game_dir)` to find all stock variant files
+2. For each `(variant_id, hull_id)`: look up `game_data.hulls[hull_id]`. Skip variants whose hull is not in `game_data.hulls`.
+3. Filter out non-opponent hulls via `_is_valid_opponent(hull)`:
+   - `fleet_pts <= 0` → fighter wings and drones (require carriers, can't fight standalone)
+   - `hints` contains `STATION`, `HIDE_IN_CODEX`, or `MODULE` → stations and station modules
+   - `tags` contains `threat` or `dweller` → Remnant threat units and Shrouded entities (non-standard AI)
+4. Group valid variant IDs by hull size, sort alphabetically within each group
+5. Warn if any hull size has fewer than 2 opponents (minimum for meaningful pruning)
+6. Return `OpponentPool` with non-empty hull sizes only
+
+Discovery is scoped to `game_dir/data/variants/` — does not scan `mods/` directories. Civilian/logistics ships (CIVILIAN hint) are kept — they provide easy opponents for the difficulty gradient, and B1 ordering deprioritizes them if uninformative. The discovered pool is a reservoir (typically 36-71 per hull size); active selection of a subset happens in the optimizer via `OptimizerConfig.active_opponents`.
 
 ### `get_opponents(pool, hull_size) -> tuple[str, ...]`
 

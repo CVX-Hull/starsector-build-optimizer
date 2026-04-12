@@ -203,48 +203,15 @@ class TestFileManagement:
         assert data[0]["matchup_id"] == "test_001"
 
 
-# --- Matchup Distribution Tests ---
+# --- Instance Pool Properties ---
 
 
-class TestMatchupDistribution:
+class TestInstancePoolProperties:
 
-    def test_distribute_matchups(self, config):
-        """N matchups split across M instances with batch_size B."""
-        config_small = InstanceConfig(
-            game_dir=config.game_dir,
-            instance_root=config.instance_root,
-            num_instances=2,
-            batch_size=3,
-        )
-        pool = InstancePool(config_small)
-
-        matchups = [
-            MatchupConfig(matchup_id=f"m{i}", player_builds=(BuildSpec(variant_id="a", hull_id="a", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),), enemy_variants=("b",))
-            for i in range(6)
-        ]
-        chunks = pool._split_into_chunks(matchups)
-        assert len(chunks) == 2  # 6 / 3 = 2 chunks
-        assert len(chunks[0]) == 3
-        assert len(chunks[1]) == 3
-
-    def test_distribute_uneven(self, config):
-        """Remainder matchups form a smaller final chunk."""
-        config_small = InstanceConfig(
-            game_dir=config.game_dir,
-            instance_root=config.instance_root,
-            num_instances=2,
-            batch_size=4,
-        )
-        pool = InstancePool(config_small)
-
-        matchups = [
-            MatchupConfig(matchup_id=f"m{i}", player_builds=(BuildSpec(variant_id="a", hull_id="a", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),), enemy_variants=("b",))
-            for i in range(7)
-        ]
-        chunks = pool._split_into_chunks(matchups)
-        assert len(chunks) == 2  # ceil(7/4) = 2
-        assert len(chunks[0]) == 4
-        assert len(chunks[1]) == 3
+    def test_num_instances(self, pool, config):
+        """num_instances property returns correct count after setup."""
+        pool.setup()
+        assert pool.num_instances == config.num_instances
 
 
 # --- Health Monitoring Tests ---

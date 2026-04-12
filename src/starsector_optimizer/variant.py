@@ -131,3 +131,29 @@ def load_stock_builds(game_dir: Path, hull_id: str) -> list[Build]:
         except Exception:
             pass  # Skip malformed variant files
     return builds
+
+
+def discover_stock_variant_ids(game_dir: Path) -> list[tuple[str, str]]:
+    """Discover all stock variant IDs from game data.
+
+    Scans game_dir/data/variants/ recursively for .variant files.
+    Returns (variant_id, hull_id) pairs. Excludes optimizer-generated variants.
+    """
+    variants_dir = game_dir / "data" / "variants"
+    if not variants_dir.exists():
+        return []
+
+    optimizer_markers = ("_opt_", "_val_", "_inttest_")
+    results = []
+    for path in sorted(variants_dir.rglob("*.variant")):
+        if any(marker in path.stem for marker in optimizer_markers):
+            continue
+        try:
+            data = load_variant_file(path)
+            variant_id = data.get("variantId")
+            hull_id = data.get("hullId")
+            if variant_id and hull_id:
+                results.append((variant_id, hull_id))
+        except Exception:
+            continue  # Skip malformed variant files
+    return results

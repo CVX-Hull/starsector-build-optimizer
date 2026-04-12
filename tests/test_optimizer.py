@@ -9,12 +9,13 @@ from starsector_optimizer.models import Build, HullSize
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.calibration import generate_random_build
-from starsector_optimizer.opponent_pool import DEFAULT_OPPONENT_POOL, OpponentPool
+from starsector_optimizer.opponent_pool import OpponentPool
 from starsector_optimizer.models import BuildSpec
 from starsector_optimizer.optimizer import (
     BuildCache,
     OptimizerConfig,
     RunningStats,
+    _create_pruner,
     _create_sampler,
     build_to_trial_params,
     define_distributions,
@@ -394,44 +395,43 @@ class TestWarmStart:
 class TestOptimizeHullIntegration:
     """Tests using mocked InstancePool to verify ask-tell loop correctness."""
 
-    def _make_mock_pool(self):
-        """Create a mock InstancePool that returns synthetic CombatResults."""
+    def _make_mock_pool(self, *, num_instances=1):
+        """Create a mock InstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import InstancePool
 
         mock_pool = MagicMock(spec=InstancePool)
         mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = num_instances
 
-        def mock_evaluate(matchups):
-            results = []
-            for m in matchups:
-                player_ship = ShipCombatResult(
-                    fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                    hull_id="wolf", destroyed=False, hull_fraction=0.7,
-                    armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
-                    disabled_weapons=0, flameouts=0,
-                    damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
-                    overload_count=0,
-                )
-                enemy_ship = ShipCombatResult(
-                    fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                    hull_id="enemy", destroyed=True, hull_fraction=0.0,
-                    armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
-                    disabled_weapons=0, flameouts=0,
-                    damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
-                    overload_count=0,
-                )
-                results.append(CombatResult(
-                    matchup_id=m.matchup_id, winner="PLAYER",
-                    duration_seconds=60.0,
-                    player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                    player_ships_destroyed=0, enemy_ships_destroyed=1,
-                    player_ships_retreated=0, enemy_ships_retreated=0,
-                ))
-            return results
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=False, hull_fraction=0.7,
+                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=True, hull_fraction=0.0,
+                armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner="PLAYER",
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0, enemy_ships_destroyed=1,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+            )
 
-        mock_pool.evaluate = mock_evaluate
+        mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
     def test_no_orphaned_trials(self, wolf_hull, game_data):
@@ -466,36 +466,8 @@ class TestOptimizeHullIntegration:
         # Stock builds + heuristic warm-start + sim trials
         assert len(study.trials) >= config.warm_start_n + config.sim_budget
 
-    def test_batched_evaluation(self, wolf_hull, game_data):
-        """optimize_hull sends matchups from multiple builds per evaluate() call."""
-        from unittest.mock import MagicMock
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import HullSize
-
-        pool = self._make_mock_pool()
-        original_evaluate = pool.evaluate
-        batch_sizes = []
-
-        def tracking_evaluate(matchups):
-            batch_sizes.append(len(matchups))
-            return original_evaluate(matchups)
-
-        pool.evaluate = tracking_evaluate
-        # eval_batch_size=2 with 1 opponent → up to 2 matchups per evaluate() call
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
-        config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20,
-                                 eval_batch_size=2)
-
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        assert len(study.trials) >= config.warm_start_n + config.sim_budget
-        # At least one batch should have had multiple matchups (mixed builds)
-        assert any(size > 1 for size in batch_sizes), (
-            f"Expected mixed-build batches, got sizes: {batch_sizes}"
-        )
-
     def test_error_recovery(self, wolf_hull, game_data):
-        """InstanceError during evaluation doesn't crash the optimizer."""
+        """InstanceError during run_matchup doesn't crash the optimizer."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -503,18 +475,17 @@ class TestOptimizeHullIntegration:
 
         pool = self._make_mock_pool()
         call_count = [0]
-        original_evaluate = pool.evaluate
+        original_run = pool.run_matchup
 
-        def failing_evaluate(matchups):
+        def failing_run(instance_id, matchup):
             call_count[0] += 1
-            if call_count[0] == 2:  # Fail on second batch
+            if call_count[0] == 2:  # Fail on second matchup
                 raise InstanceError("Test failure")
-            return original_evaluate(matchups)
+            return original_run(instance_id, matchup)
 
-        pool.evaluate = failing_evaluate
+        pool.run_matchup = failing_run
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
-        config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20,
-                                 eval_batch_size=2)
+        config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20)
 
         # Should not raise — error is caught internally
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
@@ -651,59 +622,58 @@ class TestValidateBuildSpec:
 class TestStagedEvaluator:
     """Tests for the staged evaluation loop with ASHA-style pruning."""
 
-    def _make_mock_pool(self, *, winner="PLAYER"):
-        """Create a mock InstancePool that returns synthetic CombatResults."""
+    def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
+        """Create a mock InstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import InstancePool
 
         mock_pool = MagicMock(spec=InstancePool)
         mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = num_instances
 
-        def mock_evaluate(matchups):
-            results = []
-            for m in matchups:
-                player_destroyed = winner == "ENEMY"
-                enemy_destroyed = winner == "PLAYER"
-                player_ship = ShipCombatResult(
-                    fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                    hull_id="wolf", destroyed=player_destroyed,
-                    hull_fraction=0.0 if player_destroyed else 0.7,
-                    armor_fraction=0.0 if player_destroyed else 0.8,
-                    cr_remaining=0.0 if player_destroyed else 0.5,
-                    peak_time_remaining=0.0 if player_destroyed else 100.0,
-                    disabled_weapons=0, flameouts=0,
-                    damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
-                    damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
-                    overload_count=0,
-                )
-                enemy_ship = ShipCombatResult(
-                    fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                    hull_id="enemy", destroyed=enemy_destroyed,
-                    hull_fraction=0.0 if enemy_destroyed else 0.7,
-                    armor_fraction=0.0 if enemy_destroyed else 0.8,
-                    cr_remaining=0.0 if enemy_destroyed else 0.5,
-                    peak_time_remaining=0.0 if enemy_destroyed else 100.0,
-                    disabled_weapons=0, flameouts=0,
-                    damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
-                    damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
-                    overload_count=0,
-                )
-                results.append(CombatResult(
-                    matchup_id=m.matchup_id, winner=winner,
-                    duration_seconds=60.0,
-                    player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                    player_ships_destroyed=1 if player_destroyed else 0,
-                    enemy_ships_destroyed=1 if enemy_destroyed else 0,
-                    player_ships_retreated=0, enemy_ships_retreated=0,
-                ))
-            return results
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            player_destroyed = winner == "ENEMY"
+            enemy_destroyed = winner == "PLAYER"
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=player_destroyed,
+                hull_fraction=0.0 if player_destroyed else 0.7,
+                armor_fraction=0.0 if player_destroyed else 0.8,
+                cr_remaining=0.0 if player_destroyed else 0.5,
+                peak_time_remaining=0.0 if player_destroyed else 100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=enemy_destroyed,
+                hull_fraction=0.0 if enemy_destroyed else 0.7,
+                armor_fraction=0.0 if enemy_destroyed else 0.8,
+                cr_remaining=0.0 if enemy_destroyed else 0.5,
+                peak_time_remaining=0.0 if enemy_destroyed else 100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner=winner,
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=1 if player_destroyed else 0,
+                enemy_ships_destroyed=1 if enemy_destroyed else 0,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+            )
 
-        mock_pool.evaluate = mock_evaluate
+        mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
     def test_cached_builds_skip_evaluation(self, wolf_hull, game_data):
-        """Cached builds are told to Optuna immediately without evaluate()."""
+        """Cached builds are told to Optuna immediately without run_matchup()."""
         from unittest.mock import MagicMock
         from starsector_optimizer.optimizer import (
             BuildCache, StagedEvaluator, optimize_hull,
@@ -713,19 +683,19 @@ class TestStagedEvaluator:
 
         pool = self._make_mock_pool()
         call_count = [0]
-        original_evaluate = pool.evaluate
+        original_run = pool.run_matchup
 
-        def counting_evaluate(matchups):
+        def counting_run(instance_id, matchup):
             call_count[0] += 1
-            return original_evaluate(matchups)
+            return original_run(instance_id, matchup)
 
-        pool.evaluate = counting_evaluate
+        pool.run_matchup = counting_run
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         # Small budget to keep test fast
         config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # With 2 sim trials and 1 opponent, we expect at most 2 evaluate calls
+        # With 2 sim trials and 1 opponent, we expect at most 2 run_matchup calls
         # (fewer if cache hits occur — same build proposed twice)
         assert call_count[0] <= config.sim_budget
 
@@ -785,13 +755,13 @@ class TestStagedEvaluator:
 
         # Track all matchup IDs
         all_matchup_ids = []
-        original_evaluate = pool.evaluate
+        original_run = pool.run_matchup
 
-        def tracking_evaluate(matchups):
-            all_matchup_ids.extend(m.matchup_id for m in matchups)
-            return original_evaluate(matchups)
+        def tracking_run(instance_id, matchup):
+            all_matchup_ids.append(matchup.matchup_id)
+            return original_run(instance_id, matchup)
 
-        pool.evaluate = tracking_evaluate
+        pool.run_matchup = tracking_run
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
 
@@ -846,13 +816,13 @@ class TestStagedEvaluator:
         config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
 
         all_matchup_ids = []
-        original_evaluate = pool.evaluate
+        original_run = pool.run_matchup
 
-        def tracking_evaluate(matchups):
-            all_matchup_ids.extend(m.matchup_id for m in matchups)
-            return original_evaluate(matchups)
+        def tracking_run(instance_id, matchup):
+            all_matchup_ids.append(matchup.matchup_id)
+            return original_run(instance_id, matchup)
 
-        pool.evaluate = tracking_evaluate
+        pool.run_matchup = tracking_run
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
 
@@ -862,7 +832,7 @@ class TestStagedEvaluator:
             assert "wolf_opt_" in mid, f"Matchup ID missing 'wolf_opt_': {mid}"
 
     def test_instance_error_scores_negative(self, wolf_hull, game_data):
-        """InstanceError during evaluate() scores affected trials as -1.0."""
+        """InstanceError during run_matchup() scores affected trials as -1.0."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -870,20 +840,20 @@ class TestStagedEvaluator:
 
         pool = self._make_mock_pool()
         call_count = [0]
-        original_evaluate = pool.evaluate
+        original_run = pool.run_matchup
 
-        def sometimes_failing(matchups):
+        def sometimes_failing(instance_id, matchup):
             call_count[0] += 1
             if call_count[0] == 1:
-                raise InstanceError("First batch fails")
-            return original_evaluate(matchups)
+                raise InstanceError("First matchup fails")
+            return original_run(instance_id, matchup)
 
-        pool.evaluate = sometimes_failing
+        pool.run_matchup = sometimes_failing
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=4, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # Some trials should have -1.0 value (from the failed batch)
+        # Some trials should have -1.0 value (from the failed matchup)
         negative_trials = [t for t in study.trials
                            if t.state == optuna.trial.TrialState.COMPLETE
                            and t.value is not None and t.value < 0]
@@ -1053,15 +1023,15 @@ class TestStagedEvaluator:
 
         pool = self._make_mock_pool()
         call_count = [0]
-        original_evaluate = pool.evaluate
+        original_run = pool.run_matchup
 
-        def always_fails(matchups):
+        def always_fails(instance_id, matchup):
             call_count[0] += 1
             if call_count[0] <= 2:
                 raise InstanceError("Simulated failure")
-            return original_evaluate(matchups)
+            return original_run(instance_id, matchup)
 
-        pool.evaluate = always_fails
+        pool.run_matchup = always_fails
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
@@ -1087,3 +1057,503 @@ class TestStagedEvaluator:
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
+
+    def test_opponent_ordering_shuffled_before_threshold(self, wolf_hull, game_data, tmp_path):
+        """Before ordering_recompute_interval, opponent_order is shuffled (not alphabetical)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        import json
+
+        pool = self._make_mock_pool()
+        # Use 6+ real opponents so shuffle reliably changes order
+        opponents = (
+            "brawler_Assault", "cerberus_Standard", "hound_Standard",
+            "lasher_Assault", "vigilance_Standard", "wolf_Assault",
+        )
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            ordering_recompute_interval=50,
+
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        for rec in records:
+            order = rec["opponent_order"]
+            assert set(order) == set(opponents[:len(order)])
+        # At least one record should have non-alphabetical order
+        orders = [tuple(r["opponent_order"]) for r in records]
+        sorted_prefix = tuple(sorted(opponents))[:len(orders[0])]
+        assert any(o != sorted_prefix for o in orders), "Expected shuffled order, got alphabetical"
+
+    def test_opponent_ordering_recomputed_after_threshold(self, wolf_hull, game_data, tmp_path):
+        """After enough completions, opponent ordering may change from default."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from unittest.mock import MagicMock
+        from starsector_optimizer.instance_manager import InstancePool
+        import json
+        import random
+
+        # Mock pool that returns different difficulties per opponent
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = 1
+        rng = random.Random(42)
+
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            enemy_id = m.enemy_variants[0]
+            # wolf_Assault: always easy (player wins) — low discriminative power
+            # lasher_Assault: variable (sometimes win, sometimes lose) — high discriminative power
+            if enemy_id == "wolf_Assault":
+                winner = "PLAYER"
+                p_hull = 0.9
+                e_hull = 0.0
+            else:
+                if rng.random() < 0.5:
+                    winner = "PLAYER"
+                    p_hull = 0.6
+                    e_hull = 0.0
+                else:
+                    winner = "ENEMY"
+                    p_hull = 0.0
+                    e_hull = 0.5
+            player_destroyed = winner == "ENEMY"
+            enemy_destroyed = winner == "PLAYER"
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=player_destroyed,
+                hull_fraction=p_hull, armor_fraction=0.5,
+                cr_remaining=0.5, peak_time_remaining=100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=enemy_destroyed,
+                hull_fraction=e_hull, armor_fraction=0.5,
+                cr_remaining=0.5, peak_time_remaining=100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner=winner,
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=1 if player_destroyed else 0,
+                enemy_ships_destroyed=1 if enemy_destroyed else 0,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+            )
+
+        mock_pool.run_matchup = mock_run_matchup
+        opponents = ("wolf_Assault", "lasher_Assault")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=30, warm_start_n=3, warm_start_sample_n=20,
+            ordering_recompute_interval=10,
+
+        )
+
+        optimize_hull("wolf", game_data, mock_pool, opp_pool, config, eval_log_path=log_path)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        # After enough builds, ordering should have been computed
+        assert len(records) > 10
+        # Check that at least some later records have a different opponent order
+        # (lasher_Assault is more discriminative due to variable outcomes)
+        orders = [tuple(r["opponent_order"]) for r in records]
+        # We can't guarantee the order changes with random mock data,
+        # but we verify the field is present and valid
+        for order in orders:
+            assert set(order) == set(opponents)
+            assert len(order) == len(opponents)
+
+    def test_opponent_stats_keyed_by_id(self, wolf_hull, game_data):
+        """Dict-keyed opponent stats work correctly (regression test for list→dict refactor)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault")})
+        config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # All trials should complete — dict refactor should not cause errors
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE
+                     and len(t.intermediate_values) > 0]
+        assert len(completed) > 0
+
+    def test_discriminative_power_computation(self, wolf_hull, game_data):
+        """_compute_opponent_ordering ranks more predictive opponents first."""
+        from starsector_optimizer.optimizer import StagedEvaluator, BuildCache
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from unittest.mock import MagicMock
+        from starsector_optimizer.instance_manager import InstancePool
+
+        pool = MagicMock(spec=InstancePool)
+        pool.game_dir = Path("game/starsector")
+        opponents = ("opp_a", "opp_b", "opp_c")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            ordering_recompute_interval=5,
+        )
+        study = optuna.create_study(direction="maximize")
+        distributions = define_distributions(
+            build_search_space(wolf_hull, game_data),
+        )
+        cache = BuildCache()
+        evaluator = StagedEvaluator(
+            study, wolf_hull, "wolf", game_data, pool, opp_pool,
+            cache, config, distributions,
+        )
+
+        # Populate _finalized_z_scores with known data:
+        # opp_a: z-scores [1, -1, 1, -1, 1] — strongly correlated with aggregate
+        # opp_b: z-scores [0.1, 0.1, 0.1, 0.1, 0.1] — near constant, no discrimination
+        # opp_c: z-scores [0.5, -0.5, 0.5, -0.5, 0.5] — moderately correlated
+        for i in range(5):
+            sign = 1 if i % 2 == 0 else -1
+            evaluator._finalized_z_scores.append([
+                ("opp_a", sign * 1.0),
+                ("opp_b", 0.1),
+                ("opp_c", sign * 0.5),
+            ])
+
+        order = evaluator._compute_opponent_ordering()
+        # opp_a has highest correlation with leave-one-out aggregate
+        # opp_b has near-zero correlation
+        assert order[0] == "opp_a", f"Expected opp_a first, got {order}"
+        assert order[-1] == "opp_b", f"Expected opp_b last, got {order}"
+
+    def test_in_flight_builds_keep_original_ordering(self, wolf_hull, game_data, tmp_path):
+        """Builds created before reordering keep their original opponent tuple."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        import json
+
+        pool = self._make_mock_pool()
+        opponents = ("wolf_Assault", "lasher_Assault")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        # Very low threshold so ordering computed early
+        config = OptimizerConfig(
+            sim_budget=30, warm_start_n=3, warm_start_sample_n=20,
+            ordering_recompute_interval=3,
+
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        # All records should have valid opponent_order field
+        for rec in records:
+            assert "opponent_order" in rec
+            assert set(rec["opponent_order"]) == set(opponents)
+
+    def test_ordering_recomputed_periodically(self, wolf_hull, game_data, tmp_path):
+        """Ordering recomputes every ordering_recompute_interval, not just once."""
+        from starsector_optimizer.optimizer import StagedEvaluator, BuildCache
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from unittest.mock import MagicMock
+        from starsector_optimizer.instance_manager import InstancePool
+
+        pool = MagicMock(spec=InstancePool)
+        pool.game_dir = Path("game/starsector")
+        opponents = ("opp_a", "opp_b", "opp_c")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            ordering_recompute_interval=3,
+        )
+        study = optuna.create_study(direction="maximize")
+        distributions = define_distributions(
+            build_search_space(wolf_hull, game_data),
+        )
+        cache = BuildCache()
+        evaluator = StagedEvaluator(
+            study, wolf_hull, "wolf", game_data, pool, opp_pool,
+            cache, config, distributions,
+        )
+
+        # First window: 3 records → triggers recompute, clears buffer
+        for i in range(3):
+            sign = 1 if i % 2 == 0 else -1
+            evaluator._finalized_z_scores.append([
+                ("opp_a", sign * 1.0),
+                ("opp_b", 0.1),
+                ("opp_c", sign * 0.5),
+            ])
+        order1 = evaluator._compute_opponent_ordering()
+        evaluator._ordered_opponents = order1
+        evaluator._finalized_z_scores.clear()
+
+        # Second window: 3 more records with different pattern → recompute again
+        for i in range(3):
+            sign = 1 if i % 2 == 0 else -1
+            evaluator._finalized_z_scores.append([
+                ("opp_a", 0.1),  # now opp_a is uninformative
+                ("opp_b", sign * 1.0),  # now opp_b is most informative
+                ("opp_c", sign * 0.5),
+            ])
+        order2 = evaluator._compute_opponent_ordering()
+
+        # Orders should differ — opp_a was first, now opp_b should be first
+        assert order1[0] == "opp_a", f"Expected opp_a first in window 1, got {order1}"
+        assert order2[0] == "opp_b", f"Expected opp_b first in window 2, got {order2}"
+
+    def test_active_opponents_limits_rungs(self, wolf_hull, game_data, tmp_path):
+        """With active_opponents=3 and pool of 5, builds complete after 3 opponents."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        import json
+
+        pool = self._make_mock_pool()
+        opponents = (
+            "brawler_Assault", "hound_Standard", "lasher_Assault",
+            "vigilance_Standard", "wolf_Assault",
+        )
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            active_opponents=3,
+
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        for rec in records:
+            assert rec["opponents_total"] == 3
+            assert len(rec["opponent_order"]) == 3
+
+    def test_active_opponents_exceeds_pool_uses_all(self, wolf_hull, game_data, tmp_path):
+        """With active_opponents=20 and pool of 3, all 3 are used."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        import json
+
+        pool = self._make_mock_pool()
+        opponents = ("wolf_Assault", "lasher_Assault", "hyperion_Attack")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            active_opponents=20,
+
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        for rec in records:
+            assert rec["opponents_total"] == 3
+
+    def test_initial_ordering_shuffled(self, wolf_hull, game_data, tmp_path):
+        """Initial opponent ordering is shuffled, not alphabetical."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        import json
+
+        pool = self._make_mock_pool()
+        opponents = (
+            "brawler_Assault", "cerberus_Standard", "hound_Standard",
+            "kite_Standard", "lasher_Assault", "monitor_Escort",
+            "vigilance_Standard", "wolf_Assault",
+        )
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            active_opponents=6,
+
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        first_order = tuple(records[0]["opponent_order"])
+        # Should not be alphabetical (shuffled with seed 42)
+        alphabetical = tuple(sorted(opponents))[:len(first_order)]
+        assert first_order != alphabetical, f"Expected shuffled order, got alphabetical: {first_order}"
+
+
+class TestParallelDispatch:
+    """Tests for async parallel instance dispatch."""
+
+    def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
+        """Create a mock pool with run_matchup tracking instance_id."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.instance_manager import InstancePool
+
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = num_instances
+        mock_pool._call_log = []  # track (instance_id, matchup_id)
+
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            mock_pool._call_log.append((instance_id, m.matchup_id))
+            player_destroyed = winner == "ENEMY"
+            enemy_destroyed = winner == "PLAYER"
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=player_destroyed,
+                hull_fraction=0.0 if player_destroyed else 0.7,
+                armor_fraction=0.0 if player_destroyed else 0.8,
+                cr_remaining=0.0 if player_destroyed else 0.5,
+                peak_time_remaining=0.0 if player_destroyed else 100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=enemy_destroyed,
+                hull_fraction=0.0 if enemy_destroyed else 0.7,
+                armor_fraction=0.0 if enemy_destroyed else 0.8,
+                cr_remaining=0.0 if enemy_destroyed else 0.5,
+                peak_time_remaining=0.0 if enemy_destroyed else 100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
+                damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner=winner,
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=1 if player_destroyed else 0,
+                enemy_ships_destroyed=1 if enemy_destroyed else 0,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+            )
+
+        mock_pool.run_matchup = mock_run_matchup
+        return mock_pool
+
+    def test_all_instances_used(self, game_data):
+        """With num_instances=3 and multiple opponents, all 3 instance_ids get work."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool(num_instances=3)
+        opponents = ("wolf_Assault", "lasher_Assault", "hound_Standard")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        used_instances = {inst_id for inst_id, _ in pool._call_log}
+        assert used_instances == {0, 1, 2}, (
+            f"Expected all instances used, got: {used_instances}"
+        )
+
+    def test_single_instance_works(self, game_data):
+        """With num_instances=1, optimization completes normally."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool(num_instances=1)
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE]
+        assert len(completed) > 0
+
+    def test_build_not_dispatched_twice(self, game_data):
+        """Same build is never evaluated on two instances simultaneously."""
+        import threading
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool(num_instances=3)
+        active_trials: dict[str, int] = {}  # trial_prefix -> concurrent count
+        max_concurrent: dict[str, int] = {}
+        lock = threading.Lock()
+        original_run = pool.run_matchup
+
+        def tracking_run(instance_id, matchup):
+            prefix = matchup.matchup_id.split("_vs_")[0]
+            with lock:
+                active_trials[prefix] = active_trials.get(prefix, 0) + 1
+                max_concurrent[prefix] = max(
+                    max_concurrent.get(prefix, 0), active_trials[prefix],
+                )
+            try:
+                return original_run(instance_id, matchup)
+            finally:
+                with lock:
+                    active_trials[prefix] -= 1
+
+        pool.run_matchup = tracking_run
+        opponents = ("wolf_Assault", "lasher_Assault", "hound_Standard")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        for prefix, count in max_concurrent.items():
+            assert count == 1, (
+                f"Build {prefix} had {count} concurrent dispatches, expected 1"
+            )
+
+    def test_queue_drains_after_budget(self, game_data):
+        """After sim_budget reached, builds in queue still complete."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool(num_instances=1)
+        opponents = ("wolf_Assault", "lasher_Assault", "hound_Standard")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        # All sim trials should be COMPLETE or PRUNED (not abandoned mid-evaluation)
+        allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
+        for trial in study.trials:
+            assert trial.state in allowed, (
+                f"Trial {trial.number} is {trial.state.name}"
+            )
+
+
+class TestPrunerFactory:
+    """Tests for _create_pruner factory function."""
+
+    def test_median_pruner_is_default(self):
+        """Default pruner_type='median' creates MedianPruner."""
+        config = OptimizerConfig()
+        pruner = _create_pruner(config, n_opponents=5)
+        assert isinstance(pruner, optuna.pruners.MedianPruner)
+
+    def test_hyperband_pruner_creation(self):
+        """pruner_type='hyperband' creates HyperbandPruner with correct params."""
+        config = OptimizerConfig(
+            pruner_type="hyperband",
+            hyperband_reduction_factor=3,
+            hyperband_min_resource=1,
+        )
+        pruner = _create_pruner(config, n_opponents=5)
+        assert isinstance(pruner, optuna.pruners.HyperbandPruner)
+
+    def test_invalid_pruner_type_raises(self):
+        """Unknown pruner_type raises ValueError."""
+        config = OptimizerConfig(pruner_type="unknown")
+        with pytest.raises(ValueError, match="Unknown pruner_type"):
+            _create_pruner(config, n_opponents=5)

@@ -18,7 +18,6 @@ GAME_DIR = Path("game/starsector")
 config = InstanceConfig(
     game_dir=GAME_DIR,
     num_instances=1,
-    batch_size=2,
     xvfb_base_display=100,
     startup_timeout_seconds=120.0,  # generous for first test
     heartbeat_timeout_seconds=180.0,
@@ -52,7 +51,10 @@ print()
 try:
     print(f"Submitting {len(matchups)} matchups...")
     start = time.monotonic()
-    results = pool.evaluate(matchups)
+    results = []
+    for i, m in enumerate(matchups):
+        result = pool.run_matchup(i % pool.num_instances, m)
+        results.append(result)
     elapsed = time.monotonic() - start
 
     print(f"\n{'='*60}")

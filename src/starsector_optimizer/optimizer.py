@@ -83,7 +83,6 @@ class OptimizerConfig:
     n_startup_trials: int = 100
     n_ei_candidates: int = 256
     fitness_mode: str = "mean"
-    eval_batch_size: int = 8  # builds per batch; set to num_instances for full utilization
     engagement_threshold: float = 500.0
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
@@ -98,6 +97,12 @@ class OptimizerConfig:
     cv_min_samples: int = 30
     cv_rho_threshold: float = 0.3
     cv_recalc_interval: int = 10
+    pruner_type: str = "median"
+    hyperband_reduction_factor: int = 3
+    hyperband_min_resource: int = 1
+    ordering_recompute_interval: int = 20
+    active_opponents: int = 10
+    opponent_shuffle_seed: int = 42
 
 
 class BuildCache:
@@ -170,7 +175,7 @@ def preflight_check(
         if not found:
             raise ValueError(
                 f"Opponent variant '{opp_id}' not found under {variants_dir}. "
-                f"Check DEFAULT_OPPONENT_POOL variant IDs."
+                f"Check opponent pool variant IDs."
             )
 
     # Xvfb and xdotool installed
@@ -214,6 +219,39 @@ def _create_sampler(config: OptimizerConfig) -> optuna.samplers.BaseSampler:
         mod = optunahub.load_module("samplers/catcmawm")
         return mod.CatCmawmSampler()
     raise ValueError(f"Unknown sampler: {config.sampler!r}")
+
+
+def _pearson_r(xs: list[float], ys: list[float]) -> float:
+    """Pearson correlation coefficient. Returns 0.0 if n < 2 or either std ≈ 0."""
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    x_mean = sum(xs) / n
+    y_mean = sum(ys) / n
+    x_std = (sum((x - x_mean) ** 2 for x in xs) / (n - 1)) ** 0.5
+    y_std = (sum((y - y_mean) ** 2 for y in ys) / (n - 1)) ** 0.5
+    if x_std < _EPSILON or y_std < _EPSILON:
+        return 0.0
+    cov = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)) / (n - 1)
+    return cov / (x_std * y_std)
+
+
+def _create_pruner(
+    config: OptimizerConfig, n_opponents: int,
+) -> optuna.pruners.BasePruner:
+    """Create Optuna pruner instance from config."""
+    if config.pruner_type == "median":
+        return optuna.pruners.MedianPruner(
+            n_startup_trials=config.pruner_startup_trials,
+            n_warmup_steps=config.pruner_warmup_steps,
+        )
+    if config.pruner_type == "hyperband":
+        return optuna.pruners.HyperbandPruner(
+            min_resource=config.hyperband_min_resource,
+            max_resource=n_opponents,
+            reduction_factor=config.hyperband_reduction_factor,
+        )
+    raise ValueError(f"Unknown pruner_type: {config.pruner_type!r}")
 
 
 def define_distributions(
@@ -373,12 +411,12 @@ class _InFlightBuild:
 
 
 class StagedEvaluator:
-    """ASHA-style staged evaluator with mixed-build batching and pruning.
+    """Async ASHA-style staged evaluator with parallel instance dispatch.
 
-    Evaluates opponents incrementally — poor builds are pruned early via
-    Optuna's MedianPruner, freeing slots for new builds. Each
-    InstancePool.evaluate() call contains matchups from different builds
-    at different stages.
+    Coordinator-worker pattern: main thread owns all Optuna/optimizer state;
+    worker threads (one per instance) do blocking I/O via run_matchup().
+    All state mutations happen in the main thread between wait() calls.
+    Pruning decisions are immediate after every opponent result.
     """
 
     def __init__(
@@ -408,13 +446,20 @@ class StagedEvaluator:
             engagement_threshold=config.engagement_threshold,
         )
         self._queue: list[_InFlightBuild] = []
-        self._in_flight: dict[str, _InFlightBuild] = {}
+        self._dispatched: set[int] = set()  # trial.number of builds on an instance
         self._trials_asked = 0
         self._trials_completed = 0
-        # A1: Per-opponent running statistics for z-score normalization
-        self._opponent_stats: list[RunningStats] = [
-            RunningStats() for _ in self._opponents
-        ]
+        # A1: Per-opponent running statistics keyed by opponent variant ID
+        self._opponent_stats: dict[str, RunningStats] = {
+            opp: RunningStats() for opp in self._opponents
+        }
+        # B1: Opponent ordering (shuffled initially for exploration, recomputed periodically)
+        import random as _random
+        _rng = _random.Random(config.opponent_shuffle_seed)
+        _initial_order = list(self._opponents)
+        _rng.shuffle(_initial_order)
+        self._ordered_opponents: tuple[str, ...] = tuple(_initial_order)
+        self._finalized_z_scores: list[list[tuple[str, float]]] = []
         # A2: Control variate estimation state
         self._cv_pairs: list[tuple[float, float]] = []
         self._cv_coefficient: float = 0.0
@@ -424,94 +469,137 @@ class StagedEvaluator:
         self._completed_fitness_values: list[float] = []
 
     def run(self) -> None:
-        """Execute the staged evaluation loop until sim_budget is exhausted."""
-        while self._trials_completed < self._config.sim_budget or self._queue:
-            batch = self._compose_batch()
-            if not batch:
-                break
+        """Execute staged evaluation with parallel instance dispatch.
 
-            try:
-                results = self._instance_pool.evaluate(batch)
-            except InstanceError:
-                logger.error(
-                    "Instance failure at trial %d, scoring batch as %s",
-                    self._trials_completed, self._config.failure_score,
-                )
-                failed: dict[int, _InFlightBuild] = {}
-                for matchup in batch:
-                    ifb = self._in_flight.pop(matchup.matchup_id, None)
-                    if ifb is not None and id(ifb) not in failed:
-                        failed[id(ifb)] = ifb
+        Coordinator pattern: main thread owns all Optuna/optimizer state.
+        Worker threads (one per instance) only do blocking I/O via run_matchup().
+        All state mutations (_queue, _dispatched, _opponent_stats, etc.) happen
+        in the main thread between wait() calls — no locks needed.
+        """
+        from collections import deque
+        from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_COMPLETED
+
+        num_inst = self._instance_pool.num_instances
+        logger.info(
+            "Starting staged evaluation: %d instances, %d active / %d total opponents",
+            num_inst,
+            min(self._config.active_opponents, len(self._opponents)),
+            len(self._opponents),
+        )
+
+        with ThreadPoolExecutor(max_workers=num_inst) as executor:
+            pending: dict[Future, tuple[int, _InFlightBuild]] = {}
+            free_instances: deque[int] = deque(range(num_inst))
+
+            self._fill_instances(executor, pending, free_instances)
+
+            while pending:
+                done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
+
+                for future in done:
+                    inst_id, ifb = pending.pop(future)
+                    self._dispatched.discard(ifb.trial.number)
+
+                    try:
+                        result = future.result()
+                    except InstanceError:
+                        logger.error(
+                            "Instance %d failed for trial %d, scoring as %s",
+                            inst_id, ifb.trial.number,
+                            self._config.failure_score,
+                        )
                         self._study.tell(ifb.trial, self._config.failure_score)
                         self._trials_completed += 1
-                        self._queue.remove(ifb)
-                continue
+                        if ifb in self._queue:
+                            self._queue.remove(ifb)
+                        free_instances.append(inst_id)
+                        continue
 
-            self._route_results(results)
+                    self._handle_result(ifb, result)
+                    free_instances.append(inst_id)
 
-            if (self._trials_completed % self._config.log_interval == 0
-                    or self._trials_completed >= self._config.sim_budget):
-                best = self._study.best_value if self._study.best_trial else 0.0
-                logger.info(
-                    "Progress: %d/%d trials, best=%.3f",
-                    self._trials_completed, self._config.sim_budget, best,
-                )
+                    if (self._trials_completed % self._config.log_interval == 0
+                            or not pending):
+                        best = (self._study.best_value
+                                if self._study.best_trial else 0.0)
+                        logger.info(
+                            "Progress: %d/%d trials, best=%.3f, pending=%d",
+                            self._trials_completed, self._config.sim_budget,
+                            best, len(pending),
+                        )
 
-    def _compose_batch(self) -> list[MatchupConfig]:
-        """Build a batch of matchups from the priority queue + new trials."""
-        target = self._config.eval_batch_size
-        batch: list[MatchupConfig] = []
+                # Dispatch new work to all freed instances
+                self._fill_instances(executor, pending, free_instances)
 
+    def _fill_instances(self, executor, pending, free_instances) -> None:
+        """Dispatch matchups to all free instances."""
+        while free_instances:
+            work = self._next_matchup()
+            if work is None:
+                break
+            ifb, matchup = work
+            inst_id = free_instances.popleft()
+            logger.info(
+                "Dispatch trial %d rung %d/%d vs %s → instance %d",
+                ifb.trial.number, ifb.rung + 1, len(ifb.opponents),
+                ifb.opponents[ifb.next_opponent_index], inst_id,
+            )
+            future = executor.submit(
+                self._instance_pool.run_matchup, inst_id, matchup,
+            )
+            pending[future] = (inst_id, ifb)
+
+    def _next_matchup(self) -> tuple[_InFlightBuild, MatchupConfig] | None:
+        """Pick the highest-priority matchup to dispatch next."""
         # Phase 1: Promote existing builds (highest rung first)
         for ifb in sorted(self._queue, key=lambda x: -x.rung):
-            if len(batch) >= target:
-                break
-            matchup = self._make_matchup(ifb)
-            batch.append(matchup)
-            self._in_flight[matchup.matchup_id] = ifb
+            if ifb.trial.number not in self._dispatched:
+                self._dispatched.add(ifb.trial.number)
+                return ifb, self._make_matchup(ifb)
 
-        # Phase 2: Fill with new trials
-        while len(batch) < target and self._trials_asked < self._config.sim_budget:
+        # Phase 2: Ask for new trial
+        while self._trials_asked < self._config.sim_budget:
             ifb = self._ask_new_trial()
             if ifb is None:
                 continue  # cache hit, already told Optuna
             self._queue.append(ifb)
-            matchup = self._make_matchup(ifb)
-            batch.append(matchup)
-            self._in_flight[matchup.matchup_id] = ifb
+            self._dispatched.add(ifb.trial.number)
+            return ifb, self._make_matchup(ifb)
 
-        return batch
+        return None
 
-    def _route_results(self, results: list[CombatResult]) -> None:
-        """Route results to their trials, handle pruning/completion."""
-        builds_with_results: dict[int, _InFlightBuild] = {}
-        for result in results:
-            ifb = self._in_flight.pop(result.matchup_id, None)
-            if ifb is None:
-                logger.warning("Unrecognized matchup_id: %s", result.matchup_id)
-                continue
-            # A1: Compute raw score and update opponent running stats
-            opp_idx = ifb.next_opponent_index
-            raw = combat_fitness(result, config=self._fitness_config)
-            self._opponent_stats[opp_idx].update(raw)
-            ifb.raw_scores.append(raw)
-            ifb.completed_results.append(result)
-            ifb.next_opponent_index += 1
-            builds_with_results[id(ifb)] = ifb
+    def _handle_result(self, ifb: _InFlightBuild, result: CombatResult) -> None:
+        """Process one matchup result: update stats, check prune/complete."""
+        # A1: Compute raw score and update opponent running stats
+        opp_id = ifb.opponents[ifb.next_opponent_index]
+        raw = combat_fitness(result, config=self._fitness_config)
+        self._opponent_stats[opp_id].update(raw)
+        ifb.raw_scores.append(raw)
+        ifb.completed_results.append(result)
+        ifb.next_opponent_index += 1
 
-        for ifb in builds_with_results.values():
-            cum_fitness = self._cumulative_fitness(ifb)
-            ifb.trial.report(cum_fitness, step=ifb.rung - 1)
+        cum_fitness = self._cumulative_fitness(ifb)
+        ifb.trial.report(cum_fitness, step=ifb.rung - 1)
 
-            if ifb.is_complete:
-                self._finalize_build(ifb)
-                self._queue.remove(ifb)
-                self._trials_completed += 1
-            elif ifb.trial.should_prune():
-                self._prune_build(ifb)
-                self._queue.remove(ifb)
-                self._trials_completed += 1
-            # else: stays in queue for next batch
+        logger.info(
+            "  Trial %d rung %d/%d vs %s: %s (raw=%.3f, cum=%.3f)",
+            ifb.trial.number, ifb.rung, len(ifb.opponents),
+            opp_id, result.winner, raw, cum_fitness,
+        )
+
+        if ifb.is_complete:
+            self._finalize_build(ifb)
+            self._queue.remove(ifb)
+            self._trials_completed += 1
+            logger.info("  Trial %d COMPLETE (fitness=%.3f)",
+                        ifb.trial.number, cum_fitness)
+        elif ifb.trial.should_prune():
+            self._prune_build(ifb)
+            self._queue.remove(ifb)
+            self._trials_completed += 1
+            logger.info("  Trial %d PRUNED at rung %d",
+                        ifb.trial.number, ifb.rung)
+        # else: stays in queue, _next_matchup will pick it up
 
     def _ask_new_trial(self) -> _InFlightBuild | None:
         """Ask Optuna for a new trial, repair, check cache.
@@ -556,7 +644,7 @@ class StagedEvaluator:
             build=build,
             build_spec=build_spec,
             variant_id=variant_id,
-            opponents=self._opponents,
+            opponents=self._ordered_opponents[:self._config.active_opponents],
             heuristic_val=h_val,
         )
 
@@ -572,6 +660,21 @@ class StagedEvaluator:
         self._completed_fitness_values.append(cv_fitness)
         ranked_fitness = self._rank_fitness(cv_fitness)
 
+        # B1: Record per-opponent z-scores for ordering computation
+        z_records = [
+            (ifb.opponents[i], self._opponent_stats[ifb.opponents[i]].z_score(raw))
+            for i, raw in enumerate(ifb.raw_scores)
+        ]
+        self._finalized_z_scores.append(z_records)
+
+        # B1: Recompute ordering periodically
+        if len(self._finalized_z_scores) >= self._config.ordering_recompute_interval:
+            new_order = self._compute_opponent_ordering()
+            if new_order != self._ordered_opponents:
+                logger.info("Opponent ordering updated: %s", new_order)
+                self._ordered_opponents = new_order
+            self._finalized_z_scores.clear()
+
         self._cache.put(ifb.build, ranked_fitness)
         self._study.tell(ifb.trial, ranked_fitness)
 
@@ -581,6 +684,7 @@ class StagedEvaluator:
                 ifb.build, ifb.completed_results, ranked_fitness,
                 raw_fitness=cv_fitness,
                 pruned=False, opponents_total=len(ifb.opponents),
+                opponent_order=list(ifb.opponents),
             )
 
     def _prune_build(self, ifb: _InFlightBuild) -> None:
@@ -593,6 +697,7 @@ class StagedEvaluator:
                 self._eval_log_path, self._hull_id, ifb.trial.number,
                 ifb.build, ifb.completed_results, cum,
                 pruned=True, opponents_total=len(ifb.opponents),
+                opponent_order=list(ifb.opponents),
             )
 
     def _cumulative_fitness(self, ifb: _InFlightBuild) -> float:
@@ -600,7 +705,7 @@ class StagedEvaluator:
         if not ifb.raw_scores:
             return 0.0
         z_scores = [
-            self._opponent_stats[i].z_score(raw)
+            self._opponent_stats[ifb.opponents[i]].z_score(raw)
             for i, raw in enumerate(ifb.raw_scores)
         ]
         if self._config.fitness_mode == "minimax":
@@ -638,20 +743,17 @@ class StagedEvaluator:
             return
         hs = [p[0] for p in self._cv_pairs]
         fs = [p[1] for p in self._cv_pairs]
-        h_mean = sum(hs) / n
-        f_mean = sum(fs) / n
-        h_var = sum((h - h_mean) ** 2 for h in hs) / (n - 1)
-        f_var = sum((f - f_mean) ** 2 for f in fs) / (n - 1)
-        h_std = h_var ** 0.5
-        f_std = f_var ** 0.5
-        if h_std < _EPSILON or f_std < _EPSILON:
-            self._cv_active = False
-            return
-        cov = sum(
-            (h - h_mean) * (f - f_mean) for h, f in self._cv_pairs
-        ) / (n - 1)
-        rho = cov / (h_std * f_std)
+        rho = _pearson_r(hs, fs)
         if abs(rho) > self._config.cv_rho_threshold:
+            h_mean = sum(hs) / n
+            h_var = sum((h - h_mean) ** 2 for h in hs) / (n - 1)
+            if h_var < _EPSILON:
+                self._cv_active = False
+                return
+            cov = sum(
+                (h - h_mean) * (f - sum(fs) / n)
+                for h, f in self._cv_pairs
+            ) / (n - 1)
             self._cv_coefficient = cov / h_var
             self._cv_heuristic_mean = h_mean
             self._cv_active = True
@@ -666,6 +768,31 @@ class StagedEvaluator:
         rank = sum(1 for v in self._completed_fitness_values if v <= fitness)
         return rank / n
 
+    def _compute_opponent_ordering(self) -> tuple[str, ...]:
+        """Compute opponent order by discriminative power (|correlation| with aggregate)."""
+        if len(self._finalized_z_scores) < self._config.ordering_recompute_interval:
+            return self._opponents
+
+        opp_correlations: dict[str, float] = {}
+        for opp in self._opponents:
+            opp_scores: list[float] = []
+            aggregates: list[float] = []
+            for record in self._finalized_z_scores:
+                opp_z = next((z for oid, z in record if oid == opp), None)
+                if opp_z is None:
+                    continue
+                others = [z for oid, z in record if oid != opp]
+                if not others:
+                    continue
+                agg = sum(others) / len(others)
+                opp_scores.append(opp_z)
+                aggregates.append(agg)
+            opp_correlations[opp] = abs(_pearson_r(opp_scores, aggregates))
+
+        return tuple(sorted(
+            self._opponents, key=lambda o: -opp_correlations.get(o, 0.0),
+        ))
+
 
 def _append_eval_log(
     path: Path,
@@ -678,6 +805,7 @@ def _append_eval_log(
     raw_fitness: float | None = None,
     pruned: bool = False,
     opponents_total: int = 0,
+    opponent_order: list[str] | None = None,
 ) -> None:
     """Append one JSONL record to the evaluation log."""
     record = {
@@ -703,6 +831,7 @@ def _append_eval_log(
         ],
         "opponents_evaluated": len(results),
         "opponents_total": opponents_total,
+        "opponent_order": opponent_order or [],
         "pruned": pruned,
         "raw_fitness": raw_fitness if raw_fitness is not None else fitness,
         "fitness": fitness,
@@ -730,10 +859,9 @@ def optimize_hull(
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     sampler = _create_sampler(config)
-    pruner = optuna.pruners.MedianPruner(
-        n_startup_trials=config.pruner_startup_trials,
-        n_warmup_steps=config.pruner_warmup_steps,
-    )
+    opponents = get_opponents(opponent_pool, hull.hull_size)
+    n_active = min(config.active_opponents, len(opponents))
+    pruner = _create_pruner(config, n_opponents=n_active)
 
     study = optuna.create_study(
         sampler=sampler,

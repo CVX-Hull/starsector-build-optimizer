@@ -16,7 +16,6 @@ Frozen dataclass configuring the instance pool.
 | `xvfb_base_display` | `int` | 100 | First Xvfb display number (instances use base+0, base+1, ...) |
 | `xvfb_screen` | `str` | `"1920x1080x24"` | Xvfb screen geometry (WxHxD) |
 | `xvfb_poll_interval_seconds` | `float` | 0.1 | Poll interval for Xvfb socket readiness |
-| `batch_size` | `int` | 6 | Matchups per instance per game launch |
 | `heartbeat_timeout_seconds` | `float` | 120.0 | Kill instance if no heartbeat for this long |
 | `startup_timeout_seconds` | `float` | 90.0 | Kill instance if no heartbeat within this after launch |
 | `poll_interval_seconds` | `float` | 1.0 | How often to check heartbeat/done files |
@@ -73,19 +72,22 @@ Mutable dataclass tracking a single game instance.
 
 ### `InstancePool`
 
-Main class managing N parallel game instances.
+Main class managing N parallel game instances. Acts as a resource manager — provides per-instance blocking execution. The optimizer drives concurrency via ThreadPoolExecutor.
 
 ```python
 class InstancePool:
     def __init__(self, config: InstanceConfig, curtailment: CurtailmentMonitor | None = None) -> None: ...
     def setup(self) -> None: ...
     def teardown(self) -> None: ...
-    def evaluate(self, matchups: list[MatchupConfig]) -> list[CombatResult]: ...
+    def run_matchup(self, instance_id: int, matchup: MatchupConfig) -> CombatResult: ...
+    @property
+    def num_instances(self) -> int: ...
     def __enter__(self) -> InstancePool: ...
     def __exit__(self, *args) -> None: ...
-    # Persistent session methods (internal)
+    # Internal methods
     def _is_instance_reusable(self, inst: GameInstance) -> bool: ...
     def _assign_next_batch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None: ...
+    def _restart_or_raise(self, inst: GameInstance, matchup: MatchupConfig) -> None: ...
     def _write_shutdown_signal(self, inst: GameInstance) -> None: ...
 ```
 
@@ -134,26 +136,29 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
    - Copy `mods/combat-harness/` and `mods/enabled_mods.json`
    - Create `saves/common/`, `screenshots/`
 
-### `evaluate(matchups)`
+### `run_matchup(instance_id, matchup)`
 
-1. Split matchups into chunks of `batch_size`
-2. Assign initial chunks to instances:
-   - If `_is_instance_reusable(inst)` (game+Xvfb processes still alive from previous evaluate): use `_assign_next_batch()` (persistent session reuse — no process creation)
-   - Otherwise: use `_assign_and_launch()` (full Xvfb + game launch)
+Run a single matchup on the specified instance. Blocks until complete. Thread-safe per instance_id (each id called from at most one thread at a time). Raises `InstanceError` if the instance fails unrecoverably.
+
+1. Get instance by id. If `total_matchups_processed >= clean_restart_matchups`, kill instance, reset counter.
+2. If `_is_instance_reusable(inst)`: `_assign_next_batch(inst, [matchup])` (persistent session reuse). Otherwise: `_assign_and_launch(inst, [matchup])` (full Xvfb + game launch).
 3. Poll loop (every `poll_interval_seconds`):
-   - For each active instance:
-     - **Done check:** If done file exists → DONE. Parse results. Track `total_matchups_processed += len(assigned_matchups)`. If more chunks:
-       - If `total_matchups_processed >= clean_restart_matchups` or process exited: kill instance, reset counter, `_assign_and_launch()` (clean restart)
-       - Otherwise: `_assign_next_batch()` (persistent session reuse)
-     - **Process check:** If game process exited without done signal → FAILED.
-     - **Heartbeat check:** If STARTING and `now - launch_time > startup_timeout` → FAILED. If RUNNING and heartbeat file mtime stale > `heartbeat_timeout` → FAILED. If heartbeat fresh and STARTING → RUNNING.
-   - For FAILED instances: kill, restart (up to `max_restarts`), re-queue same chunk, reset `total_matchups_processed`
-   - Instances with no remaining work stay alive in IDLE (game in WAITING state for potential reuse in next `evaluate()` call)
-4. Return all results ordered by `matchup_id`
+   - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. Set state IDLE. Return `results[0]`.
+   - **Process check:** If game process exited without done signal → FAILED. Call `_restart_or_raise()`. Continue polling.
+   - **Heartbeat check:** If STARTING and heartbeat fresh → RUNNING. If STARTING and startup timed out → FAILED, `_restart_or_raise()`. If RUNNING and heartbeat fresh → update timestamp, check curtailment. If RUNNING and heartbeat stale > timeout → FAILED, `_restart_or_raise()`.
+4. Instance stays alive in IDLE after returning (game in WAITING state for reuse in next `run_matchup()` call).
+
+### `num_instances` (property)
+
+Returns `len(self._instances)`. Used by the optimizer to determine ThreadPoolExecutor concurrency.
+
+### `_restart_or_raise(inst, matchup)`
+
+Kill instance, check restart count. If `restart_count < max_restarts`: increment count, `_assign_and_launch(inst, [matchup])`. Otherwise: raise `InstanceError`.
 
 ### `_is_instance_reusable(inst)`
 
-Returns `True` if both `game_process` and `xvfb_process` are alive (`poll() is None`). Used to detect instances from prior `evaluate()` calls that can accept new work without a full restart.
+Returns `True` if both `game_process` and `xvfb_process` are alive (`poll() is None`). Used to detect instances from prior `run_matchup()` calls that can accept new work without a full restart.
 
 ### `_assign_next_batch(inst, chunk)`
 

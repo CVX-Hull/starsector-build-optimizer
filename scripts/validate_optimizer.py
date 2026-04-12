@@ -59,7 +59,6 @@ print(f"\n2. Setting up {NUM_INSTANCES} instances...", flush=True)
 config = InstanceConfig(
     game_dir=GAME_DIR,
     num_instances=NUM_INSTANCES,
-    batch_size=len(opponents),  # One build's matchups per instance launch
     xvfb_base_display=200,
 )
 curtailment = CurtailmentMonitor(min_time=30.0, ttd_ratio=3.0)
@@ -112,8 +111,10 @@ try:
             all_matchups.extend(matchups)
             variant_ids.append(vid)
 
-        # Evaluate ALL matchups in one batch (uses all instances)
-        all_results = pool.evaluate(all_matchups)
+        # Evaluate matchups across instances
+        all_results = []
+        for i, m in enumerate(all_matchups):
+            all_results.append(pool.run_matchup(i % pool.num_instances, m))
 
         # Map results back to each build
         results_by_build = {vid: [] for vid in variant_ids}

@@ -1,5 +1,9 @@
 """Tests for opponent pool — diverse opponent selection and fitness computation."""
 
+import json
+import logging
+from pathlib import Path
+
 import pytest
 
 from starsector_optimizer.models import (
@@ -11,9 +15,9 @@ from starsector_optimizer.models import (
     ShipCombatResult,
 )
 from starsector_optimizer.opponent_pool import (
-    DEFAULT_OPPONENT_POOL,
     OpponentPool,
     compute_fitness,
+    discover_opponent_pool,
     generate_matchups,
     get_opponents,
     hp_differential,
@@ -77,14 +81,9 @@ def _make_result(
 
 class TestOpponentPool:
 
-    def test_default_pools_cover_all_combat_sizes(self):
-        """Every combat HullSize has at least 3 opponents."""
-        for size in [HullSize.FRIGATE, HullSize.DESTROYER, HullSize.CRUISER, HullSize.CAPITAL_SHIP]:
-            opponents = get_opponents(DEFAULT_OPPONENT_POOL, size)
-            assert len(opponents) >= 3, f"{size} has only {len(opponents)} opponents"
-
     def test_get_opponents_returns_tuple(self):
-        opponents = get_opponents(DEFAULT_OPPONENT_POOL, HullSize.CRUISER)
+        pool = OpponentPool(pools={HullSize.CRUISER: ("dom_Assault", "eagle_Assault")})
+        opponents = get_opponents(pool, HullSize.CRUISER)
         assert isinstance(opponents, tuple)
         assert all(isinstance(o, str) for o in opponents)
 
@@ -93,15 +92,116 @@ class TestOpponentPool:
         with pytest.raises(KeyError):
             get_opponents(pool, HullSize.FRIGATE)
 
-    def test_cruiser_pool_has_five_opponents(self):
-        """CRUISER pool has exactly 5 opponents after heron_Attack removal."""
-        opponents = get_opponents(DEFAULT_OPPONENT_POOL, HullSize.CRUISER)
-        assert len(opponents) == 5
 
-    def test_cruiser_pool_excludes_heron(self):
-        """heron_Attack removed from CRUISER pool — kiting carrier produces no fitness gradient."""
-        opponents = get_opponents(DEFAULT_OPPONENT_POOL, HullSize.CRUISER)
-        assert "heron_Attack" not in opponents
+# --- Discover Opponent Pool Tests ---
+
+
+class TestDiscoverOpponentPool:
+
+    @pytest.fixture(scope="module")
+    def game_data(self):
+        from starsector_optimizer.parser import load_game_data
+        return load_game_data(Path("game/starsector"))
+
+    def test_discover_finds_stock_variants(self, game_data):
+        """discover_opponent_pool returns non-empty pools for all combat hull sizes."""
+        pool = discover_opponent_pool(Path("game/starsector"), game_data)
+        for size in [HullSize.FRIGATE, HullSize.DESTROYER, HullSize.CRUISER, HullSize.CAPITAL_SHIP]:
+            opponents = get_opponents(pool, size)
+            assert len(opponents) >= 2, f"{size.name} has only {len(opponents)} opponents"
+
+    def test_discover_stock_variant_ids_returns_pairs(self, game_data):
+        """discover_stock_variant_ids returns (variant_id, hull_id) pairs from real game data."""
+        from starsector_optimizer.variant import discover_stock_variant_ids
+
+        result = discover_stock_variant_ids(Path("game/starsector"))
+        assert len(result) > 0, "Expected to find stock variants"
+        # Each entry is a (variant_id, hull_id) tuple with string values
+        for variant_id, hull_id in result:
+            assert isinstance(variant_id, str)
+            assert isinstance(hull_id, str)
+        # At least some hull_ids should be in game data (faction skins may not be)
+        known = [hid for _, hid in result if hid in game_data.hulls]
+        assert len(known) > 10, f"Expected many known hulls, got {len(known)}"
+
+    def test_discover_excludes_optimizer_variants(self, game_data, tmp_path):
+        """Optimizer-generated variant files are excluded from discovery."""
+        from starsector_optimizer.variant import discover_stock_variant_ids
+
+        # Create a temp variants dir with one real and one optimizer-generated variant
+        variants_dir = tmp_path / "data" / "variants"
+        variants_dir.mkdir(parents=True)
+
+        real_variant = {"variantId": "wolf_Test", "hullId": "wolf", "weaponGroups": [], "hullMods": []}
+        opt_variant = {"variantId": "wolf_opt_000001", "hullId": "wolf", "weaponGroups": [], "hullMods": []}
+
+        (variants_dir / "wolf_Test.variant").write_text(json.dumps(real_variant))
+        (variants_dir / "wolf_opt_000001.variant").write_text(json.dumps(opt_variant))
+
+        result = discover_stock_variant_ids(tmp_path)
+        variant_ids = [vid for vid, _ in result]
+        assert "wolf_Test" in variant_ids
+        assert "wolf_opt_000001" not in variant_ids
+
+    def test_discover_excludes_unknown_hulls(self, game_data, tmp_path):
+        """Variants referencing hulls not in game_data are excluded."""
+        from starsector_optimizer.variant import discover_stock_variant_ids
+
+        variants_dir = tmp_path / "data" / "variants"
+        variants_dir.mkdir(parents=True)
+        unknown = {"variantId": "alien_Assault", "hullId": "alien_ship", "weaponGroups": [], "hullMods": []}
+        (variants_dir / "alien_Assault.variant").write_text(json.dumps(unknown))
+
+        pool = discover_opponent_pool(tmp_path, game_data)
+        # alien_ship is not in game_data, so it should not appear in any pool
+        all_opponents = []
+        for size in HullSize:
+            try:
+                all_opponents.extend(get_opponents(pool, size))
+            except KeyError:
+                pass
+        assert "alien_Assault" not in all_opponents
+
+    def test_discover_warns_sparse_pool(self, tmp_path, caplog):
+        """Warning emitted if a hull size has fewer than 2 opponents."""
+        from starsector_optimizer.models import GameData, ShipHull, ShieldType
+
+        # Minimal game data with one hull
+        hull = ShipHull(
+            id="wolf", name="Wolf", hull_size=HullSize.FRIGATE, designation="Fast Attack",
+            tech_manufacturer="", system_id="", fleet_pts=5, hitpoints=2000,
+            armor_rating=200, max_flux=2500, flux_dissipation=200, ordnance_points=55,
+            fighter_bays=0, max_speed=150, shield_type=ShieldType.OMNI, shield_arc=360,
+            shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0, phase_upkeep=0,
+            peak_cr_sec=300, cr_loss_per_sec=0.25,
+            weapon_slots=[], built_in_mods=frozenset(), built_in_weapons={},
+        )
+        game_data = GameData(
+            hulls={"wolf": hull}, weapons={}, hullmods={},
+        )
+
+        # Create one variant
+        variants_dir = tmp_path / "data" / "variants"
+        variants_dir.mkdir(parents=True)
+        variant = {"variantId": "wolf_Solo", "hullId": "wolf", "weaponGroups": [], "hullMods": []}
+        (variants_dir / "wolf_Solo.variant").write_text(json.dumps(variant))
+
+        with caplog.at_level(logging.WARNING):
+            discover_opponent_pool(tmp_path, game_data)
+
+        assert any("only 1 opponent" in msg for msg in caplog.messages)
+
+    def test_discover_skips_malformed_variants(self, game_data, tmp_path):
+        """Malformed .variant files are skipped silently."""
+        from starsector_optimizer.variant import discover_stock_variant_ids
+
+        variants_dir = tmp_path / "data" / "variants"
+        variants_dir.mkdir(parents=True)
+        (variants_dir / "broken.variant").write_text("not valid json {{{")
+
+        # Should not raise
+        result = discover_stock_variant_ids(tmp_path)
+        assert isinstance(result, list)
 
 
 # --- Generate Matchups Tests ---

@@ -191,20 +191,17 @@ With sequential opponent evaluation, a single "batch" now evaluates one opponent
 
 *Expected impact: 2–3× budget efficiency. Average evaluation cost drops from 5 matchups to ~2.5 per build.*
 
-### Phase C: Richer Objectives (optional, bigger conceptual change)
+### Phase C: Adaptive Opponent Pool (implemented)
 
-**C1. Multi-Objective Decomposition**
-Report 3 objectives instead of 1 composite:
-- Engagement score (damage exchange quality)
-- Damage efficiency (player permanent damage / total permanent damage)
-- Survivability (mean player HP fraction preserved)
+**C1. Multi-Objective Decomposition** (deferred)
+Deferred — requires fundamental changes to the A1→A2→A3 pipeline (scalar fitness assumptions), conflicts with MedianPruner (compares scalars), and the 3 proposed objectives are hand-designed decompositions at odds with the bitter lesson.
 
-Use `NSGAIISampler`. Select final build from Pareto front using current composite formula as tiebreaker. Lets the optimizer discover different strategies without pre-encoded weights.
+**C2. Adaptive Opponent Pool** (implemented)
+Two-layer design inspired by racing algorithms (irace) and the bitter lesson. Layer 1: discover ALL stock variants from the game data as a reservoir (36-71 per hull size after filtering fighters, stations, and special entities via ship_data.csv hints/tags). Layer 2: each build evaluates only the top `active_opponents` (default 10) from the B1 discriminative power ordering. Initial ordering is a random shuffle for exploration; B1 recomputes periodically to optimize within the active set. No hand-designed curriculum, difficulty labels, or thresholds.
 
-**C2. Curriculum Learning**
-Start against stock builds of the same hull size (beatable). Use heuristic scorer to rank opponent difficulty automatically. Ramp opponent difficulty as rolling win rate exceeds 30%. The optimizer always faces a tractable challenge.
+*Expected impact: Wider fitness gradient from difficulty diversity. 10 opponents per build maintains throughput (vs 71 exhaustive). Budget efficiency from pruning over 10 steps.*
 
-*Expected impact: Win rate 0.4% → 20–40% against easy opponents. Much richer gradient signal.*
+**Instance parallelism:** Async coordinator-worker pattern (ThreadPoolExecutor + wait(FIRST_COMPLETED)) dispatches 1 matchup per instance, processes results as they arrive (promote-on-arrival, async ASHA). N instances run in parallel; pruning decisions are immediate after every opponent result.
 
 ### Phase D: If Java Modification Is Feasible
 
