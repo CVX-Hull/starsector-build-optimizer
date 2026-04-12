@@ -35,8 +35,16 @@ public class MenuNavigator {
     private static final int ARENA_Y = 876;
 
     // "Play Mission" button
-    private static final int PLAY_MISSION_X = 1295;
-    private static final int PLAY_MISSION_Y = 908;
+    private static final int PLAY_MISSION_X = 1322;
+    private static final int PLAY_MISSION_Y = 906;
+
+    // Post-combat results screen: "Continue" button
+    private static final int CONTINUE_X = 963;
+    private static final int CONTINUE_Y = 892;
+
+    // High score dialog "OK" button (may not always appear)
+    private static final int HIGH_SCORE_OK_X = 1119;
+    private static final int HIGH_SCORE_OK_Y = 611;
 
     /**
      * Navigate from main menu to Optimizer Arena mission start.
@@ -75,6 +83,34 @@ public class MenuNavigator {
             log.info("MenuNavigator: navigation complete");
         } catch (Exception e) {
             log.error("MenuNavigator: failed to navigate", e);
+        }
+    }
+
+    /**
+     * Dismiss post-combat results screen to return to mission select.
+     * Sequence: Continue → OK (high score dialog, harmless if absent).
+     * TitleScreenPlugin handles the rest (detects queue → navigates → Play Mission).
+     */
+    public static void dismissResults() {
+        try {
+            Robot robot = new Robot();
+            robot.setAutoDelay(50);
+
+            // Wait for results screen to fully render
+            Thread.sleep(500);
+
+            // Step 1: Click "Continue" on results screen
+            log.info("MenuNavigator: clicking Continue at (" + CONTINUE_X + "," + CONTINUE_Y + ")...");
+            robotClick(robot, CONTINUE_X, CONTINUE_Y);
+            Thread.sleep(1500);
+
+            // Step 2: Dismiss high score dialog if present (click is harmless if absent)
+            log.info("MenuNavigator: clicking high score OK at (" + HIGH_SCORE_OK_X + "," + HIGH_SCORE_OK_Y + ")...");
+            robotClick(robot, HIGH_SCORE_OK_X, HIGH_SCORE_OK_Y);
+
+            log.info("MenuNavigator: results dismissed, TitleScreenPlugin will handle restart");
+        } catch (Exception e) {
+            log.error("MenuNavigator: failed to dismiss results", e);
         }
     }
 

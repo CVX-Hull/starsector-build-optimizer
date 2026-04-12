@@ -17,46 +17,36 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * State machine that cycles through a batch of matchups in a single combat session.
+ * Single-matchup-per-mission combat harness.
  *
- * States: INIT → SPAWNING → FIGHTING → CLEANING → SPAWNING → ... → DONE
- *
- * The first matchup's ships are added by MissionDefinition (required for the
- * deployment screen). Subsequent matchups use spawnShipOrWing() mid-combat.
+ * MissionDefinition adds placeholder ships via addToFleet() for proper deployment.
+ * This plugin swaps the player ship's loadout in-place, runs one matchup,
+ * writes results, and calls endCombat() to return to the mission screen.
+ * Python + Robot-click automation restarts the mission with a new queue.
  */
 public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private static final Logger log = Logger.getLogger(CombatHarnessPlugin.class);
-    private static final float SHIP_SPACING = 800f;
     private static final String NEW_QUEUE_FILE = MatchupConfig.COMMON_PREFIX + "new_queue";
     private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
-    private static final int WAITING_TIMEOUT_FRAMES = 3600;  // ~60s at 60fps
+    private static final int WAITING_TIMEOUT_FRAMES = 3600;
     private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
-    private static final float PLAYER_SPAWN_X = -2000f;
-    private static final float ENEMY_SPAWN_X = 2000f;
-    private static final float PLAYER_FACING = 0f;
-    private static final float ENEMY_FACING = 180f;
-    private static final int CLEANUP_FRAMES = 3;
-    private static final float MAX_APPROACH_TIME = 30f;  // force timeout if no contact in 30s
+    private static final float MAX_APPROACH_TIME = 30f;
 
-    private enum State { INIT, SPAWNING, FIGHTING, CLEANING, DONE, WAITING }
+    private enum State { INIT, SETUP, FIGHTING, DONE, WAITING }
 
     private CombatEngineAPI engine;
     private State state = State.INIT;
     private MatchupQueue queue;
-    private int currentIndex = 0;
     private MatchupConfig currentConfig;
     private DamageTracker currentTracker;
     private List<ShipAPI> playerShips = new ArrayList<ShipAPI>();
     private List<ShipAPI> enemyShips = new ArrayList<ShipAPI>();
-    private float spawnTime;              // when ships were spawned (for approach timeout)
-    private float matchupStartTime;       // when fleets made contact (for combat timeout)
+    private float spawnTime;
+    private float matchupStartTime;
     private boolean contactMade = false;
-    private boolean isFirstBatch = true;  // true only for very first batch; NOT reset on WAITING→INIT
     private int waitingFrameCount = 0;
-    private JSONArray allResults = new JSONArray();
     private int frameCount = 0;
-    private int cleanupFramesLeft = 0;
 
     @Override
     public void init(CombatEngineAPI engine) {
@@ -66,28 +56,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     @Override
     public void advance(float amount, List<InputEventAPI> events) {
         if (engine == null || engine.isPaused()) return;
-
         frameCount++;
 
         switch (state) {
-            case INIT:
-                doInit();
-                break;
-            case SPAWNING:
-                doSpawning();
-                break;
-            case FIGHTING:
-                doFighting();
-                break;
-            case CLEANING:
-                doCleaning();
-                break;
-            case DONE:
-                doDone();
-                break;
-            case WAITING:
-                doWaiting();
-                break;
+            case INIT:    doInit(); break;
+            case SETUP:   doSetup(); break;
+            case FIGHTING: doFighting(); break;
+            case DONE:    doDone(); break;
+            case WAITING: doWaiting(); break;
         }
     }
 
@@ -102,30 +78,52 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
         engine.setDoNotEndCombat(true);
         log.info("Combat Harness: loaded queue with " + queue.size() + " matchups");
-        state = State.SPAWNING;
+        state = State.SETUP;
     }
 
-    private void doSpawning() {
-        currentConfig = queue.get(currentIndex);
-        log.info("Matchup " + (currentIndex + 1) + "/" + queue.size()
-                + ": " + currentConfig.matchupId
+    private void doSetup() {
+        currentConfig = queue.get(0);  // Single matchup per mission
+        log.info("Matchup: " + currentConfig.matchupId
                 + " (time_mult=" + currentConfig.timeMult
                 + ", time_limit=" + currentConfig.timeLimitSeconds + "s)");
 
-        // Apply time multiplier
         engine.getTimeMult().modifyMult("harness", currentConfig.timeMult);
 
-        // Create and register damage tracker
         currentTracker = new DamageTracker();
         engine.getListenerManager().addListener(currentTracker);
 
-        if (isFirstBatch) {
-            // Very first matchup of game session: MissionDefinition added
-            // placeholder ships for the deployment screen. Remove them.
-            removePlaceholderShips();
-            isFirstBatch = false;
+        // Collect ships deployed by MissionDefinition (addToFleet — proper CR/AI)
+        playerShips.clear();
+        enemyShips.clear();
+        for (ShipAPI ship : engine.getShips()) {
+            if (ship.isFighter()) continue;
+            if (ship.getOwner() == 0) playerShips.add(ship);
+            else if (ship.getOwner() == 1) enemyShips.add(ship);
         }
-        spawnShips();
+
+        // Swap player ship loadout to the real build spec
+        for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
+            ShipAPI ship = playerShips.get(i);
+            MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
+
+            com.fs.starfarer.api.combat.ShipVariantAPI v = ship.getVariant();
+            v.clear();
+            for (java.util.Map.Entry<String, String> e : spec.weaponAssignments.entrySet()) {
+                v.addWeapon(e.getKey(), e.getValue());
+            }
+            for (String modId : spec.hullmods) {
+                v.addMod(modId);
+            }
+            v.setNumFluxVents(spec.fluxVents);
+            v.setNumFluxCapacitors(spec.fluxCapacitors);
+            v.autoGenerateWeaponGroups();
+
+            ship.setCurrentCR(spec.cr);
+            ship.setCRAtDeployment(spec.cr);
+            log.info("  Swapped loadout: " + spec.variantId
+                    + " weapons=" + spec.weaponAssignments.size()
+                    + " mods=" + spec.hullmods.length);
+        }
 
         spawnTime = engine.getTotalElapsedTime(false);
         matchupStartTime = 0f;
@@ -135,68 +133,9 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         state = State.FIGHTING;
     }
 
-    private void removePlaceholderShips() {
-        for (ShipAPI ship : engine.getShips()) {
-            if (ship.isFighter()) continue;
-            if (ship.getOwner() == 0) {
-                engine.removeEntity(ship);
-            }
-        }
-    }
-
-    private void ensureCombatReady(ShipAPI ship, float cr) {
-        if (ship.getCurrentCR() < cr) {
-            ship.setCurrentCR(cr);
-            ship.setCRAtDeployment(cr);
-        }
-    }
-
-    private void spawnShips() {
-        // Player ships: construct programmatically from build specs
-        playerShips.clear();
-        for (int i = 0; i < currentConfig.playerBuilds.length; i++) {
-            MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
-            float yOffset = (i - (currentConfig.playerBuilds.length - 1) / 2f) * SHIP_SPACING;
-            try {
-                com.fs.starfarer.api.fleet.FleetMemberAPI member =
-                        VariantBuilder.createFleetMember(spec);
-                ShipAPI ship = engine.getFleetManager(FleetSide.PLAYER)
-                        .spawnFleetMember(member, new Vector2f(PLAYER_SPAWN_X, yOffset), PLAYER_FACING, 0f);
-                if (ship != null) {
-                    playerShips.add(ship);
-                    ensureCombatReady(ship, spec.cr);
-                } else {
-                    log.warn("Failed to spawn player build: " + spec.variantId);
-                }
-            } catch (Exception e) {
-                log.error("Error spawning player build: " + spec.variantId, e);
-            }
-        }
-
-        // Enemy ships: use stock variant IDs
-        enemyShips.clear();
-        for (int i = 0; i < currentConfig.enemyVariants.length; i++) {
-            String variantId = currentConfig.enemyVariants[i];
-            float yOffset = (i - (currentConfig.enemyVariants.length - 1) / 2f) * SHIP_SPACING;
-            try {
-                ShipAPI ship = engine.getFleetManager(FleetSide.ENEMY)
-                        .spawnShipOrWing(variantId, new Vector2f(ENEMY_SPAWN_X, yOffset), ENEMY_FACING);
-                if (ship != null) {
-                    enemyShips.add(ship);
-                } else {
-                    log.warn("Failed to spawn enemy variant: " + variantId);
-                }
-            } catch (Exception e) {
-                log.error("Error spawning enemy variant: " + variantId, e);
-            }
-        }
-    }
-
     private void doFighting() {
-        // Center camera on midpoint between player and enemy ships
         updateCamera();
 
-        // Heartbeat every HEARTBEAT_INTERVAL_FRAMES (enriched with HP fractions)
         if (frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
             ResultWriter.writeHeartbeat(
                     engine.getTotalElapsedTime(false),
@@ -206,21 +145,18 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                     countAlive(enemyShips));
         }
 
-        // Start timer only once fleets engage (approach time doesn't count)
         if (!contactMade) {
             if (engine.isFleetsInContact()) {
                 contactMade = true;
                 matchupStartTime = engine.getTotalElapsedTime(false);
                 log.info("  Contact made for " + currentConfig.matchupId);
             } else if (engine.getTotalElapsedTime(false) - spawnTime > MAX_APPROACH_TIME) {
-                // Evasive AI never engaged — force contact timer to start
                 contactMade = true;
                 matchupStartTime = engine.getTotalElapsedTime(false);
-                log.info("  Approach timeout for " + currentConfig.matchupId + " — forcing combat timer start");
+                log.info("  Approach timeout for " + currentConfig.matchupId);
             }
         }
 
-        // Custom win detection
         int playerAlive = countAlive(playerShips);
         int enemyAlive = countAlive(enemyShips);
         float elapsed = contactMade ? engine.getTotalElapsedTime(false) - matchupStartTime : 0f;
@@ -238,104 +174,60 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
 
         if (winner != null) {
+            JSONArray results = new JSONArray();
             try {
-                allResults.put(ResultWriter.buildMatchupResult(
+                results.put(ResultWriter.buildMatchupResult(
                         currentConfig, playerShips, enemyShips,
                         currentTracker, winner, elapsed));
+                ResultWriter.writeAllResults(results);
+                ResultWriter.writeDoneSignal();
                 log.info("Matchup " + currentConfig.matchupId
                         + " complete: winner=" + winner + ", duration=" + elapsed + "s");
             } catch (Exception e) {
-                log.error("Failed to build result for " + currentConfig.matchupId, e);
+                log.error("Failed to write result", e);
             }
-            state = State.CLEANING;
-            cleanupFramesLeft = CLEANUP_FRAMES;
-        }
-    }
 
-    private void doCleaning() {
-        if (cleanupFramesLeft > 0) {
-            if (cleanupFramesLeft == CLEANUP_FRAMES) {
-                // Remove all entities
-                for (ShipAPI ship : new ArrayList<ShipAPI>(engine.getShips())) {
-                    engine.removeEntity(ship);
-                }
-                for (Object proj : new ArrayList<Object>(engine.getProjectiles())) {
-                    if (proj instanceof com.fs.starfarer.api.combat.CombatEntityAPI) {
-                        engine.removeEntity((com.fs.starfarer.api.combat.CombatEntityAPI) proj);
-                    }
-                }
-                for (Object missile : new ArrayList<Object>(engine.getMissiles())) {
-                    if (missile instanceof com.fs.starfarer.api.combat.CombatEntityAPI) {
-                        engine.removeEntity((com.fs.starfarer.api.combat.CombatEntityAPI) missile);
-                    }
-                }
+            engine.getListenerManager().removeListener(currentTracker);
 
-                // Unregister damage tracker
-                engine.getListenerManager().removeListener(currentTracker);
-                playerShips.clear();
-                enemyShips.clear();
-            }
-            cleanupFramesLeft--;
-            return;
-        }
-
-        currentIndex++;
-        if (currentIndex < queue.size()) {
-            state = State.SPAWNING;
-        } else {
+            // End combat — game shows mission results screen
+            engine.setDoNotEndCombat(false);
+            FleetSide winnerSide = "PLAYER".equals(winner) ? FleetSide.PLAYER : FleetSide.ENEMY;
+            engine.endCombat(0f, winnerSide);
+            log.info("endCombat called — awaiting mission results screen");
             state = State.DONE;
         }
     }
 
     private void doDone() {
-        try {
-            ResultWriter.writeAllResults(allResults);
-            ResultWriter.writeDoneSignal();
-            log.info("All " + queue.size() + " matchups complete. Results written. Entering WAITING state.");
-        } catch (Exception e) {
-            log.error("Failed to write final results", e);
-            System.exit(1);
-            return;
-        }
+        // After endCombat, game shows results screen. Robot clicks Continue
+        // (and high score OK if present) to return to mission select.
+        // TitleScreenPlugin will detect the queue and auto-navigate to Play Mission.
+        new Thread(new Runnable() {
+            public void run() {
+                MenuNavigator.dismissResults();
+            }
+        }).start();
+        log.info("Robot restart thread launched");
         waitingFrameCount = 0;
         state = State.WAITING;
     }
 
     private void doWaiting() {
-        // Heartbeat to prove liveness (zeros = no ships in combat)
         if (frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
             ResultWriter.writeHeartbeat(engine.getTotalElapsedTime(false), 0f, 0f, 0, 0);
         }
 
-        // Check shutdown signal (priority over new queue)
         if (Global.getSettings().fileExistsInCommon(SHUTDOWN_FILE)) {
             try {
                 Global.getSettings().deleteTextFileFromCommon(SHUTDOWN_FILE);
-            } catch (Exception e) {
-                log.warn("Failed to delete shutdown signal", e);
-            }
+            } catch (Exception e) { /* ignore */ }
             log.info("Shutdown signal received, exiting.");
             System.exit(0);
         }
 
-        // Check new queue signal
-        if (Global.getSettings().fileExistsInCommon(NEW_QUEUE_FILE)) {
-            try {
-                Global.getSettings().deleteTextFileFromCommon(NEW_QUEUE_FILE);
-            } catch (Exception e) {
-                log.warn("Failed to delete new queue signal", e);
-            }
-            allResults = new JSONArray();
-            currentIndex = 0;
-            state = State.INIT;
-            log.info("New queue signal received, loading next batch.");
-            return;
-        }
-
-        // Timeout — exit cleanly if no work arrives
         waitingFrameCount++;
         if (waitingFrameCount > WAITING_TIMEOUT_FRAMES) {
-            log.info("Waiting timeout (" + WAITING_TIMEOUT_FRAMES + " frames), exiting.");
+            log.info("Waiting timeout, exiting.");
             System.exit(0);
         }
     }
@@ -348,17 +240,15 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         return count;
     }
 
-    /** Compute aggregate HP fraction across a list of ships (0.0-1.0). */
     private float computeAggregateHp(List<ShipAPI> ships) {
         if (ships.isEmpty()) return 0f;
         float total = 0f;
         for (ShipAPI s : ships) {
-            total += s.getHullLevel();  // 0.0 (destroyed) to 1.0 (full HP)
+            total += s.getHullLevel();
         }
         return total / ships.size();
     }
 
-    /** Center viewport on midpoint of all tracked ships so the fight is visible. */
     private void updateCamera() {
         float sumX = 0f, sumY = 0f;
         int count = 0;

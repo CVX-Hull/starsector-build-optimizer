@@ -23,7 +23,7 @@ public class MissionDefinition implements MissionDefinitionPlugin {
 
     public void defineMission(MissionDefinitionAPI api) {
         if (!MatchupQueue.existsInCommon()) {
-            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
+            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
             api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
             api.addBriefingItem("ERROR: No queue file found in saves/common/");
             api.addBriefingItem("Write combat_harness_queue.json.data before launching.");
@@ -35,32 +35,32 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         try {
             queue = MatchupQueue.loadFromCommon();
         } catch (Exception e) {
-            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
+            api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
             api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
             api.addBriefingItem("ERROR: Failed to parse queue: " + e.getMessage());
             api.initMap(-8000f, 8000f, -6000f, 6000f);
             return;
         }
 
-        // PLAYER useDefaultAI=false: all ships get AI (no human control)
-        // ENEMY useDefaultAI=true: standard enemy AI
-        api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, false);
+        // Both sides fully AI-controlled with ATTACK goal
+        // useDefaultAI=true required — false means "player controls" which causes
+        // retreat behavior when no human commander is present
+        api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
         api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
 
         api.setFleetTagline(FleetSide.PLAYER, "Optimizer Candidate");
         api.setFleetTagline(FleetSide.ENEMY, "Test Opponent");
 
         // Add first matchup's ships — required for the deployment screen to work.
-        // Subsequent matchups are handled by the plugin via spawnFleetMember()/spawnShipOrWing().
+        // Use addToFleet() with stock variants so the game handles CR/deployment
+        // correctly. The plugin will swap the loadout to the real build at combat start.
         MatchupConfig first = queue.get(0);
 
-        // Player ships: add placeholders so the deployment screen has something to show.
-        // The plugin will remove these and spawn the real builds via spawnFleetMember().
         for (int i = 0; i < first.playerBuilds.length; i++) {
             String hullId = first.playerBuilds[i].hullId;
-            String placeholderVariant = findAnyVariantForHull(hullId);
-            api.addToFleet(FleetSide.PLAYER, placeholderVariant,
-                    FleetMemberType.SHIP, placeholderVariant, false);
+            String stockVariant = findAnyVariantForHull(hullId);
+            api.addToFleet(FleetSide.PLAYER, stockVariant,
+                    FleetMemberType.SHIP, stockVariant, false);
         }
 
         // Enemy ships: use stock variant IDs

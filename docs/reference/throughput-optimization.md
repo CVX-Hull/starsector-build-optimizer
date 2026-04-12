@@ -314,31 +314,24 @@ Player builds are constructed programmatically. Enemy variants (stock opponents)
 - Include build specs in matchup queue JSON instead of variant file references
 - `InstancePool._create_work_dir()` no longer needs variant directory management
 
-#### Phase T2: Persistent Game Session (Java change, highest throughput impact) — IMPLEMENTED
+#### Phase T2: Persistent Game Session — REVISED (Robot-click mission restart)
 
-Replace `System.exit(0)` in `CombatHarnessPlugin.doDone()` with WAITING state. Add periodic clean restart via Robot-click re-entry.
+**Original plan (in-combat WAITING → SPAWNING loop) does not work.** `spawnFleetMember()` mid-combat always causes retreat behavior — the engine sets `directRetreat=true` at a level below the public API. Exhaustive testing confirmed no API combination overrides this (tested: `setDirectRetreat`, `clearTasks`, `reassign`, `preventFullRetreat`, `setCanForceShipsToEngageWhenBattleClearlyLost`, custom `AdmiralAIPlugin`, per-frame `setRetreating`). Only `addToFleet()` in `MissionDefinition` produces ships with correct AI behavior.
 
-**New state machine:**
+**Working approach (Approach B from original research):**
 ```
-INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE → WAITING
-                                                 ↑        |
-                                                 |  (new queue detected)
-                                                 └────────┘
+INIT → SETUP → FIGHTING → DONE → endCombat() → Robot dismisses results → TitleScreenPlugin restarts
 ```
 
-**WAITING state behavior:**
-1. Write results + done signal (existing behavior)
-2. Poll `fileExistsInCommon("combat_harness_new_queue")` every ~60 frames
-3. When detected: delete signal file, load new queue, reset state, transition to SPAWNING
-4. If no new queue after configurable timeout (e.g., 60s): `System.exit(0)` for clean shutdown
+1. Single matchup per mission — `MissionDefinition.addToFleet()` for proper deployment/CR/AI
+2. Plugin swaps player ship loadout in-place via `variant.clear()` + `addWeapon()`/`addMod()`
+3. After matchup: write results + done signal, call `engine.endCombat()`
+4. Robot clicks Continue (963,892) and high score OK (1119,611) to dismiss results screen
+5. `TitleScreenPlugin` detects queue → `MenuNavigator.navigateToMission()` → fresh `MissionDefinition` cycle
 
-**Python-side protocol change:**
-1. Detect done signal, read results (existing)
-2. Write new queue file to `saves/common/`
-3. Write `combat_harness_new_queue.data` signal file
-4. Resume polling for next done signal
+**Overhead:** ~5-8s per matchup restart (Robot clicks + menu loading) vs ~25-35s for full game restart. The game stays running between matchups; only the mission restarts.
 
-**Clean restart trigger:** After N matchups (configurable, default ~200), Python writes a `combat_harness_shutdown.data` signal instead of a new queue. The harness exits cleanly. Python restarts the game for a fresh engine state.
+**Instance manager integration (TODO):** The instance manager's persistent session protocol (`new_queue` signal) needs to be replaced. After `endCombat()`, the game is at the mission select — it can't poll for in-combat signals. Python must write the new queue file BEFORE `TitleScreenPlugin` triggers, then let the auto-navigation restart the mission.
 
 #### Phase T3: Mixed-Build Batching / Staged Evaluator (Python change, required for Phase 5)
 

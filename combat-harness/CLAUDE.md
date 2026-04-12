@@ -12,15 +12,17 @@ Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports re
 
 ## Architecture
 
-Batched matchups per game launch. Flow:
-1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array of matchup configs with build specs embedded)
+Single matchup per mission cycle. Flow:
+1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array with 1 matchup config)
 2. Game launches → TitleScreenPlugin detects queue → MenuNavigator auto-navigates to Optimizer Arena
-3. MissionDefinition (compiled in JAR) reads first matchup from queue via SettingsAPI
-4. Player ships constructed programmatically via `VariantBuilder` from `BuildSpec` data in the queue
-5. CombatHarnessPlugin state machine: INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE
-6. Per matchup: spawn ships, run combat with DamageTracker, custom win detection, entity cleanup
-7. After all matchups: ResultWriter writes `combat_harness_results.json.data` + `combat_harness_done.data`
-8. Enter WAITING state — poll for `combat_harness_new_queue` (load next batch) or `combat_harness_shutdown` (exit cleanly). Self-exits after ~60s timeout if no signal.
+3. MissionDefinition (compiled in JAR) adds placeholder ships via `addToFleet()` for proper deployment/CR/AI
+4. CombatHarnessPlugin swaps player ship loadout in-place from `BuildSpec` data (variant `clear()` + `addWeapon`/`addMod`)
+5. Plugin state machine: INIT → SETUP → FIGHTING → DONE → WAITING
+6. After matchup: ResultWriter writes results + done signal, plugin calls `endCombat()`, Robot dismisses results screen
+7. TitleScreenPlugin detects queue (new or same) → auto-navigates to mission → fresh MissionDefinition cycle
+
+### Why single-matchup-per-mission (not batched spawning)
+`spawnFleetMember()` mid-combat causes ships to retreat — the engine sets `directRetreat=true` at a level below the public API. No combination of `setDirectRetreat(false)`, `clearTasks()`, `reassign()`, `preventFullRetreat`, `setCanForceShipsToEngageWhenBattleClearlyLost`, no-op admiral AI, or per-frame `setRetreating(false,false)` overrides this. Only `addToFleet()` in MissionDefinition produces ships with proper AI behavior. See `docs/reference/tech-debt.md` for details.
 
 ## File Protocol
 
@@ -70,7 +72,8 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 - `combat_harness_queue.json` (in saves/common/) is the ONLY input
 - `combat_harness_results.json` (in saves/common/) is the ONLY output
 - `combat_harness_done` signals completion; Python polls for this, not results
-- The plugin never modifies combat (no damage modification, no AI override)
+- The plugin never modifies combat (no damage modification, no custom AI)
+- Single matchup per mission — `endCombat()` + Robot dismiss + TitleScreenPlugin restart between matchups
 - All config values have sane defaults (time_mult=3, time_limit=300, map=24000x18000)
 - MissionDefinition gracefully handles missing queue (shows error in briefing)
 
@@ -84,3 +87,6 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 - **Gradle version:** Gradle 8.x doesn't support Java 26. Use Gradle 9.4+.
 - **Fleet manager accumulation:** `getAllEverDeployedCopy()` accumulates across batched matchups.
 - **Missing icon.jpg:** Game requires icon in mission descriptor. Crashes if absent.
+- **`spawnFleetMember()` retreat bug:** Ships spawned mid-combat via `spawnFleetMember()` always have `directRetreat=true`. No API call overrides this — the engine re-sets it below the public API level. Workaround: use `addToFleet()` in MissionDefinition (proper deployment) + in-place variant swap via `variant.clear()` + `addWeapon()`/`addMod()`.
+- **`spawnShipOrWing()` with programmatic variants:** `createEmptyVariant()` does NOT register variants for `spawnShipOrWing()` lookup. Only `.variant` files loaded at startup are registered.
+- **xdotool vs LWJGL:** `xdotool` click events do NOT work on LWJGL/OpenGL windows. Only `java.awt.Robot` (from inside the JVM) can interact with in-game UI. xdotool only works on the Swing launcher window.

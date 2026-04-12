@@ -48,6 +48,18 @@ Both config dataclasses define `engagement_threshold: float = 500.0`. `StagedEva
 
 ---
 
+## Combat harness
+
+### 10. Instance manager persistent session incompatible with endCombat restart
+
+The instance manager's `run_matchup()` uses the persistent session protocol (`new_queue` signal → game reads in WAITING state). But with the single-matchup-per-mission architecture, `endCombat()` returns to the mission select screen — the game is no longer in combat and can't poll for `new_queue`. The instance manager needs to detect mission restart (via TitleScreenPlugin) and write the new queue BEFORE `MissionDefinition.defineMission()` runs, rather than signaling an in-combat reload.
+
+### 11. `useDefaultAI` flag confusion in MissionDefinition
+
+`MissionDefinitionAPI.initFleet(side, prefix, goal, useDefaultAI)`: `true` = AI-controlled fleet, `false` = player-controlled fleet. The name is misleading — "default AI" sounds like "use basic AI" but actually means "use the game's fleet commander AI." Must be `true` for both sides in automated combat. Comment in code documents this.
+
+---
+
 ## Code hygiene
 
 ### 8. Bare `MagicMock()` without `spec=` in tests
