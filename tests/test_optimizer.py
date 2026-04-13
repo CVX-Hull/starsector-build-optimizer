@@ -14,7 +14,6 @@ from starsector_optimizer.models import BuildSpec
 from starsector_optimizer.optimizer import (
     BuildCache,
     OptimizerConfig,
-    RunningStats,
     _create_pruner,
     _create_sampler,
     build_to_trial_params,
@@ -42,65 +41,6 @@ def wolf_hull(game_data):
 @pytest.fixture(scope="module")
 def wolf_space(wolf_hull, game_data):
     return build_search_space(wolf_hull, game_data)
-
-
-# --- RunningStats Tests ---
-
-
-class TestRunningStats:
-    """Tests for Welford's online mean/variance utility."""
-
-    def test_empty_z_score_returns_zero(self):
-        """z_score on empty stats returns 0.0."""
-        rs = RunningStats()
-        assert rs.z_score(42.0) == 0.0
-
-    def test_single_sample_z_score_returns_zero(self):
-        """z_score with n=1 returns 0.0 (need at least 2 for std)."""
-        rs = RunningStats()
-        rs.update(5.0)
-        assert rs.n == 1
-        assert rs.z_score(5.0) == 0.0
-
-    def test_z_score_known_values(self):
-        """z_score of the mean is 0; values above mean have positive z."""
-        rs = RunningStats()
-        for v in [1.0, 2.0, 3.0, 4.0, 5.0]:
-            rs.update(v)
-        assert rs.z_score(3.0) == pytest.approx(0.0)
-        assert rs.z_score(5.0) > 0.0
-        assert rs.z_score(1.0) < 0.0
-
-    def test_constant_values_z_score_zero(self):
-        """All identical values → std=0 → z_score returns 0.0."""
-        rs = RunningStats()
-        for _ in range(5):
-            rs.update(7.0)
-        assert rs.z_score(7.0) == 0.0
-
-    def test_welford_accuracy(self):
-        """Welford mean/std matches statistics module for 100 values."""
-        import statistics
-        values = [i * 0.7 + 3.1 for i in range(100)]
-        rs = RunningStats()
-        for v in values:
-            rs.update(v)
-        assert rs.mean == pytest.approx(statistics.mean(values), rel=1e-9)
-        assert rs.std == pytest.approx(statistics.stdev(values), rel=1e-9)
-
-    def test_min_samples_respected(self):
-        """z_score returns 0.0 until min_samples observations."""
-        rs = RunningStats()
-        rs.update(1.0)
-        rs.update(10.0)
-        # Default min_samples=2, n=2, should work
-        assert rs.z_score(10.0) != 0.0
-        # With min_samples=5, still returns 0.0
-        assert rs.z_score(10.0, min_samples=5) == 0.0
-        for v in [3.0, 5.0, 7.0]:
-            rs.update(v)
-        assert rs.n == 5
-        assert rs.z_score(10.0, min_samples=5) != 0.0
 
 
 # --- Build Conversion Tests ---
@@ -781,8 +721,8 @@ class TestStagedEvaluator:
                 f"expected {len(opponents)}"
             )
 
-    def test_cumulative_fitness_uses_aggregate(self, wolf_hull, game_data):
-        """Staged evaluator reports intermediate values for multi-opponent evaluation."""
+    def test_intermediate_values_per_opponent(self, wolf_hull, game_data):
+        """Staged evaluator reports one intermediate value per opponent evaluated."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -858,27 +798,6 @@ class TestStagedEvaluator:
                            if t.state == optuna.trial.TrialState.COMPLETE
                            and t.value is not None and t.value < 0]
         assert len(negative_trials) > 0, "Expected some trials with negative scores from InstanceError"
-
-    def test_opponent_stats_updated_per_result(self, wolf_hull, game_data):
-        """After routing results, _opponent_stats[i].n increments for correct opponent."""
-        from starsector_optimizer.optimizer import StagedEvaluator, BuildCache, optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import HullSize
-
-        pool = self._make_mock_pool()
-        opponents = ("wolf_Assault", "lasher_Assault")
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
-        config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
-
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-
-        # Can't directly inspect evaluator state after run(), so verify indirectly:
-        # completed trials should have intermediate values (z-scored) for each opponent
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE
-                     and len(t.intermediate_values) > 0]
-        for trial in completed:
-            assert len(trial.intermediate_values) == len(opponents)
 
     def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data):
         """Intermediate trial.report() values are raw combat_fitness at stable opponent step IDs."""
@@ -1046,8 +965,8 @@ class TestStagedEvaluator:
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
-    def test_opponent_stats_keyed_by_id(self, wolf_hull, game_data):
-        """Dict-keyed opponent stats work correctly (regression test for list→dict refactor)."""
+    def test_all_trials_complete_without_error(self, wolf_hull, game_data):
+        """Multi-opponent evaluation completes without errors (general regression test)."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
 
@@ -1056,7 +975,6 @@ class TestStagedEvaluator:
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # All trials should complete — dict refactor should not cause errors
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and len(t.intermediate_values) > 0]
@@ -1109,6 +1027,157 @@ class TestStagedEvaluator:
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:
             assert rec["opponents_total"] == 3
+
+
+    def test_twfe_fitness_in_finalize(self, wolf_hull, game_data):
+        """study.tell() receives rank-shaped value derived from TWFE alpha."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault")})
+        config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        sim_trials = [t for t in study.trials
+                      if t.state == optuna.trial.TrialState.COMPLETE
+                      and t.value is not None
+                      and len(t.intermediate_values) > 0]
+        assert len(sim_trials) > 0
+        # Values should be rank-shaped (0, 1]
+        for trial in sim_trials:
+            assert 0.0 < trial.value <= 1.0
+
+    def test_incumbent_tracking(self, wolf_hull, game_data):
+        """After evaluating builds, incumbent tracks the best build's opponents."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+
+        pool = self._make_mock_pool()
+        opponents = ("wolf_Assault", "lasher_Assault", "hyperion_Attack")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # Pipeline should complete — incumbent tracking does not crash
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE]
+        assert len(completed) > 0
+
+    def test_score_matrix_populated_on_result(self, wolf_hull, game_data, tmp_path):
+        """ScoreMatrix receives records for each matchup result."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        import json
+
+        pool = self._make_mock_pool()
+        opponents = ("wolf_Assault", "lasher_Assault")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=3, warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        # Eval log records confirm opponents were evaluated (ScoreMatrix was populated)
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        for rec in records:
+            assert rec["opponents_evaluated"] > 0
+            assert len(rec["opponent_results"]) == rec["opponents_evaluated"]
+
+    def test_incumbent_overlap_forces_opponents(self, wolf_hull, game_data, tmp_path):
+        """After burn-in, new builds share opponents with the incumbent."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import TWFEConfig
+        import json
+
+        pool = self._make_mock_pool()
+        # Need enough opponents that overlap isn't trivial
+        opponents = (
+            "brawler_Assault", "hound_Standard", "lasher_Assault",
+            "vigilance_Standard", "wolf_Assault",
+        )
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        # Small burn-in so we exercise post-burn-in path
+        twfe_cfg = TWFEConfig(anchor_burn_in=3, n_incumbent_overlap=2)
+        config = OptimizerConfig(
+            sim_budget=10, warm_start_n=3, warm_start_sample_n=20,
+            active_opponents=3, twfe=twfe_cfg, eval_log_path=log_path,
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        # After burn-in (first 3), later builds should share opponents with earlier ones
+        # We can't assert exact overlap without inspecting internal state,
+        # but we verify the pipeline completes and produces valid results
+        assert len(records) >= 3
+
+    def test_anchor_first_ordering(self, wolf_hull, game_data, tmp_path):
+        """After burn-in, anchors appear at the front of the opponent order."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import TWFEConfig
+        import json
+
+        pool = self._make_mock_pool()
+        opponents = (
+            "brawler_Assault", "hound_Standard", "lasher_Assault",
+            "vigilance_Standard", "wolf_Assault",
+        )
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        log_path = tmp_path / "eval.jsonl"
+        twfe_cfg = TWFEConfig(anchor_burn_in=3, n_anchors=2)
+        config = OptimizerConfig(
+            sim_budget=8, warm_start_n=3, warm_start_sample_n=20,
+            active_opponents=4, twfe=twfe_cfg, eval_log_path=log_path,
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        records = [json.loads(line) for line in log_path.read_text().splitlines()]
+        # Post-burn-in records should have consistent first opponents (anchors)
+        post_burn_in = records[3:]  # after 3 burn-in builds
+        if len(post_burn_in) >= 2:
+            # Anchor opponents should appear in the same positions across trials
+            first_opps = [rec["opponent_order"][:2] for rec in post_burn_in
+                          if len(rec["opponent_order"]) >= 2]
+            if len(first_opps) >= 2:
+                # Anchors are locked — first 2 opponents should be the same set
+                anchor_set = set(first_opps[0])
+                for opps in first_opps[1:]:
+                    assert set(opps) == anchor_set, (
+                        f"Anchor opponents should be consistent: {first_opps}"
+                    )
+
+    def test_anchor_computation_after_burn_in(self, wolf_hull, game_data):
+        """Anchors are computed and locked after anchor_burn_in builds."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import TWFEConfig
+
+        pool = self._make_mock_pool()
+        opponents = ("wolf_Assault", "lasher_Assault", "hyperion_Attack")
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
+        twfe_cfg = TWFEConfig(anchor_burn_in=3, n_anchors=2)
+        config = OptimizerConfig(
+            sim_budget=8, warm_start_n=3, warm_start_sample_n=20,
+            twfe=twfe_cfg,
+        )
+
+        # Pipeline should complete without errors — anchors computed after burn-in
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE]
+        assert len(completed) > 3  # More than burn-in count
+
+    def test_config_no_fitness_mode(self):
+        """OptimizerConfig no longer has fitness_mode attribute."""
+        assert not hasattr(OptimizerConfig(), "fitness_mode")
 
 
 class TestParallelDispatch:

@@ -26,8 +26,8 @@ Frozen dataclass configuring the optimization run.
 | `warm_start_scale` | `float` | `0.1` | Scale factor for heuristic scores |
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
 | `n_ei_candidates` | `int` | `256` | EI candidates per sample |
-| `fitness_mode` | `str` | `"mean"` | `"mean"` or `"minimax"` |
 | `combat_fitness` | `CombatFitnessConfig` | `CombatFitnessConfig()` | Embedded fitness config (engagement threshold, tier weights, etc.). Single source of truth — no duplication. |
+| `twfe` | `TWFEConfig` | `TWFEConfig()` | TWFE deconfounding + opponent selection parameters (ridge, iterations, trim, anchors, incumbent overlap). See spec 28. |
 | `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
@@ -66,7 +66,7 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 | `build` | `Build` | required | Repaired build |
 | `build_spec` | `BuildSpec` | required | Serializable build spec |
 | `variant_id` | `str` | required | Unique variant ID (`{hull_id}_opt_{trial.number:06d}`) |
-| `opponents` | `tuple[str, ...]` | required | Active opponent subset (randomly shuffled per-trial for reproducibility) |
+| `opponents` | `tuple[str, ...]` | required | Active opponent subset (anchors first, then shuffled; incumbent overlap forced after burn-in) |
 | `heuristic_val` | `float` | `0.0` | Heuristic composite score for control variate (A2) |
 | `completed_results` | `list[CombatResult]` | `[]` | Results accumulated so far |
 | `raw_scores` | `list[float]` | `[]` | Per-opponent raw `combat_fitness()` values (parallel to `completed_results`) |
@@ -105,9 +105,15 @@ class StagedEvaluator:
 - `_trials_asked: int` — trials asked from Optuna
 - `_trials_completed: int` — trials told to Optuna (COMPLETE + PRUNED)
 - `_opponents: tuple[str, ...]` — opponent list for this hull size
-- `_fitness_config: CombatFitnessConfig` — constructed from config.engagement_threshold (7 fields; see spec 25)
-- `_opponent_stats: dict[str, RunningStats]` — per-opponent running mean/std for A1 z-score normalization, keyed by opponent variant ID
-- `_cv_pairs: list[tuple[float, float]]` — (heuristic_val, z_fitness) pairs for A2 correlation estimation
+- `_fitness_config: CombatFitnessConfig` — constructed from config.combat_fitness (7 fields; see spec 25)
+- `_score_matrix: ScoreMatrix` — sparse build × opponent score accumulator for TWFE decomposition (see spec 28)
+- `_incumbent_opponents: tuple[str, ...] | None` — opponents used by the best build so far (for forced overlap)
+- `_incumbent_fitness: float` — fitness of the incumbent build
+- `_anchors: tuple[str, ...]` — high-discrimination opponents locked at front of evaluation order (computed after burn-in, never changed)
+- `_burn_in_scores: dict[str, list[float]]` — per-opponent raw scores during burn-in (cleared after anchor lock)
+- `_burn_in_fitness: list[float]` — per-build TWFE fitness during burn-in (cleared after anchor lock)
+- `_builds_evaluated: int` — count for burn-in threshold
+- `_cv_pairs: list[tuple[float, float]]` — (heuristic_val, twfe_fitness) pairs for A2 correlation estimation
 - `_cv_coefficient: float` — A2 control variate coefficient c = Cov(f,h)/Var(h)
 - `_cv_heuristic_mean: float` — A2 running mean of heuristic scores
 - `_cv_active: bool` — A2 active when |ρ| > cv_rho_threshold
@@ -127,25 +133,23 @@ class StagedEvaluator:
 
 **`_next_matchup()`:** Returns the single highest-priority matchup. Phase 1: promote existing builds (highest rung first, skip `_dispatched`). Phase 2: ask Optuna for new trial (if `_trials_asked < sim_budget`). Returns None if no work available.
 
-**`_handle_result(ifb, result)`:** Processes one matchup result. A1: compute raw `combat_fitness()` score, update `_opponent_stats[opp_id]`, store on `ifb.raw_scores`. Report raw fitness to Optuna: `trial.report(raw, step=opp_step)` where `opp_step` is the stable opponent step ID from `_opponent_step_map`. WilcoxonPruner pairs values at the same step across trials via signed-rank test. If complete: finalize via A1→A2→A3 pipeline (A1 z-score normalization still used for `_cumulative_fitness` at finalization). If `trial.should_prune()`: tell Optuna PRUNED. Otherwise: build stays in queue for next dispatch.
+**`_handle_result(ifb, result)`:** Processes one matchup result. Compute raw `combat_fitness()` score, record into `_score_matrix.record(trial_number, opp_id, raw)`, store on `ifb.raw_scores`. Report raw fitness to Optuna: `trial.report(raw, step=opp_step)` where `opp_step` is the stable opponent step ID from `_opponent_step_map`. WilcoxonPruner pairs values at the same step across trials via signed-rank test. If complete: finalize via A1→A2→A3 pipeline. If `trial.should_prune()`: tell Optuna PRUNED. Otherwise: build stays in queue for next dispatch.
 
 **`_fill_instances(executor, pending, free_instances)`:** Dispatch matchups to all free instances until no work or no free instances. Each instance gets exactly 1 matchup — finest pruning granularity.
 
 **Instance parallelism:** Each instance independently cycles: dispatch → combat → result → dispatch. No synchronization barrier between instances. Pruning decisions are immediate after every opponent result. Concurrency = `instance_pool.num_instances`.
 
-**Opponent Pool & Active Selection:** The discovered pool (typically 36-71 per hull size) is a reservoir. Each build evaluates up to `active_opponents` (default 10) from the pool. Opponents are shuffled independently per trial via `random.Random(trial.number).shuffle()` for reproducibility. WilcoxonPruner handles discriminative instance matching internally via signed-rank test pairing — each opponent has a stable step ID from `_opponent_step_map` (sorted opponent variant IDs mapped to consecutive integers), so the pruner can pair the same opponent across trials regardless of evaluation order.
+**Opponent Pool & Active Selection:** The discovered pool (typically 36-71 per hull size) is a reservoir. Each build evaluates up to `active_opponents` (default 10) from the pool. Opponent selection uses incumbent overlap + anchor-first ordering:
 
-### `RunningStats`
+1. **Before burn-in** (`_builds_evaluated < twfe.anchor_burn_in`): random selection from pool, random order.
+2. **After burn-in**: Discriminative power per opponent is computed as |ρ(raw_scores_j, build_fitness_j)| using Spearman correlation (requires ≥ `twfe.min_disc_samples` per opponent). Top `twfe.n_anchors` opponents are locked as anchors. Burn-in state is cleared.
+3. **Per trial** (after burn-in): Force `twfe.n_incumbent_overlap` opponents from the incumbent's set. Fill remaining slots from the full pool. Order: anchors first (steps 0..n_anchors−1), then rest shuffled via `random.Random(trial.number)`.
 
-Private utility class in `optimizer.py` implementing Welford's online algorithm for streaming mean/variance. Used by `StagedEvaluator` for A1 opponent normalization.
+Anchors at the front give the WilcoxonPruner maximum early signal for pruning decisions. Incumbent overlap guarantees TWFE has direct build-vs-build comparisons through shared opponents. Each opponent has a stable step ID from `_opponent_step_map` (sorted variant IDs mapped to consecutive integers), so the pruner pairs the same opponent across trials regardless of evaluation order.
 
-| Method/Property | Signature | Description |
-|----------------|-----------|-------------|
-| `update` | `(x: float) -> None` | Add observation, update running mean and M2 |
-| `z_score` | `(x: float, min_samples: int = 2) -> float` | Z-score x against running stats. Returns 0.0 if n < min_samples or std < ε |
-| `n` | `-> int` | Number of observations |
-| `mean` | `-> float` | Running mean |
-| `std` | `-> float` | Sample standard deviation (Bessel-corrected, n-1). Returns 0.0 if n < 2 |
+### `ScoreMatrix` (from `deconfounding.py`)
+
+See spec 28 for full documentation. The `StagedEvaluator` maintains a `ScoreMatrix` instance that accumulates raw `combat_fitness()` scores across all builds and opponents. Used for TWFE decomposition at build finalization.
 
 ## Functions
 
@@ -209,22 +213,22 @@ Raw per-matchup scores from `combat_fitness()` (spec 25) pass through three comp
 
 ```
 raw combat_fitness score
-  → A1: z-score per opponent (RunningStats)
-  → aggregate (mean or minimax per fitness_mode)
+  → record in ScoreMatrix
+  → A1: TWFE decomposition (α_i + β_j) → trimmed_alpha
   → A2: control variate correction (if active)
   → A3: rank-based fitness shaping (finalization only)
   → study.tell()
 ```
 
-**A1 — Opponent Normalization:** Each opponent's raw scores are tracked by a `RunningStats` instance (Welford's online algorithm). When computing cumulative fitness, stored raw scores are z-scored against the current opponent statistics, then aggregated by `fitness_mode`. Stats are updated from ALL trials (including pruned) so the normalizer learns from every observation. Cold start: z_score returns 0.0 when n<2 per opponent — overlaps with `wilcoxon_n_startup_steps` warm-up.
+**A1 — TWFE Deconfounding (spec 28):** Raw `combat_fitness()` scores are recorded into a `ScoreMatrix` instance via `record(trial_number, opp_id, raw)`. At build finalization, `build_alpha(trial_number, config.twfe)` decomposes the accumulated score matrix into build quality (α_i) and opponent difficulty (β_j), then applies trimmed mean (dropping `trim_worst` worst residuals per build). The α_i estimate is schedule-adjusted — comparable across builds that faced different opponent subsets. All observations (including from pruned builds) contribute to β estimates, improving α for subsequent builds.
 
-**A2 — Control Variate Correction:** `fitness_adj = z_fitness - c * (heuristic_score - E[heuristic])`. Correlation ρ estimated from `(heuristic_val, z_fitness)` pairs after `cv_min_samples` completions. Applied only when |ρ| > `cv_rho_threshold`. Re-estimated every `cv_recalc_interval` completions. The `heuristic_score` is computed per-build at trial creation time in `_ask_new_trial` (cheap CPU-only computation).
+**A2 — Control Variate Correction:** `fitness_adj = twfe_fitness - c * (heuristic_score - E[heuristic])`. Correlation ρ estimated from `(heuristic_val, twfe_fitness)` pairs after `cv_min_samples` completions. Applied only when |ρ| > `cv_rho_threshold`. Re-estimated every `cv_recalc_interval` completions. The `heuristic_score` is computed per-build at trial creation time in `_ask_new_trial` (cheap CPU-only computation). Note: TWFE alpha has different distributional properties than the prior z-scored mean, so CV correlation strength may differ.
 
 **A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
 
 **Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the opponent's stable step ID (no A1/A2/A3). `WilcoxonPruner` pairs values at the same step across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences (same opponent across trials), making per-opponent scale differences irrelevant.
 
-**Failure scores** (-1.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
+**Failure scores** (`failure_score`, default -2.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
 
 ### `preflight_check(hull_id, game_data, instance_pool, opponent_pool) -> None`
 
@@ -246,7 +250,7 @@ Checks:
 2. Every hullmod ID in `spec.hullmods` exists in `game_data.hullmods`
 3. Every weapon ID in `spec.weapon_assignments` values exists in `game_data.weapons`
 
-### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config, eval_log_path=None) -> Study`
+### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config) -> Study`
 
 Main entry point.
 
@@ -293,7 +297,7 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
 }
 ```
 
-For completed builds, `fitness` is the rank-shaped value (quantile in [0, 1]) told to Optuna; `raw_fitness` is the z-scored + CV-corrected value before rank shaping (for analysis). For pruned builds, both `fitness` and `raw_fitness` are the z-scored cumulative at prune time (no rank shaping). `opponents_evaluated < opponents_total` indicates early termination.
+For completed builds, `fitness` is the rank-shaped value (quantile in [0, 1]) told to Optuna; `raw_fitness` is the TWFE α + CV-corrected value before rank shaping (for analysis). For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `opponents_evaluated < opponents_total` indicates early termination.
 
 ## Study Persistence
 

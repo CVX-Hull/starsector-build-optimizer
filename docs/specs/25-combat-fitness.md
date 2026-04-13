@@ -95,7 +95,7 @@ Positive = player winning the attrition war. Negative = losing. Zero = even exch
 
 ### `aggregate_combat_fitness(results, mode, config) -> float`
 
-Aggregates `combat_fitness` across multiple matchup results.
+Standalone utility for simple aggregation of `combat_fitness` scores. The optimizer uses TWFE decomposition (spec 28) for fitness aggregation instead of this function.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

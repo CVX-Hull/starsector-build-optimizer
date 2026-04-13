@@ -79,6 +79,7 @@ src/starsector_optimizer/          # Python modules
 ├── timeout_tuner.py               # Data-driven timeout prediction (Weibull AFT)
 ├── combat_fitness.py              # Hierarchical composite combat fitness score
 ├── opponent_pool.py               # Diverse opponent pool per hull size
+├── deconfounding.py               # TWFE decomposition for schedule-adjusted build quality
 ├── importance.py                  # Parameter importance analysis (fANOVA) + fixed params
 └── optimizer.py                   # Optuna integration, ask-tell loop, warm-start
 

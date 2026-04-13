@@ -222,7 +222,7 @@ study = optuna.create_study(
 
 trial = study.ask(distributions)
 # After each opponent result:
-trial.report(normalized_cumulative_fitness, step=opponent_index)
+trial.report(raw_combat_fitness, step=opponent_step_id)
 if trial.should_prune():
     study.tell(trial, state=TrialState.PRUNED)
 else:

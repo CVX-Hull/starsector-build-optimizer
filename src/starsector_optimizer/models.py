@@ -425,6 +425,24 @@ class CombatFitnessConfig:
 
 
 @dataclass(frozen=True)
+class TWFEConfig:
+    """Two-Way Fixed Effects deconfounding + opponent selection parameters.
+
+    Controls the additive decomposition score_ij = α_i + β_j + ε_ij that
+    separates build quality (α) from opponent difficulty (β). Also configures
+    anchor-first opponent ordering and incumbent overlap for comparability.
+    See spec 28 for algorithm details.
+    """
+    ridge: float = 0.01
+    n_iters: int = 20
+    trim_worst: int = 2
+    n_incumbent_overlap: int = 5
+    n_anchors: int = 3
+    anchor_burn_in: int = 30
+    min_disc_samples: int = 5
+
+
+@dataclass(frozen=True)
 class ImportanceResult:
     """Parameter importance analysis result from fANOVA."""
     importances: dict[str, float]  # param_name -> importance (0.0–1.0, sums to ~1.0)

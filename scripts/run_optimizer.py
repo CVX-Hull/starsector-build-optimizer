@@ -22,7 +22,6 @@ def main():
     parser.add_argument("--num-instances", type=int, default=2, help="Parallel game instances")
     parser.add_argument("--sim-budget", type=int, default=50, help="Number of build evaluations")
     parser.add_argument("--study-db", type=str, default=None, help="SQLite path for study persistence")
-    parser.add_argument("--fitness-mode", choices=["mean", "minimax"], default="mean")
     parser.add_argument("--sampler", choices=["tpe", "catcma"], default="tpe",
                         help="Optimization sampler: tpe (default) or catcma")
     parser.add_argument("--heuristic-only", action="store_true",
@@ -81,7 +80,6 @@ def main():
 
     config = OptimizerConfig(
         sim_budget=args.sim_budget,
-        fitness_mode=args.fitness_mode,
         sampler=args.sampler,
         active_opponents=args.active_opponents,
         fixed_params=fixed_params,

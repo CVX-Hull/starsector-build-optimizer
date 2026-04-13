@@ -1,5 +1,7 @@
 # Phase 5B: Opponent Curriculum and Adaptive Pool Evolution
 
+> **Superseded**: The epoch-based rotation approach was superseded by TWFE deconfounding (spec 28) + incumbent overlap after simulation showed rotation hurts cross-epoch comparability. See `docs/reference/phase5b-deconfounding-research.md` for the research synthesis and `docs/specs/28-deconfounding.md` for the implemented approach.
+
 Research findings and design for improving evaluation signal quality through better opponent selection, ordering, and difficulty-aware fitness scoring.
 
 ---

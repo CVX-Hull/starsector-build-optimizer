@@ -23,8 +23,9 @@ from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, GameData, HullSize, MatchupConfig, ShipHull
+from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, GameData, HullSize, MatchupConfig, ShipHull, TWFEConfig
 from .combat_fitness import combat_fitness
+from .deconfounding import ScoreMatrix
 from .opponent_pool import (
     OpponentPool,
     get_opponents,
@@ -40,39 +41,6 @@ logger = logging.getLogger(__name__)
 _EPSILON = 1e-12  # Guard for near-zero std in z-scoring and correlation estimation
 
 
-class RunningStats:
-    """Welford's online mean/variance for a single stream."""
-
-    def __init__(self) -> None:
-        self._n: int = 0
-        self._mean: float = 0.0
-        self._m2: float = 0.0
-
-    @property
-    def n(self) -> int:
-        return self._n
-
-    @property
-    def mean(self) -> float:
-        return self._mean
-
-    @property
-    def std(self) -> float:
-        return (self._m2 / (self._n - 1)) ** 0.5 if self._n >= 2 else 0.0
-
-    def update(self, x: float) -> None:
-        self._n += 1
-        delta = x - self._mean
-        self._mean += delta / self._n
-        self._m2 += delta * (x - self._mean)
-
-    def z_score(self, x: float, min_samples: int = 2) -> float:
-        """Return z-score, or 0.0 if insufficient samples or std near zero."""
-        if self._n < min_samples or self.std < _EPSILON:
-            return 0.0
-        return (x - self._mean) / self.std
-
-
 @dataclass(frozen=True)
 class OptimizerConfig:
     """Configuration for an optimization run."""
@@ -83,8 +51,8 @@ class OptimizerConfig:
     warm_start_scale: float = 0.1
     n_startup_trials: int = 100
     n_ei_candidates: int = 256
-    fitness_mode: str = "mean"
     combat_fitness: CombatFitnessConfig = field(default_factory=CombatFitnessConfig)
+    twfe: TWFEConfig = field(default_factory=TWFEConfig)
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
@@ -438,10 +406,15 @@ class StagedEvaluator:
         self._dispatched: set[int] = set()  # trial.number of builds on an instance
         self._trials_asked = 0
         self._trials_completed = 0
-        # A1: Per-opponent running statistics keyed by opponent variant ID
-        self._opponent_stats: dict[str, RunningStats] = {
-            opp: RunningStats() for opp in self._opponents
-        }
+        # A1: TWFE score matrix — accumulates raw combat_fitness for decomposition
+        self._score_matrix = ScoreMatrix()
+        # Opponent selection state
+        self._incumbent_opponents: tuple[str, ...] | None = None
+        self._incumbent_fitness: float = float("-inf")
+        self._anchors: tuple[str, ...] = ()
+        self._burn_in_scores: dict[str, list[float]] = {}
+        self._burn_in_fitness: list[float] = []
+        self._builds_evaluated: int = 0
         # Stable opponent → integer step mapping for WilcoxonPruner
         # (sorted for determinism; same opponent always gets same step ID across trials)
         self._opponent_step_map: dict[str, int] = {
@@ -460,7 +433,7 @@ class StagedEvaluator:
 
         Coordinator pattern: main thread owns all Optuna/optimizer state.
         Worker threads (one per instance) only do blocking I/O via run_matchup().
-        All state mutations (_queue, _dispatched, _opponent_stats, etc.) happen
+        All state mutations (_queue, _dispatched, _score_matrix, etc.) happen
         in the main thread between wait() calls — no locks needed.
         """
         from collections import deque
@@ -556,32 +529,29 @@ class StagedEvaluator:
         return None
 
     def _handle_result(self, ifb: _InFlightBuild, result: CombatResult) -> None:
-        """Process one matchup result: update stats, check prune/complete."""
-        # A1: Compute raw score and update opponent running stats
+        """Process one matchup result: record in score matrix, check prune/complete."""
         opp_id = ifb.opponents[ifb.next_opponent_index]
         raw = combat_fitness(result, config=self._fitness_config)
-        self._opponent_stats[opp_id].update(raw)
+        self._score_matrix.record(ifb.trial.number, opp_id, raw)
         ifb.raw_scores.append(raw)
         ifb.completed_results.append(result)
         ifb.next_opponent_index += 1
 
-        cum_fitness = self._cumulative_fitness(ifb)
+        raw_mean = sum(ifb.raw_scores) / len(ifb.raw_scores)
         # Report raw per-opponent score at stable step ID (WilcoxonPruner semantics)
         opp_step = self._opponent_step_map[opp_id]
         ifb.trial.report(raw, step=opp_step)
 
         logger.info(
-            "  Trial %d rung %d/%d vs %s: %s (raw=%.3f, cum=%.3f)",
+            "  Trial %d rung %d/%d vs %s: %s (raw=%.3f, mean=%.3f)",
             ifb.trial.number, ifb.rung, len(ifb.opponents),
-            opp_id, result.winner, raw, cum_fitness,
+            opp_id, result.winner, raw, raw_mean,
         )
 
         if ifb.is_complete:
             self._finalize_build(ifb)
             self._queue.remove(ifb)
             self._trials_completed += 1
-            logger.info("  Trial %d COMPLETE (fitness=%.3f)",
-                        ifb.trial.number, cum_fitness)
         elif ifb.trial.should_prune():
             self._prune_build(ifb)
             self._queue.remove(ifb)
@@ -628,9 +598,7 @@ class StagedEvaluator:
         h_val = heuristic_score(
             build, self._hull, self._game_data,
         ).composite_score
-        # Per-trial reproducible shuffle for unbiased WilcoxonPruner coverage
-        active = list(self._opponents[:self._config.active_opponents])
-        _random.Random(trial.number).shuffle(active)
+        active = self._select_opponents(trial.number)
         return _InFlightBuild(
             trial=trial,
             build=build,
@@ -642,11 +610,16 @@ class StagedEvaluator:
 
     def _finalize_build(self, ifb: _InFlightBuild) -> None:
         """Compute final fitness via A1→A2→A3 pipeline, tell Optuna, cache, log."""
-        # A1: z-scored aggregate
-        z_fitness = self._cumulative_fitness(ifb)
+        # A1: TWFE decomposition — schedule-adjusted build quality
+        twfe_fitness = self._score_matrix.build_alpha(
+            ifb.trial.number, self._config.twfe,
+        )
+        self._builds_evaluated += 1
+        self._update_incumbent(ifb, twfe_fitness)
+        self._update_burn_in(ifb, twfe_fitness)
         # A2: control variate correction
-        cv_fitness = self._apply_control_variate(z_fitness, ifb.heuristic_val)
-        self._cv_pairs.append((ifb.heuristic_val, z_fitness))
+        cv_fitness = self._apply_control_variate(twfe_fitness, ifb.heuristic_val)
+        self._cv_pairs.append((ifb.heuristic_val, twfe_fitness))
         self._maybe_update_cv()
         # A3: rank-based shaping
         self._completed_fitness_values.append(cv_fitness)
@@ -654,6 +627,8 @@ class StagedEvaluator:
 
         self._cache.put(ifb.build, ranked_fitness)
         self._study.tell(ifb.trial, ranked_fitness)
+        logger.info("  Trial %d COMPLETE (twfe=%.3f, ranked=%.3f)",
+                    ifb.trial.number, twfe_fitness, ranked_fitness)
 
         if self._eval_log_path:
             _append_eval_log(
@@ -669,25 +644,114 @@ class StagedEvaluator:
         self._study.tell(ifb.trial, state=TrialState.PRUNED)
 
         if self._eval_log_path:
-            cum = self._cumulative_fitness(ifb)
+            raw_mean = (
+                sum(ifb.raw_scores) / len(ifb.raw_scores)
+                if ifb.raw_scores else 0.0
+            )
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
-                ifb.build, ifb.completed_results, cum,
+                ifb.build, ifb.completed_results, raw_mean,
                 pruned=True, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
 
-    def _cumulative_fitness(self, ifb: _InFlightBuild) -> float:
-        """Running aggregate of z-scored per-opponent fitness (A1)."""
-        if not ifb.raw_scores:
-            return 0.0
-        z_scores = [
-            self._opponent_stats[ifb.opponents[i]].z_score(raw)
-            for i, raw in enumerate(ifb.raw_scores)
-        ]
-        if self._config.fitness_mode == "minimax":
-            return min(z_scores)
-        return sum(z_scores) / len(z_scores)
+    def _select_opponents(self, trial_number: int) -> list[str]:
+        """Select and order opponents for a new trial.
+
+        Uses incumbent overlap + anchor-first ordering after burn-in.
+        Before burn-in: random selection and order.
+        """
+        active_size = min(self._config.active_opponents, len(self._opponents))
+        rng = _random.Random(trial_number)
+        twfe_cfg = self._config.twfe
+
+        if self._anchors and self._incumbent_opponents is not None:
+            # Post-burn-in: force overlap with incumbent's opponents
+            inc_pool = list(self._incumbent_opponents)
+            rng.shuffle(inc_pool)
+            n_overlap = min(twfe_cfg.n_incumbent_overlap, len(inc_pool), active_size)
+            forced = inc_pool[:n_overlap]
+            forced_set = set(forced)
+            remaining = [o for o in self._opponents if o not in forced_set]
+            rng.shuffle(remaining)
+            active = forced + remaining[:active_size - len(forced)]
+        else:
+            # Pre-burn-in: random sample from full pool
+            pool = list(self._opponents)
+            rng.shuffle(pool)
+            active = pool[:active_size]
+
+        # Anchor-first ordering: anchors at front for early pruning signal
+        if self._anchors:
+            anchor_set = set(self._anchors)
+            anchor_part = [o for o in active if o in anchor_set]
+            rest_part = [o for o in active if o not in anchor_set]
+            rng.shuffle(rest_part)
+            active = anchor_part + rest_part
+        else:
+            rng.shuffle(active)
+
+        return active
+
+    def _update_incumbent(
+        self, ifb: _InFlightBuild, twfe_fitness: float,
+    ) -> None:
+        """Track the best build's opponents for forced overlap."""
+        if twfe_fitness > self._incumbent_fitness:
+            self._incumbent_fitness = twfe_fitness
+            self._incumbent_opponents = ifb.opponents
+
+    def _update_burn_in(
+        self, ifb: _InFlightBuild, twfe_fitness: float,
+    ) -> None:
+        """Accumulate burn-in data; lock anchors after threshold."""
+        twfe_cfg = self._config.twfe
+        if self._anchors:
+            return  # anchors already locked
+
+        build_idx = self._builds_evaluated - 1  # 0-indexed
+        for opp_id, raw in zip(ifb.opponents, ifb.raw_scores):
+            self._burn_in_scores.setdefault(opp_id, []).append((build_idx, raw))
+        self._burn_in_fitness.append((build_idx, twfe_fitness))
+
+        if self._builds_evaluated >= twfe_cfg.anchor_burn_in:
+            self._compute_anchors()
+            # Clear burn-in state (no longer needed)
+            self._burn_in_scores.clear()
+            self._burn_in_fitness.clear()
+
+    def _compute_anchors(self) -> None:
+        """Compute discriminative power per opponent and lock top-N as anchors."""
+        from scipy.stats import spearmanr
+
+        twfe_cfg = self._config.twfe
+        # Index burn-in fitness by build_idx for alignment
+        fitness_by_build = dict(self._burn_in_fitness)
+
+        disc: dict[str, float] = {}
+        for opp_id, indexed_scores in self._burn_in_scores.items():
+            if len(indexed_scores) < twfe_cfg.min_disc_samples:
+                disc[opp_id] = 0.0
+                continue
+            # Align: only use builds where both opp score and fitness exist
+            opp_vals = []
+            fitness_vals = []
+            for build_idx, raw in indexed_scores:
+                if build_idx in fitness_by_build:
+                    opp_vals.append(raw)
+                    fitness_vals.append(fitness_by_build[build_idx])
+            if len(opp_vals) < twfe_cfg.min_disc_samples:
+                disc[opp_id] = 0.0
+                continue
+            corr, _ = spearmanr(opp_vals, fitness_vals)
+            disc[opp_id] = abs(corr) if not (corr != corr) else 0.0  # NaN check
+
+        sorted_opps = sorted(disc.keys(), key=lambda o: disc[o], reverse=True)
+        self._anchors = tuple(sorted_opps[:twfe_cfg.n_anchors])
+        logger.info(
+            "Locked %d anchors after %d builds: %s",
+            len(self._anchors), self._builds_evaluated, self._anchors,
+        )
 
     def _make_matchup(self, ifb: _InFlightBuild) -> MatchupConfig:
         """Create one matchup for the next opponent."""
