@@ -19,7 +19,10 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
   T3: Mixed-build batching / StagedEvaluator   ASHA scheduling for Phase 5B
   T4: Cloud deployment (GPU instances)          Linear scaling to 32-64 instances (requires GPU)
 
-Phase 5:   Signal Quality ─────────────────── Evaluation noise reduction + budget efficiency
+Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (z-score, control variate, rank shaping)
+Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
+Phase 5C:  Opponent Curriculum ─────────────── Epoch-based pool rotation, Elo-weighted fitness, discriminative ordering
+Phase 5D:  Richer Combat Fitness ──────────── Damage efficiency, overload tracking, flux pressure
 Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
 Phase 7:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost)
 ```
@@ -298,51 +301,126 @@ With $30: optimize 2-3 hulls fully, or 5+ hulls with reduced racing.
 ## Phase 5: Signal Quality
 
 ### Goal
-Improve the signal-to-noise ratio of combat fitness evaluations and increase evaluation budget efficiency through opponent normalization, multi-fidelity evaluation, and richer objectives.
+Improve the signal-to-noise ratio of combat fitness evaluations and increase evaluation budget efficiency through opponent normalization, multi-fidelity evaluation, curriculum learning, and richer fitness signals.
 
 ### Status
-Research complete. See `docs/reference/phase5-signal-quality.md` for full research findings and recommended approach.
+- **Phase 5A** (opponent normalization, control variate, rank shaping): ✓ COMPLETE — integrated into `StagedEvaluator`
+- **Phase 5B** (sequential evaluation, WilcoxonPruner, ASHA scheduling): ✓ COMPLETE — integrated into `StagedEvaluator`
+- **Phase 5C** (opponent curriculum, adaptive pool, Elo-weighted fitness): Research complete, implementation planned
+- **Phase 5D** (richer combat fitness signals): Research complete, implementation planned
 
-### Motivation (from Phase 4 Eagle Experiment)
-A prior 203-trial Eagle experiment suggested the optimizer finds real signal (Cohen's d = 3.30) but with low win rate (0.4%) — navigating "shades of losing." However, that data was invalidated by a combat harness bug (ships retreating). The qualitative findings (per-opponent variance, timeout waste, noise characteristics) likely still hold directionally but need re-validation with the fixed harness.
+First real optimization run completed (Hammerhead, 63 sim trials, 2026-04-13). See `experiments/hammerhead-overnight-2026-04-13/` for data and analysis. Results validated the pipeline end-to-end but revealed critical issues with opponent pool composition and evaluation efficiency.
+
+### Research Documents
+- `docs/reference/phase5-signal-quality.md` — Original Phase 5A/5B research (opponent normalization, multi-fidelity)
+- `docs/reference/phase5b-opponent-curriculum.md` — Phase 5C/5D research (curriculum learning, adaptive pool, richer fitness)
+- `docs/reference/multi-fidelity-strategy.md` — Multi-fidelity strategy (heuristic vs simulation tiers)
+
+### Key Findings from First Real Run
+
+| Finding | Impact | Fix |
+|---------|--------|-----|
+| Only 10/54 opponents used (alphabetical selection, biased toward freighters/carriers) | Builds optimized against non-combat ships | Epoch-based pool rotation covering full pool |
+| All opponents weighted equally in fitness | Beating a buffalo counts same as beating condor_Attack | Elo-weighted z-score fitness |
+| Random opponent ordering | WilcoxonPruner only pruned 11% of trials | Discriminative ordering (anchors first) |
+| Frequent heartbeat timeouts (~every 3-5 min) | ~30-40% throughput loss on 4 instances | Investigate heartbeat timeout tuning |
+| combat_fitness ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Richer fitness from already-collected data |
 
 ### Dependencies
-- Phase 4 (optimizer integration, opponent pool, evaluation pipeline)
-- Throughput optimization (Phases T1-T3) — Phase 5B requires persistent sessions + mixed-build batching for efficient sequential evaluation. See `docs/reference/throughput-optimization.md`.
-- No new external libraries required (Optuna's built-in MedianPruner, NSGAIISampler)
+- Phase 4 (optimizer integration, opponent pool, evaluation pipeline) ✓
+- No new external libraries required
 
 ### Deliverables (Phased)
 
-**Phase A — Quick Signal Improvements (no pipeline change):**
-1. **Opponent normalization** — Z-score per opponent using running statistics
-2. **Control variate correction** — Adjust fitness using heuristic scorer correlation
-3. **Rank-based fitness shaping** — Report quantile rank instead of raw composite score
+**Phase 5A — Opponent Normalization ✓ COMPLETE:**
+1. ✓ Z-score per opponent using running statistics (Welford's algorithm)
+2. ✓ Control variate correction using heuristic scorer correlation
+3. ✓ Rank-based fitness shaping (quantile rank reported to Optuna)
 
-**Phase B — Sequential Evaluation Pipeline (main architectural change):**
-1. **Opponent ordering** — Most discriminating opponent first (learned from data)
-2. **MedianPruner** — Intermediate reporting after each opponent via `trial.report()`, Optuna prunes bad builds (MedianPruner with `n_startup_trials=20` — 5 steps is too few for HyperbandPruner's bracket structure)
-3. **Mixed-build batching** — ASHA-style rung-priority scheduling via `StagedEvaluator`. Each game launch gets matchups from different builds at different stages, maximizing instance utilization even with aggressive pruning.
+**Phase 5B — Sequential Evaluation Pipeline ✓ COMPLETE:**
+1. ✓ ASHA-style rung-priority scheduling via `StagedEvaluator`
+2. ✓ WilcoxonPruner for statistical early stopping
+3. ✓ Mixed-build dispatching across parallel instances
 
-**Phase C — Richer Objectives (optional, bigger conceptual change):**
-1. **Multi-objective decomposition** — 3 objectives (engagement, damage efficiency, survivability) via NSGAIISampler
-2. **Curriculum learning** — Start against weaker opponents, ramp difficulty as win rate improves
+**Phase 5C — Opponent Curriculum and Adaptive Pool:**
 
-**Phase D — If Java Modification Is Feasible:**
-1. **Common Random Numbers** — Seed-controlled combat for 80–94% variance reduction on paired comparisons
+See `docs/reference/phase5b-opponent-curriculum.md` for full research and design.
+
+1. **Epoch-based opponent pool rotation** — Burn-in with random 10, then rotate every 30 trials using UCB-informativeness scoring. Gradually covers all 54 destroyers while concentrating budget on informative opponents.
+2. **Three-tier evaluation** — Gate set (3 anchor opponents, always first) → Rotating diagnostic set (7 opponents) → Extended validation (top 10% builds get 10-20 extra opponents).
+3. **Discriminative opponent ordering** — Anchors first (highest correlation with final fitness), then f_var ordering (opponents near 50% win rate = most informative).
+4. **Elo-weighted fitness** — Maintain opponent Elo ratings from data. Weight z-scored fitness by opponent Elo. Bitter-lesson compliant (difficulty emerges from data, not hand-engineered).
+
+**Phase 5D — Richer Combat Fitness Signals:**
+1. **From already-collected data** (no Java changes) — Damage efficiency ratio, armor-stripping effectiveness, overload differential, duration-normalized damage, peak time remaining.
+2. **Lightweight Java harness changes** — Per-frame flux pressure tracking, cumulative overload duration, time to first hull damage.
+3. **Medium Java changes** (lower priority) — Engagement distance tracking, shield uptime fraction.
+
+### Implementation Plan for Phase 5C
+
+```
+Step 1: Opponent Elo system (~50 lines in optimizer.py)
+  - Add OpponentElo class with standard Elo update
+  - Bootstrap from existing 63-trial data
+  - Compute Elo for all 10 tested opponents
+
+Step 2: Epoch-based pool rotation (~100 lines in optimizer.py)
+  - Add _epoch_length to OptimizerConfig
+  - Replace static opponents[:active_opponents] with _select_active_opponents()
+  - Implement UCB-informativeness scoring (discriminative power × diversity + exploration)
+  - Dynamic _opponent_step_map extension
+
+Step 3: Discriminative ordering (~30 lines in optimizer.py)
+  - Replace random shuffle with anchor-first + f_var ordering
+  - Track per-opponent Spearman correlation with final fitness
+
+Step 4: Elo-weighted fitness (~30 lines in optimizer.py)
+  - Replace equal-weight mean with Elo-weighted z-score aggregation
+  - Add temperature parameter to OptimizerConfig
+
+Step 5: Extended validation (~50 lines in optimizer.py)
+  - After trial completes, check if top-10% fitness
+  - If so, dispatch additional matchups from full pool
+  - Append extended results to evaluation log
+
+Step 6: Tests
+  - Unit tests for Elo update, UCB scoring, discriminative ordering
+  - Replay overnight data under new scoring, verify rank preservation
+  - Integration test: verify epoch rotation selects diverse opponents
+```
+
+### Implementation Plan for Phase 5D
+
+```
+Step 1: Richer combat_fitness from existing data (~40 lines in combat_fitness.py)
+  - Add damage_efficiency, overload_differential, duration_normalized_damage
+  - Composite as weighted sum with existing hierarchical fitness
+  - Verify on overnight data: does richer fitness better separate top/bottom builds?
+
+Step 2: Java harness — flux/overload tracking (~30 lines in CombatHarnessPlugin.java)
+  - Per-frame accumulator: sum(flux_level) / frame_count → time-weighted flux
+  - Per-frame accumulator: overload_seconds += dt if isOverloaded()
+  - Add to ShipCombatResult in ResultWriter
+
+Step 3: Update result_parser.py and combat_fitness.py for new fields
+```
 
 ### Expected Impact
 
-| Metric | Phase 4 Baseline | After Phase A | After Phase B |
-|--------|-------------------|---------------|---------------|
-| Evals per build | 5 (fixed) | 5 (cleaner) | ~2.5 avg |
-| Signal quality (CoV) | 0.41 | ~0.25 | ~0.15 |
-| Budget efficiency | 1× | 1× | 2–3× |
+| Metric | Current (Phase 5A+5B) | After Phase 5C | After Phase 5C+5D |
+|--------|----------------------|----------------|-------------------|
+| Opponent coverage | 10/54 (19%) | 54/54 over epochs | 54/54 |
+| Pruning rate | 11% | 30-40% | 30-40% |
+| Fitness signal quality | z-scored, equal weight | Elo-weighted, ordered | Elo-weighted + richer gradient |
+| Generalization | Untested vs combat destroyers | Validated across full pool | Validated + richer signal |
+| Budget efficiency | 1× | 1.5-2× (more pruning) | 2-3× |
 
 ### Testing
-- Replay 203-trial evaluation log under new scoring (normalization, control variate) — measure rank correlation preservation
-- Benchmark Hyperband pruning accuracy: do pruned builds have lower full-evaluation fitness?
-- Multi-objective: verify Pareto front covers diverse build strategies
-- Curriculum: verify win rate increases against weaker opponents, builds transfer to harder opponents
+- Replay overnight evaluation log under Elo-weighted scoring — measure rank correlation preservation
+- Benchmark discriminative ordering: does pruning rate increase with anchor-first ordering?
+- Verify epoch rotation covers diverse opponent types within 3-4 epochs
+- Verify extended validation catches builds that overfit to active set
+- Richer fitness: correlation analysis — do new signals predict final rank better?
 
 ---
 

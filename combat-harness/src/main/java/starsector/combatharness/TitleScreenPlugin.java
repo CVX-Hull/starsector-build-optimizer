@@ -21,19 +21,25 @@ public class TitleScreenPlugin extends BaseEveryFrameCombatPlugin {
 
     private static final Logger log = Logger.getLogger(TitleScreenPlugin.class);
 
+    // Wait for title screen to stabilize before checking queue (~2s at 60fps)
+    private static final int TITLE_STABILIZE_FRAMES = 120;
+
     private boolean triggered = false;
     private int frameCount = 0;
 
     @Override
     public void advance(float amount, List<InputEventAPI> events) {
+        // Reset when leaving title screen so we can re-trigger on return
+        if (Global.getCurrentState() != GameState.TITLE) {
+            triggered = false;
+            frameCount = 0;
+            return;
+        }
+
         if (triggered) return;
 
-        // Only act on title screen
-        if (Global.getCurrentState() != GameState.TITLE) return;
-
         frameCount++;
-        // Wait ~2s for title screen to fully stabilize (120 frames at 60fps)
-        if (frameCount < 120) return;
+        if (frameCount < TITLE_STABILIZE_FRAMES) return;
 
         // Check for queue file
         if (!MatchupQueue.existsInCommon()) return;

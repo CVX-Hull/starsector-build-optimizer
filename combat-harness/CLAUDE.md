@@ -14,7 +14,7 @@ Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports re
 
 Single matchup per mission cycle. Flow:
 1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array with 1 matchup config)
-2. Game launches → TitleScreenPlugin detects queue → MenuNavigator auto-navigates to Optimizer Arena
+2. Game launches → TitleScreenPlugin detects queue on title screen → MenuNavigator auto-navigates to Optimizer Arena (resets on every return to title screen for persistent session reuse)
 3. MissionDefinition (compiled in JAR) adds placeholder ships via `addToFleet()` for proper deployment/CR/AI
 4. CombatHarnessPlugin swaps player ship loadout in-place from `BuildSpec` data (variant `clear()` + `addWeapon`/`addMod`)
 5. Plugin state machine: INIT → SETUP → FIGHTING → DONE → WAITING
@@ -91,3 +91,5 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 - **`spawnShipOrWing()` with programmatic variants:** `createEmptyVariant()` does NOT register variants for `spawnShipOrWing()` lookup. Only `.variant` files loaded at startup are registered.
 - **xdotool vs LWJGL:** `xdotool` click events do NOT work on LWJGL/OpenGL windows. Only `java.awt.Robot` (from inside the JVM) can interact with in-game UI. xdotool only works on the Swing launcher window.
 - **`endCombat()` stops `advance()` immediately:** After calling `engine.endCombat()`, the engine stops calling the plugin's `advance()` method within the same or next frame. Any work that must happen after combat (e.g., launching Robot dismiss thread) must be done in the same frame, before the `endCombat()` call.
+- **Title screen plugin `triggered` flag must reset:** Global plugins that use a `triggered` boolean to run once on the title screen must reset it when `GameState != TITLE`. Otherwise the plugin only fires on the first mission per game launch, breaking persistent session reuse.
+- **Robot dismiss uses pixel-color polling:** After `endCombat()`, there's a ~1.5s white-flash transition before the results dialog renders. `dismissResults()` polls a 40x40 pixel region around the Continue button location using `Robot.createScreenCapture()`, checking for Starsector's cyan UI color (hue 185-210 in HSB). Clicks once the button color is detected (typically 1-3s). Falls back to blind click after 15s timeout. `Robot.createScreenCapture()` is NOT blocked by the security sandbox.

@@ -179,7 +179,7 @@ public void reportDamageApplied(Object source, CombatEntityAPI target, ApplyDama
 
 ## UI Automation via java.awt.Robot
 
-Robot works from mod code (not blocked by sandbox). Generates native OS input events that LWJGL picks up. Coordinates are **absolute screen coordinates** — not window-relative.
+Robot works from mod code (not blocked by sandbox). Generates native OS input events that LWJGL picks up. Coordinates are **absolute screen coordinates** — not window-relative. `Robot.createScreenCapture()` also works (returns `BufferedImage` from the Xvfb framebuffer) — useful for pixel-color polling to detect when UI elements have rendered before clicking.
 
 Calibration: track mouse positions during manual navigation (`xdotool getmouselocation` in a loop), record where clicks land.
 
@@ -191,7 +191,7 @@ Register an EveryFrameCombatPlugin for ALL combat (including title screen) via m
 ```json
 {"plugins": {"myPluginKey": "com.mymod.MyPlugin"}}
 ```
-Use `Global.getCurrentState() == GameState.TITLE` to detect the title screen.
+Use `Global.getCurrentState() == GameState.TITLE` to detect the title screen. **Important**: If using a `triggered` flag to run one-shot logic on the title screen, reset it when `GameState != TITLE` — otherwise the plugin only fires once per game launch, breaking persistent session reuse across missions.
 
 ## Weapon Filtering
 

@@ -1078,10 +1078,10 @@ class TestStagedEvaluator:
         config = OptimizerConfig(
             sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
             active_opponents=3,
-
+            eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
 
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:
@@ -1101,10 +1101,10 @@ class TestStagedEvaluator:
         config = OptimizerConfig(
             sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
             active_opponents=20,
-
+            eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config, eval_log_path=log_path)
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
 
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:

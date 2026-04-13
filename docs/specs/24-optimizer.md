@@ -27,7 +27,7 @@ Frozen dataclass configuring the optimization run.
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
 | `n_ei_candidates` | `int` | `256` | EI candidates per sample |
 | `fitness_mode` | `str` | `"mean"` | `"mean"` or `"minimax"` |
-| `engagement_threshold` | `float` | `500.0` | Minimum total raw damage (all types, all ships) for "engaged" status in combat fitness. |
+| `combat_fitness` | `CombatFitnessConfig` | `CombatFitnessConfig()` | Embedded fitness config (engagement threshold, tier weights, etc.). Single source of truth — no duplication. |
 | `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
@@ -42,6 +42,7 @@ Frozen dataclass configuring the optimization run.
 | `cv_rho_threshold` | `float` | `0.3` | Minimum \|ρ\| to activate control variate correction |
 | `cv_recalc_interval` | `int` | `10` | Re-estimate control variate parameters every N completions |
 | `active_opponents` | `int` | `10` | Maximum opponents evaluated per build. If pool has fewer than K opponents, all are used. |
+| `eval_log_path` | `Path \| None` | `None` | Path for JSONL evaluation log. If None, no log is written. |
 
 ### `BuildCache`
 
@@ -49,7 +50,7 @@ Mutable class for hash-based deduplication of repaired builds.
 
 | Method | Signature | Description |
 |--------|-----------|-------------|
-| `hash_build` | `(build: Build) -> str` | SHA-256 of sorted weapon_assignments + sorted hullmods + vents + caps |
+| `hash_build` | `(build: Build) -> str` | SHA-256 of hull_id + sorted weapon_assignments + sorted hullmods + vents + caps (5 components; hull_id prevents cross-hull collisions) |
 | `get` | `(build: Build) -> float \| None` | Cached score or None |
 | `put` | `(build: Build, score: float) -> None` | Store score |
 
@@ -66,9 +67,9 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 | `build_spec` | `BuildSpec` | required | Serializable build spec |
 | `variant_id` | `str` | required | Unique variant ID (`{hull_id}_opt_{trial.number:06d}`) |
 | `opponents` | `tuple[str, ...]` | required | Active opponent subset (randomly shuffled per-trial for reproducibility) |
+| `heuristic_val` | `float` | `0.0` | Heuristic composite score for control variate (A2) |
 | `completed_results` | `list[CombatResult]` | `[]` | Results accumulated so far |
 | `raw_scores` | `list[float]` | `[]` | Per-opponent raw `combat_fitness()` values (parallel to `completed_results`) |
-| `heuristic_val` | `float` | `0.0` | Heuristic composite score for control variate (A2) |
 | `next_opponent_index` | `int` | `0` | Which opponent to evaluate next |
 
 **Properties:**

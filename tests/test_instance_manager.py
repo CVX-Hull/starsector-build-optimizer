@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from starsector_optimizer.models import BuildSpec, MatchupConfig
+from starsector_optimizer.models import BuildSpec, CombatResult, MatchupConfig
 from starsector_optimizer.instance_manager import (
     GameInstance,
     InstanceConfig,
@@ -477,17 +477,21 @@ class TestPersistentSession:
         assert len(data) == 3
 
     def test_assign_next_batch_cleans_protocol_files(self, pool, config):
-        """_assign_next_batch removes old done/heartbeat/results files first."""
+        """_assign_next_batch removes done/results but touches heartbeat."""
         pool.setup()
         inst = pool._instances[0]
         inst.done_path.write_text("old")
         inst.heartbeat_path.write_text("old")
         inst.results_path.write_text("old")
+        old_mtime = inst.heartbeat_path.stat().st_mtime
 
+        import time
+        time.sleep(0.05)  # ensure mtime changes
         pool._assign_next_batch(inst, _make_matchups(1))
 
         assert not inst.done_path.exists()
-        assert not inst.heartbeat_path.exists()
+        assert inst.heartbeat_path.exists(), "heartbeat should be touched, not deleted"
+        assert inst.heartbeat_path.stat().st_mtime >= old_mtime
         assert not inst.results_path.exists()
 
     def test_assign_next_batch_preserves_processes(self, pool, config):
@@ -511,7 +515,7 @@ class TestPersistentSession:
         """_assign_next_batch clears results, restart_count; sets RUNNING."""
         pool.setup()
         inst = pool._instances[0]
-        inst.results = [MagicMock()]
+        inst.results = [MagicMock(spec=CombatResult)]
         inst.restart_count = 2
 
         pool._assign_next_batch(inst, _make_matchups(2))

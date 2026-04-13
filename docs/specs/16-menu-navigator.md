@@ -32,6 +32,27 @@ These settings ensure deterministic button positions on any machine (local or cl
 
 Each click: `Robot.mouseMove(x, y)` → delay → `mousePress(BUTTON1_DOWN_MASK)` → delay → `mouseRelease(BUTTON1_DOWN_MASK)`.
 
+### `static void dismissResults()`
+
+Dismisses post-combat results screen to return to title screen. Uses pixel-color polling to wait for the Continue button to render (the `endCombat()` white-flash transition takes ~1.5s).
+
+1. Poll 40x40 pixel region around Continue button via `Robot.createScreenCapture()`
+2. Check cyan pixel ratio: HSB hue 185-210, sat >= 0.25, bri >= 0.35
+3. When ratio >= 30% (button rendered), click Continue
+4. Retry click after 500ms for safety
+5. Click High Score OK (harmless if absent)
+6. Falls back to blind click after 15s timeout
+
+### Button Detection
+
+`waitForButton(Robot, cx, cy)` polls a region around a button location for Starsector's cyan UI color. `computeCyanRatio(BufferedImage)` computes the fraction of pixels matching. Constants:
+
+- `BUTTON_DETECT_HALF_SIZE = 20` (40x40 region)
+- `BUTTON_POLL_INTERVAL_MS = 200`
+- `BUTTON_POLL_TIMEOUT_MS = 15000`
+- `BUTTON_HUE_MIN/MAX = 185/210`, `BUTTON_SAT_MIN = 0.25`, `BUTTON_BRI_MIN = 0.35`
+- `BUTTON_MATCH_THRESHOLD = 0.30`
+
 ### Coordinate Calibration
 
 **Two sets of coordinates exist:** one for Xvfb 1920x1080 fullscreen (production/headless), one for windowed on a physical display (development).
@@ -40,7 +61,9 @@ Each click: `Robot.mouseMove(x, y)` → delay → `mousePress(BUTTON1_DOWN_MASK)
 ```java
 private static final int MISSIONS_X = 1401, MISSIONS_Y = 453;
 private static final int ARENA_X = 619, ARENA_Y = 876;
-private static final int PLAY_MISSION_X = 1295, PLAY_MISSION_Y = 908;
+private static final int PLAY_MISSION_X = 1322, PLAY_MISSION_Y = 906;
+private static final int CONTINUE_X = 963, CONTINUE_Y = 892;
+private static final int HIGH_SCORE_OK_X = 1119, HIGH_SCORE_OK_Y = 611;
 ```
 
 **Launcher button** (handled by Python instance manager via xdotool, NOT Robot):
@@ -69,9 +92,15 @@ The title screen background is a combat scene — global plugins run on it.
 
 ```
 advance(amount, events):
+  // Reset when leaving title screen — enables re-triggering on return
+  // (persistent session: combat → results → title → next mission)
+  if Global.getCurrentState() != GameState.TITLE:
+    triggered = false
+    frameCount = 0
+    return
+
   if triggered: return
-  if Global.getCurrentState() != GameState.TITLE: return
-  if frameCount++ < 120: return  // wait ~2s for title screen to stabilize
+  if frameCount++ < TITLE_STABILIZE_FRAMES: return  // 120 frames ≈ 2s
   if !MatchupQueue.existsInCommon(): return
   
   triggered = true
@@ -82,7 +111,8 @@ advance(amount, events):
 ### Key Design Decisions
 
 - **Separate thread for Robot calls.** `Thread.sleep()` delays in `navigateToMission()` would freeze the game's rendering loop if called from `advance()`.
-- **`triggered` flag prevents re-triggering.** Once navigation starts, don't try again.
+- **`triggered` flag prevents re-triggering within a single title screen visit.** Once navigation starts, don't try again until the game leaves and returns to the title screen.
+- **`triggered`/`frameCount` reset when `GameState != TITLE`.** Enables persistent session reuse: after combat ends and Robot dismisses results, game returns to title screen, plugin re-triggers for the next queue. Without this reset, the plugin only fires once per game launch.
 - **Frame count delay (120 frames ≈ 2s).** The title screen needs time to fully render before clicks register.
 - **Queue file as trigger.** TitleScreenPlugin only acts when a queue file exists. Normal game sessions (no queue) are unaffected.
 

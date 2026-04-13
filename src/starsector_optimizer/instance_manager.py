@@ -62,6 +62,7 @@ class InstanceConfig:
     xvfb_base_display: int = 100
     xvfb_screen: str = "1920x1080x24"
     xvfb_poll_interval_seconds: float = 0.1
+    xvfb_ready_timeout_seconds: float = 5.0
     heartbeat_timeout_seconds: float = 120.0
     startup_timeout_seconds: float = 90.0
     poll_interval_seconds: float = 1.0
@@ -330,7 +331,16 @@ class InstancePool:
         inst.results = []
         inst.restart_count = 0
 
-        self._clean_protocol_files(inst)
+        # Clean queue/results/done but touch (not delete) heartbeat so health
+        # checks stay happy during the ~15-20s mission restart transition.
+        # Touching resets mtime to now, giving a clean heartbeat_timeout window.
+        # Deleting would make _is_heartbeat_fresh return False immediately.
+        for name in PROTOCOL_FILES:
+            path = inst.saves_common / name
+            if "heartbeat" in name:
+                path.touch(exist_ok=True)
+            else:
+                path.unlink(missing_ok=True)
         self._write_queue(inst, chunk)
 
         inst.state = InstanceState.RUNNING
@@ -363,12 +373,12 @@ class InstancePool:
 
     def _start_xvfb(self, inst: GameInstance) -> None:
         """Start Xvfb with instance's display number and wait until ready."""
-        timeout = self._config.process_kill_timeout_seconds
+        kill_timeout = self._config.process_kill_timeout_seconds
         # Kill any existing Xvfb for this instance
         if inst.xvfb_process and inst.xvfb_process.poll() is None:
             inst.xvfb_process.terminate()
             try:
-                inst.xvfb_process.wait(timeout=timeout)
+                inst.xvfb_process.wait(timeout=kill_timeout)
             except subprocess.TimeoutExpired:
                 inst.xvfb_process.kill()
 
@@ -385,7 +395,8 @@ class InstancePool:
         )
         # Wait for socket file (what clients actually connect to)
         poll_interval = self._config.xvfb_poll_interval_seconds
-        max_polls = int(timeout / poll_interval)
+        ready_timeout = self._config.xvfb_ready_timeout_seconds
+        max_polls = int(ready_timeout / poll_interval)
         for _ in range(max_polls):
             if socket_file.exists() and inst.xvfb_process.poll() is None:
                 break

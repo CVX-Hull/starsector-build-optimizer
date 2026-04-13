@@ -86,6 +86,7 @@ def main():
         active_opponents=args.active_opponents,
         fixed_params=fixed_params,
         study_storage=storage,
+        eval_log_path=Path("data/evaluation_log.jsonl"),
     )
 
     if args.heuristic_only:
@@ -106,7 +107,6 @@ def main():
         pool.setup()
         study = optimize_hull(
             args.hull, game_data, pool, opponent_pool, config,
-            eval_log_path=Path("data/evaluation_log.jsonl"),
         )
 
     _print_results(study, args.hull, game_data)

@@ -16,6 +16,7 @@ Frozen dataclass configuring the instance pool.
 | `xvfb_base_display` | `int` | 100 | First Xvfb display number (instances use base+0, base+1, ...) |
 | `xvfb_screen` | `str` | `"1920x1080x24"` | Xvfb screen geometry (WxHxD) |
 | `xvfb_poll_interval_seconds` | `float` | 0.1 | Poll interval for Xvfb socket readiness |
+| `xvfb_ready_timeout_seconds` | `float` | 5.0 | Timeout for Xvfb socket readiness poll (dedicated, not shared with process_kill_timeout) |
 | `heartbeat_timeout_seconds` | `float` | 120.0 | Kill instance if no heartbeat for this long |
 | `startup_timeout_seconds` | `float` | 90.0 | Kill instance if no heartbeat within this after launch |
 | `poll_interval_seconds` | `float` | 1.0 | How often to check heartbeat/done files |
@@ -58,6 +59,7 @@ Mutable dataclass tracking a single game instance.
 | `launch_time` | `float` | `time.monotonic()` when game was launched |
 | `restart_count` | `int` | Number of restarts for current batch |
 | `total_matchups_processed` | `int` | Cumulative matchups across batches for this process (for clean restart threshold) |
+| `_game_log_file` | `TextIO \| None` | File handle for stdout capture to `{work_dir}/game_stdout.log` (implementation detail) |
 
 **Properties:**
 
@@ -81,6 +83,8 @@ class InstancePool:
     def run_matchup(self, instance_id: int, matchup: MatchupConfig) -> CombatResult: ...
     @property
     def num_instances(self) -> int: ...
+    @property
+    def game_dir(self) -> Path: ...
     def __enter__(self) -> InstancePool: ...
     def __exit__(self, *args) -> None: ...
     # Internal methods
@@ -163,7 +167,7 @@ Returns `True` if both `game_process` and `xvfb_process` are alive (`poll() is N
 
 Writes new queue to an already-running game instance. TitleScreenPlugin detects the queue on the title screen and auto-navigates to the mission.
 1. Reset instance state: `assigned_matchups`, `results`, `restart_count`
-2. Clean protocol files (removes stale done/heartbeat/results)
+2. Clean protocol files: remove stale done/results/queue/shutdown, but **touch** (not delete) heartbeat file — resets mtime to now, preventing false timeouts during the ~15-20s mission restart transition
 3. Write new queue file
 4. Set state to RUNNING, reset `last_heartbeat_time`
 

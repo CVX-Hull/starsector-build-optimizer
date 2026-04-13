@@ -84,7 +84,7 @@ class OptimizerConfig:
     n_startup_trials: int = 100
     n_ei_candidates: int = 256
     fitness_mode: str = "mean"
-    engagement_threshold: float = 500.0
+    combat_fitness: CombatFitnessConfig = field(default_factory=CombatFitnessConfig)
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
@@ -99,6 +99,7 @@ class OptimizerConfig:
     cv_rho_threshold: float = 0.3
     cv_recalc_interval: int = 10
     active_opponents: int = 10
+    eval_log_path: Path | None = None
 
 
 class BuildCache:
@@ -432,9 +433,7 @@ class StagedEvaluator:
         self._distributions = distributions
         self._eval_log_path = eval_log_path
         self._opponents = get_opponents(opponent_pool, hull.hull_size)
-        self._fitness_config = CombatFitnessConfig(
-            engagement_threshold=config.engagement_threshold,
-        )
+        self._fitness_config = config.combat_fitness
         self._queue: list[_InFlightBuild] = []
         self._dispatched: set[int] = set()  # trial.number of builds on an instance
         self._trials_asked = 0
@@ -801,7 +800,6 @@ def optimize_hull(
     instance_pool: InstancePool,
     opponent_pool: OpponentPool,
     config: OptimizerConfig,
-    eval_log_path: Path | None = None,
 ) -> optuna.Study:
     """Main optimization entry point. Returns the Optuna study."""
     preflight_check(hull_id, game_data, instance_pool, opponent_pool)
@@ -837,7 +835,7 @@ def optimize_hull(
         cache=BuildCache(),
         config=config,
         distributions=distributions,
-        eval_log_path=eval_log_path,
+        eval_log_path=config.eval_log_path,
     )
     evaluator.run()
 
