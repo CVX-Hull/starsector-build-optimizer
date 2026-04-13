@@ -196,7 +196,7 @@ Complete. 10 timeout tuner tests passing. Enriched heartbeat confirmed in integr
 Connect the Optuna optimizer framework to the evaluation pipeline with a diverse opponent pool, heuristic warm-starting, and proper constraint handling.
 
 ### Status
-Complete. 407 tests passing across all test files. End-to-end tested: 203-trial Eagle optimization campaign (4.3h, 47.6 trials/hour). See `experiments/eagle_200/` for data and analysis notebooks.
+Complete. 437 tests passing across all test files. Previously tested with a 203-trial Eagle campaign, but that data was invalidated by a combat harness bug (ships retreating due to `spawnFleetMember()` `directRetreat=true`). The harness has since been rewritten to single-matchup-per-mission and verified end-to-end.
 
 ### Dependencies
 - Phase 1 (data layer, search space, repair operator, variant generator)
@@ -304,7 +304,7 @@ Improve the signal-to-noise ratio of combat fitness evaluations and increase eva
 Research complete. See `docs/reference/phase5-signal-quality.md` for full research findings and recommended approach.
 
 ### Motivation (from Phase 4 Eagle Experiment)
-The 203-trial Eagle experiment achieved Cohen's d = 3.30 (the optimizer finds real signal) but win rate was only 0.4% — the optimizer navigates "shades of losing." Per-opponent analysis revealed dominator_XIV_Elite has *negative* correlation with fitness (ρ = -0.225), inter-opponent correlations are near-zero, and within-outcome variance is high (doom_Strike TIMEOUT: std = 0.547). The evaluation pipeline spends equal budget on clearly bad and potentially good builds.
+A prior 203-trial Eagle experiment suggested the optimizer finds real signal (Cohen's d = 3.30) but with low win rate (0.4%) — navigating "shades of losing." However, that data was invalidated by a combat harness bug (ships retreating). The qualitative findings (per-opponent variance, timeout waste, noise characteristics) likely still hold directionally but need re-validation with the fixed harness.
 
 ### Dependencies
 - Phase 4 (optimizer integration, opponent pool, evaluation pipeline)

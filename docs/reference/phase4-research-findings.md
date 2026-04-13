@@ -219,14 +219,15 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 
 **heron_Attack is noise:** 74% timeout rate with near-zero HP differential (0.0% player wins, 0.0% player losses). The Eagle cannot engage a kiting carrier in 1v1. Removed from CRUISER opponent pool.
 
-**Timeout strategy benchmark:** Replaying the evaluation log under different timeout strategies (`experiments/eagle_200/timeout_strategy_benchmark.ipynb`), a 200s flat cap saves **22.5% of combat time** at rho=0.958 Spearman rank correlation. Shorter timeouts corrupt rankings. Between-trial pruning via WilcoxonPruner (dropping bad builds after 2-3 opponents) is a more effective budget-saving strategy than mid-fight timeout manipulation.
+**Timeout strategy benchmark:** Replaying the evaluation log under different timeout strategies, a 200s flat cap saves **22.5% of combat time** at rho=0.958 Spearman rank correlation. Shorter timeouts corrupt rankings. Between-trial pruning via WilcoxonPruner (dropping bad builds after 2-3 opponents) is a more effective budget-saving strategy than mid-fight timeout manipulation.
+
+**Note:** The 203-trial Eagle experiment data was invalidated by a combat harness bug (`spawnFleetMember()` caused ships to retreat). The qualitative findings above likely hold directionally but need re-validation with the fixed single-matchup-per-mission harness.
 
 ### Actions Taken
 - Timeout strategy analysis informed between-trial pruning approach
 - Removed `heron_Attack` from CRUISER `DEFAULT_OPPONENT_POOL` (spec 23)
 - Added CatCMAwM as first-class sampler option via `--sampler catcma` (spec 24)
 - Added parameter importance analysis via fANOVA and `--fix-params` support (spec 26)
-- Analysis notebooks: `experiments/eagle_200/eagle_200_analysis.ipynb`, `experiments/eagle_200/timeout_strategy_benchmark.ipynb`
 
 ### Signal Quality Analysis (Phase 5 Research Input)
 

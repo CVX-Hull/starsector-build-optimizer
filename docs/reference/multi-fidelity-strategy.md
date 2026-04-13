@@ -180,7 +180,7 @@ Total per hull: ~3-4 hours, ~1000-1700 sims, ~$11
 
 ## Phase 5 Evolution: Hyperband Over Opponents
 
-Phase 5 research (see `docs/reference/phase5-signal-quality.md`) identified a third fidelity dimension: **number of opponents evaluated**. The 203-trial Eagle experiment showed that opponents have vastly different informativeness, and bad builds can be identified after 1-2 opponents.
+Phase 5 research (see `docs/reference/phase5-signal-quality.md`) identified a third fidelity dimension: **number of opponents evaluated**. Prior analysis suggested opponents have vastly different informativeness, and bad builds can be identified after 1-2 opponents.
 
 ### Sequential Opponent Evaluation
 

@@ -21,7 +21,7 @@ Each evaluation requires ~5 matchups × ~10 seconds each = ~50 seconds of wall-c
 
 ### The Problem: Signal Quality
 
-A 203-trial Eagle cruiser experiment (4.3 hours, 47.6 trials/hour) revealed that the optimizer finds real signal but extracts it inefficiently:
+A prior 203-trial Eagle cruiser experiment revealed that the optimizer finds real signal but extracts it inefficiently. (Note: this data was from the old batched combat harness which had a ship retreat bug — the qualitative findings likely hold directionally but specific numbers need re-validation with the fixed harness.)
 
 | Metric | Value | Implication |
 |--------|-------|-------------|
