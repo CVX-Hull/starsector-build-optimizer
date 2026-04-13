@@ -18,7 +18,7 @@ Single matchup per mission cycle. Flow:
 3. MissionDefinition (compiled in JAR) adds placeholder ships via `addToFleet()` for proper deployment/CR/AI
 4. CombatHarnessPlugin swaps player ship loadout in-place from `BuildSpec` data (variant `clear()` + `addWeapon`/`addMod`)
 5. Plugin state machine: INIT → SETUP → FIGHTING → DONE → WAITING
-6. After matchup: ResultWriter writes results + done signal, plugin calls `endCombat()`, Robot dismisses results screen
+6. After matchup: ResultWriter writes results + done signal, Robot dismiss thread launched, then `endCombat()` called (Robot must launch before endCombat — engine stops calling advance() immediately after)
 7. TitleScreenPlugin detects queue (new or same) → auto-navigates to mission → fresh MissionDefinition cycle
 
 ### Why single-matchup-per-mission (not batched spawning)
@@ -32,7 +32,6 @@ Single matchup per mission cycle. Flow:
 | `saves/common/combat_harness_results.json.data` | `combat_harness_results.json` | Java | Array of combat results |
 | `saves/common/combat_harness_done.data` | `combat_harness_done` | Java | Completion signal |
 | `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java | Liveness (every ~1s) |
-| `saves/common/combat_harness_new_queue.data` | `combat_harness_new_queue` | Python | Signal: new queue ready |
 | `saves/common/combat_harness_shutdown.data` | `combat_harness_shutdown` | Python | Signal: exit cleanly |
 
 ## File I/O — Security Sandbox
@@ -65,6 +64,7 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 6. **Null-check API return values defensively.** `getFluxTracker()`, `getDisabledWeapons()`, `getVariant()`, `getHullSpec()` can return null.
 7. **`getHullLevel()` is on `CombatEntityAPI`, inherited by `ShipAPI`.** Check full inheritance chain.
 8. **Track spawned ShipAPIs directly.** `getAllEverDeployedCopy()` accumulates across batched matchups. `engine.getShips()` drops destroyed ships.
+10. **`endCombat()` stops `advance()` immediately.** The engine stops calling `advance()` within the same or next frame after `endCombat()`. Any post-combat work must happen in the same frame, before the `endCombat()` call.
 9. **Mission descriptor requires `icon.jpg`.** Game crashes if missing.
 
 ## Design Invariants
@@ -90,3 +90,4 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 - **`spawnFleetMember()` retreat bug:** Ships spawned mid-combat via `spawnFleetMember()` always have `directRetreat=true`. No API call overrides this — the engine re-sets it below the public API level. Workaround: use `addToFleet()` in MissionDefinition (proper deployment) + in-place variant swap via `variant.clear()` + `addWeapon()`/`addMod()`.
 - **`spawnShipOrWing()` with programmatic variants:** `createEmptyVariant()` does NOT register variants for `spawnShipOrWing()` lookup. Only `.variant` files loaded at startup are registered.
 - **xdotool vs LWJGL:** `xdotool` click events do NOT work on LWJGL/OpenGL windows. Only `java.awt.Robot` (from inside the JVM) can interact with in-game UI. xdotool only works on the Swing launcher window.
+- **`endCombat()` stops `advance()` immediately:** After calling `engine.endCombat()`, the engine stops calling the plugin's `advance()` method within the same or next frame. Any work that must happen after combat (e.g., launching Robot dismiss thread) must be done in the same frame, before the `endCombat()` call.

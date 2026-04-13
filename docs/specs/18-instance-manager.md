@@ -67,7 +67,6 @@ Mutable dataclass tracking a single game instance.
 - `results_path` → `saves_common / "combat_harness_results.json.data"`
 - `done_path` → `saves_common / "combat_harness_done.data"`
 - `heartbeat_path` → `saves_common / "combat_harness_heartbeat.txt.data"`
-- `new_queue_signal_path` → `saves_common / "combat_harness_new_queue.data"`
 - `shutdown_signal_path` → `saves_common / "combat_harness_shutdown.data"`
 
 ### `InstancePool`
@@ -141,12 +140,12 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 Run a single matchup on the specified instance. Blocks until complete. Thread-safe per instance_id (each id called from at most one thread at a time). Raises `InstanceError` if the instance fails unrecoverably.
 
 1. Get instance by id. If `total_matchups_processed >= clean_restart_matchups`, kill instance, reset counter.
-2. If `_is_instance_reusable(inst)`: `_assign_next_batch(inst, [matchup])` (persistent session reuse). Otherwise: `_assign_and_launch(inst, [matchup])` (full Xvfb + game launch).
+2. If `_is_instance_reusable(inst)`: `_assign_next_batch(inst, [matchup])` (game still running, reuse via mission restart). Otherwise: `_assign_and_launch(inst, [matchup])` (full Xvfb + game launch).
 3. Poll loop (every `poll_interval_seconds`):
    - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. Set state IDLE. Return `results[0]`.
    - **Process check:** If game process exited without done signal → FAILED. Call `_restart_or_raise()`. Continue polling.
    - **Heartbeat check:** If STARTING and heartbeat fresh → RUNNING. If STARTING and startup timed out → FAILED, `_restart_or_raise()`. If RUNNING and heartbeat fresh → update timestamp. If RUNNING and heartbeat stale > timeout → FAILED, `_restart_or_raise()`.
-4. Instance stays alive in IDLE after returning (game in WAITING state for reuse in next `run_matchup()` call).
+4. Instance stays alive in IDLE after returning. Game is on title screen (or transitioning via Robot dismiss). TitleScreenPlugin will detect the next queue written by a subsequent `run_matchup()` call.
 
 ### `num_instances` (property)
 
@@ -162,12 +161,11 @@ Returns `True` if both `game_process` and `xvfb_process` are alive (`poll() is N
 
 ### `_assign_next_batch(inst, chunk)`
 
-Sends a new batch to an already-running persistent game instance:
+Writes new queue to an already-running game instance. TitleScreenPlugin detects the queue on the title screen and auto-navigates to the mission.
 1. Reset instance state: `assigned_matchups`, `results`, `restart_count`
-2. Clean protocol files (removes stale done/heartbeat/results/signals)
+2. Clean protocol files (removes stale done/heartbeat/results)
 3. Write new queue file
-4. Write `combat_harness_new_queue.data` signal (triggers Java WAITING → INIT transition)
-5. Set state to RUNNING, reset `last_heartbeat_time`
+4. Set state to RUNNING, reset `last_heartbeat_time`
 
 ### `_write_shutdown_signal(inst)`
 

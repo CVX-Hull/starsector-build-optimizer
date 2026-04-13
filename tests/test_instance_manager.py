@@ -439,13 +439,6 @@ def _make_matchups(n):
 
 class TestPersistentSession:
 
-    def test_new_queue_signal_path_property(self, pool, config):
-        """new_queue_signal_path returns correct saves/common path."""
-        pool.setup()
-        inst = pool._instances[0]
-        expected = inst.saves_common / "combat_harness_new_queue.data"
-        assert inst.new_queue_signal_path == expected
-
     def test_shutdown_signal_path_property(self, pool, config):
         """shutdown_signal_path returns correct saves/common path."""
         pool.setup()
@@ -453,26 +446,24 @@ class TestPersistentSession:
         expected = inst.saves_common / "combat_harness_shutdown.data"
         assert inst.shutdown_signal_path == expected
 
-    def test_protocol_files_includes_new_signals(self):
-        """PROTOCOL_FILES list has all 6 files including new signals."""
-        assert "combat_harness_new_queue.data" in PROTOCOL_FILES
+    def test_protocol_files_includes_shutdown_signal(self):
+        """PROTOCOL_FILES list has 5 files including shutdown signal."""
+        assert "combat_harness_new_queue.data" not in PROTOCOL_FILES
         assert "combat_harness_shutdown.data" in PROTOCOL_FILES
-        assert len(PROTOCOL_FILES) == 6
+        assert len(PROTOCOL_FILES) == 5
 
-    def test_clean_protocol_files_removes_new_signals(self, pool, config):
-        """_clean_protocol_files removes new signal files too."""
+    def test_clean_protocol_files_removes_shutdown_signal(self, pool, config):
+        """_clean_protocol_files removes shutdown signal file."""
         pool.setup()
         inst = pool._instances[0]
-        inst.new_queue_signal_path.write_text("1")
         inst.shutdown_signal_path.write_text("1")
 
         pool._clean_protocol_files(inst)
 
-        assert not inst.new_queue_signal_path.exists()
         assert not inst.shutdown_signal_path.exists()
 
-    def test_assign_next_batch_writes_queue_and_signal(self, pool, config):
-        """_assign_next_batch writes queue file + new_queue signal, no process creation."""
+    def test_assign_next_batch_writes_queue_only(self, pool, config):
+        """_assign_next_batch writes queue file but no new_queue signal."""
         pool.setup()
         inst = pool._instances[0]
         matchups = _make_matchups(3)
@@ -480,7 +471,8 @@ class TestPersistentSession:
         pool._assign_next_batch(inst, matchups)
 
         assert inst.queue_path.exists()
-        assert inst.new_queue_signal_path.exists()
+        # No new_queue signal — TitleScreenPlugin detects queue file directly
+        assert not (inst.saves_common / "combat_harness_new_queue.data").exists()
         data = json.loads(inst.queue_path.read_text())
         assert len(data) == 3
 

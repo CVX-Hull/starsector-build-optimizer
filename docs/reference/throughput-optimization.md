@@ -15,11 +15,11 @@ The optimizer evaluates ship builds by running AI-vs-AI combat in parallel Stars
 3. **Launcher click** — `xdotool` clicks "Play Starsector" on the Swing launcher window
 4. **Title screen** — `TitleScreenPlugin` waits ~2s for stability, then triggers `MenuNavigator`
 5. **Menu navigation** — `java.awt.Robot` clicks through: Missions → scroll → Optimizer Arena → Play Mission (~5s of Thread.sleep delays)
-6. **MissionDefinition** runs — reads queue from `saves/common/`, deploys first matchup's ships
-7. **CombatHarnessPlugin** state machine: INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE
-8. **Between matchups** — entity cleanup (remove ships, projectiles, missiles), spawn new ships
-9. **After all matchups** — `ResultWriter` writes results + done signal, then `System.exit(0)`
-10. **Python detects** done signal, parses results, kills processes, assigns next batch
+6. **MissionDefinition** runs — reads queue from `saves/common/`, adds placeholder ships via `addToFleet()`
+7. **CombatHarnessPlugin** state machine: INIT → SETUP → FIGHTING → DONE → WAITING
+8. **SETUP** — swaps player ship loadout in-place from BuildSpec (variant clear + addWeapon/addMod)
+9. **After matchup** — writes results + done signal, calls `endCombat()`, Robot dismisses results screen
+10. **Mission restart** — TitleScreenPlugin detects new queue on title screen, auto-navigates to fresh mission
 
 Each game instance runs on its own Xvfb virtual display (1920x1080x24) with Mesa/llvmpipe software rendering. The `InstancePool` manages 4-8 parallel instances with health monitoring via heartbeat files.
 
@@ -72,9 +72,9 @@ Previous serial design (batch `evaluate()`) used only 1 of 4 instances: 210 tria
 
 ### Bottleneck 1: Game Restart Per Batch (37% overhead)
 
-Each game instance persists across matchups via the `new_queue` signal protocol. The instance processes one matchup at a time, signaling done after each. The coordinator dispatches the next matchup immediately via `run_matchup()`. A clean restart (`clean_restart_matchups=200`) is forced periodically to prevent memory accumulation.
+Each game instance persists across matchups via the mission restart cycle. After each matchup, `endCombat()` returns to the title screen, and TitleScreenPlugin auto-navigates to a fresh mission when Python writes the next queue. The coordinator dispatches the next matchup immediately via `run_matchup()`. A clean restart (`clean_restart_matchups=200`) is forced periodically to prevent memory accumulation.
 
-**Persistent sessions eliminate restart overhead.** With `run_matchup()`, each matchup is dispatched to an already-running game instance. The file I/O overhead (queue write + signal + poll) is ~ms, negligible vs 10-120s combat time.
+**Mission restart overhead is ~5-8s per matchup** (Robot dismisses results + TitleScreenPlugin navigation). The game stays running; only the mission restarts. File I/O overhead (queue write + poll) is ~ms, negligible vs 10-120s combat time.
 
 ### Bottleneck 2: Variant File I/O
 
@@ -142,20 +142,17 @@ ShipAPI ship = engine.getFleetManager(FleetSide.PLAYER)
 
 ### 3.2 Persistent Game Session
 
-Instead of `System.exit(0)` after each batch, the combat harness can stay running and poll for new work.
+Instead of killing the game after each matchup, the game stays running and TitleScreenPlugin auto-restarts the mission.
 
-**Approach A — Stay in combat, poll for new queue (highest throughput):**
+**Implemented approach — Single matchup per mission with mission restart:**
 
-The `CombatHarnessPlugin` already uses `engine.setDoNotEndCombat(true)` to prevent auto-ending. After all matchups complete, instead of exiting, it can enter a WAITING state:
+`spawnFleetMember()` mid-combat causes ships to retreat (engine sets `directRetreat=true` below the public API — no workaround found). Only `addToFleet()` in MissionDefinition produces ships with proper AI behavior. Therefore: one matchup per mission, with `endCombat()` + Robot dismiss + TitleScreenPlugin restart between matchups.
 
 ```
-Current:  INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE → System.exit(0)
-Proposed: INIT → SPAWNING → FIGHTING → CLEANING → ... → DONE → WAITING → SPAWNING → ...
+INIT → SETUP → FIGHTING → (Robot thread + endCombat()) → DONE → WAITING → TitleScreenPlugin restarts
 ```
 
-In WAITING, the plugin polls `saves/common/` for a new queue signal (via `fileExistsInCommon()`). When detected, it loads the new queue and transitions back to SPAWNING.
-
-With programmatic variant creation, the variant caching problem is eliminated — no files to cache. Build specs arrive as JSON in the queue and are constructed in memory at spawn time.
+Build specs arrive as JSON in the queue and are applied in-place via `variant.clear()` + `addWeapon()`/`addMod()` during SETUP.
 
 **Engine state accumulation concerns:**
 - `FleetManager.getAllEverDeployedCopy()` accumulates across matchups (confirmed). We track ships directly and don't use this method, so it's not a functional issue, but memory grows.
@@ -331,7 +328,7 @@ INIT → SETUP → FIGHTING → DONE → endCombat() → Robot dismisses results
 
 **Overhead:** ~5-8s per matchup restart (Robot clicks + menu loading) vs ~25-35s for full game restart. The game stays running between matchups; only the mission restarts.
 
-**Instance manager integration (TODO):** The instance manager's persistent session protocol (`new_queue` signal) needs to be replaced. After `endCombat()`, the game is at the mission select — it can't poll for in-combat signals. Python must write the new queue file BEFORE `TitleScreenPlugin` triggers, then let the auto-navigation restart the mission.
+**Instance manager integration:** Python writes the new queue file to `saves/common/`. TitleScreenPlugin (fresh instance on each title screen) polls for the queue file and auto-navigates when it appears. No timing constraint — TitleScreenPlugin polls every frame indefinitely until a queue is found.
 
 #### Phase T3: Mixed-Build Batching / Staged Evaluator (Python change, required for Phase 5)
 

@@ -27,7 +27,6 @@ import java.util.List;
 public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private static final Logger log = Logger.getLogger(CombatHarnessPlugin.class);
-    private static final String NEW_QUEUE_FILE = MatchupConfig.COMMON_PREFIX + "new_queue";
     private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
     private static final int WAITING_TIMEOUT_FRAMES = 3600;
     private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
@@ -189,26 +188,29 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
             engine.getListenerManager().removeListener(currentTracker);
 
+            // Launch Robot dismiss thread BEFORE endCombat — the engine may stop
+            // calling advance() after endCombat, so doDone() might never execute.
+            new Thread(new Runnable() {
+                public void run() {
+                    MenuNavigator.dismissResults();
+                }
+            }).start();
+            log.info("Robot restart thread launched");
+
             // End combat — game shows mission results screen
             engine.setDoNotEndCombat(false);
             FleetSide winnerSide = "PLAYER".equals(winner) ? FleetSide.PLAYER : FleetSide.ENEMY;
             engine.endCombat(0f, winnerSide);
             log.info("endCombat called — awaiting mission results screen");
+
+            waitingFrameCount = 0;
             state = State.DONE;
         }
     }
 
     private void doDone() {
-        // After endCombat, game shows results screen. Robot clicks Continue
-        // (and high score OK if present) to return to mission select.
-        // TitleScreenPlugin will detect the queue and auto-navigate to Play Mission.
-        new Thread(new Runnable() {
-            public void run() {
-                MenuNavigator.dismissResults();
-            }
-        }).start();
-        log.info("Robot restart thread launched");
-        waitingFrameCount = 0;
+        // Fallback: if advance() is still called after endCombat and Robot
+        // hasn't been launched yet, this is a no-op since Robot is already running.
         state = State.WAITING;
     }
 

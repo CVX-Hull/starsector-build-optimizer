@@ -12,34 +12,38 @@ All filenames use a flat `combat_harness_` prefix (subdirectories don't work wit
 | Results | `saves/common/combat_harness_results.json.data` | `combat_harness_results.json` | Java | Array of combat results |
 | Done | `saves/common/combat_harness_done.data` | `combat_harness_done` | Java | Signal: all matchups complete |
 | Heartbeat | `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java | Liveness: timestamp + elapsed |
-| New Queue | `saves/common/combat_harness_new_queue.data` | `combat_harness_new_queue` | Python | Signal: new queue ready for persistent session |
 | Shutdown | `saves/common/combat_harness_shutdown.data` | `combat_harness_shutdown` | Python | Signal: exit cleanly |
 
 ## Lifecycle
 
-### First Batch
-1. Python writes queue to `saves/common/` with build specs embedded in `player_builds` field
+### First Matchup
+1. Python writes queue (1 matchup) to `saves/common/` with build specs embedded in `player_builds` field
 2. Game launches (Xvfb + launcher click + ~30s startup)
 3. TitleScreenPlugin detects queue → auto-navigates to Optimizer Arena mission
-4. CombatHarnessPlugin processes matchups sequentially in one combat session
-5. After all matchups: writes results array + done signal, enters WAITING state
+4. MissionDefinition adds placeholder ships via `addToFleet()`, CombatHarnessPlugin swaps player variant in-place
+5. After matchup: writes results + done signal, calls `endCombat()`
+6. Robot dismisses results screen → game returns to title screen
 
-### Subsequent Batches (Persistent Session)
+### Subsequent Matchups (Mission Restart Cycle)
 1. Python detects done signal, reads results
-2. Python cleans protocol files, writes new queue file
-3. Python writes `combat_harness_new_queue.data` signal
-4. Java detects signal in WAITING state, loads new queue, resumes SPAWNING
-5. After all matchups: writes results + done signal, re-enters WAITING
+2. Python cleans protocol files, writes new queue (1 matchup)
+3. Robot finishes dismissing results → game reaches title screen
+4. TitleScreenPlugin (fresh instance) detects queue → auto-navigates to mission
+5. New MissionDefinition + CombatHarnessPlugin cycle runs the matchup
+6. After matchup: writes results + done signal, calls `endCombat()`, Robot dismisses
 
 ### Clean Restart (After N Matchups)
-1. Python writes `combat_harness_shutdown.data` instead of new queue signal
-2. Java detects shutdown signal, calls `System.exit(0)`
-3. Python launches fresh game instance (back to First Batch flow)
+1. Python kills game process (memory accumulation threshold)
+2. Python launches fresh game instance (back to First Matchup flow)
+
+### Graceful Shutdown
+1. Python writes `combat_harness_shutdown.data`
+2. Java detects shutdown signal in WAITING state, calls `System.exit(0)`
 
 ### Idle Timeout
-1. Game self-exits after ~60s in WAITING without any signal
-2. Python detects process exit via heartbeat timeout
-3. Next `evaluate()` call launches fresh game instance
+1. CombatHarnessPlugin WAITING state exits after ~60s without activity
+2. Python detects process exit
+3. Next `run_matchup()` call launches fresh game instance
 
 ## Queue Input Schema
 
@@ -145,7 +149,7 @@ See spec 19 for detailed field mapping. Note: `overload_count` lives under `flux
 
 Defined in `src/starsector_optimizer/instance_manager.py`:
 
-- `InstancePool.evaluate(matchups)` — submit matchups to N parallel game instances, return results
+- `InstancePool.run_matchup(instance_id, matchup)` — run single matchup on specified instance, return result
 - Handles per-instance work directories, Xvfb displays, health monitoring, crash recovery
 
 See spec 18 for full design.

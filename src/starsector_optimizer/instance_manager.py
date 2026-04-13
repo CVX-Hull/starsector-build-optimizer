@@ -30,7 +30,6 @@ PROTOCOL_FILES = [
     "combat_harness_results.json.data",
     "combat_harness_done.data",
     "combat_harness_heartbeat.txt.data",
-    "combat_harness_new_queue.data",
     "combat_harness_shutdown.data",
 ]
 
@@ -115,10 +114,6 @@ class GameInstance:
     @property
     def heartbeat_path(self) -> Path:
         return self.saves_common / "combat_harness_heartbeat.txt.data"
-
-    @property
-    def new_queue_signal_path(self) -> Path:
-        return self.saves_common / "combat_harness_new_queue.data"
 
     @property
     def shutdown_signal_path(self) -> Path:
@@ -337,11 +332,10 @@ class InstancePool:
 
         self._clean_protocol_files(inst)
         self._write_queue(inst, chunk)
-        inst.new_queue_signal_path.write_text(str(int(time.time() * 1000)))
 
         inst.state = InstanceState.RUNNING
         inst.last_heartbeat_time = time.monotonic()
-        logger.info("Instance %d: sent batch (%d matchups) to persistent session",
+        logger.info("Instance %d: queued %d matchup(s) for mission restart",
                     inst.instance_id, len(chunk))
 
     def _write_shutdown_signal(self, inst: GameInstance) -> None:

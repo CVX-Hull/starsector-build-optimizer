@@ -91,7 +91,7 @@ combat-harness/                    # Java combat harness mod
 │   ├── VariantBuilder.java        # Programmatic ShipVariantAPI construction from BuildSpec
 │   ├── DamageTracker.java         # DamageListener — per-ship damage accumulation
 │   ├── ResultWriter.java          # Batch results + done signal via SettingsAPI
-│   ├── CombatHarnessPlugin.java   # State machine: INIT→SPAWNING→FIGHTING→CLEANING→DONE
+│   ├── CombatHarnessPlugin.java   # State machine: INIT→SETUP→FIGHTING→DONE→WAITING
 │   ├── CombatHarnessModPlugin.java # BaseModPlugin — mod entry point
 │   ├── TitleScreenPlugin.java     # Auto-navigates to mission on title screen
 │   └── MenuNavigator.java         # java.awt.Robot menu clicking (1920x1080 calibrated)
