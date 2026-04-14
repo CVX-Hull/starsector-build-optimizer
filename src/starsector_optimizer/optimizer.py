@@ -415,11 +415,6 @@ class StagedEvaluator:
         self._burn_in_scores: dict[str, list[float]] = {}
         self._burn_in_fitness: list[float] = []
         self._builds_evaluated: int = 0
-        # Stable opponent → integer step mapping for WilcoxonPruner
-        # (sorted for determinism; same opponent always gets same step ID across trials)
-        self._opponent_step_map: dict[str, int] = {
-            opp: i for i, opp in enumerate(sorted(self._opponents))
-        }
         # A2: Control variate estimation state
         self._cv_pairs: list[tuple[float, float]] = []
         self._cv_coefficient: float = 0.0
@@ -538,9 +533,13 @@ class StagedEvaluator:
         ifb.next_opponent_index += 1
 
         raw_mean = sum(ifb.raw_scores) / len(ifb.raw_scores)
-        # Report raw per-opponent score at stable step ID (WilcoxonPruner semantics)
-        opp_step = self._opponent_step_map[opp_id]
-        ifb.trial.report(raw, step=opp_step)
+        # Report raw score at rung position (0-based).  Every trial evaluates
+        # the same number of opponents, so all trials share step IDs 0..N-1.
+        # With anchor-first ordering (post-burn-in), the first rung positions
+        # are the same high-discrimination opponents across trials, giving
+        # WilcoxonPruner the strongest paired signal for early pruning.
+        rung_step = ifb.rung - 1  # rung already incremented by next_opponent_index += 1
+        ifb.trial.report(raw, step=rung_step)
 
         logger.info(
             "  Trial %d rung %d/%d vs %s: %s (raw=%.3f, mean=%.3f)",
@@ -666,29 +665,38 @@ class StagedEvaluator:
         twfe_cfg = self._config.twfe
 
         if self._anchors and self._incumbent_opponents is not None:
-            # Post-burn-in: force overlap with incumbent's opponents
-            inc_pool = list(self._incumbent_opponents)
+            # Post-burn-in: force anchors + incumbent overlap, fill remainder
+            forced_set: set[str] = set()
+            forced: list[str] = []
+            # 1. Anchors always included (high-discrimination, stable step IDs)
+            for a in self._anchors:
+                if len(forced) < active_size:
+                    forced.append(a)
+                    forced_set.add(a)
+            # 2. Incumbent overlap (SMAC-style direct comparability)
+            inc_pool = [o for o in self._incumbent_opponents if o not in forced_set]
             rng.shuffle(inc_pool)
-            n_overlap = min(twfe_cfg.n_incumbent_overlap, len(inc_pool), active_size)
-            forced = inc_pool[:n_overlap]
-            forced_set = set(forced)
+            n_overlap = min(twfe_cfg.n_incumbent_overlap, len(inc_pool),
+                            active_size - len(forced))
+            for o in inc_pool[:n_overlap]:
+                forced.append(o)
+                forced_set.add(o)
+            # 3. Fill remainder from full pool
             remaining = [o for o in self._opponents if o not in forced_set]
             rng.shuffle(remaining)
             active = forced + remaining[:active_size - len(forced)]
-        else:
-            # Pre-burn-in: random sample from full pool
-            pool = list(self._opponents)
-            rng.shuffle(pool)
-            active = pool[:active_size]
-
-        # Anchor-first ordering: anchors at front for early pruning signal
-        if self._anchors:
-            anchor_set = set(self._anchors)
-            anchor_part = [o for o in active if o in anchor_set]
-            rest_part = [o for o in active if o not in anchor_set]
+            # Anchors are already at the front; shuffle only the non-anchor tail
+            rest_part = active[len(self._anchors):]
             rng.shuffle(rest_part)
-            active = anchor_part + rest_part
+            active = list(self._anchors) + rest_part
         else:
+            # Pre-burn-in: fixed opponent set for all trials.
+            # Same 10 opponents every time ensures WilcoxonPruner has full
+            # step-ID overlap for paired comparisons from the very first trial.
+            fixed_rng = _random.Random(0)
+            pool = list(self._opponents)
+            fixed_rng.shuffle(pool)
+            active = pool[:active_size]
             rng.shuffle(active)
 
         return active

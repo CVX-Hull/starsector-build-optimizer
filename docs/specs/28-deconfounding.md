@@ -118,7 +118,7 @@ The optimizer's `StagedEvaluator` maintains a `ScoreMatrix` instance. On each ma
 _handle_result():
     raw = combat_fitness(result, config)
     _score_matrix.record(trial_number, opp_id, raw)
-    trial.report(raw, step=opp_step)  # WilcoxonPruner (unchanged)
+    trial.report(raw, step=rung_step)  # WilcoxonPruner — rung position (0-based)
 
 _finalize_build():
     twfe_fitness = _score_matrix.build_alpha(trial_number, config.twfe)

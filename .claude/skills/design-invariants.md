@@ -11,7 +11,7 @@ Verify these invariants against the current changes. Every applicable item must 
 ---
 
 ## Domain Models
-- [ ] All domain dataclasses are `@dataclass(frozen=True)` — `Build`, `EffectiveStats`, `ScorerResult`, `CombatFitnessConfig`, `ImportanceResult`, `OpponentPool`, `MatchupConfig`, `Heartbeat`, etc.
+- [ ] All domain dataclasses are `@dataclass(frozen=True)` — `Build`, `EffectiveStats`, `ScorerResult`, `CombatFitnessConfig`, `TWFEConfig`, `ImportanceResult`, `OpponentPool`, `MatchupConfig`, `Heartbeat`, etc.
 - [ ] `Build.hullmods` is `frozenset`, not `set` or `list`
 - [ ] Repair always returns new instances — never mutates input
 - [ ] Every `Build` returned by `repair_build()` passes `is_feasible()`

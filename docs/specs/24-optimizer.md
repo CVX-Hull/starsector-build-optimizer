@@ -118,7 +118,6 @@ class StagedEvaluator:
 - `_cv_heuristic_mean: float` — A2 running mean of heuristic scores
 - `_cv_active: bool` — A2 active when |ρ| > cv_rho_threshold
 - `_completed_fitness_values: list[float]` — post-A1/A2 fitness values for A3 rank shaping
-- `_opponent_step_map: dict[str, int]` — maps opponent variant ID to stable sorted integer for WilcoxonPruner step pairing
 
 **`run()` algorithm (async coordinator):**
 
@@ -133,7 +132,7 @@ class StagedEvaluator:
 
 **`_next_matchup()`:** Returns the single highest-priority matchup. Phase 1: promote existing builds (highest rung first, skip `_dispatched`). Phase 2: ask Optuna for new trial (if `_trials_asked < sim_budget`). Returns None if no work available.
 
-**`_handle_result(ifb, result)`:** Processes one matchup result. Compute raw `combat_fitness()` score, record into `_score_matrix.record(trial_number, opp_id, raw)`, store on `ifb.raw_scores`. Report raw fitness to Optuna: `trial.report(raw, step=opp_step)` where `opp_step` is the stable opponent step ID from `_opponent_step_map`. WilcoxonPruner pairs values at the same step across trials via signed-rank test. If complete: finalize via A1→A2→A3 pipeline. If `trial.should_prune()`: tell Optuna PRUNED. Otherwise: build stays in queue for next dispatch.
+**`_handle_result(ifb, result)`:** Processes one matchup result. Compute raw `combat_fitness()` score, record into `_score_matrix.record(trial_number, opp_id, raw)`, store on `ifb.raw_scores`. Report raw fitness to Optuna: `trial.report(raw, step=rung_step)` where `rung_step` is the 0-based rung position (not opponent pool index). All trials share step IDs 0..N-1, giving WilcoxonPruner full paired overlap from the first trial. With anchor-first ordering, the first rung positions are the same high-discrimination opponents across trials. If complete: finalize via A1→A2→A3 pipeline. If `trial.should_prune()`: tell Optuna PRUNED. Otherwise: build stays in queue for next dispatch.
 
 **`_fill_instances(executor, pending, free_instances)`:** Dispatch matchups to all free instances until no work or no free instances. Each instance gets exactly 1 matchup — finest pruning granularity.
 
@@ -141,11 +140,11 @@ class StagedEvaluator:
 
 **Opponent Pool & Active Selection:** The discovered pool (typically 36-71 per hull size) is a reservoir. Each build evaluates up to `active_opponents` (default 10) from the pool. Opponent selection uses incumbent overlap + anchor-first ordering:
 
-1. **Before burn-in** (`_builds_evaluated < twfe.anchor_burn_in`): random selection from pool, random order.
+1. **Before burn-in** (`_builds_evaluated < twfe.anchor_burn_in`): fixed opponent set (seeded with `Random(0)`) for all trials. Using the same opponents ensures WilcoxonPruner has full step-ID overlap for paired comparisons from the very first trial. Per-trial `Random(trial_number)` shuffles the evaluation order for diversity.
 2. **After burn-in**: Discriminative power per opponent is computed as |ρ(raw_scores_j, build_fitness_j)| using Spearman correlation (requires ≥ `twfe.min_disc_samples` per opponent). Top `twfe.n_anchors` opponents are locked as anchors. Burn-in state is cleared.
-3. **Per trial** (after burn-in): Force `twfe.n_incumbent_overlap` opponents from the incumbent's set. Fill remaining slots from the full pool. Order: anchors first (steps 0..n_anchors−1), then rest shuffled via `random.Random(trial.number)`.
+3. **Per trial** (after burn-in): Force anchors + `twfe.n_incumbent_overlap` opponents from the incumbent's set. Fill remaining slots from the full pool. Order: anchors first (steps 0..n_anchors−1), then rest shuffled via `random.Random(trial.number)`.
 
-Anchors at the front give the WilcoxonPruner maximum early signal for pruning decisions. Incumbent overlap guarantees TWFE has direct build-vs-build comparisons through shared opponents. Each opponent has a stable step ID from `_opponent_step_map` (sorted variant IDs mapped to consecutive integers), so the pruner pairs the same opponent across trials regardless of evaluation order.
+Anchors at the front give the WilcoxonPruner maximum early signal for pruning decisions. Incumbent overlap guarantees TWFE has direct build-vs-build comparisons through shared opponents. Step IDs are rung positions (0-based), so all trials share steps 0..N-1 regardless of which opponents they face — enabling paired comparisons from the first real trial.
 
 ### `ScoreMatrix` (from `deconfounding.py`)
 
@@ -205,7 +204,7 @@ CatCMAwM uses population-based parallelism rather than constant_liar — it natu
 
 Created via `_create_pruner(config)` factory:
 
-`WilcoxonPruner(p_threshold=config.wilcoxon_p_threshold, n_startup_steps=config.wilcoxon_n_startup_steps)`. Uses a Wilcoxon signed-rank test to compare a trial's intermediate values against the best trial's values at the same steps. The step IDs correspond to stable opponent IDs from `_opponent_step_map`, so the signed-rank test naturally pairs the same opponent across trials regardless of evaluation order. No `n_opponents` parameter needed.
+`WilcoxonPruner(p_threshold=config.wilcoxon_p_threshold, n_startup_steps=config.wilcoxon_n_startup_steps)`. Uses a Wilcoxon signed-rank test to compare a trial's intermediate values against the best trial's values at the same steps. Step IDs are rung positions (0-based), so all trials share steps 0..N-1 regardless of which opponents they face. With anchor-first ordering post-burn-in, the first rung positions compare the same high-discrimination opponents across trials. No `n_opponents` parameter needed.
 
 ### Fitness Function — Signal Quality Pipeline (A1→A2→A3)
 
@@ -226,7 +225,7 @@ raw combat_fitness score
 
 **A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
 
-**Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the opponent's stable step ID (no A1/A2/A3). `WilcoxonPruner` pairs values at the same step across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences (same opponent across trials), making per-opponent scale differences irrelevant.
+**Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the rung position (0-based, no A1/A2/A3). `WilcoxonPruner` pairs values at the same rung across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences at the same evaluation position, and anchor-first ordering ensures the first rungs compare the same opponents post-burn-in.
 
 **Failure scores** (`failure_score`, default -2.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
 

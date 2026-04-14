@@ -800,7 +800,7 @@ class TestStagedEvaluator:
         assert len(negative_trials) > 0, "Expected some trials with negative scores from InstanceError"
 
     def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data):
-        """Intermediate trial.report() values are raw combat_fitness at stable opponent step IDs."""
+        """Intermediate trial.report() values are raw combat_fitness at rung positions."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -813,9 +813,15 @@ class TestStagedEvaluator:
 
         trials_with_iv = [t for t in study.trials if len(t.intermediate_values) > 0]
         assert len(trials_with_iv) > 2
-        # With all PLAYER wins from mock, raw scores in [1.0, 1.5]
-        # Step IDs are stable opponent indices (not sequential rungs)
+        # Step IDs are rung positions (0-based), so all trials share the same
+        # step IDs — enabling WilcoxonPruner paired comparisons from trial 1.
         for trial in trials_with_iv:
+            steps = sorted(trial.intermediate_values.keys())
+            n_opps = len(steps)
+            assert steps == list(range(n_opps)), (
+                f"Trial {trial.number} steps {steps} should be 0..{n_opps-1}"
+            )
+            # With all PLAYER wins from mock, raw scores in [1.0, 1.5]
             for step, val in trial.intermediate_values.items():
                 assert 1.0 <= val <= 1.5, (
                     f"Trial {trial.number} step {step} has value {val}, "
@@ -1334,14 +1340,19 @@ class TestWilcoxonPruner:
         assert pruner._p_threshold == 0.05
         assert pruner._n_startup_steps == 3
 
-    def test_stable_opponent_step_ids(self):
-        """Same opponent always maps to same integer step ID regardless of order."""
-        opponents = ("fury_Attack", "aurora_Assault", "dominator_AntiCV")
-        step_map = {opp: i for i, opp in enumerate(sorted(opponents))}
-        # Sorted: aurora_Assault=0, dominator_AntiCV=1, fury_Attack=2
-        assert step_map["aurora_Assault"] == 0
-        assert step_map["dominator_AntiCV"] == 1
-        assert step_map["fury_Attack"] == 2
+    def test_rung_based_step_ids(self):
+        """Step IDs are rung positions (0..N-1), not opponent pool indices."""
+        import optuna
+
+        study = optuna.create_study(direction="maximize")
+        trial = study.ask()
+        # Simulate reporting at rung positions
+        for rung_step in range(3):
+            trial.report(1.0, step=rung_step)
+        study.tell(trial, 1.0)
+        frozen = study.trials[-1]
+        steps = sorted(frozen.intermediate_values.keys())
+        assert steps == [0, 1, 2]
 
     def test_per_trial_opponent_shuffle(self):
         """Different trial numbers produce different opponent orderings."""

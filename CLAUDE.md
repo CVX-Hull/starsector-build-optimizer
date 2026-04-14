@@ -7,7 +7,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
 - **Phase 3.5** (complete): Data-driven timeout tuning (Weibull AFT).
 - **Phase 4** (complete): Optimizer integration — Optuna TPE/CatCMAwM, opponent pool, heuristic warm-start, parameter importance.
-- **Phase 5** (research complete): Signal quality — opponent normalization, multi-fidelity evaluation, multi-objective decomposition, curriculum learning.
+- **Phase 5** (5A-5C complete, 5D planned): Signal quality — TWFE deconfounding, multi-fidelity evaluation, anchor-first opponent ordering, incumbent overlap.
 
 ## Commands
 

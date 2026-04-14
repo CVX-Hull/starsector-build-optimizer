@@ -19,9 +19,9 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
   T3: Mixed-build batching / StagedEvaluator   ASHA scheduling for Phase 5B
   T4: Cloud deployment (GPU instances)          Linear scaling to 32-64 instances (requires GPU)
 
-Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (z-score, control variate, rank shaping)
+Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (TWFE deconfounding, control variate, rank shaping)
 Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
-Phase 5C:  Opponent Curriculum ─────────────── Epoch-based pool rotation, Elo-weighted fitness, discriminative ordering
+Phase 5C:  Opponent Curriculum ─────────────── ✓ COMPLETE (TWFE replaced Elo; anchor-first ordering, incumbent overlap)
 Phase 5D:  Richer Combat Fitness ──────────── Damage efficiency, overload tracking, flux pressure
 Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
 Phase 7:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost)
@@ -304,9 +304,9 @@ With $30: optimize 2-3 hulls fully, or 5+ hulls with reduced racing.
 Improve the signal-to-noise ratio of combat fitness evaluations and increase evaluation budget efficiency through opponent normalization, multi-fidelity evaluation, curriculum learning, and richer fitness signals.
 
 ### Status
-- **Phase 5A** (opponent normalization, control variate, rank shaping): ✓ COMPLETE — integrated into `StagedEvaluator`
+- **Phase 5A** (TWFE deconfounding, control variate, rank shaping): ✓ COMPLETE — integrated into `StagedEvaluator`
 - **Phase 5B** (sequential evaluation, WilcoxonPruner, ASHA scheduling): ✓ COMPLETE — integrated into `StagedEvaluator`
-- **Phase 5C** (opponent curriculum, adaptive pool, Elo-weighted fitness): Research complete, implementation planned
+- **Phase 5C** (opponent curriculum, anchor-first ordering, incumbent overlap): ✓ COMPLETE — TWFE deconfounding replaced Elo-based approach after simulation showed Elo is confounded by improving builds (ρ=0.024). See `docs/specs/28-deconfounding.md` and `docs/reference/phase5b-deconfounding-research.md`.
 - **Phase 5D** (richer combat fitness signals): Research complete, implementation planned
 
 First real optimization run completed (Hammerhead, 63 sim trials, 2026-04-13). See `experiments/hammerhead-overnight-2026-04-13/` for data and analysis. Results validated the pipeline end-to-end but revealed critical issues with opponent pool composition and evaluation efficiency.
@@ -318,13 +318,13 @@ First real optimization run completed (Hammerhead, 63 sim trials, 2026-04-13). S
 
 ### Key Findings from First Real Run
 
-| Finding | Impact | Fix |
-|---------|--------|-----|
-| Only 10/54 opponents used (alphabetical selection, biased toward freighters/carriers) | Builds optimized against non-combat ships | Epoch-based pool rotation covering full pool |
-| All opponents weighted equally in fitness | Beating a buffalo counts same as beating condor_Attack | Elo-weighted z-score fitness |
-| Random opponent ordering | WilcoxonPruner only pruned 11% of trials | Discriminative ordering (anchors first) |
-| Frequent heartbeat timeouts (~every 3-5 min) | ~30-40% throughput loss on 4 instances | Investigate heartbeat timeout tuning |
-| combat_fitness ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Richer fitness from already-collected data |
+| Finding | Impact | Fix | Status |
+|---------|--------|-----|--------|
+| Only 10/54 opponents used (alphabetical selection, biased toward freighters/carriers) | Builds optimized against non-combat ships | Random selection from full pool (pre-burn-in fixed set, post-burn-in incumbent overlap + fill) | ✓ Fixed |
+| All opponents weighted equally in fitness | Beating a buffalo counts same as beating condor_Attack | TWFE decomposition — β_j captures opponent difficulty, α_i is schedule-adjusted | ✓ Fixed |
+| Random opponent ordering | WilcoxonPruner only pruned 11% of trials | Anchor-first ordering + rung-based step IDs for full pruner overlap | ✓ Fixed |
+| Frequent heartbeat timeouts (~every 3-5 min) | ~30-40% throughput loss on 4 instances | Investigate heartbeat timeout tuning | Open |
+| combat_fitness ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Richer fitness from already-collected data | Open (Phase 5D) |
 
 ### Dependencies
 - Phase 4 (optimizer integration, opponent pool, evaluation pipeline) ✓
@@ -332,62 +332,34 @@ First real optimization run completed (Hammerhead, 63 sim trials, 2026-04-13). S
 
 ### Deliverables (Phased)
 
-**Phase 5A — Opponent Normalization ✓ COMPLETE:**
-1. ✓ Z-score per opponent using running statistics (Welford's algorithm)
-2. ✓ Control variate correction using heuristic scorer correlation
-3. ✓ Rank-based fitness shaping (quantile rank reported to Optuna)
+**Phase 5A — Fitness Deconfounding ✓ COMPLETE:**
+1. ✓ TWFE decomposition (additive model: score_ij = α_i + β_j) via `deconfounding.py`
+2. ✓ Trimmed mean (drop worst 2 residuals) for RPS robustness
+3. ✓ Control variate correction using heuristic scorer correlation
+4. ✓ Rank-based fitness shaping (quantile rank reported to Optuna)
 
 **Phase 5B — Sequential Evaluation Pipeline ✓ COMPLETE:**
 1. ✓ ASHA-style rung-priority scheduling via `StagedEvaluator`
 2. ✓ WilcoxonPruner for statistical early stopping
 3. ✓ Mixed-build dispatching across parallel instances
 
-**Phase 5C — Opponent Curriculum and Adaptive Pool:**
+**Phase 5C — Opponent Curriculum ✓ COMPLETE:**
 
-See `docs/reference/phase5b-opponent-curriculum.md` for full research and design.
+Original Elo-based approach (epoch rotation, Elo-weighted fitness) was superseded by TWFE deconfounding after simulation showed Elo is confounded by improving builds. See `docs/reference/phase5b-deconfounding-research.md` for the research synthesis.
 
-1. **Epoch-based opponent pool rotation** — Burn-in with random 10, then rotate every 30 trials using UCB-informativeness scoring. Gradually covers all 54 destroyers while concentrating budget on informative opponents.
-2. **Three-tier evaluation** — Gate set (3 anchor opponents, always first) → Rotating diagnostic set (7 opponents) → Extended validation (top 10% builds get 10-20 extra opponents).
-3. **Discriminative opponent ordering** — Anchors first (highest correlation with final fitness), then f_var ordering (opponents near 50% win rate = most informative).
-4. **Elo-weighted fitness** — Maintain opponent Elo ratings from data. Weight z-scored fitness by opponent Elo. Bitter-lesson compliant (difficulty emerges from data, not hand-engineered).
+1. ✓ **TWFE-based opponent difficulty** — β_j estimates from additive decomposition replace Elo
+2. ✓ **Anchor-first ordering** — Top-3 discriminative opponents locked at front after burn-in for maximum WilcoxonPruner signal
+3. ✓ **Incumbent overlap** — Force 5 opponents from incumbent's set for direct TWFE comparability
+4. ✓ **Fixed pre-burn-in set** — All early builds face the same opponents for fair comparison and pruner overlap
 
 **Phase 5D — Richer Combat Fitness Signals:**
 1. **From already-collected data** (no Java changes) — Damage efficiency ratio, armor-stripping effectiveness, overload differential, duration-normalized damage, peak time remaining.
 2. **Lightweight Java harness changes** — Per-frame flux pressure tracking, cumulative overload duration, time to first hull damage.
 3. **Medium Java changes** (lower priority) — Engagement distance tracking, shield uptime fraction.
 
-### Implementation Plan for Phase 5C
+### Implementation Plan for Phase 5C (superseded)
 
-```
-Step 1: Opponent Elo system (~50 lines in optimizer.py)
-  - Add OpponentElo class with standard Elo update
-  - Bootstrap from existing 63-trial data
-  - Compute Elo for all 10 tested opponents
-
-Step 2: Epoch-based pool rotation (~100 lines in optimizer.py)
-  - Add _epoch_length to OptimizerConfig
-  - Replace static opponents[:active_opponents] with _select_active_opponents()
-  - Implement UCB-informativeness scoring (discriminative power × diversity + exploration)
-  - Dynamic _opponent_step_map extension
-
-Step 3: Discriminative ordering (~30 lines in optimizer.py)
-  - Replace random shuffle with anchor-first + f_var ordering
-  - Track per-opponent Spearman correlation with final fitness
-
-Step 4: Elo-weighted fitness (~30 lines in optimizer.py)
-  - Replace equal-weight mean with Elo-weighted z-score aggregation
-  - Add temperature parameter to OptimizerConfig
-
-Step 5: Extended validation (~50 lines in optimizer.py)
-  - After trial completes, check if top-10% fitness
-  - If so, dispatch additional matchups from full pool
-  - Append extended results to evaluation log
-
-Step 6: Tests
-  - Unit tests for Elo update, UCB scoring, discriminative ordering
-  - Replay overnight data under new scoring, verify rank preservation
-  - Integration test: verify epoch rotation selects diverse opponents
-```
+> **Note:** This Elo-based plan was superseded by TWFE deconfounding after simulation showed Elo ρ(difficulty)=0.024 with improving builds. The actual implementation uses `deconfounding.py` (spec 28) + anchor-first ordering + incumbent overlap. See `docs/specs/28-deconfounding.md`.
 
 ### Implementation Plan for Phase 5D
 
