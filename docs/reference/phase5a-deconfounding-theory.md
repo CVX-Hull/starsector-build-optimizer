@@ -1,9 +1,13 @@
-# Phase 5B: Deconfounding Build Quality from Opponent Difficulty
+# Phase 5A — Deconfounding Theory (TWFE Foundation)
+
+> **Status**: Research synthesis. The design it produced (TWFE decomposition) is shipped in `src/starsector_optimizer/deconfounding.py` and specified in `docs/specs/28-deconfounding.md`.
 
 Research synthesis from 6 independent literature surveys (IRT/adaptive testing, game rating systems, causal inference, bandits/active learning, sports analytics, coevolutionary algorithms) addressing two core problems:
 
-1. **Cross-subset comparability**: How to compare builds tested against different opponent subsets
-2. **Temporal confounding**: How to separate "build improved" from "opponent was easy" when build quality is non-stationary
+1. **Cross-subset comparability**: How to compare builds tested against different opponent subsets.
+2. **Temporal confounding**: How to separate "build improved" from "opponent was easy" when build quality is non-stationary.
+
+Reading this doc cold: this is the *theory* foundation for the Phase 5A fitness aggregator that ships in the optimizer. The downstream pieces — Phase 5C opponent selection, Phase 5D covariate adjustment, Phase 5E shape revision — all build on the TWFE model derived here. See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview.
 
 ---
 

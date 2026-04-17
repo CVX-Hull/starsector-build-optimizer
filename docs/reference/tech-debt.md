@@ -16,7 +16,7 @@ Pre-existing issues found by post-implementation audit agents. Address when touc
 - *#8 (bare MagicMock): Added spec=CombatResult*
 - *#9 (hardcoded eval_log_path): Added to OptimizerConfig*
 - *#10 (useDefaultAI confusion): Documented in code and starsector-modding skill*
-- *#11 (alphabetical opponent selection): Tracked in Phase 5C roadmap (docs/reference/phase5b-opponent-curriculum.md)*
+- *#11 (alphabetical opponent selection): Resolved — anchor-first + incumbent-overlap selection shipped (Phase 5C). See docs/reference/phase5c-opponent-curriculum.md*
 - *#12 (heartbeat timeout): Fixed (Robot pixel-polling + heartbeat touch-not-delete)*
 - *#13 (spec 16 coordinates): Updated to match code*
 - *#14 (TitleScreenPlugin triggered reset): Documented in spec 16*

@@ -7,7 +7,11 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - **Phase 3** (complete): Instance manager — N parallel Starsector instances via Xvfb, batch evaluation, health monitoring.
 - **Phase 3.5** (complete): Data-driven timeout tuning (Weibull AFT).
 - **Phase 4** (complete): Optimizer integration — Optuna TPE/CatCMAwM, opponent pool, heuristic warm-start, parameter importance.
-- **Phase 5** (5A-5C complete, 5D planned): Signal quality — TWFE deconfounding, multi-fidelity evaluation, anchor-first opponent ordering, incumbent overlap.
+- **Phase 5** (5A–5C complete; 5D and 5E planned; 5F deferred): Signal quality.
+  - **5A** TWFE deconfounding + control variate + rank shape; **5B** WilcoxonPruner + ASHA; **5C** anchor-first + incumbent-overlap opponent selection — all shipped and documented in `docs/reference/phase5-signal-quality.md`, `phase5a-deconfounding-theory.md`, `phase5c-opponent-curriculum.md`.
+  - **5D** (planned) — covariate-adjusted TWFE: extends A1 to `Y_ij = α_i + β_j + γᵀ X_ij + ε_ij` via Frisch-Waugh-Lovell + CUPED (Deng et al. 2013); absorbs A2 into multivariate OLS. Replaces the rejected hand-weighted composite fitness and the rejected per-frame Java harness tracking, both of which violated the bitter lesson. See `docs/reference/phase5d-covariate-adjustment.md`.
+  - **5E** (planned) — Box-Cox replaces the top-quartile-clamped rank shape at A3. Simulation-validated (Δρ = +0.070, ceiling 25.3% → 0.4%) in `experiments/signal-quality-2026-04-17/`; see `docs/reference/phase5e-shape-revision.md`.
+  - **5F** (deferred) — adversarial opponent curriculum (PSRO-style pool growth). Research complete; revisit post-5E if exploit convergence persists.
 
 ## Commands
 

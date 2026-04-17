@@ -6,7 +6,7 @@ Two-Way Fixed Effects (TWFE) decomposition for schedule-adjusted build quality e
 
 When builds are evaluated against different opponent subsets, raw fitness scores are incomparable: a high score could mean "good build" or "easy opponents." When build quality improves over time (optimizer convergence), all opponents appear easier — opponent difficulty estimates are confounded with the build improvement trend.
 
-TWFE solves both problems by decomposing the score matrix into additive build quality (α_i) and opponent difficulty (β_j) components. This decomposition is the consensus solution across six independent fields: IRT, game rating systems, causal inference, sports analytics, bandits/active learning, and coevolutionary algorithms. See `docs/reference/phase5b-deconfounding-research.md` for the full literature synthesis.
+TWFE solves both problems by decomposing the score matrix into additive build quality (α_i) and opponent difficulty (β_j) components. This decomposition is the consensus solution across six independent fields: IRT, game rating systems, causal inference, sports analytics, bandits/active learning, and coevolutionary algorithms. See `docs/reference/phase5a-deconfounding-theory.md` for the full literature synthesis.
 
 ## Overview
 

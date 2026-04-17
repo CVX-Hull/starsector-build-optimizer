@@ -64,6 +64,11 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | [multi-fidelity-strategy](./reference/multi-fidelity-strategy.md) | Three-tier evaluation pipeline, surrogate models, noise handling |
 | [quality-diversity](./reference/quality-diversity.md) | MAP-Elites for build archetype discovery, behavior descriptors |
 | [implementation-roadmap](./reference/implementation-roadmap.md) | Phased build plan with dependencies and technology choices |
+| [phase5-signal-quality](./reference/phase5-signal-quality.md) | Phase 5A/5B foundational research — opponent normalisation, multi-fidelity, pruning |
+| [phase5a-deconfounding-theory](./reference/phase5a-deconfounding-theory.md) | TWFE additive-decomposition synthesis (6-field literature consensus; foundation of 5A + 5C) |
+| [phase5c-opponent-curriculum](./reference/phase5c-opponent-curriculum.md) | Phase 5C — anchor-first + incumbent overlap + fixed pre-burn-in; rejected alternatives (Elo, per-frame Java, hullmod blacklist) |
+| [phase5d-covariate-adjustment](./reference/phase5d-covariate-adjustment.md) | Phase 5D — covariate-adjusted TWFE (FWL + CUPED) with automatic two-stage selection (timing filter + PDS lasso; optional DML / ICP); rejected alternatives (hand-weighted composite, MISO) |
+| [phase5e-shape-revision](./reference/phase5e-shape-revision.md) | Phase 5E — Box-Cox replaces rank-shape-with-ceiling; simulation-validated |
 | [game-data-reference](./reference/game-data-reference.md) | File formats, CSV schemas, .variant and .ship file structures |
 
 ## Key Design Decisions

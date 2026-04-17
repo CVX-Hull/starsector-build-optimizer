@@ -404,7 +404,7 @@ COPY optimizer/ /opt/optimizer/
 
 ## 6. Interaction with Other Phases
 
-**Phase 5 (Signal Quality):** Mixed-build batching (Phase T3) is a prerequisite for Phase 5B (sequential opponent evaluation with Hyperband pruning). The staged evaluator also naturally supports Phase 5A (opponent normalization — z-score as results arrive), Phase 5C (curriculum learning — easy opponents as rung 0), and Phase 5D (CRN — seed field in MatchupConfig).
+**Phase 5 (Signal Quality):** Mixed-build batching (Phase T3) is a prerequisite for Phase 5B (sequential opponent evaluation with Hyperband pruning). The staged evaluator also naturally supports Phase 5A (opponent normalization — z-score / TWFE as results arrive), Phase 5C (curriculum learning — anchor opponents at rung 0), and a future common-random-numbers variant (Glasserman & Yao) via a seed field in MatchupConfig — complementary to Phase 5A variance reduction. (Note: "Phase 5D" in the current roadmap refers to richer-fitness work, not CRN; CRN is a separate Phase 5A extension if later needed.)
 
 **Phase 4 (Optimizer):** The `optimize_hull()` function's inner loop changes from flat batch evaluation to staged evaluation. The ask-tell interface with Optuna is preserved. `OptimizerConfig` gains new fields for staged evaluation parameters.
 
