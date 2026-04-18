@@ -27,6 +27,23 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 - Game data location: `game/starsector/data/` (gitignored, not in repo)
 - See `combat-harness/CLAUDE.md` for Java-specific instructions
 
+## Running the live optimizer (sim mode)
+
+Each Starsector JVM consumes ~2.5 cores under active combat (measured 2026-04-18: `ps -eo pcpu` showed 232–254% per JVM on a 12-core host). Over-subscribing CPU causes load-thrash that slows throughput to a crawl. Pick instance count, launch, and stop as follows:
+
+**Sizing (enforced)**: `--num-instances ≤ os.cpu_count() // 3`. `InstancePool.setup()` preflights this and raises `InstanceError` otherwise. On a 12-core host, max is 4; on 9-core, 3.
+
+**Launch**:
+```
+uv run python scripts/run_optimizer.py --hull <id> --game-dir game/starsector \
+    --num-instances <≤nproc/2> --sim-budget <N> --study-db data/<id>.db
+```
+
+**Stop — three options in preference order**:
+1. **Ctrl-C (preferred)** — `run_optimizer.py` installs SIGINT/SIGTERM/SIGHUP handlers that raise `KeyboardInterrupt`, unwinding `with InstancePool(...)` → `teardown()` writes shutdown signals and terminates JVMs + Xvfb cleanly. `kill <pid>` on the Python orchestrator works the same.
+2. **`uv run python scripts/stop_optimizer.py`** — panic button when the orchestrator is gone (crash, `kill -9`, tmux session lost). Writes shutdown signals to every work dir, then SIGTERM → wait → SIGKILL on `StarfarerLauncher` JVMs and `Xvfb :1XX` processes.
+3. **Never `pkill -f starsector`** — the JVM cmdline contains `StarfarerLauncher` / `com.fs.starfarer`, not the literal string `starsector`. The correct patterns are `StarfarerLauncher` (JVMs) and `Xvfb :1\d\d` (displays 100–199).
+
 ## Workflow Gates
 
 For every module: spec first (`docs/specs/`), then tests, then implementation. The four skills in `.claude/skills/` enforce quality at each gate:

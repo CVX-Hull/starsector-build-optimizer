@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import signal
 import sys
 
 sys.path.insert(0, "src")
@@ -13,6 +14,18 @@ from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
 from starsector_optimizer.opponent_pool import discover_opponent_pool, get_opponents
 from starsector_optimizer.optimizer import OptimizerConfig, optimize_hull
+
+
+def _install_signal_handlers() -> None:
+    """Route SIGTERM/SIGHUP to KeyboardInterrupt so `with InstancePool(...)`
+    unwinds cleanly and game JVMs + Xvfb don't orphan.
+
+    SIGINT already raises KeyboardInterrupt by default (Ctrl-C works).
+    """
+    def handler(signum, _frame):
+        raise KeyboardInterrupt(f"received signal {signum}")
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGHUP, handler)
 
 
 def main():
@@ -33,6 +46,8 @@ def main():
     parser.add_argument("--fix-params", type=Path, default=None,
                         help="JSON file mapping param names to fixed values")
     args = parser.parse_args()
+
+    _install_signal_handlers()
 
     logging.basicConfig(
         level=logging.INFO,
@@ -101,11 +116,18 @@ def main():
         game_dir=args.game_dir,
         num_instances=args.num_instances,
     )
-    with InstancePool(instance_config) as pool:
-        pool.setup()
-        study = optimize_hull(
-            args.hull, game_data, pool, opponent_pool, config,
+    try:
+        with InstancePool(instance_config) as pool:
+            pool.setup()
+            study = optimize_hull(
+                args.hull, game_data, pool, opponent_pool, config,
+            )
+    except KeyboardInterrupt:
+        logging.getLogger(__name__).warning(
+            "Interrupted — InstancePool.__exit__ ran teardown; if any JVMs/Xvfb "
+            "remain, use `uv run python scripts/stop_optimizer.py`."
         )
+        sys.exit(130)
 
     _print_results(study, args.hull, game_data)
 

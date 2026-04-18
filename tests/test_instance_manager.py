@@ -90,6 +90,15 @@ def pool(config):
     return InstancePool(config)
 
 
+@pytest.fixture(autouse=True)
+def _pretend_large_host(monkeypatch):
+    """Fixture: pretend host has 12 cores so `setup()` preflight doesn't gate
+    tests that construct InstanceConfig(num_instances=2..3). The preflight
+    itself is tested directly via its own class below.
+    """
+    monkeypatch.setattr("os.cpu_count", lambda: 12)
+
+
 # --- Work Directory Tests ---
 
 
@@ -388,6 +397,45 @@ class TestDisplayNumbering:
 
         displays = [inst.display_num for inst in pool._instances]
         assert displays == [50, 51, 52]
+
+
+# --- Load Preflight Tests ---
+
+
+class TestSetupLoadPreflight:
+    """`setup()` refuses to launch if num_instances exceeds host CPU capacity."""
+
+    def test_rejects_overload(self, fake_game_dir, tmp_path):
+        cfg = InstanceConfig(
+            game_dir=fake_game_dir,
+            instance_root=tmp_path / "inst",
+            num_instances=100,
+        )
+        pool = InstancePool(cfg)
+        with pytest.raises(InstanceError, match="exceeds host capacity"):
+            pool.setup()
+
+    def test_accepts_within_budget(self, fake_game_dir, tmp_path):
+        cfg = InstanceConfig(
+            game_dir=fake_game_dir,
+            instance_root=tmp_path / "inst",
+            num_instances=1,
+        )
+        pool = InstancePool(cfg)
+        pool.setup()
+        assert pool.num_instances == 1
+
+    def test_message_names_safe_max(self, fake_game_dir, tmp_path, monkeypatch):
+        # cpu=9 → safe_max = 9 // 3 = 3; num=6 trips the preflight.
+        monkeypatch.setattr("os.cpu_count", lambda: 9)
+        cfg = InstanceConfig(
+            game_dir=fake_game_dir,
+            instance_root=tmp_path / "inst",
+            num_instances=6,
+        )
+        pool = InstancePool(cfg)
+        with pytest.raises(InstanceError, match="max 3"):
+            pool.setup()
 
 
 # --- Context Manager Tests ---

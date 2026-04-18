@@ -467,6 +467,11 @@ class StagedEvaluator:
         self._completed_records: dict[int, _EBRecord] = {}
         # A3: Completed fitness values for rank-based shaping
         self._completed_fitness_values: list[float] = []
+        # A2′ summary (reported at end of run)
+        self._eb_activated_count: int = 0  # trials where twfe != eb (EB moved alpha)
+        self._eb_shrinkage_magnitudes: list[float] = []  # |eb - twfe| per completed trial
+        self._run_start_time: float = 0.0
+        self._trials_pruned: int = 0
 
     def run(self) -> None:
         """Execute staged evaluation with parallel instance dispatch.
@@ -476,9 +481,11 @@ class StagedEvaluator:
         All state mutations (_queue, _dispatched, _score_matrix, etc.) happen
         in the main thread between wait() calls — no locks needed.
         """
+        import time
         from collections import deque
         from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_COMPLETED
 
+        self._run_start_time = time.time()
         num_inst = self._instance_pool.num_instances
         logger.info(
             "Starting staged evaluation: %d instances, %d active / %d total opponents",
@@ -522,14 +529,45 @@ class StagedEvaluator:
                             or not pending):
                         best = (self._study.best_value
                                 if self._study.best_trial else 0.0)
+                        finalized = self._trials_completed - self._trials_pruned
                         logger.info(
-                            "Progress: %d/%d trials, best=%.3f, pending=%d",
-                            self._trials_completed, self._config.sim_budget,
-                            best, len(pending),
+                            "Progress: %d finalized + %d pruned / %d budget, "
+                            "in-flight=%d, best=%.3f",
+                            finalized, self._trials_pruned,
+                            self._config.sim_budget, len(self._queue), best,
                         )
 
                 # Dispatch new work to all freed instances
                 self._fill_instances(executor, pending, free_instances)
+
+        self._log_run_summary()
+
+    def _log_run_summary(self) -> None:
+        """Emit end-of-run summary: EB activation, shrinkage, throughput."""
+        import time
+
+        elapsed = time.time() - self._run_start_time
+        finalized = len(self._completed_records)
+        completed = self._trials_completed - self._trials_pruned
+        rate = (finalized / elapsed * 3600) if elapsed > 0 else 0.0
+        eb_rate = (self._eb_activated_count / finalized) if finalized else 0.0
+        mean_abs = (
+            sum(self._eb_shrinkage_magnitudes) / len(self._eb_shrinkage_magnitudes)
+            if self._eb_shrinkage_magnitudes else 0.0
+        )
+        logger.info(
+            "Run summary: %d completed + %d pruned in %.1fs (%.1f trials/hr); "
+            "EB activated on %d/%d finalized (%.0f%%); mean |Δ|=%.4f",
+            completed, self._trials_pruned, elapsed, rate,
+            self._eb_activated_count, finalized, eb_rate * 100.0, mean_abs,
+        )
+
+    def _track_eb_summary(self, twfe: float, eb: float) -> None:
+        """Accumulate EB activation + magnitude stats for the end-of-run log."""
+        diff = abs(eb - twfe)
+        self._eb_shrinkage_magnitudes.append(diff)
+        if diff > 1e-9:
+            self._eb_activated_count += 1
 
     def _fill_instances(self, executor, pending, free_instances) -> None:
         """Dispatch matchups to all free instances."""
@@ -591,7 +629,7 @@ class StagedEvaluator:
         ifb.trial.report(raw, step=rung_step)
 
         logger.info(
-            "  Trial %d rung %d/%d vs %s: %s (raw=%.3f, mean=%.3f)",
+            "  Trial %d rung %d/%d vs %s: %s (score=%.3f, mean=%.3f)",
             ifb.trial.number, ifb.rung, len(ifb.opponents),
             opp_id, result.winner, raw, raw_mean,
         )
@@ -683,14 +721,20 @@ class StagedEvaluator:
         )
 
         if self._eval_log_path:
+            record = self._completed_records[ifb.trial.number]
+            covariate = _build_covariate_vector(record)
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
                 ifb.build, ifb.completed_results, ranked_fitness,
                 raw_fitness=eb_fitness,
                 eb_fitness=eb_fitness,
+                twfe_fitness=twfe_fitness,
+                engine_stats=ifb.engine_stats,
+                covariate_vector=covariate.tolist(),
                 pruned=False, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
+            self._track_eb_summary(twfe_fitness, eb_fitness)
 
     def _apply_eb_shrinkage(
         self, trial_number: int, twfe_fitness: float,
@@ -724,6 +768,7 @@ class StagedEvaluator:
     def _prune_build(self, ifb: _InFlightBuild) -> None:
         """Tell Optuna PRUNED, log partial results."""
         self._study.tell(ifb.trial, state=TrialState.PRUNED)
+        self._trials_pruned += 1
 
         if self._eval_log_path:
             raw_mean = (
@@ -875,11 +920,22 @@ def _append_eval_log(
     *,
     raw_fitness: float | None = None,
     eb_fitness: float | None = None,
+    twfe_fitness: float | None = None,
+    engine_stats: "EngineStats | None" = None,
+    covariate_vector: list[float] | None = None,
     pruned: bool = False,
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
 ) -> None:
-    """Append one JSONL record to the evaluation log."""
+    """Append one JSONL record to the evaluation log.
+
+    Completed builds write the full audit triple:
+      - twfe_fitness: pre-shrinkage α̂ from TWFE decomposition
+      - eb_fitness:   post-shrinkage posterior mean (γ̂ᵀX fused with α̂)
+      - fitness / raw_fitness: post-A3 rank-shaped value fed to Optuna
+    plus `engine_stats` + `covariate_vector` so the EB computation is reproducible
+    from the log alone. Pruned builds omit these EB-specific fields.
+    """
     record = {
         "hull_id": hull_id,
         "trial_number": trial_number,
@@ -911,6 +967,16 @@ def _append_eval_log(
     }
     if eb_fitness is not None:
         record["eb_fitness"] = eb_fitness
+    if twfe_fitness is not None:
+        record["twfe_fitness"] = twfe_fitness
+    if engine_stats is not None:
+        record["engine_stats"] = {
+            "eff_max_flux": engine_stats.eff_max_flux,
+            "eff_flux_dissipation": engine_stats.eff_flux_dissipation,
+            "eff_armor_rating": engine_stats.eff_armor_rating,
+        }
+    if covariate_vector is not None:
+        record["covariate_vector"] = [float(x) for x in covariate_vector]
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")

@@ -309,10 +309,13 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
   ],
   "opponents_evaluated": 2,
   "opponents_total": 5,
-  "pruned": true,
+  "pruned": false,
   "opponent_order": ["doom_Strike", "aurora_Assault", "dominator_Assault", "dominator_XIV_Elite", "eagle_Assault"],
-  "raw_fitness": -0.35,
-  "eb_fitness": -0.35,
+  "raw_fitness": 0.21,
+  "eb_fitness": 0.21,
+  "twfe_fitness": 0.18,
+  "engine_stats": {"eff_max_flux": 12000.0, "eff_flux_dissipation": 800.0, "eff_armor_rating": 1050.0},
+  "covariate_vector": [12000.0, 800.0, 1050.0, 4200.0, 1100.0, 0.55, 0.71],
   "fitness": 0.23,
   "timestamp": "2026-04-11T14:32:15"
 }
@@ -322,7 +325,10 @@ Schema:
 - `fitness`: rank-shaped value in [0, 1] told to Optuna (completed builds) or raw mean (pruned builds).
 - `raw_fitness`: the post-A2′ scalar fed into A3 rank shaping. Semantically stable across 5A → 5D: its *content* changed from CV-corrected to EB-shrunk, but its role ("final scalar before rank shaping") is unchanged.
 - `eb_fitness`: explicit EB posterior (post-triple-goal if enabled). Added in 5D for auditability. For completed builds under 5D this equals `raw_fitness`; the redundant write makes it unambiguous that EB was applied. Unset for pruned builds (TWFE α̂ is unstable with few observations; no shrinkage is applied at prune time).
-- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `opponents_evaluated < opponents_total` indicates early termination.
+- `twfe_fitness`: pre-shrinkage α̂ from the TWFE decomposition. Completed builds only. Paired with `eb_fitness` the JSONL reconstructs the full twfe→eb→ranked pipeline; without it, downstream analysis cannot distinguish raw TWFE from EB posterior.
+- `engine_stats`: Java SETUP-phase engine readings (flux capacity, dissipation, armor rating). Completed builds only. Absent when Java did not emit `setup_stats` (pre-5D replay logs).
+- `covariate_vector`: the 7-dim X_i in §2.7 order (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `composite_score`) used by EB shrinkage for this build. Completed builds only.
+- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
 
 ## Study Persistence
 

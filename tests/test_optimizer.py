@@ -1509,3 +1509,128 @@ class TestStagedEvaluatorEBIntegration:
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and t.value is not None]
         assert len(completed) >= 4
+
+
+class TestEvalLogAuditFields:
+    """Eval log persists twfe_fitness, engine_stats, covariate_vector for replay."""
+
+    def _make_mock_pool(self, *, engine_stats=None):
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import (
+            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+        )
+        from starsector_optimizer.instance_manager import InstancePool
+
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = 1
+        default_es = engine_stats or EngineStats(
+            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+        )
+
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=False, hull_fraction=0.7,
+                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=True, hull_fraction=0.0,
+                armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner="PLAYER",
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0, enemy_ships_destroyed=1,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=default_es,
+            )
+
+        mock_pool.run_matchup = mock_run_matchup
+        return mock_pool
+
+    def test_twfe_fitness_field_present(self, wolf_hull, game_data, tmp_path):
+        """Every completed record has a twfe_fitness field (pre-shrinkage α̂)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        import json
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        recs = [json.loads(l) for l in log_path.read_text().splitlines()]
+        completed = [r for r in recs if not r["pruned"]]
+        assert len(completed) > 0
+        for rec in completed:
+            assert "twfe_fitness" in rec
+            assert isinstance(rec["twfe_fitness"], float)
+
+    def test_engine_stats_in_log(self, wolf_hull, game_data, tmp_path):
+        """Completed records persist the engine_stats dict used in EB."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize, EngineStats
+        import json
+
+        es = EngineStats(
+            eff_max_flux=9999.0, eff_flux_dissipation=555.0, eff_armor_rating=777.0,
+        )
+        pool = self._make_mock_pool(engine_stats=es)
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        recs = [json.loads(l) for l in log_path.read_text().splitlines()]
+        completed = [r for r in recs if not r["pruned"]]
+        assert len(completed) > 0
+        for rec in completed:
+            assert "engine_stats" in rec
+            assert rec["engine_stats"]["eff_max_flux"] == pytest.approx(9999.0)
+            assert rec["engine_stats"]["eff_flux_dissipation"] == pytest.approx(555.0)
+            assert rec["engine_stats"]["eff_armor_rating"] == pytest.approx(777.0)
+
+    def test_covariate_vector_in_log(self, wolf_hull, game_data, tmp_path):
+        """Completed records persist the 7-dim covariate vector used as X_i."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        import json
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        recs = [json.loads(l) for l in log_path.read_text().splitlines()]
+        completed = [r for r in recs if not r["pruned"]]
+        assert len(completed) > 0
+        for rec in completed:
+            assert "covariate_vector" in rec
+            assert len(rec["covariate_vector"]) == 7
+            assert all(isinstance(x, float) for x in rec["covariate_vector"])

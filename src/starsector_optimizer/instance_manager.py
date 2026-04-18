@@ -39,6 +39,12 @@ _SYMLINK_DIRS = {"jre_linux", "native", "graphics", "sounds"}
 # data/ subdirectories that must be real (game writes to them)
 _REAL_DATA_SUBDIRS = {"config", "variants"}
 
+# Each Starsector JVM consumes ~2.5 cores under active combat (empirical, measured
+# 2026-04-18 on 12-core host: `ps -eo pcpu` showed 232–254% per java process for 4
+# instances). Add ~0.5 cores of orchestrator + Xvfb overhead per instance → 3 cores
+# per instance. Safe ceiling = cpu_count // 3.
+_CORES_PER_INSTANCE = 3
+
 
 class InstanceError(Exception):
     """Raised when an instance fails unrecoverably."""
@@ -147,7 +153,20 @@ class InstancePool:
         return len(self._instances)
 
     def setup(self) -> None:
-        """Create per-instance work directories with symlink structure."""
+        """Create per-instance work directories with symlink structure.
+
+        Preflight: refuses if num_instances > os.cpu_count() // 3. A Starsector
+        JVM runs at ~2.5 cores under active combat; the per-3-core rule absorbs
+        the JVM footprint plus Xvfb + Python orchestrator overhead.
+        """
+        cpu = os.cpu_count() or 1
+        safe_max = cpu // _CORES_PER_INSTANCE
+        if self._config.num_instances > safe_max:
+            raise InstanceError(
+                f"num_instances={self._config.num_instances} exceeds host capacity "
+                f"(cpu_count={cpu}, max {safe_max}). Each Starsector JVM ≈2.5 cores "
+                f"under active combat; reduce --num-instances or run on a larger host."
+            )
         self._config.instance_root.mkdir(parents=True, exist_ok=True)
         self._instances = []
         for i in range(self._config.num_instances):
