@@ -24,7 +24,7 @@ Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner
 Phase 5C:  Opponent Curriculum ─────────────── ✓ COMPLETE (TWFE replaced Elo; anchor-first, incumbent overlap)
 Phase 5D:  EB Shrinkage of A2 (fusion) ────── ✓ COMPLETE 2026-04-18 — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic prior (3 engine-computed MutableShipStats reads + 3 Python-raw offense/range aggregates + composite_score; HN + triple-goal rank correction). Fusion paradigm, not conditioning. Feature set sized by sweep + variance audit on the 2026-04-17 Hammerhead run — candidate engine features with near-zero per-hull-run variance (eff_hull_hp, eff_max_speed, eff_shield_damage_mult) were dropped in favor of features with empirically-validated spread
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── ✓ COMPLETE 2026-04-18 — scipy.stats.boxcox replaces quantile rank at A3; refit per-call on the post-5D EB posterior-mean population, min-max-rescaled to [0, 1]; ShapeConfig.min_samples=8 floor with min-max passthrough. Post-5D re-validation (experiments/signal-quality-5d-2026-04-18/): ceiling 25% → 0.5%, top-5 overlap 0.02 → 0.44 (14×), invariant across 4 covariate-strength regimes
-Phase 5F:  Regime-Segmented Optimization ──── PLANNED — user-selectable progression tier (mask hullmods/weapons/hulls by rarity tags at search_space.py); CMDP feasibility alignment. Default `mid` reclaims ~80% of compute budget from the Hammerhead 89% exploit cluster
+Phase 5F:  Regime-Segmented Optimization ──── complete (2026-04-18) — user-selectable loadout regime (hullmods + weapons; NOT hulls and NOT opponents per open-world framing) masked at search_space.py; one Optuna study per (hull, regime); cross-regime warm-start via `--warm-start-from-regime`. Default `early` (most conservative component-availability baseline)
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
 Phase 6:   Cloud Worker Federation ─────────── PLANNED (NEXT) — study federation across many (hull, regime, seed) units; each study ≤24 workers to keep TPE in efficient zone; Hetzner CCX33 Ashburn primary + AWS c7a us-west-2 fallback; campaign manager with hard cost cap; pre-baked Packer images; auto-terminate on plateau. Unlocks $1000-scale campaigns at linear $→data scaling
 Phase 7:   Structured Search-Space Repr ───── PLANNED — custom BoTorch GP: SAAS(hullmods) × transformed-overlap+attribute-Matérn(weapons) × slot-Matérn × opponent-features(smalls only) × gated-sentinel(conditional) + ICM residuals; πBO archetype priors; BOCA warm-start; ~2-4× sample efficiency. Renumbered from 6 — depends on Phase 6 cloud federation for multi-hull validation
@@ -427,32 +427,33 @@ Secondary (deferred): CAT Fisher-info opponent selection. Post-5D re-validation 
 
 Rejected alternatives (same as before): CFS-weighted TWFE (regime-mismatched at 10-active-per-trial budget), EM-Tobit TWFE (Amemiya 1984 MSE-gain condition not met at observed ~12% censoring; additionally the 2026-04-18 revalidation showed Tobit + 5D regresses ρ by ~0.09 because Tobit α̂ distribution mismatches the OLS-fit EB prior), full MAP-Elites (2-4 orders of magnitude below viable budget). Full Wilcoxon-ranked simulation results in `docs/reference/phase5e-shape-revision.md` §3 and `experiments/signal-quality-5d-2026-04-18/REPORT.md`.
 
-**Phase 5F — Regime-Segmented Optimization (PLANNED)**
+**Phase 5F — Regime-Segmented Optimization (complete, 2026-04-18)**
 
-User-selectable progression regime applied as a **hard mask** on the hullmod, weapon, and hull catalogues at `search_space.py` construction time — before `repair_build()` sees any candidate. Framed as CMDP feasibility alignment (Altman 1999 *Constrained MDPs*; Huang & Ontañón 2020 action-masking, arXiv:2006.14171), not reward-shaping. Directly addresses the 89% exploit-cluster concentration observed in the 2026-04-17 Hammerhead run.
+User-selectable **loadout regime** hard-masks the hullmod and weapon catalogues at `search_space.py` construction time — before `repair_build()` sees any candidate. Framed as CMDP feasibility alignment (Altman 1999 *Constrained MDPs*; Huang & Ontañón 2020 action-masking, arXiv:2006.14171), not reward-shaping. Directly addresses the 89% exploit-cluster concentration observed in the 2026-04-17 Hammerhead run.
 
 ```python
 @dataclass(frozen=True)
 class RegimeConfig:
     name: str                             # "early" | "mid" | "late" | "endgame"
-    max_hullmod_tier: int
+    max_hullmod_tier: int                 # inclusive ceiling on HullMod.tier
     exclude_hullmod_tags: frozenset[str]
-    exclude_hull_ids: frozenset[str]
     exclude_weapon_tags: frozenset[str]
 ```
 
-Four presets, each materialized pre-repair:
+Four presets, each materialized pre-repair. **Regime filters loadout only** — hull choice is orthogonal and user-controlled via `--hull`; opponents stay drawn from the full hull-size-matched pool (`opponent_pool.py`) regardless of regime. This open-world framing is load-bearing: an early-regime build IS expected to face endgame opponents sometimes and the optimizer should reward loadouts that survive that.
 
-| Preset | Hullmod filter | Weapon filter | Hull filter |
-|---|---|---|---|
-| `early` | `tier ≤ 1 ∧ ¬codex_unlockable ∧ ¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp ∧ ¬codex_unlockable` | vanilla civilian + faction-common |
-| `mid` **(default)** | `¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp` | vanilla + faction-reachable (no Onslaught_Mk.I) |
-| `late` | `¬no_drop` | none | all except Onslaught_Mk.I + Remnant-only |
-| `endgame` | none | none | none (current behaviour; QA / exploit-discovery mode) |
+| Preset | Hullmod filter | Weapon filter |
+|---|---|---|
+| `early` **(default)** | `tier ≤ 1 ∧ ¬codex_unlockable ∧ ¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp ∧ ¬codex_unlockable` |
+| `mid` | `¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp` |
+| `late` | `¬no_drop` | none |
+| `endgame` | none | none (pre-5F behaviour, QA / exploit-discovery mode) |
 
-**One independent Optuna study per `(hull, regime)`.** This is the dominant pattern in comparable shipped bots: Slay-I / Bottled AI (per-ascension), Riot TFT (per-Set retrain), Raidbots / Ask Mr. Robot (per-raid-tier SimC run), MTG Pauper/Modern/Legacy optimizers, FIA class homologation. Cross-regime warm-start via `study.enqueue_trial()` is optional but not required for correctness.
+**One independent Optuna study per `(hull, regime)`.** Study identity is `f"{hull_id}__{regime.name}"` (double-underscore separator unambiguous against hull IDs like `onslaught_mk1`). Pre-5F DBs (`study_name == hull_id`) are not auto-loadable; fresh DB per regime expected. Matches the dominant pattern in comparable shipped bots: Slay-I / Bottled AI (per-ascension), Riot TFT (per-Set retrain), Raidbots / Ask Mr. Robot (per-raid-tier SimC run), MTG Pauper/Modern/Legacy optimizers, FIA class homologation.
 
-**Default `mid`** is grounded in four converging arguments: (a) Csikszentmihalyi flow + Koster mastery-decay + Ryan-Rigby PENS (overpowered play collapses engagement); (b) Suits' lusory attitude + Caillois' agon + Paul 2020 (constraint is constitutive of meaningful play; unconstrained optimization empirically collapses variety); (c) Alex Mosolov's stated design intent (Codex Overhaul 2024-05-11: `codex_unlockable` is spoiler-avoidance, `no_drop` / `no_drop_salvage` are genuine acquisition gates); (d) compute efficiency — `mid` redirects ~80% of the Hammerhead trial budget from the exploit cluster to the deployment-reachable regime.
+**Cross-regime warm-start** via `--warm-start-from-regime <name>` enqueues the top-M completed trials from the named prior-regime study on the same hull, but first routes each trial through `trial_params_to_build` → `repair_build` → `is_feasible` + the target regime's tag mask. Source trials that reference regime-incompatible components are skipped with a WARNING (never silently enqueued — that would contaminate the target regime's TPE posterior). After the feasibility gate, params are re-encoded via `build_to_trial_params(repaired, target_space)` before `study.enqueue_trial()` to handle the case where a component survives the regime mask but sits outside the target's per-slot weapon_options (structural-distribution mismatch).
+
+**Default `early`** (deviation from research doc §3.4 default-`mid` argument). Under the open-world reframe, the conservative baseline "what can a lightly-progressed save actually assemble?" is `early`; `mid`'s argument rested on assuming the median player has progressed past `no_drop_salvage` gates, which the open-world framing doesn't justify as a *default* assumption. Users whose saves have unlocked more opt up explicitly.
 
 **Extension candidate** (not in initial ship): per-`RegimeConfig` `eb_extra_covariates` opt-in for archetype-dependent post-battle signals. The 2026-04-18 TTK-signal investigation (`experiments/phase5d-ttk-signal-2026-04-18/`, §7 of `phase5d-covariate-adjustment.md`) showed build-mean `duration_seconds` is a Case-17 bad control on paper (Eggers-Tuñón placebo rejects admissibility) but empirically delivers +0.136 Δρ on production-sized n=56 overnight-log replay and saturates to ~0 at n=485. Signal is expected to be archetype-dependent — Hammerhead's quick-kill profile makes its TTK a strong α-mediator; attrition archetypes untested. Integration: extend `_build_covariate_vector` to read a regime-defined set of extra features (pre-battle projected TTK `log(effective_hp / total_dps)` as the causally clean default; raw `duration` as opt-in gated by a continuous Eggers-Tuñón placebo monitor).
 
@@ -607,7 +608,7 @@ Spend $N of compute and get $N of useful data — linear $→data scaling from $
 ### Dependencies
 - Phase 3 (`InstancePool` — worker-local parallelism unchanged)
 - Phase 4 (`StagedEvaluator` already async-friendly)
-- Phase 5F (planned; `(hull, regime)` is the natural federation unit — cloud federation and 5F are mutually enabling)
+- Phase 5F (complete 2026-04-18; `(hull, regime)` is the natural federation unit — cloud federation and 5F are mutually enabling)
 - Python libs: `hcloud` (Hetzner), `boto3` (AWS), `redis`, `apache-libcloud` (provider abstraction), `packer` (image baking)
 
 ### Key design decisions

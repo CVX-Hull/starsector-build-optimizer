@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from .models import Build, GameData, ShipHull
+from .models import REGIME_ENDGAME, Build, GameData, RegimeConfig, ShipHull
 from .repair import repair_build
 from .scorer import heuristic_score, DEFAULT_WEIGHTS
 from .search_space import build_search_space
@@ -14,12 +14,18 @@ def generate_random_build(
     hull: ShipHull,
     game_data: GameData,
     rng: np.random.Generator | None = None,
+    regime: RegimeConfig = REGIME_ENDGAME,
 ) -> Build:
-    """Generate a random build for a hull, then repair to ensure feasibility."""
+    """Generate a random build for a hull, then repair to ensure feasibility.
+
+    Default `regime=REGIME_ENDGAME` preserves the pre-5F unfiltered catalogue
+    for callers that were not regime-aware (warm-start random sampling, etc.).
+    Pass an explicit regime to sample within a masked component set.
+    """
     if rng is None:
         rng = np.random.default_rng()
 
-    space = build_search_space(hull, game_data)
+    space = build_search_space(hull, game_data, regime)
 
     # Random weapon per slot: 70% fill, 30% empty
     weapons: dict[str, str | None] = {}
@@ -55,12 +61,13 @@ def generate_diverse_builds(
     game_data: GameData,
     n: int,
     seed: int = 42,
+    regime: RegimeConfig = REGIME_ENDGAME,
 ) -> list[Build]:
-    """Generate n diverse, feasible builds."""
+    """Generate n diverse, feasible builds under `regime` (default: endgame)."""
     rng = np.random.default_rng(seed)
     builds = []
     for _ in range(n):
-        build = generate_random_build(hull, game_data, rng)
+        build = generate_random_build(hull, game_data, rng, regime=regime)
         builds.append(build)
     return builds
 

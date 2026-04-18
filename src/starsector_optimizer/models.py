@@ -486,6 +486,59 @@ class ShapeConfig:
 
 
 @dataclass(frozen=True)
+class RegimeConfig:
+    """Phase 5F loadout regime — CMDP feasibility alignment of the search space.
+
+    Hard-masks hullmods and weapons at `search_space.py` construction time
+    so Optuna optimizes over a component set the target user can actually
+    field on their save. Hull choice is orthogonal and controlled by the
+    caller (e.g. `--hull`); opponents stay drawn from the full hull-size-
+    matched pool (open-world framing — any build can face any opponent).
+    Four presets below; see docs/reference/phase5f-regime-segmented-optimization.md.
+    """
+    name: str                             # "early" | "mid" | "late" | "endgame"
+    max_hullmod_tier: int                 # inclusive ceiling on HullMod.tier; 3 = no filter
+    exclude_hullmod_tags: frozenset[str]
+    exclude_weapon_tags: frozenset[str]
+
+
+REGIME_EARLY = RegimeConfig(
+    name="early",
+    max_hullmod_tier=1,
+    exclude_hullmod_tags=frozenset({"no_drop", "no_drop_salvage", "codex_unlockable"}),
+    exclude_weapon_tags=frozenset({"rare_bp", "codex_unlockable"}),
+)
+
+REGIME_MID = RegimeConfig(
+    name="mid",
+    max_hullmod_tier=3,
+    exclude_hullmod_tags=frozenset({"no_drop", "no_drop_salvage"}),
+    exclude_weapon_tags=frozenset({"rare_bp"}),
+)
+
+REGIME_LATE = RegimeConfig(
+    name="late",
+    max_hullmod_tier=3,
+    exclude_hullmod_tags=frozenset({"no_drop"}),
+    exclude_weapon_tags=frozenset(),
+)
+
+REGIME_ENDGAME = RegimeConfig(
+    name="endgame",
+    max_hullmod_tier=3,
+    exclude_hullmod_tags=frozenset(),
+    exclude_weapon_tags=frozenset(),
+)
+
+REGIME_PRESETS: dict[str, RegimeConfig] = {
+    "early": REGIME_EARLY,
+    "mid": REGIME_MID,
+    "late": REGIME_LATE,
+    "endgame": REGIME_ENDGAME,
+}
+
+
+@dataclass(frozen=True)
 class ImportanceResult:
     """Parameter importance analysis result from fANOVA."""
     importances: dict[str, float]  # param_name -> importance (0.0–1.0, sums to ~1.0)

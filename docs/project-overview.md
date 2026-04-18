@@ -69,6 +69,7 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | [phase5c-opponent-curriculum](./reference/phase5c-opponent-curriculum.md) | Phase 5C — anchor-first + incumbent overlap + fixed pre-burn-in; rejected alternatives (Elo, per-frame Java, hullmod blacklist) |
 | [phase5d-covariate-adjustment](./reference/phase5d-covariate-adjustment.md) | Phase 5D — empirical-Bayes shrinkage of A2 toward a heuristic-predicted regression prior (HN + triple-goal rank correction); closed-form fusion-paradigm replacement for the rejected CUPED/FWL/PDS/ICP conditioning-paradigm v1, which was refuted by synthetic + Hammerhead validation |
 | [phase5e-shape-revision](./reference/phase5e-shape-revision.md) | Phase 5E — Box-Cox output warping replaces quantile rank at A3; implemented 2026-04-18; ceiling 25% → 0.5%, top-5 identification overlap lifted 14× on the post-5D synthetic re-validation |
+| [phase5f-regime-segmented-optimization](./reference/phase5f-regime-segmented-optimization.md) | Phase 5F — user-selectable loadout regime (hullmods + weapons; NOT hulls and NOT opponents per open-world framing) hard-masks the search space at `search_space.py` construction; one Optuna study per `(hull, regime)`; cross-regime warm-start via `--warm-start-from-regime`; default `early` (most conservative component availability). Implemented 2026-04-18 |
 | [game-data-reference](./reference/game-data-reference.md) | File formats, CSV schemas, .variant and .ship file structures |
 
 ## Key Design Decisions

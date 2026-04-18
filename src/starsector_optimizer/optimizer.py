@@ -28,7 +28,12 @@ from scipy.stats import boxcox
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig, EngineStats, GameData, HullSize, MatchupConfig, ScorerResult, ShapeConfig, ShipHull, TWFEConfig
+from .models import (
+    Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig,
+    EngineStats, GameData, HullSize, MatchupConfig,
+    REGIME_EARLY, REGIME_PRESETS, RegimeConfig,
+    ScorerResult, ShapeConfig, ShipHull, TWFEConfig,
+)
 from .combat_fitness import combat_fitness
 from .deconfounding import ScoreMatrix, eb_shrinkage, triple_goal_rank
 from .opponent_pool import (
@@ -36,9 +41,12 @@ from .opponent_pool import (
     get_opponents,
     hp_differential,
 )
-from .repair import repair_build
+from .repair import is_feasible, repair_build
 from .scorer import heuristic_score
-from .search_space import SearchSpace, build_search_space
+from .search_space import (
+    SearchSpace, _regime_admits_hullmod, _regime_admits_weapon,
+    build_search_space,
+)
 from .variant import build_to_build_spec
 
 logger = logging.getLogger(__name__)
@@ -60,6 +68,8 @@ class OptimizerConfig:
     twfe: TWFEConfig = field(default_factory=TWFEConfig)
     eb: EBShrinkageConfig = field(default_factory=EBShrinkageConfig)
     shape: ShapeConfig = field(default_factory=ShapeConfig)
+    regime: RegimeConfig = field(default_factory=lambda: REGIME_EARLY)
+    warm_start_from_regime: str | None = None
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
@@ -287,7 +297,7 @@ def warm_start(
     game_dir: Path | None = None,
 ) -> None:
     """Seed the study with stock builds and top heuristic builds."""
-    space = build_search_space(hull, game_data)
+    space = build_search_space(hull, game_data, config.regime)
     distributions = define_distributions(space)
     stock_count = 0
 
@@ -308,8 +318,10 @@ def warm_start(
             except Exception:
                 pass  # Stock build may not fit distributions exactly
 
-    # Phase 2: Seed with top heuristic builds (diverse random)
-    builds = generate_diverse_builds(hull, game_data, n=config.warm_start_sample_n)
+    # Phase 2: Seed with top heuristic builds (diverse random, regime-masked)
+    builds = generate_diverse_builds(
+        hull, game_data, n=config.warm_start_sample_n, regime=config.regime,
+    )
     scored = [
         (b, heuristic_score(b, hull, game_data).composite_score)
         for b in builds
@@ -766,6 +778,7 @@ class StagedEvaluator:
                 covariate_vector=covariate.tolist(),
                 shape_lambda=shape_diag.lam,
                 shape_passthrough_reason=shape_diag.passthrough_reason,
+                regime=self._config.regime.name,
                 pruned=False, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
@@ -813,6 +826,7 @@ class StagedEvaluator:
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
                 ifb.build, ifb.completed_results, raw_mean,
+                regime=self._config.regime.name,
                 pruned=True, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
@@ -1041,6 +1055,118 @@ def _shape_fitness(
     return val, _ShapeDiag(lam=float(lam), passthrough_reason=None)
 
 
+def _enqueue_warm_start_from_regime(
+    target_study: optuna.Study,
+    source_storage: str,
+    source_study_name: str,
+    target_regime: RegimeConfig,
+    top_m: int,
+    hull: ShipHull,
+    game_data: GameData,
+    target_space: SearchSpace | None = None,
+) -> tuple[int, int]:
+    """Phase 5F cross-regime warm-start. Copy top-M completed trials from a
+    prior-regime study on the same hull into `target_study` via
+    `study.enqueue_trial()`, skipping those infeasible under `target_regime`.
+
+    Feasibility is checked on the REPAIRED build (not on raw params) — repair
+    is the canonical optimizer→domain boundary (CLAUDE.md Design Principle 3),
+    and checking raw params would bypass slot-constraint + hullmod-incompat
+    enforcement.
+
+    Returns (enqueued, skipped_infeasible); enqueued + skipped ≤ total
+    completed trials considered.
+    """
+    try:
+        source_study = optuna.load_study(
+            study_name=source_study_name, storage=source_storage,
+        )
+    except (KeyError, ValueError) as e:
+        raise ValueError(
+            f"Warm-start source study '{source_study_name}' not found in "
+            f"storage '{source_storage}': {e}"
+        ) from e
+
+    completed = [
+        t for t in source_study.trials
+        if t.state == TrialState.COMPLETE and t.value is not None
+    ]
+    completed.sort(key=lambda t: t.value, reverse=True)
+    top = completed[:top_m]
+
+    enqueued = 0
+    skipped = 0
+    for trial in top:
+        try:
+            raw = trial_params_to_build(trial.params, hull.id)
+            repaired = repair_build(raw, hull, game_data)
+        except Exception as exc:
+            logger.warning(
+                "Warm-start: could not reconstruct build from trial %d: %s",
+                trial.number, exc,
+            )
+            skipped += 1
+            continue
+        feasible_ok, _viol = is_feasible(repaired, hull, game_data)
+        if not feasible_ok:
+            logger.warning(
+                "Warm-start: repaired build from trial %d is not feasible",
+                trial.number,
+            )
+            skipped += 1
+            continue
+        # Regime mask: verify every hullmod and weapon on the repaired build
+        # is admitted by the target regime.
+        feasible = True
+        for hm_id in repaired.hullmods:
+            hm = game_data.hullmods.get(hm_id)
+            if hm is None or not _regime_admits_hullmod(hm, target_regime):
+                feasible = False
+                break
+        if feasible:
+            for w_id in repaired.weapon_assignments.values():
+                if w_id is None:
+                    continue
+                w = game_data.weapons.get(w_id)
+                if w is None or not _regime_admits_weapon(w, target_regime):
+                    feasible = False
+                    break
+        if not feasible:
+            logger.warning(
+                "Warm-start: trial %d (value=%.3f) uses components outside "
+                "regime '%s'; skipping",
+                trial.number, trial.value, target_regime.name,
+            )
+            skipped += 1
+            continue
+        # Re-encode the repaired build's params against the target regime's
+        # search space — the source study's params may reference slot/weapon
+        # choices that are structurally absent from the target's distributions
+        # even when the components themselves pass the regime mask (e.g. a
+        # per-slot weapon list differs between regimes).
+        if target_space is not None:
+            try:
+                params = build_to_trial_params(repaired, target_space)
+            except (KeyError, ValueError) as exc:
+                logger.warning(
+                    "Warm-start: trial %d re-encode failed: %s", trial.number, exc,
+                )
+                skipped += 1
+                continue
+        else:
+            params = dict(trial.params)
+        target_study.enqueue_trial(params)
+        enqueued += 1
+
+    logger.info(
+        "Warm-start from regime '%s': enqueued %d trials, skipped %d infeasible",
+        source_study_name.split("__")[-1] if "__" in source_study_name
+        else source_study_name,
+        enqueued, skipped,
+    )
+    return enqueued, skipped
+
+
 def _append_eval_log(
     path: Path,
     hull_id: str,
@@ -1056,6 +1182,7 @@ def _append_eval_log(
     covariate_vector: list[float] | None = None,
     shape_lambda: float | None = None,
     shape_passthrough_reason: str | None = None,
+    regime: str = "endgame",
     pruned: bool = False,
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
@@ -1098,6 +1225,7 @@ def _append_eval_log(
         "pruned": pruned,
         "raw_fitness": raw_fitness if raw_fitness is not None else fitness,
         "fitness": fitness,
+        "regime": regime,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if eb_fitness is not None:
@@ -1132,7 +1260,7 @@ def optimize_hull(
     """Main optimization entry point. Returns the Optuna study."""
     preflight_check(hull_id, game_data, instance_pool, opponent_pool)
     hull = game_data.hulls[hull_id]
-    space = build_search_space(hull, game_data)
+    space = build_search_space(hull, game_data, config.regime)
     distributions = define_distributions(space, fixed_params=config.fixed_params)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -1142,14 +1270,39 @@ def optimize_hull(
     n_active = min(config.active_opponents, len(opponents))
     pruner = _create_pruner(config)
 
+    study_name = f"{hull_id}__{config.regime.name}"
     study = optuna.create_study(
         sampler=sampler,
         pruner=pruner,
         direction="maximize",
         storage=config.study_storage,
-        study_name=hull_id,
+        study_name=study_name,
         load_if_exists=True,
     )
+
+    if config.warm_start_from_regime is not None:
+        if config.warm_start_from_regime == config.regime.name:
+            raise ValueError(
+                f"warm_start_from_regime='{config.warm_start_from_regime}' "
+                f"equals current regime='{config.regime.name}' — self-seeding "
+                f"is not supported; Optuna's load_if_exists handles resume."
+            )
+        if config.study_storage is None:
+            raise ValueError(
+                "warm_start_from_regime requires study_storage to be set "
+                "(both the source and target studies share one backend)."
+            )
+        source_study_name = f"{hull_id}__{config.warm_start_from_regime}"
+        _enqueue_warm_start_from_regime(
+            target_study=study,
+            source_storage=config.study_storage,
+            source_study_name=source_study_name,
+            target_regime=config.regime,
+            top_m=config.warm_start_n,
+            hull=hull,
+            game_data=game_data,
+            target_space=space,
+        )
 
     warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)
 

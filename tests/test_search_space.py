@@ -5,6 +5,7 @@ import pytest
 from starsector_optimizer.models import (
     HullSize, SlotType, SlotSize, MountType, ShieldType, WeaponType,
     WeaponSlot, ShipHull, Weapon, HullMod, DamageType, GameData,
+    REGIME_EARLY, REGIME_MID, REGIME_LATE, REGIME_ENDGAME, RegimeConfig,
 )
 from starsector_optimizer.search_space import (
     get_compatible_weapons,
@@ -133,25 +134,25 @@ class TestGetEligibleHullmods:
 class TestBuildSearchSpace:
     def test_returns_search_space(self, game_data):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
         assert isinstance(space, SearchSpace)
         assert space.hull_id == "eagle"
 
     def test_eagle_has_weapon_options(self, game_data):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
         assert len(space.weapon_options) > 0
 
     def test_each_slot_starts_with_empty(self, game_data):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
         for slot_id, options in space.weapon_options.items():
             assert options[0] == "empty", f"Slot {slot_id} doesn't start with 'empty'"
 
     def test_slot_options_are_compatible(self, game_data):
         """Every weapon in a slot's options must be compatible with that slot."""
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
         slot_map = {s.id: s for s in eagle.weapon_slots}
         from starsector_optimizer.hullmod_effects import SLOT_COMPATIBILITY
         for slot_id, options in space.weapon_options.items():
@@ -171,18 +172,127 @@ class TestBuildSearchSpace:
         for hull in game_data.hulls.values():
             if not hull.built_in_weapons:
                 continue
-            space = build_search_space(hull, game_data)
+            space = build_search_space(hull, game_data, REGIME_ENDGAME)
             for slot_id in hull.built_in_weapons:
                 assert slot_id not in space.weapon_options
             break  # just test one hull with built-in weapons
 
     def test_has_eligible_hullmods(self, game_data):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
         assert len(space.eligible_hullmods) > 10
 
     def test_has_max_vents_caps(self, game_data):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
         assert space.max_vents == 30  # CRUISER
         assert space.max_capacitors == 30
+
+
+# --- Phase 5F: regime mask tests ---
+
+
+def _fixture_game_data_with_tagged_components():
+    """Minimal GameData with a tiered, tagged hullmod set and tagged weapons.
+
+    Hullmods: mt0 (tier 0, clean), mt1 (tier 1, clean), mt3 (tier 3, clean),
+              mt_nds (tier 2, tagged `no_drop_salvage`), mt_rare (tier 3, tagged `codex_unlockable`).
+    Weapons: w_clean (no tags), w_rare (`rare_bp`), w_codex (`codex_unlockable`).
+    """
+    hull = _hull(
+        id="testhull",
+        weapon_slots=[
+            WeaponSlot("WS001", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)),
+        ],
+    )
+
+    def _h(mid, tier, tags):
+        return HullMod(mid, mid, tier, tags, [], 5, 10, 15, 20, False, "")
+
+    hullmods = {
+        "mt0": _h("mt0", 0, []),
+        "mt1": _h("mt1", 1, []),
+        "mt3": _h("mt3", 3, []),
+        "mt_nds": _h("mt_nds", 2, ["no_drop_salvage"]),
+        "mt_rare": _h("mt_rare", 3, ["codex_unlockable"]),
+    }
+
+    def _w(wid, tags):
+        return Weapon(
+            wid, wid, SlotSize.MEDIUM, WeaponType.BALLISTIC,
+            100, 0, DamageType.KINETIC, 0, 100, 0, 700, 10, 0, 0.5, 1, 0, 0, 0,
+            500, 30, [], tags,
+        )
+
+    weapons = {
+        "w_clean": _w("w_clean", []),
+        "w_rare": _w("w_rare", ["rare_bp"]),
+        "w_codex": _w("w_codex", ["codex_unlockable"]),
+    }
+
+    return hull, GameData(hulls={"testhull": hull}, weapons=weapons, hullmods=hullmods)
+
+
+class TestRegimeMask:
+    def test_endgame_regime_admits_everything(self):
+        hull, gd = _fixture_game_data_with_tagged_components()
+        space = build_search_space(hull, gd, REGIME_ENDGAME)
+        assert set(space.eligible_hullmods) == {"mt0", "mt1", "mt3", "mt_nds", "mt_rare"}
+        # Weapon options include "empty" + all three weapons
+        assert set(space.weapon_options["WS001"]) == {"empty", "w_clean", "w_rare", "w_codex"}
+
+    def test_mid_regime_excludes_no_drop_tagged_hullmods(self):
+        hull, gd = _fixture_game_data_with_tagged_components()
+        mid = build_search_space(hull, gd, REGIME_MID)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        assert "mt_nds" in endgame.eligible_hullmods
+        assert "mt_nds" not in mid.eligible_hullmods
+
+    def test_early_regime_enforces_tier_ceiling(self):
+        hull, gd = _fixture_game_data_with_tagged_components()
+        early = build_search_space(hull, gd, REGIME_EARLY)
+        late = build_search_space(hull, gd, REGIME_LATE)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        # mt3 (tier 3) must be absent from early (max_hullmod_tier=1) but present elsewhere
+        assert "mt3" not in early.eligible_hullmods
+        assert "mt3" in late.eligible_hullmods
+        assert "mt3" in endgame.eligible_hullmods
+        # mt0 (tier 0) and mt1 (tier 1) survive the tier ceiling in early
+        assert "mt0" in early.eligible_hullmods
+        assert "mt1" in early.eligible_hullmods
+
+    def test_regime_excludes_rare_bp_weapons(self):
+        hull, gd = _fixture_game_data_with_tagged_components()
+        early = build_search_space(hull, gd, REGIME_EARLY)
+        mid = build_search_space(hull, gd, REGIME_MID)
+        late = build_search_space(hull, gd, REGIME_LATE)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        assert "w_rare" not in early.weapon_options["WS001"]
+        assert "w_rare" not in mid.weapon_options["WS001"]
+        assert "w_rare" in late.weapon_options["WS001"]
+        assert "w_rare" in endgame.weapon_options["WS001"]
+
+    def test_regime_mask_preserves_ordering(self):
+        """Surviving items keep their original relative order (determinism)."""
+        hull, gd = _fixture_game_data_with_tagged_components()
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        mid = build_search_space(hull, gd, REGIME_MID)
+        # Build the expected sub-sequence: the endgame order filtered to mid's admitted set.
+        admitted = set(mid.eligible_hullmods)
+        expected_sub = [h for h in endgame.eligible_hullmods if h in admitted]
+        assert mid.eligible_hullmods == expected_sub
+
+    def test_build_search_space_signature_has_regime(self, game_data):
+        """Calling without regime must raise TypeError — no silent default."""
+        eagle = game_data.hulls["eagle"]
+        with pytest.raises(TypeError):
+            build_search_space(eagle, game_data)  # type: ignore[call-arg]
+        # explicit regime works
+        space = build_search_space(eagle, game_data, REGIME_MID)
+        assert isinstance(space, SearchSpace)
+
+    def test_regime_does_not_filter_hulls(self, game_data):
+        """Regime never vetoes the hull itself — hull is user-picked."""
+        eagle = game_data.hulls["eagle"]
+        space = build_search_space(eagle, game_data, REGIME_EARLY)
+        assert space.hull_id == "eagle"

@@ -150,12 +150,15 @@ The current pipeline evaluates all 5 opponents in parallel and averages. The pro
 ```
 Current:  build → [all 5 opponents] → average → single score → Optuna
 
-Proposed: build → opponent₁ → normalize → report intermediate
+Proposed: [Phase 5F: regime mask → search_space catalogue]
+          build → opponent₁ → normalize → report intermediate
                 → opponent₂ → normalize → report intermediate → prune?
                 → opponent₃ → normalize → report intermediate → prune?
                 → opponent₄ → normalize → report intermediate
                 → opponent₅ → normalize → report final
 ```
+
+Phase 5F operates *upstream* of this pipeline, at `search_space.py::build_search_space` construction time: the hullmod + weapon catalogues handed to `repair_build` and Optuna's distributions are already regime-masked. Phase 5A–5E (TWFE / EB / Box-Cox) run unchanged on the already-regime-scoped per-study data. Opponent selection is explicitly NOT regime-aware — the opponent pool draws from the full hull-size-matched set so every build faces the full adversary distribution (open-world framing).
 
 This single architectural change enables opponent normalization, Hyperband pruning, opponent ordering, and curriculum learning — all within Optuna's existing infrastructure.
 

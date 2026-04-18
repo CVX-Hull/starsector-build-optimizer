@@ -1,6 +1,6 @@
 # Phase 5F — Regime-Segmented Optimization
 
-> **Status**: PLANNED. Research complete (2026-04-17). Targets the 89% exploit-cluster concentration observed in the `experiments/hammerhead-twfe-2026-04-13/` run by aligning the optimizer's feasible action set with user-selectable progression regimes. No shipped code yet.
+> **Status**: **Implemented 2026-04-18.** Regime filters loadout (hullmods + weapons) at `search_space.py` construction; hull remains user-picked per `--hull`; opponents remain regime-blind (`opponent_pool.py`). Cross-regime warm-start shipped as `--warm-start-from-regime`. Default regime = `early` (deviation from the §3.4 default-`mid` argument — see §3.6). Four presets land in `models.py`: `REGIME_EARLY` / `REGIME_MID` / `REGIME_LATE` / `REGIME_ENDGAME` keyed on existing CSV `tier` + tag columns (no new parser work). See §3.6 implementation notes.
 
 Design and research log for how the optimizer selects its feasible component pool per run, so that outputs are strong *within the progression regime the player actually inhabits* rather than strong within a nominally-complete but practically-unreachable pool. Shipped design will be **hard-masking of hullmods/weapons/hulls at `search_space.py` construction time + one Optuna study per `(hull, regime)`**, with `mid` as the default regime.
 
@@ -100,13 +100,15 @@ No schema invention is required. The CSV already encodes the regime signal.
 
 ### 3.1 RegimeConfig
 
+> **Note: §3.6 implementation notes record that the shipped dataclass drops `exclude_hull_ids` under the open-world reframe — hull choice is orthogonal, controlled by `--hull`.** The snippet below preserves the original research design for provenance.
+
 ```python
 @dataclass(frozen=True)
 class RegimeConfig:
     name: str                             # "early" | "mid" | "late" | "endgame"
     max_hullmod_tier: int                 # inclusive ceiling on CSV tier column; 3 = no filter
     exclude_hullmod_tags: frozenset[str]  # e.g. {"no_drop", "no_drop_salvage"}
-    exclude_hull_ids: frozenset[str]      # e.g. {"onslaught_mk1"}
+    exclude_hull_ids: frozenset[str]      # dropped at ship — see §3.6
     exclude_weapon_tags: frozenset[str]   # e.g. {"rare_bp"}
 ```
 
@@ -127,7 +129,7 @@ Each preset is materialized at `search_space.py` construction time as a **mask o
 
 Each `(hull, regime)` pair runs an independent Optuna study. No cross-regime warm-start is required for correctness, but a transfer-BO optimization is available: seed regime-`K` with the top-M incumbents from regime-`K−1` via `study.enqueue_trial()`. This is a single-line change and gives regime-`mid` a head start from regime-`early` results when both are run in sequence. It is *not* curriculum learning (Bengio 2009 doesn't apply: we are restricting the feasible set, not ordering training data).
 
-### 3.4 Default regime = `mid`
+### 3.4 Default regime = `mid` (superseded — ship default is `early`, see §3.6)
 
 Four converging arguments:
 
@@ -155,6 +157,17 @@ The 2026-04-18 TTK-signal investigation (see `docs/reference/phase5d-covariate-a
 A clean integration: extend `RegimeConfig` with a per-hull / per-regime `eb_extra_covariates: frozenset[str]` that lets `_build_covariate_vector` opt a hull into an 8th (or 9th) column. Pre-battle projected TTK `log(effective_hp / total_dps)` is the causally clean default; raw build-mean `duration_seconds` is available as an opt-in for archetypes where an Eggers-Tuñón placebo monitor shows the partial-correlation within tolerance. The monitor runs every `cv_recalc_interval`-equivalent update and emits a warn (or reverts to EB7) if partial-corr(duration, α̂ | X) drifts past a threshold.
 
 **Not proposed for the 5F initial ship.** TTK opt-in is an *extension* of the feature — it belongs after 5F's presets are validated and a second hull's overnight log replicates the calibration/overnight regime split.
+
+### 3.6 Implementation notes (shipped 2026-04-18)
+
+- **Open-world reframe — regime filters OUR loadout, not opponents or hull choice.** Starsector is non-linear: an early-regime fleet can encounter endgame enemies, and an endgame hull often ships without endgame weapons (weapons are rarer drops than hulls). Phase 5F therefore treats regime as a **component-availability filter on the build being optimized** (hullmods + weapons), not as a difficulty or progression gate. Opponents remain drawn from the full hull-size-matched pool (`opponent_pool.py`) regardless of regime; hull choice remains user-controlled via `--hull`. The §3.2 "vanilla civilian + faction-common" / "Remnant-only" hull-filter columns are explicitly dropped; they would have broken the open-world framing. A batch user asking "what should I fly in `mid`?" across 40 hulls must still curate the hull list — Phase 6's campaign YAML is the right layer for that.
+- **Default = `early`** (deviation from research doc §3.4). Under the open-world reframe, the conservative baseline "what can a lightly-progressed save actually assemble?" is `early`; `mid`'s argument rested on assuming the median player has progressed past `no_drop_salvage` gates, which the open-world framing doesn't justify as a *default* assumption. Users whose saves have unlocked more opt up explicitly via `--regime`.
+- **Scope deviation from §3.1** — `RegimeConfig` does NOT include `exclude_hull_ids`; hull choice is orthogonal and user-controlled. Rationale per above: any hull, any opponent, realistic loadout for what the user has.
+- **Warm-start infeasibility skip** — prior-regime trials whose repaired build is infeasible under the new regime mask are skipped with a WARNING rather than silently enqueued. Feasibility checks route through `repair_build()` + `is_feasible()` (canonical optimizer→domain boundary per CLAUDE.md Design Principle 3); raw-param checks would bypass slot-constraint and hullmod-incompat enforcement.
+- **Warm-start re-encode against target search space** — after the feasibility gate, params are re-encoded via `build_to_trial_params(repaired, target_space)` before `study.enqueue_trial()`. The source study's params can reference slot/weapon choices that are structurally absent from the target's distributions (a per-slot weapon list differs between regimes) even when the components themselves pass the regime-tag mask; re-encoding ensures Optuna's `suggest_categorical` sees only target-valid choices.
+- **Study identity** — `f"{hull_id}__{regime_name}"` (double underscore). Hull IDs in `ship_data.csv` use single underscores (`onslaught_mk1`) but never `__`, so the separator is unambiguous. Pre-5F DBs (`study_name == hull_id`) are not auto-loadable; a fresh DB per regime is expected.
+- **Forward compat — future CSV tags silently admitted.** A game patch that introduces a new tag (e.g. `codex_spoiler_v2`) simply won't match any preset's `exclude_hullmod_tags` / `exclude_weapon_tags` frozenset and will default-admit to every regime. This matches the project-wide "warn don't crash on unknown game data" principle (CLAUDE.md §Design Principles #5) on the permissive side; re-tighten the presets when a patch introduces a tag that should be regime-gated.
+- **Warm-start heuristic seeding is also regime-aware.** `warm_start()` threads `config.regime` into `generate_diverse_builds(...)` → `generate_random_build(..., regime=...)` so the heuristic top-N warm starts are sampled from the already-masked catalogue. Without this, a `mid` study's Phase-2 random builds would occasionally include `rare_bp`-tagged weapons and fail Optuna's `add_trial` distribution check.
 
 ---
 
@@ -261,7 +274,7 @@ Step 6: Ship gate — replay the Hammerhead 2026-04-17 eval log with the
   TPE convergence trace is comparable to the unmasked run at matched
   in-regime trial count.
 
-Step 7: Docs — update spec 24 (optimizer), spec 26 (search-space),
+Step 7: Docs — update spec 24 (optimizer), spec 04 (search-space),
   CLAUDE.md phase overview, implementation-roadmap.md.
 ```
 
@@ -326,4 +339,4 @@ Starsector-specific:
 - `docs/reference/phase5d-covariate-adjustment.md` — EB shrinkage; Phase 5F's `X_i` covariate set is regime-invariant.
 - `docs/reference/phase5e-shape-revision.md` — Box-Cox A3; Phase 5F requires per-regime `λ̂` refit.
 - `docs/reference/implementation-roadmap.md` — phase status overview. Phase 5G is the renumbered adversarial opponent curriculum (originally 5F, research complete, deferred post-5E).
-- `docs/specs/24-optimizer.md`, `docs/specs/26-search-space.md` — implementation specs affected by Phase 5F.
+- `docs/specs/24-optimizer.md`, `docs/specs/04-search-space.md` — implementation specs affected by Phase 5F.

@@ -30,6 +30,8 @@ Frozen dataclass configuring the optimization run.
 | `twfe` | `TWFEConfig` | `TWFEConfig()` | TWFE deconfounding + opponent selection parameters (ridge, iterations, trim, anchors, incumbent overlap). See spec 28. |
 | `eb` | `EBShrinkageConfig` | `EBShrinkageConfig()` | Empirical-Bayes shrinkage parameters for A2′ (τ² floor, triple-goal toggle, min builds, OLS ridge). See spec 28. |
 | `shape` | `ShapeConfig` | `ShapeConfig()` | A3 Box-Cox output-warping parameters. `ShapeConfig(min_samples: int = 8, positivise_epsilon: float = 1e-6)`. Below `min_samples`, A3 falls through to min-max scaling (Box-Cox MLE is unstable under ~8 samples; floor chosen by analogy to `eb_min_builds`). `positivise_epsilon` guards the `shift = min - eps` positivise step and the constant-population `ptp < eps` fallback. |
+| `regime` | `RegimeConfig` | `REGIME_EARLY` | Phase 5F loadout regime — hard-masks the hullmod + weapon catalogues at `search_space.py` construction time by CSV `tier` / tag columns. Four presets in `models.py`: `REGIME_EARLY` (default; `tier <= 1`, excludes `no_drop`/`no_drop_salvage`/`codex_unlockable` hullmods and `rare_bp`/`codex_unlockable` weapons), `REGIME_MID` (excludes `no_drop`/`no_drop_salvage` + `rare_bp`), `REGIME_LATE` (excludes `no_drop` only), `REGIME_ENDGAME` (no mask — pre-5F behaviour). Regime is a component-availability filter on the build being optimized; it does NOT filter opponents or hull choice. See `docs/reference/phase5f-regime-segmented-optimization.md`. |
+| `warm_start_from_regime` | `str \| None` | `None` | If set, enqueue the top-M completed trials from the named prior-regime study in the same `study_storage` as warm-start seeds. Valid values: `"early"` / `"mid"` / `"late"` / `"endgame"`. Trials that are infeasible under the target regime's mask are skipped with a warning. Self-seeding (same regime as `regime.name`) is rejected at CLI parse time. |
 | `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
@@ -288,12 +290,13 @@ Main entry point.
 
 1. `preflight_check(hull_id, game_data, instance_pool, opponent_pool)` — fail fast
 2. Look up `hull = game_data.hulls[hull_id]`
-3. `space = build_search_space(hull, game_data)`
+3. `space = build_search_space(hull, game_data, config.regime)` — regime mask applied at catalogue-construction boundary
 4. `distributions = define_distributions(space, fixed_params=config.fixed_params)`
 5. `optuna.logging.set_verbosity(optuna.logging.WARNING)` — suppress verbose Optuna output
 6. `sampler = _create_sampler(config)` — creates TPE or CatCMAwM based on `config.sampler`
 7. `pruner = _create_pruner(config)` — WilcoxonPruner with configured p-threshold and startup steps.
-8. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=hull_id, load_if_exists=True)`
+8. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=f"{hull_id}__{config.regime.name}", load_if_exists=True)` — one study per `(hull, regime)`
+8a. If `config.warm_start_from_regime is not None`: load the prior-regime study from the same storage, filter its top-M trials through the current regime's mask + `repair_build` + `is_feasible()`, `study.enqueue_trial()` the feasible ones.
 9. `warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)`
 10. `cache = BuildCache()`
 11. Create `StagedEvaluator(study, hull, hull_id, game_data, instance_pool, opponent_pool, cache, config, distributions, eval_log_path)`
@@ -331,6 +334,7 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
   "shape_lambda": 0.73,
   "shape_passthrough_reason": null,
   "fitness": 0.23,
+  "regime": "early",
   "timestamp": "2026-04-11T14:32:15"
 }
 ```
@@ -344,7 +348,14 @@ Schema:
 - `covariate_vector`: the 7-dim X_i in §2.7 order (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `composite_score`) used by EB shrinkage for this build. Completed builds only.
 - `shape_lambda`: fitted Box-Cox λ for this trial's A3 transform, or `null` during A3 passthrough (first 7 trials or constant-population edge cases). Added in 5E for diagnostic visibility into how the transform is evolving as the completed-values distribution grows.
 - `shape_passthrough_reason`: one of `"n<1"`, `"n<min_samples"`, `"constant"` when A3 fell back to min-max scaling, or `null` when Box-Cox ran. Added in 5E.
+- `regime`: string, always present on both completed and pruned rows. The name of the loadout regime under which this build was evaluated — one of `"early"` / `"mid"` / `"late"` / `"endgame"`. Logged per trial so post-hoc analysis can filter cross-regime studies without joining against config state. Added in 5F.
 - For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector`, `shape_lambda`, `shape_passthrough_reason` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
+
+## Study Naming
+
+Study identity is `f"{hull_id}__{config.regime.name}"`. Double-underscore is the separator because hull IDs in `ship_data.csv` use single underscores (e.g. `onslaught_mk1`) but never double underscores.
+
+Pre-5F databases (written with `study_name == hull_id`) are not auto-loadable under 5F — `load_if_exists=True` looks up by the new compound name and misses. This is correct: a pre-5F study was computed over the superset (`endgame`-equivalent) regime, so silently loading it as an `early` study would mix feasible and infeasible trials into the TPE posterior. Users migrating across 5F should start a fresh `--study-db` path per regime.
 
 ## Study Persistence
 

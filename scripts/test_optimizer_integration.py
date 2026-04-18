@@ -41,7 +41,8 @@ print("=" * 60)
 print("\n1. Loading game data...")
 game_data = load_game_data(GAME_DIR)
 hull = game_data.hulls["eagle"]
-space = build_search_space(hull, game_data)
+from starsector_optimizer.models import REGIME_ENDGAME
+space = build_search_space(hull, game_data, REGIME_ENDGAME)
 print(f"   Eagle: {len(space.weapon_options)} weapon slots, "
       f"{len(space.eligible_hullmods)} hullmods, "
       f"total dims={len(space.weapon_options) + len(space.eligible_hullmods) + 2}")

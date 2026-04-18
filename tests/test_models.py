@@ -511,3 +511,88 @@ class TestMatchupConfig:
         )
         with pytest.raises(AttributeError):
             mc.time_mult = 5.0
+
+
+# --- Phase 5F: RegimeConfig tests ---
+
+
+class TestRegimeConfig:
+    def test_regime_config_frozen(self):
+        from starsector_optimizer.models import RegimeConfig
+
+        cfg = RegimeConfig(
+            name="x",
+            max_hullmod_tier=3,
+            exclude_hullmod_tags=frozenset(),
+            exclude_weapon_tags=frozenset(),
+        )
+        with pytest.raises(AttributeError):
+            cfg.name = "y"
+
+    def test_regime_presets_exist(self):
+        from starsector_optimizer.models import (
+            REGIME_EARLY,
+            REGIME_ENDGAME,
+            REGIME_LATE,
+            REGIME_MID,
+            REGIME_PRESETS,
+            RegimeConfig,
+        )
+
+        for preset in (REGIME_EARLY, REGIME_MID, REGIME_LATE, REGIME_ENDGAME):
+            assert isinstance(preset, RegimeConfig)
+        assert set(REGIME_PRESETS.keys()) == {"early", "mid", "late", "endgame"}
+        assert REGIME_PRESETS["early"] is REGIME_EARLY
+        assert REGIME_PRESETS["endgame"] is REGIME_ENDGAME
+
+    def test_regime_preset_values(self):
+        """Pins every field of every preset — catches accidental drift."""
+        from starsector_optimizer.models import (
+            REGIME_EARLY,
+            REGIME_ENDGAME,
+            REGIME_LATE,
+            REGIME_MID,
+        )
+
+        assert REGIME_EARLY.name == "early"
+        assert REGIME_EARLY.max_hullmod_tier == 1
+        assert REGIME_EARLY.exclude_hullmod_tags == frozenset(
+            {"no_drop", "no_drop_salvage", "codex_unlockable"}
+        )
+        assert REGIME_EARLY.exclude_weapon_tags == frozenset(
+            {"rare_bp", "codex_unlockable"}
+        )
+
+        assert REGIME_MID.name == "mid"
+        assert REGIME_MID.max_hullmod_tier == 3
+        assert REGIME_MID.exclude_hullmod_tags == frozenset(
+            {"no_drop", "no_drop_salvage"}
+        )
+        assert REGIME_MID.exclude_weapon_tags == frozenset({"rare_bp"})
+
+        assert REGIME_LATE.name == "late"
+        assert REGIME_LATE.max_hullmod_tier == 3
+        assert REGIME_LATE.exclude_hullmod_tags == frozenset({"no_drop"})
+        assert REGIME_LATE.exclude_weapon_tags == frozenset()
+
+        assert REGIME_ENDGAME.name == "endgame"
+        assert REGIME_ENDGAME.max_hullmod_tier == 3
+        assert REGIME_ENDGAME.exclude_hullmod_tags == frozenset()
+        assert REGIME_ENDGAME.exclude_weapon_tags == frozenset()
+
+    def test_optimizer_config_default_regime(self):
+        """Default regime = REGIME_EARLY (most conservative component-availability baseline)."""
+        from starsector_optimizer.models import REGIME_EARLY
+        from starsector_optimizer.optimizer import OptimizerConfig
+
+        cfg = OptimizerConfig()
+        assert cfg.regime is REGIME_EARLY
+        assert cfg.warm_start_from_regime is None
+
+    def test_regime_endgame_is_unfiltered(self):
+        """REGIME_ENDGAME preserves pre-5F behaviour as an opt-in."""
+        from starsector_optimizer.models import REGIME_ENDGAME
+
+        assert REGIME_ENDGAME.max_hullmod_tier == 3
+        assert REGIME_ENDGAME.exclude_hullmod_tags == frozenset()
+        assert REGIME_ENDGAME.exclude_weapon_tags == frozenset()

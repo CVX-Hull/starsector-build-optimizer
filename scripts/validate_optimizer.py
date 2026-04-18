@@ -48,7 +48,8 @@ print("=" * 70, flush=True)
 print("\n1. Loading game data...", flush=True)
 gd = load_game_data(GAME_DIR)
 hull = gd.hulls["eagle"]
-space = build_search_space(hull, gd)
+from starsector_optimizer.models import REGIME_ENDGAME
+space = build_search_space(hull, gd, REGIME_ENDGAME)
 distributions = define_distributions(space)
 opponents = get_opponents(TEST_POOL, HullSize.CRUISER)
 print(f"   {len(distributions)}D space, {len(opponents)} opponents: {opponents}", flush=True)
