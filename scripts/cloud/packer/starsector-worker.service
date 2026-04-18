@@ -1,0 +1,17 @@
+[Unit]
+Description=Starsector combat worker agent
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/opt/starsector-optimizer
+EnvironmentFile=/etc/starsector-worker.env
+Environment=STARSECTOR_GAME_DIR=/opt/starsector
+ExecStart=/home/ubuntu/.local/bin/uv run python -m starsector_optimizer.worker_agent
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

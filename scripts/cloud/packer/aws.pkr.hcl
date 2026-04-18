@@ -38,6 +38,18 @@ variable "game_dir" {
   description = "Local path to the Starsector installation (host side)."
 }
 
+variable "vpc_id" {
+  type        = string
+  default     = "vpc-08c429b59b0728a0c"
+  description = "VPC for the Packer builder instance (us-east-1)."
+}
+
+variable "subnet_id" {
+  type        = string
+  default     = "subnet-01745d2ce8253cc8b"
+  description = "Public-IP-capable subnet inside vpc_id."
+}
+
 variable "project_src" {
   type        = string
   default     = "./src"
@@ -45,10 +57,13 @@ variable "project_src" {
 }
 
 source "amazon-ebs" "worker" {
-  region        = var.region
-  instance_type = var.instance_type
-  ami_name      = "${var.ami_name_prefix}-{{timestamp}}"
-  ssh_username  = "ubuntu"
+  region                      = var.region
+  instance_type               = var.instance_type
+  ami_name                    = "${var.ami_name_prefix}-{{timestamp}}"
+  ssh_username                = "ubuntu"
+  vpc_id                      = var.vpc_id
+  subnet_id                   = var.subnet_id
+  associate_public_ip_address = true
 
   source_ami_filter {
     filters = {
@@ -122,6 +137,12 @@ build {
   }
 
   # --- Project source + venv ---
+  provisioner "shell" {
+    inline = [
+      "sudo mkdir -p /opt/starsector-optimizer/src",
+      "sudo chown -R ubuntu:ubuntu /opt/starsector-optimizer",
+    ]
+  }
   provisioner "file" {
     source      = "${var.project_src}/"
     destination = "/opt/starsector-optimizer/src/"
@@ -130,9 +151,13 @@ build {
     source      = "./pyproject.toml"
     destination = "/opt/starsector-optimizer/pyproject.toml"
   }
+  provisioner "file" {
+    source      = "./uv.lock"
+    destination = "/opt/starsector-optimizer/uv.lock"
+  }
   provisioner "shell" {
     inline = [
-      "cd /opt/starsector-optimizer && /home/ubuntu/.local/bin/uv sync",
+      "cd /opt/starsector-optimizer && /home/ubuntu/.local/bin/uv sync --frozen",
     ]
   }
 
@@ -148,27 +173,14 @@ build {
   }
 
   # --- Systemd unit for worker_agent ---
+  provisioner "file" {
+    source      = "./scripts/cloud/packer/starsector-worker.service"
+    destination = "/tmp/starsector-worker.service"
+  }
   provisioner "shell" {
     inline = [
-      "sudo tee /etc/systemd/system/starsector-worker.service <<'EOF'",
-      "[Unit]",
-      "Description=Starsector combat worker agent",
-      "After=network-online.target tailscaled.service",
-      "Wants=network-online.target",
-      "",
-      "[Service]",
-      "Type=simple",
-      "User=ubuntu",
-      "WorkingDirectory=/opt/starsector-optimizer",
-      "EnvironmentFile=/etc/starsector-worker.env",
-      "Environment=STARSECTOR_GAME_DIR=/opt/starsector",
-      "ExecStart=/home/ubuntu/.local/bin/uv run python -m starsector_optimizer.worker_agent",
-      "Restart=on-failure",
-      "RestartSec=10",
-      "",
-      "[Install]",
-      "WantedBy=multi-user.target",
-      "EOF",
+      "sudo mv /tmp/starsector-worker.service /etc/systemd/system/starsector-worker.service",
+      "sudo chown root:root /etc/systemd/system/starsector-worker.service",
       "sudo systemctl daemon-reload",
       "sudo systemctl enable starsector-worker.service",
     ]

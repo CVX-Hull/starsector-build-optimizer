@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Validation probe: launch 2 spot VMs per target region from a campaign's
-# AMI IDs, assert they boot + Xvfb comes up + worker_agent imports, then
-# tear them down. ~$0.15 per run; run 24h before any major campaign.
+# Validation probe wrapper: drives scripts/cloud/probe.py with a trap-EXIT
+# safety net that always runs final_audit.sh — catches every teardown path,
+# including SIGKILL of the Python process.
 #
 # Usage:
 #   scripts/cloud/probe.sh <campaign.yaml>
+#   scripts/cloud/probe.sh --dry-run <campaign.yaml>
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
-YAML="${1:?Usage: $0 <campaign.yaml>}"
-TRAP_PROBE_NAME="probe-$(date -u +%Y%m%d%H%M%S)"
 
-echo "[probe] Teardown command if this script is interrupted:"
-echo "[probe]   scripts/cloud/teardown.sh $TRAP_PROBE_NAME"
+if [[ "${1:-}" == "--dry-run" ]]; then
+  shift
+  exec uv run python scripts/cloud/probe.py --dry-run "$@"
+fi
+
+YAML="${1:?Usage: $0 <campaign.yaml>}"
+
+# Extract the campaign name once so the trap can reach it without re-parsing.
+NAME=$(uv run python -c "
+import sys, yaml
+with open('$YAML') as f: print(yaml.safe_load(f)['name'])
+")
+
+echo "[probe] campaign: $NAME"
+echo "[probe] teardown safety net if this script is interrupted:"
+echo "[probe]   scripts/cloud/teardown.sh $NAME && scripts/cloud/final_audit.sh $NAME"
 echo
 
-trap "scripts/cloud/teardown.sh $TRAP_PROBE_NAME || true" EXIT
+# The trap is the belt to probe.py's suspenders: even if Python is SIGKILLed
+# or the host reboots, the final_audit.sh run here will surface any leak.
+trap "scripts/cloud/teardown.sh '$NAME' || true; scripts/cloud/final_audit.sh '$NAME' || true" EXIT
 
-# Swap the campaign name in-memory to a probe marker; every resource created
-# below carries Project=starsector-$TRAP_PROBE_NAME, so teardown.sh cleans up.
-uv run python -c "
-import os, sys, yaml
-with open('$YAML') as f: c = yaml.safe_load(f)
-c['name'] = '$TRAP_PROBE_NAME'
-c['max_concurrent_workers'] = 2 * len(c['regions'])
-c['min_workers_to_start'] = 1
-c['budget_usd'] = 0.50
-with open('/tmp/probe.yaml', 'w') as f: yaml.safe_dump(c, f)
-print('probe config ready: /tmp/probe.yaml')
-"
-
-uv run python -m starsector_optimizer.campaign --dry-run /tmp/probe.yaml
-echo "[probe] Dry-run passed; live probe launch is a user action (see docs)."
-echo "[probe] When ready, remove --dry-run and re-run."
+uv run python scripts/cloud/probe.py "$YAML"

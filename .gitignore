@@ -38,3 +38,7 @@ notebooks/.ipynb_checkpoints/
 
 # Claude
 .claude/
+
+# Cloud secrets (Starsector serial key, Tailscale authkey, bearer tokens)
+scripts/cloud/packer/prefs.xml
+scripts/cloud/secrets/

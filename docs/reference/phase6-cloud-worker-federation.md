@@ -1,6 +1,6 @@
 # Phase 6 — Cloud Worker Federation
 
-Status: **INFRASTRUCTURE COMPLETE** (2026-04-18). Validation probe, pipeline smoke, sampler benchmark, and prep campaign deferred to operational sessions against the merged code. Renumbers the former Phase 6 (Structured Search-Space Representation) to Phase 7 — cloud federation is infrastructure that Phase 7's multi-week BoTorch build depends on for validation at scale.
+Status: **PARTIAL INFRASTRUCTURE SHIPPED** (2026-04-18). `AWSProvider` (LaunchTemplate + SecurityGroup + terminate-all-tagged cleanup), `cloud_userdata.render_user_data`, `CostLedger`, Packer AMI template, and Tier-1 `probe.sh` / `probe.py` are wired and test-green. **Not yet end-to-end**: `CampaignManager.provision_fleet` raises `NotImplementedError` — per-study UserData wiring (each study subprocess provisions its own fleet so workers carry the correct study-specific bearer token and Redis queue keys) lands in the smoke-test scope, because a campaign-wide fleet cannot carry study-specific secrets without leaking every study's config to every worker. Pipeline smoke, sampler benchmark, and prep campaign deferred to operational sessions against the probe-validated infrastructure. Renumbers the former Phase 6 (Structured Search-Space Representation) to Phase 7 — cloud federation is infrastructure that Phase 7's multi-week BoTorch build depends on for validation at scale.
 
 ## Budget staging
 
@@ -331,7 +331,7 @@ Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket
 
 1. **Build Packer AMI in us-east-1** (~30 min). Bake the combat harness, game files, `uv sync`, and the XRandR warmup fix into a private AMI. Tested via a post-build launch hook.
 2. **`aws ec2 copy-image` to us-east-2** (~3-5 min, one-time). AWS AMIs are region-scoped; replicate to the second target region. Re-run on every Packer rebuild.
-3. **Write validation probe script** (~15 min; `scripts/cloud/probe.sh`). Launches 2 spot instances per target region from the production AMI, runs the boot smoke, tears down. Run 24h before the campaign.
+3. **Validation probe** (`scripts/cloud/probe.sh` + `scripts/cloud/probe.py`). Tier 1: exercises `AWSProvider.create_fleet` (LaunchTemplate + SecurityGroup creation + instance launch + tag propagation) + `terminate_all_tagged` + `final_audit.sh`. Scope is fleet lifecycle only — **does not** SSH in, join Tailscale, hit Redis, or run a matchup (those are the pipeline smoke's job, Tier 2). Instance count is whatever `max_concurrent_workers // len(regions)` comes out to in the probe YAML. Cost: ~$0.05 for two c7a.2xlarge spot instances × 3-5 min wall-clock. Run 24h before any paid campaign.
 4. **Campaign manager + orchestrator** (~500 LOC, the main Phase 6 implementation work). EC2 Fleet with `price-capacity-optimized` + CapacityRebalancing, Redis-backed study queues, graceful degradation. See Deliverables.
 5. **Pipeline smoke** (~2 hr, ~$1.20): 1 study × 8 workers × 1 region. Confirms the full pipeline (orchestrator ↔ worker Redis BRPOPLPUSH + Flask POST, janitor re-queue, cost ledger, three-layer teardown, preemption replay).
 6. **Sampler benchmark** (~1 hr, ~$14.83): 2 hulls × 3 samplers per §10. Writes REPORT.md with the chosen `sampler:` value.

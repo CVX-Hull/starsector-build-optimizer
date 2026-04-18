@@ -170,7 +170,7 @@ Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — onc
 
 Three layers:
 
-1. In-process `try/finally` — `CampaignManager.run()` body runs inside `try:`; `finally:` calls `provider.terminate_all_tagged(config.name)` and asserts `provider.list_active(config.name) == []` with one retry after 10s.
+1. In-process `try/finally` — `CampaignManager.run()` body runs inside `try:`; `finally:` calls `provider.terminate_all_tagged(config.name)` and asserts `provider.list_active(config.name) == []` with one retry after `config.teardown_retry_delay_seconds` (default 10s).
 2. `atexit.register(self.teardown)` — registered in `CampaignManager.__init__`, runs on crash paths that bypass `finally`.
 3. Shell-level `trap EXIT` in `launch_campaign.sh` — re-runs `final_audit.sh` unconditionally and exits non-zero if any resource leaked.
 
@@ -181,18 +181,53 @@ Three layers:
 ```python
 class CloudProvider(abc.ABC):
     @abc.abstractmethod
-    def create_fleet(self, config: CampaignConfig) -> list[str]: ...   # returns instance IDs
+    def create_fleet(self, config: CampaignConfig, *, user_data: str) -> list[str]: ...
+        # returns instance IDs; user_data is a cloud-init script injected at boot
     @abc.abstractmethod
-    def terminate_all_tagged(self, campaign_name: str) -> int: ...      # returns count terminated
+    def terminate_all_tagged(self, campaign_name: str) -> int: ...
+        # terminates instances + deletes launch templates + deletes security groups
+        # returns instances-terminated count (LT/SG deletion is best-effort)
     @abc.abstractmethod
-    def list_active(self, campaign_name: str) -> list[dict]: ...        # returns RUNNING+PENDING instances
+    def list_active(self, campaign_name: str) -> list[dict]: ...        # RUNNING+PENDING instances
     @abc.abstractmethod
     def get_spot_price(self, region: str, instance_type: str) -> float: ...
 ```
 
 ### `AWSProvider`
 
-boto3-direct. `create_fleet` calls `ec2.create_fleet(SpotOptions={AllocationStrategy: "price-capacity-optimized", CapacityRebalancing: ...})` diversified across `instance_types` and `regions`. All instances tagged `Project=starsector-<campaign_name>`. Credentials loaded from the standard AWS credential chain — never stored in Python.
+boto3-direct. Credentials loaded from the standard AWS credential chain — never stored in Python.
+
+`create_fleet(config, *, user_data: str)`:
+
+1. **Per region**: ensure a security group `starsector-<campaign_name>` exists with all egress allowed, zero ingress (workers are outbound-only; Tailscale handles reachability; a blank-ingress SG closes the public-internet attack surface).
+2. **Per region**: ensure a launch template `starsector-<campaign_name>` exists with:
+   - `ImageId` = `ami_ids_by_region[region]`
+   - `KeyName` = `config.ssh_key_name`
+   - `SecurityGroupIds` = `[<sg created above>]`
+   - `InstanceMarketOptions={MarketType: spot}`
+   - `UserData` = `base64(user_data)` (the caller-supplied cloud-init script; see §Cloud-init UserData)
+   - `TagSpecifications`: on both `instance` and `volume`, include `Project=starsector-<campaign_name>`
+   - If a launch template with the same name already exists, create a new version and set it as default (never edit in place — LT versions are immutable once referenced by a fleet).
+3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: "price-capacity-optimized", MaintenanceStrategies: CapacityRebalance}, Type="instant")` per region, diversified across `config.instance_types`.
+
+Tag `Project=starsector-<campaign_name>` propagates to the security group, the launch template, and every instance. `terminate_all_tagged` uses this single tag to reap everything together.
+
+`terminate_all_tagged(campaign_name)`: per region, terminate instances first (avoids EC2 deletion-ordering constraints), then delete the launch template, then delete the security group. Idempotent — missing resources are treated as already-cleaned.
+
+`list_active(campaign_name)`: per region, instances in `pending` or `running` state with tag `Project=starsector-<campaign_name>`. Does NOT include launch templates or security groups (they are stateless scaffolding; absence of instances is the teardown signal).
+
+### Cloud-init UserData
+
+`src/starsector_optimizer/cloud_userdata.py::render_user_data(worker_config, tailscale_authkey) -> str` emits a bash payload that:
+
+1. `umask 077` so every file created by the script is owner-read-only.
+2. `tailscale up --authkey-stdin --advertise-tags=tag:starsector-worker --accept-dns=false <<EOF`. The authkey is piped via stdin, **never** argv — `/proc/<pid>/cmdline` is world-readable on Linux by default, so any `--authkey=<value>` form would leak the secret to every local user during boot.
+3. Writes `/etc/starsector-worker.env` with every `WorkerConfig` field mapped to `STARSECTOR_WORKER_<FIELD>`. Owner is `root:root`; mode `0600` is inherited from `umask 077` at file-creation time (no 0644 window between creation and chmod).
+4. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
+
+The renderer is a pure function — takes a frozen `WorkerConfig` + a string authkey, returns a string. No I/O. Lives in its own module (not `cloud_provider.py`) so providers other than AWS can reuse it.
+
+For probe scenarios where no real worker is needed, `render_probe_user_data(campaign_id) -> str` returns a minimal script: `echo probe-boot-ok > /var/log/starsector-probe.log`. The probe tests fleet lifecycle, not worker connectivity.
 
 ### `HetznerProvider`
 

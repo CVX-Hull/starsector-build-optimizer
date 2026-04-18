@@ -299,21 +299,24 @@ class CampaignManager:
         )
 
     def provision_fleet(self) -> list[str]:
-        """Launch EC2 Fleet; return after ≥ min_workers_to_start or timeout."""
-        logger.info("provisioning fleet: target=%d min=%d",
-                    self._config.max_concurrent_workers,
-                    self._config.min_workers_to_start)
-        start = time.monotonic()
-        workers = self._provider.create_fleet(self._config)
-        elapsed = time.monotonic() - start
-        decision = self.partial_fleet_decide(len(workers))
-        if decision == "abort":
-            self.log_partial_fleet_abort(len(workers), elapsed)
-            raise PartialFleetAbort(
-                f"launched {len(workers)}/{self._config.min_workers_to_start}"
-            )
-        logger.info("fleet ready: workers=%d elapsed=%.1fs", len(workers), elapsed)
-        return workers
+        """Not implemented — provisioning is moving per-study, not campaign-wide.
+
+        Each study subprocess must render its own WorkerConfig → UserData and
+        call ``AWSProvider.create_fleet(config, user_data=...)`` for its own
+        worker pool, so workers boot with the correct per-study bearer token,
+        Redis queue keys, and Flask listener endpoint. A campaign-wide fleet
+        cannot carry study-specific secrets without bundling every study's
+        config into every worker — a security regression.
+
+        Tier-1 probe uses ``scripts/cloud/probe.py`` (constructs AWSProvider
+        directly). Real campaigns will wire this up as part of the smoke-test
+        scope (see ``docs/reference/phase6-cloud-worker-federation.md`` §10).
+        """
+        raise NotImplementedError(
+            "CampaignManager.provision_fleet: per-study UserData wiring is "
+            "not yet implemented. Use scripts/cloud/probe.py for Tier-1 "
+            "probes, or drive AWSProvider directly. Tracked for smoke-test scope."
+        )
 
     def spawn_studies(self, workers: list[str]) -> list[subprocess.Popen]:
         """Spawn one subprocess per (hull, regime, seed) via run_optimizer.py.
