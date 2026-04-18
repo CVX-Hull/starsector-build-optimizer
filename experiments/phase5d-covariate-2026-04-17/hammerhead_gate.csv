@@ -1,0 +1,16 @@
+probe_opp,estimator,rho_vs_probe,n_valid
+condor_Attack,A0,0.3421932925337779,313
+condor_Attack,A,0.3223140797453921,313
+condor_Attack,B,0.14770916997613107,313
+condor_Attack,C,0.14770916997613107,313
+condor_Attack,D,0.14770916997613107,313
+mule_Fighter_Support,A0,0.4376737578621225,313
+mule_Fighter_Support,A,0.4191470436800174,313
+mule_Fighter_Support,B,0.2678146012755427,313
+mule_Fighter_Support,C,0.2678146012755427,313
+mule_Fighter_Support,D,0.2678146012755427,313
+sunder_Support,A0,-0.03136594913185952,313
+sunder_Support,A,-0.03333773264477878,313
+sunder_Support,B,-0.06213373437726552,313
+sunder_Support,C,-0.06213373437726552,313
+sunder_Support,D,-0.06213373437726552,313

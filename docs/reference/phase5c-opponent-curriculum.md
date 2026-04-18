@@ -4,7 +4,7 @@
 
 Design and research log for how opponent subsets are selected per trial in the Starsector ship-build optimizer. The shipped design is **anchor-first ordering + incumbent overlap + fixed pre-burn-in opponent set**, backed by TWFE decomposition (Phase 5A). This document records the research trail and the alternatives considered and rejected.
 
-Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline; Phase 5A handles fitness aggregation (TWFE decomposition), Phase 5B handles pruning (WilcoxonPruner + ASHA), Phase 5C (this doc) handles *which opponents each trial faces*, Phase 5D handles fitness refinement via covariates, Phase 5E revises the fitness-shaping post-processor. See `docs/reference/implementation-roadmap.md` for the full phase status.
+Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline; Phase 5A handles fitness aggregation (TWFE decomposition), Phase 5B handles pruning (WilcoxonPruner + ASHA), Phase 5C (this doc) handles *which opponents each trial faces*, Phase 5D replaces the scalar A2 control variate with EB shrinkage of α̂ toward a heuristic-predicted prior, Phase 5E revises the fitness-shaping post-processor. See `docs/reference/implementation-roadmap.md` for the full phase status.
 
 ---
 
@@ -90,9 +90,9 @@ For the TWFE-deconfounding research that is the estimator *downstream* of 5C's o
 
 **What it was.** Extend `CombatHarnessPlugin.java` with per-frame accumulators: time-weighted flux, cumulative overload duration, engagement-distance trajectories, time-to-first-hull-damage. Fold into a richer `combat_fitness` composite.
 
-**Why rejected.** Each of these four signals is a *human-designed intermediate quantity*, not a primitive outcome of the match. Their composite weights in `combat_fitness` would have to be hand-chosen, violating the bitter lesson (Sutton 2019) — methods leveraging computation scale better than methods leveraging human knowledge. The match outcome primitives already collected (win/loss, HP differential, duration, timeout state, overload count) are the correct target variables; richer composites can be derived from them via Phase 5D's OLS-coefficient covariate adjustment without any hand-tuned weights.
+**Why rejected.** Each of these four signals is a *human-designed intermediate quantity*, not a primitive outcome of the match. Their composite weights in `combat_fitness` would have to be hand-chosen, violating the bitter lesson (Sutton 2019) — methods leveraging computation scale better than methods leveraging human knowledge. The match outcome primitives already collected (win/loss, HP differential, duration, timeout state, overload count) are the correct target variables; richer use of the already-computed pre-matchup scorer components happens in Phase 5D via empirical-Bayes shrinkage toward an OLS-fitted regression prior — no hand-tuned weights.
 
-**Bitter-lesson verdict.** The rejected design is exactly the anti-pattern the bitter lesson names. `docs/reference/phase5d-covariate-adjustment.md` replaces it with a statistically-principled alternative (covariate-adjusted TWFE, Frisch-Waugh-Lovell 1933 / Deng et al. 2013 CUPED).
+**Bitter-lesson verdict.** The rejected design is exactly the anti-pattern the bitter lesson names. `docs/reference/phase5d-covariate-adjustment.md` replaces it with a statistically-principled alternative (empirical-Bayes shrinkage of α̂ toward a heuristic-predicted regression prior — fusion paradigm, not conditioning).
 
 ### 4.5 Hand-curated hullmod blacklist (filter "no_drop" / "codex_unlockable" tags) — REJECTED
 
@@ -119,7 +119,7 @@ For the TWFE-deconfounding research that is the estimator *downstream* of 5C's o
 
 - `docs/reference/phase5a-deconfounding-theory.md` — TWFE decomposition theory (6-field literature synthesis).
 - `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research.
-- `docs/reference/phase5d-covariate-adjustment.md` — covariate-adjusted TWFE (replaces the rejected per-frame Java approach).
+- `docs/reference/phase5d-covariate-adjustment.md` — EB shrinkage of α̂ toward a heuristic prior (replaces the rejected per-frame Java approach; and itself replaces an earlier rejected CUPED/FWL/PDS design, see §4.5 of that doc).
 - `docs/reference/phase5e-shape-revision.md` — A3 rank-shape revision (Box-Cox replaces top-quartile clamp).
 - `docs/reference/implementation-roadmap.md` — phase overview and status for all Phase 5 sub-phases.
 - `docs/specs/24-optimizer.md`, `docs/specs/28-deconfounding.md` — implemented specs.

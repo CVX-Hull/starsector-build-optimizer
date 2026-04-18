@@ -4,7 +4,7 @@
 
 Findings from the 900-trial Hammerhead TWFE run (`experiments/hammerhead-twfe-2026-04-13/`, 2026-04-17) that motivate a revision to the A3 fitness-shaping step of the Phase 5A signal-quality pipeline.
 
-Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer. The shipped pipeline is A1 TWFE decomposition → A2 single-channel control variate → A3 rank-shape-with-top-quartile-clamp. Phase 5E replaces A3. Phase 5D (`docs/reference/phase5d-covariate-adjustment.md`) separately extends A1 to absorb multiple covariates; 5D and 5E are orthogonal and compose. See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview and `docs/reference/phase5a-deconfounding-theory.md` for the TWFE foundation this doc builds on.
+Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer. The shipped pipeline is A1 TWFE decomposition → A2 single-channel control variate → A3 rank-shape-with-top-quartile-clamp. Phase 5E replaces A3. Phase 5D (`docs/reference/phase5d-covariate-adjustment.md`) separately replaces A2 with empirical-Bayes shrinkage of α̂ toward a heuristic-predicted regression prior; 5D and 5E are orthogonal and compose (5E reads α̂_EBT from 5D). See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview and `docs/reference/phase5a-deconfounding-theory.md` for the TWFE foundation this doc builds on.
 
 ---
 
@@ -141,7 +141,7 @@ This is the same rationale Sutton applies to hand-crafted features in RL. Encodi
 
 ### 5.2 Per-frame Java flux-pressure / overload-duration tracking — REJECTED (bitter lesson)
 
-Phase 5D had a sub-phase proposing additions to the Java combat harness to collect time-weighted flux averages, cumulative overload duration, engagement-distance trajectories, etc., then fold them into a richer `combat_fitness` composite. We reject the per-frame tracking sub-phase for the same bitter-lesson reason: these are *human-designed* signal channels that try to inject a prior about which combat behaviors are "good." Their weights in `combat_fitness` would then be hand-tuned.
+An early draft of Phase 5D had a sub-phase proposing additions to the Java combat harness to collect time-weighted flux averages, cumulative overload duration, engagement-distance trajectories, etc., then fold them into a richer `combat_fitness` composite. We reject the per-frame tracking sub-phase for the same bitter-lesson reason: these are *human-designed* signal channels that try to inject a prior about which combat behaviors are "good." Their weights in `combat_fitness` would then be hand-tuned.
 
 The accepted sub-phase — using data the harness already collects (win/loss, HP differential, duration, timeout state) — stays on the roadmap because those are the primitive outcome variables the optimization target is already defined over. What we reject is adding *engineered* intermediate quantities.
 
@@ -165,7 +165,7 @@ Related docs:
 - `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research (unchanged).
 - `docs/reference/phase5a-deconfounding-theory.md` — TWFE 6-field literature synthesis (unchanged).
 - `docs/reference/phase5c-opponent-curriculum.md` — Phase 5C opponent selection + rejected per-frame-Java rationale.
-- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D covariate-adjusted TWFE (replaces the rejected composite-weighted-sum approach).
+- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D EB shrinkage of α̂ toward a heuristic prior (replaces the rejected composite-weighted-sum approach and itself replaces an earlier rejected CUPED/FWL/PDS design — see §4.5 of that doc).
 - `docs/reference/implementation-roadmap.md` — Phase 5E entry on the roadmap.
 - `docs/specs/24-optimizer.md` — to be updated when Phase 5E ships (A0 Box-Cox layer before A1 input, or A3 replacement — implementation choice deferred to spec-time).
 

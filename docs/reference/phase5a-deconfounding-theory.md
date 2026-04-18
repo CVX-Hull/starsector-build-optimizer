@@ -7,7 +7,7 @@ Research synthesis from 6 independent literature surveys (IRT/adaptive testing, 
 1. **Cross-subset comparability**: How to compare builds tested against different opponent subsets.
 2. **Temporal confounding**: How to separate "build improved" from "opponent was easy" when build quality is non-stationary.
 
-Reading this doc cold: this is the *theory* foundation for the Phase 5A fitness aggregator that ships in the optimizer. The downstream pieces — Phase 5C opponent selection, Phase 5D covariate adjustment, Phase 5E shape revision — all build on the TWFE model derived here. See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview.
+Reading this doc cold: this is the *theory* foundation for the Phase 5A fitness aggregator that ships in the optimizer. The downstream pieces — Phase 5C opponent selection, Phase 5D EB shrinkage of α̂ toward a heuristic prior, Phase 5E shape revision — all build on the TWFE model derived here. See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview.
 
 ---
 

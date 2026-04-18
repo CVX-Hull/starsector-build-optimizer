@@ -22,7 +22,7 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
 Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (TWFE deconfounding, control variate, rank shape)
 Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
 Phase 5C:  Opponent Curriculum ─────────────── ✓ COMPLETE (TWFE replaced Elo; anchor-first, incumbent overlap)
-Phase 5D:  Covariate-Adjusted TWFE ────────── PLANNED — absorbs A2 into multivariate OLS (FWL + CUPED) with auto-selection: Stage-1 timing filter + Stage-2 post-double-selection lasso
+Phase 5D:  EB Shrinkage of A2 (fusion) ────── PLANNED — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward a 16-covariate heuristic prior (HN + triple-goal rank correction). Fusion paradigm, not conditioning
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── PLANNED — simulation-validated in experiments/signal-quality-2026-04-17
 Phase 5F:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E
 Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
@@ -312,7 +312,7 @@ Improve the signal-to-noise ratio of combat fitness evaluations and increase eva
 | 5A | TWFE decomposition + control variate + rank shape | ✓ COMPLETE (integrated in `StagedEvaluator`) |
 | 5B | Sequential evaluation, WilcoxonPruner, ASHA scheduling | ✓ COMPLETE (integrated in `StagedEvaluator`) |
 | 5C | Opponent curriculum — anchor-first + incumbent overlap + fixed pre-burn-in | ✓ COMPLETE |
-| 5D | Covariate-adjusted TWFE — replaces current A2 with multivariate OLS | PLANNED (research complete) |
+| 5D | EB shrinkage of A2 — replaces scalar CV with empirical-Bayes shrinkage of α̂ toward a 16-covariate heuristic regression prior (HN + triple-goal) | PLANNED (fusion design ship-gate-validated; conditioning-paradigm v1 refuted, see §4.5 of phase5d-covariate-adjustment.md) |
 | 5E | A3 shape revision — Box-Cox replaces rank-shape-with-ceiling | PLANNED (research + simulation validated) |
 | 5F | Adversarial opponent curriculum — PSRO-style pool growth | DEFERRED (research complete) |
 
@@ -322,7 +322,7 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 - `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research (opponent normalisation, multi-fidelity).
 - `docs/reference/phase5a-deconfounding-theory.md` — TWFE additive-decomposition synthesis (6-field literature consensus, foundation of 5A and 5C).
 - `docs/reference/phase5c-opponent-curriculum.md` — Phase 5C design + rejected alternatives (Elo rotation, per-frame Java tracking, hullmod blacklist).
-- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D design: covariate-adjusted TWFE via FWL + CUPED with automatic two-stage selection (timing filter + PDS lasso; optional DML / ICP); rejected alternatives (hand-weighted composite, MISO, per-frame Java).
+- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D design: empirical-Bayes shrinkage of A2 toward a heuristic-predicted regression prior (HN + triple-goal rank correction). Rejected alternatives include the original conditioning-paradigm design (CUPED / FWL / PDS lasso / ICP — refuted by `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite, MISO, one-factor CFA, and per-frame Java harness tracking.
 - `docs/reference/phase5e-shape-revision.md` — Phase 5E design: Box-Cox replaces rank shape; rejected alternatives (CFS, EM-Tobit, full MAP-Elites); Phase 5F research.
 - `docs/reference/multi-fidelity-strategy.md` — Multi-fidelity strategy (heuristic vs simulation tiers).
 
@@ -336,7 +336,7 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 | All opponents weighted equally in fitness | Beating a buffalo counts same as beating condor_Attack | TWFE decomposition — β_j captures opponent difficulty, α_i is schedule-adjusted | ✓ Fixed (5A) |
 | Random opponent ordering | WilcoxonPruner only pruned 11% of trials | Anchor-first ordering + rung-based step IDs for full pruner overlap | ✓ Fixed (5C) |
 | Frequent heartbeat timeouts (~every 3-5 min) | ~30-40% throughput loss on 4 instances | Robot pixel-polling + heartbeat touch-not-delete | ✓ Fixed |
-| `combat_fitness` ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Covariate-adjusted TWFE absorbs auxiliary signals via OLS | Planned (5D) |
+| `combat_fitness` ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Auxiliary signals (13 scorer components) enter an EB prior on α̂_i via a between-build regression; shrinkage weights α̂_i vs γ̂ᵀX_i by relative precision | Planned (5D) |
 
 #### From second run (900 trials, 2026-04-17, `experiments/hammerhead-twfe-2026-04-13/`)
 
@@ -345,8 +345,9 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 | 89% of completed builds cluster on a rare-faction-hullmod exploit (shrouded_lens, shrouded_mantle, fragment_coordinator, neural_integrator) providing passive AoE damage | TPE's posterior pulls toward the exploit cluster; ranking within cluster is noise | Adversarial opponent-pool growth; rejected hand-curated hullmod blacklist on bitter-lesson grounds | Deferred (5F) |
 | A3 rank-shape clamps top quartile to fitness=1.0; 25.3% of trials tie at the ceiling with raw TWFE α ranging only 0.48–0.82 (theoretical max 1.5) | Optimiser cannot distinguish top-cluster winners; TPE has no gradient at the top | Replace rank-shape with Box-Cox output warping; simulation Δρ = +0.070 (p = 0.0001), ceiling 25.3% → 0.4% | Planned (5E) |
 | Opponent pool lacks peers that can defeat strong exploit builds (peer Hammerhead variants force timeouts but not kills) | Matchup scores censor at HP-diff ≈ 1.0; pool-side ceiling correlated with build strength | CAT Fisher-info opponent selection + Sympson-Hetter exposure control (simulation +0.05 Δρ, marginal) | Planned (5E secondary) |
-| Per-frame Java harness extensions (flux, overload duration, engagement distance) proposed as the original Phase 5D | Would inject hand-designed intermediate signals with hand-tuned weights | REJECTED (bitter lesson) — replaced by covariate-adjusted TWFE (5D) | ✗ Rejected |
-| Hand-weighted composite fitness proposed as Phase 5D.1 | Weight choice encodes a human prior about combat-behaviour quality | REJECTED (bitter lesson) — replaced by OLS-coefficient covariate adjustment | ✗ Rejected |
+| Per-frame Java harness extensions (flux, overload duration, engagement distance) proposed as the original Phase 5D | Would inject hand-designed intermediate signals with hand-tuned weights | REJECTED (bitter lesson) — replaced by EB shrinkage toward a heuristic-predicted prior (5D) | ✗ Rejected |
+| Hand-weighted composite fitness proposed as Phase 5D.1 | Weight choice encodes a human prior about combat-behaviour quality | REJECTED (bitter lesson) — replaced by EB shrinkage with OLS-learned γ̂ | ✗ Rejected |
+| Covariate-adjusted TWFE via FWL + PDS lasso + ICP proposed as Phase 5D v1 | Treats heuristic as an exogenous covariate and partials it out of Y; but heuristic is a noisy proxy of the estimand α (Cinelli-Forney-Pearl 2022 "Case 8" bad control). Synthetic Δρ = −0.35 vs plain TWFE (p<0.0001, n=20); Hammerhead LOOO Δρ = −0.13, missed +0.02 ship gate by 7×. Closed form: ρ(α̂_CUPED, α) = √(1−R) where R = heuristic reliability, so stronger heuristic ⇒ more damage | REJECTED — replaced by fusion-paradigm EB shrinkage (HN + triple-goal). See `experiments/phase5d-covariate-2026-04-17/REPORT.md` and `FUSION_REPORT.md` | ✗ Rejected |
 
 ### Dependencies
 - Phase 4 (optimizer integration, opponent pool, evaluation pipeline) ✓
@@ -359,7 +360,7 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 Shipped in `src/starsector_optimizer/deconfounding.py` and `src/starsector_optimizer/optimizer.py`. Implements:
 1. TWFE decomposition (additive model `Y_ij = α_i + β_j`)
 2. Trimmed mean (drop worst 2 residuals) for RPS robustness
-3. Control variate correction using heuristic scorer correlation (scalar A2 — to be absorbed into multivariate A1 by Phase 5D)
+3. Control variate correction using heuristic scorer correlation (scalar A2 — to be replaced by empirical-Bayes shrinkage toward a multi-covariate regression prior in Phase 5D)
 4. Rank-based fitness shaping with top-quartile ceiling (A3 — to be replaced by Box-Cox in Phase 5E)
 
 **Phase 5B — Sequential Evaluation Pipeline ✓ COMPLETE**
@@ -379,18 +380,27 @@ Shipped in `src/starsector_optimizer/optimizer.py` opponent-selection path:
 
 Full design and rejected alternatives in `docs/reference/phase5c-opponent-curriculum.md`.
 
-**Phase 5D — Covariate-Adjusted TWFE (PLANNED)**
+**Phase 5D — EB Shrinkage of A2 (PLANNED)**
 
-Model: `Y_ij = α_i + β_j + γᵀ X_ij + ε_ij`, with γ estimated by OLS via three-block alternating projection (Frisch-Waugh-Lovell 1933 guarantees equivalence to joint OLS). Absorbs the existing scalar A2 control variate into multivariate A1 — all coefficients OLS-learned, no hand weights.
+Two-level Gaussian hierarchical model replacing the shipped scalar A2:
 
-**Automatic two-stage covariate selection** (no per-variable hand-classification; four independent literature surveys — econometrics, causal ML, Bayesian sparsity, applied experimentation — converged on this structure):
+```
+Likelihood:  α̂_i | α_i  ~ N(α_i, σ̂_i²)      (α̂ from A1 TWFE; σ̂_i from pooled residual MSE / n_i)
+Prior:       α_i | X_i   ~ N(γ̂ᵀ[1, X_i], τ̂²)  (γ̂ = OLS of α̂ on X_i; τ̂² by method of moments)
+Posterior mean:
+    α̂_EB_i = w_i · α̂_i + (1 − w_i) · γ̂ᵀ[1, X_i]
+    w_i    = τ̂² / (τ̂² + σ̂_i²)
+```
 
-- **Stage 1 — Timing filter (mechanical).** Partition every harness output by when its value is knowable: pre-matchup (`heuristic_i`, scorer component breakdown from `ScorerResult`, opponent-side heuristic, opponent identity features, schedule-position features) is admissible; post-matchup (damage_efficiency, overload_count_differential, hp_differential, duration_seconds, peak_time_remaining, armor_fraction_remaining) is excluded. One operational rule, not case-by-case causal reasoning. Any predictive selector retains a post-matchup collider — the bad-control decision belongs to the candidate set, not the selector. This is how CUPED, MLRATE, and CUPAC handle it in production.
-- **Stage 2 — Post-double-selection lasso inside X_pre.** Belloni, Chernozhukov & Hansen 2014 (panel extension Belloni-Chernozhukov-Hansen-Kozbur 2016): after within-transformation, run lasso on `Ỹ ~ X̃_pre` plus K additional lassos `X̃_k ~ X̃_{-k}` and take the union of selected sets. Selection is entirely data-driven via λ picked by K-fold CV. ~200 ms at scale ≤20 covariates.
-- **Stage 3 (optional, deferred) — Double/Debiased ML with multiway-cluster cross-fitting.** Chernozhukov et al. 2018 / Chiang et al. 2022. Not required at current X_pre size; revisit only if future hull-aspect featurisation pushes k > ~50.
-- **Optional diagnostic — Invariant Causal Prediction.** Peters, Bühlmann & Meinshausen 2016. Treat opponent j as the environment; true causal parents of Y yield residuals whose distribution is invariant across opponents. Flags post-hoc-suspicious columns that survive PDS but fail invariance.
+`X_i` is the 16-dim pre-matchup covariate vector (13 `ScorerResult` components — `composite_score`, `total_dps`, `kinetic_dps`, `he_dps`, `energy_dps`, `flux_balance`, `flux_efficiency`, `effective_hp`, `armor_ehp`, `shield_ehp`, `range_coherence`, `damage_mix`, `op_efficiency` — plus `n_hullmods`, `flux_vents`, `flux_capacitors`). Closed-form, ~10 lines of NumPy, sub-millisecond per pass.
 
-Rejected alternatives: hand-weighted composite fitness, per-frame Java harness tracking, multi-information-source BO (MISO requires same-objective sources, not side-channels). Full design, rejected alternatives, and reference list in `docs/reference/phase5d-covariate-adjustment.md`.
+Applied downstream of α̂_EB: a **triple-goal rank correction** (Lin, Louis & Shen 1999) that preserves the EB rank ordering but substitutes the empirical TWFE α̂ histogram, preventing regression-to-the-mean compression from dulling Optuna's top-tail exploitation signal. Call the composed output `α̂_EBT`; that is the value fed to Phase 5E (Box-Cox).
+
+**Stage-1 timing filter retained.** Only pre-matchup features enter `X_i`; post-matchup harness outputs (duration, damage_efficiency, overload_count_differential, armor_fraction_remaining) are excluded by construction. Defensive hygiene — OLS in the prior regression is attenuation-safe for mis-specified covariates, but the exclusion prevents the bad-control pattern from creeping back if the design is ever generalized to a within-TWFE regression.
+
+**Cross-field equivalences.** The same closed-form appears under six independent names across fields: covariate-powered empirical Bayes (Ignatiadis-Wager 2022), Efron-Morris shrinkage with covariate target (1975), hierarchical Bayes BLUP with regression prior (Lindley-Smith 1972), Hachemeister credibility regression (1975, actuarial), Mislevy collateral-information IRT (1987, psychometrics), TrueSkill 2 with feature-based prior (Minka et al. 2018, games rating). The convergence across fields is the best available evidence this is the right formulation.
+
+**Rejected alternatives:** covariate-adjusted TWFE via FWL + PDS + ICP (conditioning paradigm, refuted empirically — see `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite fitness, per-frame Java harness tracking, one-factor CFA (fails on real data due to indicator heterogeneity), MISO. Full design and rejection rationale in `docs/reference/phase5d-covariate-adjustment.md`.
 
 **Phase 5E — A3 Shape Revision (PLANNED)**
 
@@ -406,34 +416,46 @@ Research-complete in `docs/reference/phase5e-shape-revision.md` §2.1. Deferred 
 
 ### Implementation Plans
 
-#### Phase 5D — Covariate-Adjusted TWFE
+#### Phase 5D — EB Shrinkage of A2
 
 ```
 Step 1: Extend src/starsector_optimizer/deconfounding.py
-  - Generalise twfe_decompose(Y, ...) to twfe_decompose(Y, X, ...) with γ block
-  - Add post_double_selection(Y_resid, X_resid, cv_folds=5) via sklearn.LassoCV
-  - ScoreMatrix.record() grows a covariates: np.ndarray argument
-  - Define X_PRE_CANDIDATES constant (mechanical output of the Stage-1 timing rule)
-  - Return (alpha, beta, gamma, selected_set); existing alpha callers unchanged.
+  - twfe_decompose returns (alpha, beta, sigma_i) — new sigma_i from pooled
+    residual MSE / n_i per build.
+  - New function eb_shrinkage(alpha, sigma_i, X_build, tau2_floor_frac=0.05)
+    returning (alpha_eb, gamma, tau2). Method: OLS γ̂ of α̂ on [1, X], MoM
+    τ̂², per-build w_i, convex-combine α̂ with γ̂ᵀX. ~40 lines NumPy.
+  - New function triple_goal_rank(posterior, raw) — one-line histogram
+    substitution preserving ranks of posterior.
 
 Step 2: Delete A2 scalar control variate from src/starsector_optimizer/optimizer.py
-  - Remove _apply_control_variate, _refit_control_variate, _cv_beta, _cv_heuristic_mean
-  - Heuristic becomes column 0 of X_pre; its coefficient lives in gamma
+  - Remove _apply_control_variate, _refit_control_variate, _cv_beta,
+    _cv_heuristic_mean and their unit tests.
+  - In _finalize_build: call eb_shrinkage then triple_goal_rank, feeding the
+    result into the existing A3 (or Box-Cox under Phase 5E) stage.
 
 Step 3: Route pre-matchup covariates through src/starsector_optimizer/combat_fitness.py
-  - Expose already-computed per-matchup pre-matchup signals (heuristic, scorer components, opponent features)
-  - No new signal collection — only routing. Post-matchup fields are not routed.
+  - Expose per-build X_i = [13 ScorerResult components, n_hullmods,
+    flux_vents, flux_capacitors]. Already computed, only reshape.
+  - Post-matchup harness outputs remain un-routed (Stage-1 timing rule).
 
-Step 4: Update spec 28 (deconfounding) and spec 24 (optimizer). Add pyproject.toml entry for scikit-learn if absent.
+Step 4: Add ShrinkageConfig to models.py (enable, tau2_floor_frac,
+  triple_goal). Wire into OptimizerConfig. Update spec 28 (deconfounding)
+  and spec 24 (optimizer).
 
-Step 5: Ship gate — empirical validation on 2026-04-17 Hammerhead eval log
+Step 5: Ship gate — replay on 2026-04-17 Hammerhead eval log
   - Fit three pipelines on the log:
-      (a) A1+A2 baseline
-      (b) covariate-adjusted A1' with full X_pre (no PDS)
-      (c) covariate-adjusted A1' with PDS-selected S ⊆ X_pre
-  - Measure rank correlation with held-out "true" α (re-evaluate ~20 builds against the full 50-opponent pool)
-  - Ship (c) only if ρ(c) ≥ ρ(b) ≥ ρ(a) + 0.02. Regression at any stage blocks.
-  - Optional: run ICP post-hoc on selected S; investigate any PDS∖ICP disagreement.
+      (A0) plain TWFE
+      (A)  A0 + shipped scalar CV
+      (EB) A0 + eb_shrinkage + triple_goal_rank
+  - LOOO across top-5 most-sampled anchor opponents. For each probe:
+    drop its column, refit, measure Spearman ρ(refit α̂, probe raw Y) across
+    all non-pruned builds. Mean across 5 probes = gate.
+  - Ship EB only if Δρ(EB − A0) ≥ +0.02 AND Δρ(EB − A) ≥ +0.02. Both
+    margins required — the shipped A itself is not a safe floor.
+  - Reference values validated in experiments/phase5d-covariate-2026-04-17/
+    phase5d_fusion_validation.py: A0=0.280, A=0.259, EB=0.316,
+    Δρ=+0.036 vs A0, +0.057 vs A.
 ```
 
 #### Phase 5E — Box-Cox A3 (and optional CAT)
@@ -463,14 +485,14 @@ Step 3: Ship gate — re-run the Hammerhead 1000-trial budget on 5E alone. Verif
 |--------|------------------------|----------|----------|----------------|
 | Opponent coverage | 10/54 via curriculum | 10/54 | 10/54 | 10/54 |
 | A3 ceiling saturation | 25.3% | 25.3% | <2% (simulation: 0.4%) | <2% |
-| ρ(predicted, true) — Spearman | 0.40 baseline (simulation) | ~0.42 (covariate-adjustment gain) | 0.47 (Box-Cox gain) | ~0.49 (orthogonal composition) |
-| Exploit-cluster internal spread ρ | 0.31 (simulation) | ~0.33 | 0.38 | ~0.40 |
-| Timeout-tier discrimination | Flat | Gradient from auxiliary signals via γ | Flat | Gradient + spread |
+| ρ(predicted, true) — Spearman | 0.280 (Hammerhead LOOO baseline) | 0.316 (+0.036 from EB shrinkage, validated) | 0.47 projected (Box-Cox simulation) | ~0.50 (orthogonal composition) |
+| Exploit-cluster internal spread ρ | 0.31 (simulation) | ~0.34 | 0.38 | ~0.40 |
+| Timeout-tier discrimination | Flat | Per-build gradient from prior-mean regression γ̂ᵀX_i | Flat | Gradient + spread |
 
 Phase 5E is the biggest signal-quality win per engineering-hour; Phase 5D is orthogonal and complementary. Phase 5F stays deferred as an empirical next step if 5E does not fully resolve exploit convergence.
 
 ### Testing
-- **Phase 5D**: unit tests for covariate-adjusted TWFE (synthetic-data recovery, OLS equivalence, ridge effect); integration ablation on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` with ship-gate validation.
+- **Phase 5D**: unit tests for `eb_shrinkage` (synthetic known-γ recovery; degenerate limits `σ̂²→0`, `σ̂²→∞`, `τ̂²=0` floor; MoM identifiability) and `triple_goal_rank` (exact rank preservation, histogram equality). Integration ablation on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` with LOOO ship-gate per §3.3 of `phase5d-covariate-adjustment.md`.
 - **Phase 5E**: simulation validation complete (`experiments/signal-quality-2026-04-17/`). Production validation re-runs Hammerhead 1000-trial budget post-ship.
 - **Phase 5F**: research only. Promoting to implementation requires extending the synthetic generative model with RPS-counterable exploits — the current flat-uplift exploit cannot validate exploiter-loop gains.
 

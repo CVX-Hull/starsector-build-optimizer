@@ -1,142 +1,148 @@
-# Phase 5D — Covariate-Adjusted TWFE
+# Phase 5D — Empirical-Bayes Shrinkage of TWFE α̂ Toward a Heuristic-Derived Prior
 
-> **Status**: Research complete, implementation planned. See `docs/reference/implementation-roadmap.md` for the roadmap slot.
+> **Status**: Design finalized after two-stage research and validation. Implementation pending.
 
-Design for incorporating auxiliary per-matchup signals into the fitness estimate *without hand-tuned composite weights and without per-variable causal classification*. The shipped pipeline (`src/starsector_optimizer/combat_fitness.py` → `deconfounding.py` A1 → `optimizer.py` A2/A3) currently uses only the scalar `combat_fitness` outcome and ignores the rest of what the harness emits. This document specifies a bitter-lesson-compliant extension that folds those signals into the additive decomposition via OLS with **automatic two-stage covariate selection**: Stage 1 is a mechanical timing filter (pre-matchup vs post-matchup — one operational rule, not per-variable judgment), Stage 2 is post-double-selection lasso (Belloni, Chernozhukov & Hansen 2014) over the admissible set.
+Design for using the auxiliary per-build signals (heuristic composite score and 13 scorer components) already produced by the Python data layer to improve the TWFE fitness estimate. The shipped pipeline (`combat_fitness.py` → `deconfounding.py` A1 → `optimizer.py` A2/A3) uses the `composite_score` only as a scalar control variate at A2; the other 12 scorer components are ignored. This doc specifies a bitter-lesson-compliant extension that **fuses** (`α̂_TWFE`, `heuristic`, `scorer components`) as multiple noisy measurements of the same latent build quality α via empirical-Bayes shrinkage toward a regression-predicted prior mean.
 
-Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline. The stages as shipped are A1 TWFE decomposition → A2 single-channel control variate (heuristic) → A3 rank-shape-with-top-quartile-clamp. Phase 5D extends A1 to absorb multiple covariates; Phase 5E replaces A3 with Box-Cox warping. The two are orthogonal and compose cleanly. See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview and `docs/reference/phase5a-deconfounding-theory.md` for the TWFE foundation.
+Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline. A1 (TWFE decomposition) → A2 (control-variate adjustment) → A3 (rank shaping) are the three stages; Phase 5D replaces A2, Phase 5E replaces A3. Both are orthogonal and compose cleanly. See `docs/reference/implementation-roadmap.md` for phase overview and `docs/reference/phase5a-deconfounding-theory.md` for the TWFE foundation.
+
+**Design history.** An earlier version of this doc (2026-04-13 through 2026-04-17) specified a *conditioning*-paradigm design — multivariate CUPED / FWL / post-double-selection lasso — treating the heuristic and scorer components as covariates to partial out of the outcome Y_ij. Synthetic validation (20 seeds, p<0.0001) and a real-data ship-gate on the 2026-04-17 Hammerhead run (368 builds × 54 opponents, LOOO across 5 anchor probes) showed that paradigm is categorically wrong for this setting — the Δρ vs plain TWFE was **−0.35 synthetic and −0.13 real**. See §4.5 for the rejection, and `experiments/phase5d-covariate-2026-04-17/REPORT.md` for the full refutation. The current doc describes the fusion-paradigm replacement that passed the same ship-gate at Δρ = +0.036 on real Hammerhead data.
 
 ---
 
 ## 1. Problem
 
-The combat harness emits per-matchup auxiliary signals beyond the scalar `combat_fitness` score:
+The Python data layer computes a 13-component `ScorerResult` per build (`composite_score`, `total_dps`, `kinetic_dps`, `he_dps`, `energy_dps`, `flux_balance`, `flux_efficiency`, `effective_hp`, `armor_ehp`, `shield_ehp`, `range_coherence`, `damage_mix`, `op_efficiency`) plus structural features (`n_hullmods`, `flux_vents`, `flux_capacitors`). All are **build-level** and **pre-matchup** — computable from `(Build, GameData)` without running combat. Each has moderate positive correlation with true combat α (empirically ρ ≈ 0.3–0.5).
 
-- `damage_dealt`, `damage_taken` (and hence `damage_efficiency = dealt / taken`)
-- `overload_count_differential` (player minus enemy)
-- `duration_seconds`
-- `hp_differential`
-- `armor_fraction_remaining`
-- `peak_time_remaining`, `disabled_weapons_count`, `flameouts_count`
+The current shipped A2 uses only `composite_score` as a scalar control variate. The question this doc answers: **how do we use the full 16-dimensional pre-matchup feature vector?**
 
-These are parsed in `src/starsector_optimizer/result_parser.py` but currently ignored by the fitness aggregation. The original Phase 5D proposal (see `docs/reference/phase5c-opponent-curriculum.md` §4.4 and the 2026-04-13 version of this roadmap) was to fold them into a **hand-weighted composite sum** alongside `combat_fitness`. That proposal was rejected on bitter-lesson grounds — choosing the weights is exactly the kind of human-knowledge injection Sutton 2019 warns against.
-
-The question this doc answers: **can we use these signals without human weights?** The literature gives an unambiguous yes.
+The post-matchup outputs of the harness (`duration_seconds`, `hp_differential`, `damage_efficiency`, `overload_count_differential`, `peak_time_remaining`, `armor_fraction_remaining`) are **excluded by design** — see §2.5.
 
 ---
 
-## 2. Accepted Design — Covariate-Adjusted TWFE
+## 2. Accepted Design — EB Shrinkage with Covariate-Powered Prior
 
-### 2.1 Model
+### 2.1 Model (two-level Gaussian)
 
-Extend the current TWFE decomposition from
+The key reframe: heuristic signals are **noisy estimators of the same latent α** as the TWFE estimate, not orthogonal covariates of Y. Phase 5D is a **fusion** problem (combine multiple noisy views of one quantity by precision weighting), not a **conditioning** problem (project out explained variance).
 
-```
-Y_ij = α_i + β_j + ε_ij
-```
-
-to
+Two-level hierarchical Gaussian model:
 
 ```
-Y_ij = α_i + β_j + γᵀ X_ij + ε_ij
+Likelihood (A1 TWFE, shipped):     α̂_i | α_i   ~ N(α_i, σ̂_i²)
+Prior (learned from the data):     α_i | X_i    ~ N(γᵀ [1, X_i], τ²)
 ```
 
-where `X_ij ∈ ℝ^k` is a per-matchup covariate vector and `γ ∈ ℝ^k` is the OLS projection of `Y` onto `X` after removing the build and opponent fixed effects. The Frisch-Waugh-Lovell theorem (Frisch & Waugh 1933, *Econometrica* 1(4); Lovell 1963, *JASA* 58(304)) guarantees that α̂ recovered this way equals α̂ from the joint OLS of the full model — the three-block alternating projection below converges to the same point as solving the full least-squares system directly.
+where:
 
-### 2.2 Estimator
+- **`α̂_i`** is the Phase 5A TWFE estimate of build i's fitness.
+- **`σ̂_i²`** is its squared standard error. Computed from TWFE residuals as `σ̂_ε² / n_i`, where `σ̂_ε²` is the pooled residual variance and `n_i` is the number of opponents build i was evaluated against.
+- **`X_i ∈ ℝ^16`** is the pre-matchup covariate vector (13 scorer components + 3 structural extras), standardized column-wise.
+- **`γ ∈ ℝ^17`** (OLS coefficient vector including intercept) defines the regression prior mean `γᵀ [1, X_i]`.
+- **`τ²`** is the residual variance of α around the regression prior — the unexplained between-build variance.
 
-Three-block alternating projection, each block being a closed-form least-squares update:
+Both `γ` and `τ²` are estimated empirically from the same data they will be applied to — this is the "empirical" in empirical Bayes, after Robbins 1956 / Efron & Morris 1975 / Ignatiadis & Wager 2022.
+
+### 2.2 Estimator (closed-form posterior mean)
+
+Under the conjugate Gaussian-Gaussian model, the posterior mean of α_i given α̂_i and the prior is a precision-weighted convex combination:
 
 ```
-Given α, β:   γ ← (X^T X + ridge · I)^{-1} X^T (Y − α1^T − 1β^T).flatten()
-Given β, γ:   α_i ← mean_j(Y_ij − β_j − γ^T X_ij)   over observed matchups
-Given α, γ:   β_j ← mean_i(Y_ij − α_i − γ^T X_ij)   over observed matchups
+α̂_EB_i  =  w_i · α̂_i  +  (1 − w_i) · γ̂ᵀ [1, X_i]
+w_i    =  τ̂² / (τ̂² + σ̂_i²)
 ```
 
-Iterate until `||α^(t+1) − α^(t)||_∞ < 10^{-4}` (or fixed `n_iters`). Same convergence properties as the existing A1 alternating projection in `twfe_decompose()`; the extra γ block adds a single small matrix solve per outer iteration. At n ≈ 10,000 observed matchups and k ≤ 8 covariates, this is sub-millisecond per solve.
+**`γ̂`** is the ordinary-least-squares fit of `α̂_i` on `[1, X_i]` at the build level:
+
+```
+γ̂ = (Xᵀ X + ε I)⁻¹ Xᵀ α̂
+```
+
+with a small ε (1e-4) for numerical stability. Attenuation bias from measurement error in α̂ is first-order negligible when TWFE is reasonably precise (n_i ≥ ~5); re-examination is deferred to revisits under §4.4.
+
+**`τ̂²`** is estimated by the method of moments:
+
+```
+τ̂² = max( Var(α̂ − γ̂ᵀ [1, X])  −  mean(σ̂_i²),   0.05 · Var(α̂) )
+```
+
+The residual variance of `α̂` around the OLS fit decomposes additively into `τ²` (between-build variance) plus the average measurement variance `E[σ̂_i²]`, so subtracting the latter isolates the former. The 5% floor prevents total collapse when the OLS fit over-explains α̂ in small samples.
+
+**`w_i`** is the per-build shrinkage weight:
+
+- High `σ̂_i²` (few opponents faced) → `w_i → 0` → shrink toward the prior. Builds with sparse matchup data rely on the heuristic.
+- Low `σ̂_i²` (many opponents faced) → `w_i → 1` → trust the data. Well-evaluated builds keep their α̂.
+- High `τ̂²` (heuristic is a weak predictor of α overall) → `w_i → 1` uniformly → prior contributes little.
+- Low `τ̂²` (heuristic strongly predicts α) → `w_i < 1` → prior pulls hard.
+
+The whole computation is closed-form, ~10 lines of NumPy, O(N·k) per pass where N = #builds, k = 16. Sub-millisecond at our scale.
 
 ### 2.3 Where it lives in the pipeline
 
-This extension replaces **A1 + A2** with a single covariate-adjusted A1:
+HN replaces the shipped A2:
 
 ```
-Current:   A1 TWFE(Y)         →  α_i
-           A2 α_i − β̂_cv · (heuristic_i − heuristic_mean)   →  cv_fitness_i
-           A3 rank-shape(cv_fitness)                        →  reported_fitness
+Shipped:   A1 TWFE(Y)                                        →  α̂_i
+           A2 α̂_i − β̂_cv · (h_i − h̄)                        →  cv_fitness_i
+           A3 rank-shape(cv_fitness)                          →  reported_fitness
 
-Proposed:  A1' TWFE(Y, X)                     →  α_i (covariate-adjusted)
-           A3 rank-shape(α_i)                  →  reported_fitness
+Phase 5D:  A1 TWFE(Y)                                        →  α̂_i, σ̂_i
+           A2' EB-shrinkage(α̂, σ̂, X) via §2.2                 →  α̂_EB_i
+           A2''  triple-goal-rank(α̂_EB; α̂) via §2.4           →  α̂_EBT_i
+           A3 Box-Cox-or-rank-shape(α̂_EBT)                    →  reported_fitness
 ```
 
-The scalar heuristic control-variate (current A2, coefficient `_cv_beta` at `optimizer.py:787`) becomes column 0 of `X_ij`. Its OLS coefficient is part of γ and is learned, not fit separately. Any additional covariates become columns 1 through k−1 of X.
+The A3 stage is the Phase 5E Box-Cox rewrite (`docs/reference/phase5e-shape-revision.md`); its input is `α̂_EBT`, not `α̂_EB`. The two phases compose cleanly.
 
-### 2.4 Automatic covariate selection — two-stage procedure
+### 2.4 Rank correction via triple-goal estimation
 
-The single substantive question is **which signals go into X**. Blindly including every harness output is wrong: if a covariate is a *mechanical consequence* of build quality (a strong build trivially produces higher `damage_efficiency` against a weak opponent), conditioning on it partials out the very α_i signal we want to recover. Econometrics calls this **"bad control"** (Cinelli, Forney & Pearl 2022, "A Crash Course in Good and Bad Controls"). Four independent literature surveys (econometrics, causal ML, Bayesian sparsity, applied experimentation) converged on the same answer: **no purely-predictive selector detects bad controls** — lasso, horseshoe, SSVS, projpred, and BART will all dutifully retain a collider that correlates with Y. The bad-control decision must be made by the **candidate set**, not the **selector**.
+Pure EB shrinkage (α̂_EB) has a known failure mode for ranking: the top and bottom of the distribution shrink toward the mean more than the middle, compressing α̂_EB's histogram. This is the "regression to the mean" effect Louis 1984 *JASA* 79:393 documented. When Optuna TPE's expected-improvement acquisition reads α̂_EB, the compression dulls the exploitation signal at the top of the distribution.
 
-The design below pushes the structural decision into a single mechanical rule (Stage 1), then lets compute handle the rest (Stage 2). No per-variable judgment required.
+Lin, Louis & Shen 1999 *Stat. Med.* 18:2135 give the fix — **triple-goal estimation**:
 
-#### Stage 1 — Timing filter (mechanical; bitter-lesson compliant)
+```
+rank_i = argsort(argsort(α̂_EB))                           # 0..N-1
+α̂_EBT_i = sort(α̂_TWFE)[rank_i]                            # substitute histogram
+```
 
-Partition every candidate signal by **when its value is known**:
+The output preserves the EB-improved *rank ordering* of builds while substituting the empirical TWFE α̂ histogram for the shrunken posterior-mean histogram. Spearman ρ with truth is identical to α̂_EB's (ranks are preserved); the top-tail magnitudes are preserved for acquisition. Cost: O(N log N). Call this **EBT** (empirical Bayes + triple-goal).
 
-| Signal | Origin | Stage 1 |
+EBT is strictly a rank-preserving post-processing step; it can be turned off via a config flag if downstream analysis prefers pure EB posteriors.
+
+### 2.5 Stage-1 timing filter — excluded-by-design covariates
+
+`X_i` includes *only* pre-matchup build-level features. Post-matchup outputs of the harness are **not** admissible candidates:
+
+| Signal | Origin | Admissible? |
 |---|---|---|
-| `heuristic_i` (scalar) | pre-matchup (build-only) | ✓ admissible |
-| Scorer component breakdown (flux economy, burst DPS, sustained DPS, effective armor/shields) | pre-matchup (from `ScorerResult`) | ✓ admissible |
-| Opponent-side heuristic | pre-matchup (opponent-only) | ✓ admissible |
-| Opponent identity features (hull size class, pool role) | pre-matchup | ✓ admissible |
-| Schedule-position features (trial number, incumbent overlap count) | pre-matchup | ✓ admissible |
-| `duration_seconds` | post-matchup | ✗ excluded |
-| `peak_time_remaining` | post-matchup | ✗ excluded |
-| `damage_efficiency` | post-matchup | ✗ excluded |
-| `overload_count_differential` | post-matchup | ✗ excluded |
-| `hp_differential` | post-matchup | ✗ excluded (already the outcome) |
-| `armor_fraction_remaining` | post-matchup | ✗ excluded |
+| `composite_score`, 12 scorer components | pre-matchup (from `ScorerResult`) | ✓ |
+| `n_hullmods`, `flux_vents`, `flux_capacitors` | pre-matchup (build structure) | ✓ |
+| Opponent-side heuristic, identity features | pre-matchup | ✓ (future — not in initial ship) |
+| `duration_seconds`, `hp_differential` | post-matchup | ✗ |
+| `damage_efficiency`, `overload_count_differential` | post-matchup | ✗ |
+| `peak_time_remaining`, `armor_fraction_remaining` | post-matchup | ✗ |
 
-This is **one operational decision** ("is the value knowable before the matchup begins?"), not per-variable causal reasoning. It scales to any future harness output without elicitation and is the strategy every production A/B-testing system uses — CUPED (Deng et al. 2013), MLRATE (Guo et al. 2021), DoorDash CUPAC all restrict to pre-treatment features by policy, not case-by-case analysis. Post-matchup signals of scientific interest should be modeled as separate outcomes (a multi-objective setup, out of scope here), never as covariates of α_i.
+The reasoning: post-matchup signals are mechanical consequences of Y_ij (colliders on α). Including them in the prior regression `α̂ ~ X` is fine *in the regression step* (OLS is attenuation-safe), but they become bad controls if the design ever reverts to within-TWFE covariate adjustment. The exclusion is defensive and zero-cost — we have no business routing post-matchup signals through the A2 pipeline.
 
-#### Stage 2 — Automatic selection inside X_pre via post-double-selection lasso
+This is the same convention as CUPED (Deng et al. 2013), MLRATE (Guo et al. 2021), and DoorDash CUPAC — one operational rule per output, no per-covariate causal reasoning.
 
-With the timing rule holding the door, X_pre can be large (~10-20 channels) without bad-control risk. Within that pool, selection is data-driven via **post-double-selection lasso** (Belloni, Chernozhukov & Hansen 2014, *Review of Economic Studies* 81(2), arXiv:1201.0220; panel extension Belloni, Chernozhukov, Hansen & Kozbur 2016, arXiv:1312.7186):
+### 2.6 Connections to adjacent literatures
 
-1. Partial out fixed effects via within-transformation (demean each column of Y and X_pre by build i and opponent j — this is the FWL residualization already implicit in the alternating projection).
-2. Run lasso `Ỹ ~ X̃_pre` with λ chosen by K-fold CV → selects set `S_Y` predictive of outcome.
-3. For each column k in X_pre, run lasso `X̃_k ~ X̃_{-k}` → selects set `S_k` capturing which other covariates predict `X_k`.
-4. Final adjustment set `S = S_Y ∪ (⋃_k S_k)` — the "post-double" union.
-5. Refit the covariate-adjusted TWFE using only columns in S.
+The same two-level Gaussian model appears under different names across six fields:
 
-The union step is what makes this **double** selection: a covariate that predicts `X_k` but not Y directly must still be retained, because omitting it would bias γ̂_k through the correlation structure of X_pre itself. Plain single-lasso-on-Y is known to under-select and bias γ in panel settings — Belloni-Chernozhukov-Hansen prove PDS restores √n-rate inference on γ̂ under mild sparsity.
+| Field | Name | Canonical reference |
+|---|---|---|
+| Empirical Bayes (stats) | Covariate-powered EB | Ignatiadis & Wager 2022 *Ann. Stat.* 50:2467, arXiv:1810.02333 |
+| Classical shrinkage (stats) | Efron-Morris with covariate target | Efron & Morris 1975 *JASA* 70:311 |
+| Parametric empirical Bayes | Tweedie / regression prior | Efron 2010 *Large-Scale Inference* ch. 1, 11 |
+| Hierarchical Bayes (stats) | BLUP with regression prior | Lindley & Smith 1972 *JRSS-B* 34:1; Gelman 2006 *Technometrics* 48:432 |
+| Actuarial | Hachemeister credibility regression | Hachemeister 1975 |
+| Psychometrics | Mislevy collateral-info IRT | Mislevy 1987 *Appl. Psych. Meas.* 11:81 |
+| Games rating | TrueSkill 2 w/ feature-based prior | Minka, Cleven & Zaykov 2018 MSR-TR-2018-8 |
 
-Cost: at ~10k-25k observations and k ≤ 20, Stage 2 is ~200 ms in scikit-learn (`LassoCV` + per-column refits). No GBM, no neural nets — plain L1 is sufficient at this scale.
+All seven are mathematically identical: α_i ~ N(γᵀX_i, τ²), α̂_i | α_i ~ N(α_i, σ_i²), posterior by Bayes rule. The convergence across independent fields is the best available evidence that this is the right formulation for "rate many things with sparse data plus side info."
 
-#### Stage 3 (optional) — Double ML with cross-fitting if k grows large
-
-If X_pre eventually exceeds ~50 channels (e.g., we start featurising opponent hulls with dense aspect vectors), Stage 2 risks selection instability. Replace with **Double/Debiased ML with multiway-cluster cross-fitting** (Chernozhukov et al. 2018, *Econometrics Journal* 21(1), arXiv:1608.00060; multiway-cluster extension Chiang, Kato, Ma & Sasaki 2022, *JASA*, arXiv:1909.03489):
-
-- K-fold cross-fitting over matchups, blocked on both build and opponent to respect crossed dependence.
-- On each held-out fold, estimate γ via Neyman-orthogonal residual-on-residual regression; fit `E[Y|X]` and `E[X_k|X_{-k}]` nuisances with lasso or GBM on the remaining folds.
-- Aggregate γ across folds.
-
-This is insurance, not required. The current Starsector harness has <20 natural pre-matchup channels; Stage 2 PDS is the right tool. Promote to Stage 3 only if diagnostics show λ-selected S varying dramatically across CV folds.
-
-### 2.5 Optional diagnostic — Invariant Causal Prediction
-
-The timing filter is the primary bad-control defense but relies on the convention that "pre-matchup ⇒ causally prior." For edge cases — a pre-matchup feature computed from aggregated past-match data whose distribution shifts with opponent — an **experimental** invariance check is available.
-
-**Invariant Causal Prediction (ICP; Peters, Bühlmann & Meinshausen 2016, *JRSS-B* 78(5), arXiv:1501.01332):** Treat each opponent j as an environment. True causal parents of Y produce residuals `ε̂_S = Ỹ − X̃_S γ̂_S` whose distribution is **invariant across environments**. Mediators and colliders fail invariance because j directly perturbs them. Procedure:
-
-1. For each candidate subset `S ⊂ X_pre`, fit the covariate-adjusted TWFE using only columns in S.
-2. Test `H_0: residuals have the same distribution across all opponents` via a multi-sample Levene test (Bonferroni-corrected across S candidates).
-3. The **accepted set** is the intersection of all non-rejected S — a confidence set of causal parents.
-
-Any column retained by PDS-lasso but rejected by ICP is a candidate bad control worth manual inspection. Any column retained by both is high-confidence safe. Cost: exhaustive 2^k at k ≤ 15 is ~seconds; for larger k, use `nonlinearICP`'s greedy variant (Heinze-Deml, Peters & Meinshausen 2018, arXiv:1706.08576).
-
-This is a **diagnostic**, not the primary selector. Ship-gating remains driven by held-out empirical lift (§3.3), not ICP agreement. ICP earns its keep when PDS selection includes a post-hoc-suspicious column and a principled rejection criterion is needed.
-
-### 2.6 Connection to CUPED / CUPAC / DML
-
-The design is the experiment-design community's CUPED pattern (Deng, Xu, Kohavi & Walker 2013, WSDM), where A/B experiments reduce variance by subtracting a regression-projected pre-experiment covariate — Bing reports ~50% variance reduction. DoorDash's CUPAC (Tang et al. 2020) extends CUPED to an ML-predicted scalar covariate. MLRATE (Guo et al. 2021, arXiv:2106.07263) generalises to arbitrary ML learners with cross-fitting. The modern semiparametric treatment is Double/Debiased ML (Chernozhukov et al. 2018), which gives Stage 3 its theoretical grounding. All three systems restrict to pre-treatment features by convention — the Stage 1 timing filter above is that convention, made explicit. At our scale (~10k-25k observations, k ≤ 20) Stage 2 plain OLS+PDS is sufficient; Stage 3 cross-fitting is available when X_pre outgrows it.
+For the formal derivation of why this beats CUPED — specifically the derivation ρ(α̂_CUPED, α) = √(1 − R) where R is the heuristic's reliability — see `experiments/phase5d-covariate-2026-04-17/FUSION_REPORT.md` §4.
 
 ---
 
@@ -144,113 +150,180 @@ The design is the experiment-design community's CUPED pattern (Deng, Xu, Kohavi 
 
 ### 3.1 Code changes
 
-- **`src/starsector_optimizer/deconfounding.py`** — extend `twfe_decompose(Y, ...)` to `twfe_decompose(Y, X, ...)` with the γ block. `ScoreMatrix.record()` grows a `covariates: np.ndarray` argument. `ScoreMatrix.build_alpha()` and `opponent_beta()` unchanged signatures; γ and S accessible via new `score_matrix.gamma` / `score_matrix.selected_covariates` properties.
-- **`src/starsector_optimizer/deconfounding.py`** (new function) — `post_double_selection(Y_resid, X_resid, cv_folds=5) → set[int]` implementing the Stage 2 PDS lasso. Uses `sklearn.linear_model.LassoCV`. ~40 lines.
-- **`src/starsector_optimizer/optimizer.py`** — delete `_apply_control_variate`, `_refit_control_variate`, `_cv_beta`, `_cv_heuristic_mean`. Their role is absorbed by γ. Update `_finalize_build` to pass the full X_pre vector through to `ScoreMatrix.record()`. Decision on S runs once at finalization, cached until next `record()`. No structural change to A3 downstream.
-- **`src/starsector_optimizer/models.py`** — add to `TWFEConfig`: `use_pds: bool = True` (gate the Stage 2 selector on/off for A/B diagnostics), `pds_cv_folds: int = 5`. Candidate column identifiers come from a constant `X_PRE_CANDIDATES` tuple in `deconfounding.py` (not a user-tuned list — it's the mechanical output of Stage 1 applied to `CombatResult` plus `ScorerResult`).
-- **`src/starsector_optimizer/combat_fitness.py`** — expose all pre-matchup candidates from the existing `CombatResult` + `ScorerResult` plumbing. No new signal collection; only routing.
-- **`pyproject.toml`** — add `scikit-learn` to the runtime dependency set if not already present (check `LassoCV`).
-- **`docs/specs/28-deconfounding.md`** — extend to describe the γ estimation step, Stage 1 timing filter, Stage 2 PDS lasso, and the optional ICP diagnostic path.
+- **`src/starsector_optimizer/deconfounding.py`** — extend with:
+  - `TWFEResult` named tuple returning `(alpha, beta, sigma_i)`, where `sigma_i` comes from pooled residual MSE / n_i.
+  - `eb_shrinkage(alpha, sigma_i, X_build, tau2_floor_frac=0.05) → (alpha_eb, gamma, tau2)`: the two-level EB closed-form from §2.2.
+  - `triple_goal_rank(posterior, raw) → alpha_ebt`: the one-line histogram substitution from §2.4.
+- **`src/starsector_optimizer/optimizer.py`** — delete `_apply_control_variate`, `_refit_control_variate`, `_cv_beta`, `_cv_heuristic_mean`. Replace with one call to `eb_shrinkage` at `_finalize_build`. Route the build's 16-dim feature vector from the trial params.
+- **`src/starsector_optimizer/combat_fitness.py`** — expose per-build pre-matchup feature vector. ScorerResult already has everything; the function just reshapes to the 16-dim X_i.
+- **`src/starsector_optimizer/models.py`** — add `ShrinkageConfig` frozen dataclass with `enable: bool = True`, `tau2_floor_frac: float = 0.05`, `triple_goal: bool = True`. Replace the scalar `_cv_beta` fields in `OptimizerConfig` with this.
+- **`docs/specs/28-deconfounding.md`** — extend to describe the EB shrinkage step with σ_i estimation and the triple-goal correction.
 
-Estimated code size: ~140 lines in `deconfounding.py` (90 for the covariate-adjusted alternating projection + 40 for PDS + 10 for Stage-1 helper), ~30 lines deleted from `optimizer.py`, ~20 lines net of model and spec updates. Order-of-magnitude 2–3 days including tests and spec sync.
+No new runtime dependencies. `scipy.linalg.lstsq` + NumPy is sufficient. Estimated code size: ~80 lines net in `deconfounding.py`, ~15 lines deleted from `optimizer.py`, ~20 lines of spec updates.
 
 ### 3.2 Tests
 
-- Unit: synthetic data with known α, β, γ — verify recovery tolerance (fixture analogous to existing `test_deconfounding.py::test_twfe_decompose_known_values`).
-- Unit: OLS equivalence — verify three-block alternating projection converges to the same γ as a single joint OLS via `numpy.linalg.lstsq`.
-- Unit: ridge effect — with k > n-ranks of X, γ should remain finite.
-- Unit: Stage 2 PDS recovers the active set on synthetic data where S_true ⊂ X_pre is known, with high probability across 100 random seeds.
-- Unit: Stage 2 PDS on fully-noise X returns S = ∅ (no false positives) with λ chosen by CV.
-- Integration: ablation on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl`. Baselines are (a) current A1+A2, (b) covariate-adjusted A1' without PDS (full X_pre), (c) covariate-adjusted A1' with PDS. Compare α̂ rank correlation against a held-out-matchup-based "true" α (re-evaluation against all 50 opponents for a ~20-build sub-sample). Ship only if (c) ≥ (b) ≥ (a), confirming PDS helps or is neutral.
+- Unit: synthetic 2-level model with known `γ`, `τ²` — verify recovery of shrinkage weights and posterior mean within tolerance.
+- Unit: degenerate cases — all `σ̂_i² → 0` (no shrinkage), all `σ̂_i² → ∞` (full shrinkage), `τ̂² = 0` floor behavior.
+- Unit: `triple_goal_rank` preserves exact rank ordering; histogram equals the empirical α̂ histogram by construction.
+- Integration: replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl`. Verify mean α̂_EBT matches the reference value computed by `experiments/phase5d-covariate-2026-04-17/phase5d_fusion_validation.py::hammerhead_replay`.
+- Regression: ablation on three pipelines — A0 plain TWFE, A shipped scalar CV, A1+A2' new EB — on the Hammerhead log. Confirm LOOO ship-gate Δρ ≥ +0.02 vs both A0 and A (already validated at Δρ = +0.036 vs A0 and +0.057 vs A in the fusion validation).
 
 ### 3.3 Ship gate
 
-Phase 5D is **gated on an empirical validation** against the 2026-04-17 Hammerhead evaluation log:
+Phase 5D is gated on **leave-one-opponent-out** rank correlation against the 2026-04-17 Hammerhead log, with the top-5 most-sampled anchor opponents as probes:
 
-- Fit both the current A1+A2 pipeline and the proposed A1' on the log.
-- Measure rank correlation with "true" α on a held-out evaluation set.
-- Require Δρ ≥ +0.02 to ship. Δρ < 0 is a blocker (indicates bad-control leakage or ill-conditioned covariate selection).
+- Fit A0, A, A2' (new EB) on the log minus probe opponent.
+- Measure Spearman ρ between the refit α̂ and the probe's raw `hp_differential` across all 313 non-pruned builds.
+- Require **Δρ(EB − A0) ≥ +0.02 AND Δρ(EB − A) ≥ +0.02** — both relative to plain TWFE *and* relative to the shipped scalar CV. Strict improvement on both required; the shipped A2 itself is not a safe floor (see §4.5).
 
-This gate prevents shipping covariate adjustment that merely looks principled without being empirically useful.
+Observed gate values in fusion validation (5-probe mean, 200-bootstrap CI): A0 = 0.280, A = 0.259, EB = 0.316, EBT = 0.316. Both Δρ margins ≥ +0.028.
 
 ---
 
-## 4. Rejected alternatives — with rationale
+## 4. Rejected alternatives
 
 ### 4.1 Hand-weighted composite fitness — REJECTED
 
 **What it was.** Compute `damage_efficiency`, `overload_differential`, `duration_normalized_damage` per matchup; sum into a weighted composite alongside the existing tiered `combat_fitness`; use the composite as the fitness scalar.
 
-**Why rejected.** The weights have to be picked by humans, and they encode a prior about which combat behaviours indicate quality. This is the exact anti-pattern the bitter lesson names (Sutton 2019, "The Bitter Lesson"). The covariate-adjusted TWFE above is a strict improvement — the regression coefficients are OLS-derived.
+**Why rejected.** The weights have to be picked by humans, and they encode a prior about which combat behaviors indicate quality. This is the anti-pattern the bitter lesson names (Sutton 2019, "The Bitter Lesson"). The EB design above has only one learned linear fit (`γ̂`) at the build level; all magnitudes are data-derived.
 
 ### 4.2 Per-frame Java harness tracking — REJECTED
 
-**What it was.** Extend `CombatHarnessPlugin.java` with per-frame accumulators for time-weighted flux, cumulative overload duration, engagement-distance trajectories, and time-to-first-hull-damage; fold into a richer composite.
+**What it was.** Extend `CombatHarnessPlugin.java` with per-frame accumulators for time-weighted flux, cumulative overload duration, engagement-distance trajectories, time-to-first-hull-damage; fold into a richer composite.
 
-**Why rejected.** Same pathology as 4.1, compounded — the new intermediate signals don't just need weights, they inject strategy taxonomy ("kiting vs brawling detection") into the reward signal. The match outcome primitives already collected (win/loss, HP differential, duration, timeouts, overload count) are the correct target variables; richer composites can be derived from them via this Phase 5D's OLS-coefficient adjustment without any new engineered channels.
+**Why rejected.** Same pathology as 4.1, compounded — the intermediate signals don't just need weights, they inject strategy taxonomy ("kiting vs brawling detection") into the reward signal. The match outcome primitives already collected (`win`/`loss`, `hp_differential`, `duration`, `TIMEOUT` count) are the correct scalar outcomes, and Phase 5E (Box-Cox) will re-warp their distribution without introducing new channels.
 
-See also `docs/reference/phase5c-opponent-curriculum.md` §4.4 for the original rejection context.
+See `docs/reference/phase5c-opponent-curriculum.md` §4.4 for the original rejection context.
 
-### 4.3 Multi-information-source Bayesian optimisation (MISO) — REJECTED
+### 4.3 Multi-information-source Bayesian optimization (MISO) — REJECTED
 
 **What it was.** Treat each auxiliary signal as a separate information source of build quality; aggregate via multi-output GP + knowledge-gradient-per-cost acquisition (Poloczek, Wang & Frazier 2017, NeurIPS).
 
-**Why rejected.** MISO's structural assumption is that each source gives an independent noisy estimate of the *same* objective (e.g. cheap simulator vs expensive simulator). Our auxiliary signals are *correlated side-channels*, not alternative estimators of build quality. Forcing them into the MISO framework requires declaring a mapping from each channel to "implied build quality" — which is itself a hand-weighted composite in disguise. In addition, adopting MISO would require replacing Optuna TPE with a custom GP/KG backend — a Phase-7-scale sampler rewrite for modest marginal gain.
+**Why rejected.** MISO's structural assumption is that each source gives an independent noisy estimate of the *same* objective (cheap simulator vs expensive simulator). The heuristic and scorer components here are **noisy views of the same α**, not alternative estimators of a common cost. EB shrinkage (§2.1) is the correct frame for that — MISO would re-derive the same fusion up to a heavier GP backend. Adopting MISO also requires replacing Optuna TPE with a custom GP/knowledge-gradient sampler — a Phase-7-scale rewrite for modest marginal gain.
 
 ### 4.4 Heteroscedastic-TWFE with learned σ²(X) — DEFERRED
 
-**What it was.** Generalise the error model from `ε ∼ N(0, σ²)` homoscedastic to `ε_ij ∼ N(0, σ²(X_ij))` with learned variance function, then fit TWFE by GLS (weighted least squares).
+**What it was.** Generalise the error model from `ε ~ N(0, σ²)` homoscedastic to `ε_ij ~ N(0, σ²(X_ij))` with learned variance function, then fit TWFE by GLS.
 
-**Why deferred, not rejected.** Heteroscedasticity is real (glass-cannon builds have bimodal outcomes; peer-Hammerhead matchups produce near-deterministic timeouts). But modelling σ²(X) is orthogonal to the auxiliary-signal question and is a second-order refinement. Revisit after the covariate-adjusted design above is in production and diagnostics show residual heteroscedasticity that matters. References for the revisit: Binois, Gramacy & Ludkovski 2018, *JCGS* 27(4), arXiv:1611.05902 ("Practical Heteroskedastic Gaussian Process Modeling for Large Simulation Experiments"); Kersting et al. 2007, ICML ("Most Likely Heteroscedastic GP Regression").
+**Why deferred.** Heteroscedasticity is real (glass-cannon builds have bimodal outcomes; peer-Hammerhead matchups produce near-deterministic timeouts). The EB shrinkage partially absorbs this through per-build σ̂_i, but not through per-matchup σ_ij. Revisit after the fusion design ships and diagnostics show residual heteroscedasticity matters. References: Binois, Gramacy & Ludkovski 2018 *JCGS* 27(4), arXiv:1611.05902; Kersting et al. 2007 ICML.
+
+### 4.5 Covariate-adjusted TWFE (CUPED / FWL / PDS / ICP) — REJECTED
+
+**What it was.** An earlier version of this document (2026-04-13 through 2026-04-17) specified a *conditioning-paradigm* design:
+
+```
+Y_ij = α_i + β_j + γᵀ X_ij + ε_ij       (multivariate OLS, not EB shrinkage)
+```
+
+with `γ` estimated by three-block alternating projection (Frisch-Waugh-Lovell 1933), automatic column selection via Belloni-Chernozhukov-Hansen post-double-selection lasso (2014, arXiv:1201.0220), and an optional ICP invariance safety net (Peters-Bühlmann-Meinshausen 2016).
+
+**Why rejected — empirical refutation.** Full synthetic sweep (20 seeds, 368 builds × 54 opponents matched to Hammerhead characteristics) and real-data ship-gate on the 2026-04-17 Hammerhead evaluation log (313 non-pruned builds × 54 opponents, LOOO across 5 anchor probes) showed:
+
+| Estimator | Synthetic ρ(α̂, truth) | Hammerhead LOOO ρ |
+|---|---|---|
+| Plain TWFE (A0, baseline) | 0.407 | 0.280 |
+| Shipped scalar CV (A) | 0.347 (p<0.0001 worse than A0) | 0.259 |
+| CUPED multi-covariate (rejected 5D.v1) | 0.055 (p<0.0001 worse than A0) | 0.118 |
+| CUPED + PDS lasso | 0.055 (identical — PDS kept all cols) | 0.118 |
+| CUPED + PDS + ICP | 0.077 (marginal rescue) | 0.118 |
+| **EB shrinkage (new 5D)** | **0.744** | **0.316** |
+
+Ship gate was +0.02; the conditioning paradigm missed it by −0.14. Full writeup in `experiments/phase5d-covariate-2026-04-17/REPORT.md`.
+
+**Why rejected — causal diagnosis.** The conditioning paradigm treats `X` as an exogenous covariate of the outcome Y and partials it out. This is valid when X is correlated with *noise* in Y (CUPED's A/B-testing use case, where pre-period user metrics are correlated with user-specific noise but orthogonal to treatment randomization). It is invalid when X is correlated with *the estimand*. Here X is correlated with α itself (the scorer components are predictive signals of combat quality) — Cinelli, Forney & Pearl 2022 arXiv:2106.10314 name this "Case 8: proxy of the treatment," a bad-control pattern. Conditioning on a noisy measurement of the estimand biases the coefficient on the estimand and, in the between-build projection, removes the signal α̂ shares with X.
+
+Closed-form derivation (see `FUSION_REPORT.md` §4): in the scalar-h case, if `h_i = c₀ + c₁ α_i + ν_i` and `R = c₁² Var(α) / (c₁² Var(α) + σ_ν²)` is h's reliability as a measurement of α, then after CUPED adjustment
+
+```
+ρ(α̂_CUPED, α) = √(1 − R)
+```
+
+compared to ρ(α̂, α) = 1 for plain TWFE. The more useful the heuristic, the more CUPED damages the rank correlation. At observed R ≈ 0.2 on our data, plain TWFE beats CUPED by factor √(1 − R) = 0.89 — matching the empirical ratio 0.85 in the simulation.
+
+**Philosophical resolution.** The bad-control fix and the correct design share the same auxiliary data and the same general hygiene concerns (Stage-1 timing filter, rejection of human-designed weights), but differ in the *mathematical operation* applied to the data. The conditioning paradigm subtracts `γ̂ᵀ X` from Y; the fusion paradigm averages `α̂` with `γ̂ᵀ X` by relative precision. That sign flip is the entire difference.
+
+Citations kept in this section for historical completeness; they do not guide the active design:
+
+- Frisch & Waugh 1933 *Econometrica* 1(4):387. Lovell 1963 *JASA* 58(304):993.
+- Belloni, Chernozhukov & Hansen 2014 *RES* 81(2):608, arXiv:1201.0220.
+- Chernozhukov et al. 2018 *Econometrics J.* 21(1):C1, arXiv:1608.00060.
+- Peters, Bühlmann & Meinshausen 2016 *JRSS-B* 78(5), arXiv:1501.01332.
+- Deng, Xu, Kohavi & Walker 2013 WSDM (CUPED).
+- Cinelli, Forney & Pearl 2022 *Soc. Meth. Res.*, arXiv:2106.10314 (the bad-control taxonomy that names the mistake).
+
+### 4.6 One-factor confirmatory factor analysis (CFA) — REJECTED
+
+**What it was.** Treat `(α̂_TWFE, h, scorer_1, ..., scorer_13)` as 14 noisy indicators of a single latent factor α and estimate factor scores by ML (Jöreskog 1967 `Psychometrika` 32:443; Bollen 1989 *Structural Equations with Latent Variables*).
+
+**Why rejected.** CFA dominated synthetic (ρ = 0.806, best overall) but failed the ship gate on real Hammerhead (ρ = 0.135, Δρ = −0.145 vs A0). The one-factor assumption — that every indicator is a rescaled noisy measurement of the same underlying α — is approximately correct in the synthetic generative model but violated in real data, where scorer components measure genuinely different aspects of a build (kinetic-DPS vs shield-eHP vs flux-efficiency are not one-dimensional). The EB shrinkage in §2.1 makes a strictly weaker structural assumption (`α_i = γᵀ X_i + residual`, no factor structure on X) and is robust to indicator heterogeneity.
+
+A multi-factor CFA with k > 1 latent factors might recover performance, but at that point the simplicity advantage over §2 vanishes and the closed-form OLS prior suffices.
+
+### 4.7 Inverse-variance combining without τ² shrinkage — CLOSE ALTERNATIVE
+
+**What it was.** Graybill & Deal 1959 *Biometrics* 15(4):543 — combine α̂_TWFE and γ̂ᵀX by inverse variance:
+
+```
+α̂_IV_i = (α̂_i/σ̂_i² + ĥ_i/σ̂_h²) / (1/σ̂_i² + 1/σ̂_h²),   ĥ_i = γ̂ᵀ X_i
+```
+
+Passes the ship gate (Δρ = +0.028 vs A0 on Hammerhead) but is systematically weaker than §2 EB (Δρ = +0.036). The difference: IV does not separate τ² (between-build variance around the prior) from `σ̂_h²` (OLS fit quality). When the OLS fit over-explains α̂ in small samples, IV under-weights the data. The EB method-of-moments τ̂² estimator corrects this — at the cost of a slightly more complex recipe.
+
+Kept as a reference implementation in `experiments/phase5d-covariate-2026-04-17/phase5d_fusion_validation.py::estimator_IV_inverse_variance` and a fallback if diagnostic evidence shows the MoM τ̂² estimate is unstable in production.
+
+### 4.8 EB with PDS-selected prior regression — CLOSE ALTERNATIVE
+
+**What it was.** Apply post-double-selection lasso (Belloni-Chernozhukov-Hansen 2014) *inside the prior regression* to select a subset of the 16 columns before forming `γ̂ᵀ X_i`.
+
+**Why not currently used.** At N = 313 builds × 16 columns, PDS retained **all 16 columns** in both synthetic and real replays — providing identical α̂_EB as §2 without selection, at ~200× the wall time (LassoCV CV cost). Retain as a no-op default; promote only if the covariate pool grows past ~50 columns.
 
 ---
 
 ## 5. References
 
-**TWFE + FWL foundations**
-- Frisch & Waugh (1933), "Partial Time Regressions as Compared with Individual Trends," *Econometrica* 1(4): 387–401.
-- Lovell (1963), "Seasonal Adjustment of Economic Time Series and Multiple Regression Analysis," *JASA* 58(304): 993–1010.
+**Fusion-family core (prior mean + likelihood, closed-form shrinkage)**
+- Stein 1956, "Inadmissibility of the Usual Estimator for the Mean of a Multivariate Normal Distribution," *Proc. 3rd Berkeley Symp.* 1:197.
+- James & Stein 1961, "Estimation with Quadratic Loss," *Proc. 4th Berkeley Symp.* 1:361.
+- Efron & Morris 1975, "Data Analysis Using Stein's Estimator and Its Generalizations," *JASA* 70:311.
+- Lindley & Smith 1972, "Bayes Estimates for the Linear Model," *JRSS-B* 34:1.
+- Efron 2010, *Large-Scale Inference*, Cambridge, chap. 1–3, 11. *(Parametric EB + Tweedie + rank-preserving post-hoc corrections.)*
+- Ignatiadis & Wager 2022, "Covariate-Powered Empirical Bayes Estimation," *Annals of Statistics* 50:2467, arXiv:1810.02333. *(The most direct modern reference for §2.1.)*
 
-**Control variates (classical)**
-- Rubinstein & Marcus (1985), "Efficiency of Multivariate Control Variates in Monte Carlo Simulation," *Operations Research* 33(3): 661–677.
-- Nelson (1990), "Control Variate Remedies," *Operations Research* 38(6): 974–992.
-- Glasserman (2004), *Monte Carlo Methods in Financial Engineering*, Springer, chap. 4.
-- Szechtman (2003), "Control Variate Techniques for Monte Carlo Simulation," *Winter Simulation Conference*.
-- Lin (2013), "Agnostic Notes on Regression Adjustments to Experimental Data," *Annals of Applied Statistics* 7(1): 295–318, arXiv:1208.2301.
+**Rank-preservation after shrinkage (§2.4 triple-goal)**
+- Louis 1984, "Estimating a Population of Parameter Values Using Bayes and Empirical Bayes Methods," *JASA* 79:393.
+- Lin, Louis & Shen 1999, "Triple-goal estimates for the evaluation of healthcare providers," *Stat. Med.* 18:2135.
+- Laird & Louis 1989, "Empirical Bayes ranking methods," *JASA* 84:739.
 
-**Automatic covariate selection (Stage 2 + Stage 3)**
-- Belloni, Chernozhukov & Hansen (2014), "Inference on Treatment Effects after Selection among High-Dimensional Controls," *Review of Economic Studies* 81(2): 608–650, arXiv:1201.0220.
-- Belloni, Chernozhukov, Hansen & Kozbur (2016), "Inference in High-Dimensional Panel Models With an Application to Gun Control," arXiv:1312.7186. *(PDS lasso extended to TWFE panels — the Stage 2 citation.)*
-- Chernozhukov, Chetverikov, Demirer, Duflo, Hansen, Newey & Robins (2018), "Double/Debiased Machine Learning for Treatment and Structural Parameters," *Econometrics Journal* 21(1): C1–C68, arXiv:1608.00060.
-- Chiang, Kato, Ma & Sasaki (2022), "Multiway Cluster Robust Double/Debiased Machine Learning," *JASA*, arXiv:1909.03489. *(DML with multiway clustering — the Stage 3 citation.)*
-- Zhang & Zhang (2014), "Confidence Intervals for Low-Dimensional Parameters in High-Dimensional Linear Models," *JRSS-B* 76(1), arXiv:1110.2563. *(Desparsified lasso, used if honest CIs on α̂_i are needed.)*
+**Standard error of TWFE α̂ (§2.2 σ̂_i)**
+- Arellano 1987, "Computing robust standard errors for within-groups estimators," *Oxford Bull. Econ. Stat.* 49:431.
+- Wooldridge 2010, *Econometric Analysis of Cross Section and Panel Data* (2e), MIT, chap. 10.
 
-**Invariance-based bad-control detection (Stage 2.5 diagnostic)**
-- Peters, Bühlmann & Meinshausen (2016), "Causal Inference using Invariant Prediction: Identification and Confidence Intervals," *JRSS-B* 78(5), arXiv:1501.01332.
-- Heinze-Deml, Peters & Meinshausen (2018), "Invariant Causal Prediction for Nonlinear Models," arXiv:1706.08576.
-- Rothenhäusler, Meinshausen, Bühlmann & Peters (2021), "Anchor Regression: Heterogeneous Data Meet Causality," *JRSS-B*, arXiv:1801.06229. *(Softer sibling of ICP — future generalisation if strict invariance proves too tight.)*
+**Cross-field equivalences (§2.6)**
+- Hachemeister 1975, "Credibility for regression models with application to trend," *Credibility: Theory and Applications*, Academic Press.
+- Bühlmann & Gisler 2005, *A Course in Credibility Theory and its Applications*, Springer.
+- Mislevy 1987, "Exploiting auxiliary information about examinees in the estimation of item parameters," *Applied Psychological Measurement* 11:81.
+- Minka, Cleven & Zaykov 2018, "TrueSkill 2: An Improved Bayesian Skill Rating System," MSR-TR-2018-8.
+- Kennedy & O'Hagan 2000, "Predicting the output from a complex computer code when fast approximations are available," *Biometrika* 87(1):1. *(Co-kriging — same math, GP framing.)*
 
-**Applied / production practice**
-- Deng, Xu, Kohavi & Walker (2013), "Improving the Sensitivity of Online Controlled Experiments by Utilizing Pre-Experiment Data" (CUPED), *WSDM*.
-- Guo, Coey, Konutgan, Li, Schoener & Goldman (2021), "Machine Learning for Variance Reduction in Online Experiments" (MLRATE), *ICML*, arXiv:2106.07263.
-- Tang, Zhou et al. (2020), "Improving Experimental Power through Control Using Predictions as Covariates" (CUPAC), DoorDash Engineering Blog.
+**Bad-control / refutation of the conditioning paradigm (§4.5)**
+- Cinelli, Forney & Pearl 2022, "A Crash Course in Good and Bad Controls," *Sociological Methods & Research*, arXiv:2106.10314.
+- Fuller 1987, *Measurement Error Models*, Wiley. *(The proxy-of-treatment case.)*
 
-**Bad-control theory + bitter lesson**
-- Cinelli, Forney & Pearl (2022), "A Crash Course in Good and Bad Controls," *Sociological Methods & Research*.
-- Shi, Veitch & Blei (2020), "Invariant Representations for Counterfactual-Invariant Representations," arXiv:2005.01643. *(Out-of-sample leakage test as a mediator diagnostic.)*
-- Sutton (2019), "The Bitter Lesson."
-
-**Rejected alternatives (for citation completeness)**
-- Poloczek, Wang & Frazier (2017), "Multi-Information Source Optimization," *NeurIPS*. *(MISO — rejected §4.3.)*
+**Bitter lesson / design philosophy**
+- Sutton 2019, "The Bitter Lesson."
 
 ---
 
 ## 6. See also
 
-- `docs/reference/phase5a-deconfounding-theory.md` — TWFE decomposition theory (6-field literature synthesis).
+- `docs/reference/phase5a-deconfounding-theory.md` — TWFE decomposition theory (six-field literature synthesis).
 - `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research.
-- `docs/reference/phase5c-opponent-curriculum.md` — anchor + incumbent opponent selection (Phase 5C, shipped).
+- `docs/reference/phase5c-opponent-curriculum.md` — opponent-selection design (anchor-first + incumbent-overlap).
 - `docs/reference/phase5e-shape-revision.md` — A3 rank-shape revision (Box-Cox).
 - `docs/reference/implementation-roadmap.md` — phase overview and status.
-- `docs/specs/28-deconfounding.md` — implemented TWFE spec (to be extended when 5D ships).
+- `docs/specs/28-deconfounding.md` — implementation spec (to be extended when 5D ships).
+- `experiments/phase5d-covariate-2026-04-17/REPORT.md` — refutation of the conditioning-paradigm v1 design.
+- `experiments/phase5d-covariate-2026-04-17/FUSION_REPORT.md` — validation of the fusion-paradigm v2 design (this doc).
 - `src/starsector_optimizer/deconfounding.py`, `src/starsector_optimizer/optimizer.py` — production code to modify.
