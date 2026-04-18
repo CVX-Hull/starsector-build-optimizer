@@ -14,15 +14,23 @@ Local machine (dev + heuristic + small sim)
   → Local analysis + visualization
 ```
 
-## GPU Requirement
+## GPU Requirement — REVISED 2026-04-18
 
-**Starsector requires hardware OpenGL for acceptable simulation speed.** Tested 2026-04-12: a Hetzner CCX33 (CPU-only, software Mesa/llvmpipe rendering) produced only 26s of game-time in 120s wall-clock — ~10-50x slower than local with a GPU. Xvfb provides the X11 display server, but LWJGL rendering needs a real GPU driver for the 5x time-multiplied simulation speeds.
+**CPU-only cloud instances are fully viable for Starsector simulation.** The original "GPU required" conclusion from 2026-04-12 was a misdiagnosis: Starsector was crashing on startup with a LWJGL 2.x bug, not running-but-slow under software rendering.
 
-**Implication:** CPU-only cloud providers (Hetzner Cloud CCX, most basic VMs) are not viable. Cloud deployment requires either:
-- GPU instances (AWS g4dn with T4, ~$0.16-0.25/hr spot)
-- Or local execution with a real GPU
+**The real bug:** LWJGL 2.x's `LinuxDisplay.getAvailableDisplayModes` throws `ArrayIndexOutOfBoundsException: Index 0 out of bounds for length 0` when Xvfb's XRandR extension has not populated its mode list. Xvfb does not finalize XRandR state until a client queries it — so the first call from LWJGL returns an empty array and crashes.
 
-For most optimization runs, **local execution is recommended** (simpler, free, fast with host GPU).
+**The fix** (now in `instance_manager.py::_start_xvfb`): after waiting for the Xvfb socket, run `xrandr --query` once as a client to warm the XRandR extension. This makes LWJGL's enumeration succeed. Requires `x11-xserver-utils` in cloud-init.
+
+**Benchmarks (2026-04-18, `experiments/cloud-benchmark-2026-04-18/`):**
+
+| Provider | Instance | Spot $/hr | Matchups/hr/inst | vs local (27/hr/inst) |
+|---|---|---|---|---|
+| Local workstation | 12-core, RTX 4090 | $0 | 27 | 1× baseline |
+| AWS c7i.2xlarge | 8 vCPU Intel SPR, us-east-1 | $0.158 | **64** | 2.4× |
+| Hetzner CCX33 | 8 vCPU AMD Milan, Ashburn VA | $0.13 | **~63** | 2.3× |
+
+Both CPU cloud paths match or exceed local per-instance throughput at negligible cost. **GPU instances are not required.**
 
 ## Local Machine Sizing (Recommended)
 
@@ -38,15 +46,19 @@ Measured 2026-04-12 on dev machine (12-core, 64GB RAM, RTX 4090):
 
 64GB RAM → 8 instances × 3.4GB = 27GB, well within limits. RTX 4090 handles 8+ instances trivially.
 
-## Cloud Machine Sizing (GPU Required)
+## Cloud Machine Sizing (CPU-only, updated 2026-04-18)
 
-| Machine | vCPUs | RAM | GPU | Instances | Spot Cost/hr | Use |
-|---------|-------|-----|-----|-----------|-------------|-----|
-| AWS g4dn.xlarge | 4 | 16GB | T4 | 4 | ~$0.16 | Minimum viable |
-| AWS g4dn.2xlarge | 8 | 32GB | T4 | 8 | ~$0.25 | **Recommended** |
-| AWS g4dn.4xlarge | 16 | 64GB | T4 | 12 | ~$0.36 | High throughput |
+Per-JVM cost: ~2.5 vCPU under combat (same rule as local, `num_instances ≤ cpu_count()//3`).
 
-Hetzner CCX (no GPU) is **not viable** — software rendering is too slow.
+| Machine | vCPUs | RAM | Max instances | Spot/hr | $/matchup | Notes |
+|---------|-------|-----|---------------|---------|-----------|-------|
+| Hetzner CCX33 (Ashburn) | 8 ded AMD Milan | 32 GB | 2 | **$0.13** | ~$0.001 | Cheapest; no spot tier (no preemption). Existing scripts target. |
+| AWS c7i.2xlarge (us-east-1) | 8 Intel SPR | 16 GB | 2 | $0.158 | $0.00123 | Validated 2026-04-18. |
+| AWS c7a.2xlarge (us-west-2) | 8 AMD Genoa | 16 GB | 2 | ~$0.15 | ~$0.001 | Recommended for AWS if scaling up — 2-4× lower interruption vs c7i. |
+| AWS c7i.4xlarge / c7a.4xlarge | 16 | 32 GB | 5 | ~$0.27 | — | Higher density if single-instance blast-radius acceptable. |
+| GCP n2d-standard-8 spot | 8 AMD Milan | 32 GB | 2 | $0.07 | ~$0.0005 | Half the cost of AWS; requires quota bump to 240 vCPU. |
+
+Previous GPU recommendation (g4dn.xlarge, T4) is obsolete — GPU is not required for Starsector headless simulation once XRandR warmup is in place.
 
 ## Cloud-Init Script (GPU Instance)
 
@@ -79,10 +91,11 @@ runcmd:
   - touch /tmp/cloud-init-done
 ```
 
-**Key packages discovered during testing (2026-04-12):**
+**Key packages discovered during testing (2026-04-12, updated 2026-04-18):**
 - `libxcursor1`, `libxxf86vm1` — required by LWJGL native libraries (`liblwjgl64.so`)
 - `libopenal1` — OpenAL audio (without it, game shows blocking error dialog)
 - `libasound2t64` — ALSA base (with null config above, prevents sound card errors)
+- `x11-xserver-utils` — provides `xrandr` binary needed by `instance_manager.py::_start_xvfb` for XRandR warmup (without it, LWJGL 2.x crashes on first Starsector launch)
 - **No `openjdk`** — game bundles its own JRE (`jre_linux/`), system Java is unnecessary and can interfere
 
 ## Deployment Script

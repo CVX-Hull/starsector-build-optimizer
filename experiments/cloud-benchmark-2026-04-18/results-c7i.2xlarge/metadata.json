@@ -1,0 +1,13 @@
+{
+  "instance_type": "c7i.2xlarge",
+  "instance_id": "i-0321a8d0db9a25d4a",
+  "provider": "aws",
+  "region": "us-east-1",
+  "hull": "hammerhead",
+  "num_instances": 2,
+  "sim_budget": 6,
+  "start_epoch": 1745004167,
+  "end_epoch": 1745005766,
+  "elapsed_seconds": 1599,
+  "exit_code": 0
+}

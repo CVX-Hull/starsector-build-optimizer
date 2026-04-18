@@ -17,7 +17,7 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
   T1: Programmatic variant creation (Java)     Eliminates .variant file I/O
   T2: Persistent game session (Java)           Eliminates JVM restart overhead
   T3: Mixed-build batching / StagedEvaluator   ASHA scheduling for Phase 5B
-  T4: Cloud deployment (GPU instances)          Linear scaling to 32-64 instances (requires GPU)
+  T4: Cloud deployment (CPU spot) ─────────── Superseded by Phase 6 Cloud Worker Federation. 2026-04-18 benchmarks proved CPU cloud is 2.4× local per-instance throughput after LWJGL XRandR fix; GPU is not required
 
 Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (TWFE deconfounding, control variate, rank shape)
 Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
@@ -26,9 +26,10 @@ Phase 5D:  EB Shrinkage of A2 (fusion) ────── ✓ COMPLETE 2026-04-1
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── PLANNED — simulation-validated in experiments/signal-quality-2026-04-17
 Phase 5F:  Regime-Segmented Optimization ──── PLANNED — user-selectable progression tier (mask hullmods/weapons/hulls by rarity tags at search_space.py); CMDP feasibility alignment. Default `mid` reclaims ~80% of compute budget from the Hammerhead 89% exploit cluster
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
-Phase 6:   Structured Search-Space Repr ───── PLANNED — custom BoTorch GP: SAAS(hullmods) × transformed-overlap+attribute-Matérn(weapons) × slot-Matérn × opponent-features(smalls only) × gated-sentinel(conditional) + ICM residuals; πBO archetype priors; BOCA warm-start; ~2-4× sample efficiency
-Phase 7:   Quality-Diversity ───────────────── Build archetype mapping (pyribs). Renumbered from 6
-Phase 8:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost). Renumbered from 7
+Phase 6:   Cloud Worker Federation ─────────── PLANNED (NEXT) — study federation across many (hull, regime, seed) units; each study ≤24 workers to keep TPE in efficient zone; Hetzner CCX33 Ashburn primary + AWS c7a us-west-2 fallback; campaign manager with hard cost cap; pre-baked Packer images; auto-terminate on plateau. Unlocks $1000-scale campaigns at linear $→data scaling
+Phase 7:   Structured Search-Space Repr ───── PLANNED — custom BoTorch GP: SAAS(hullmods) × transformed-overlap+attribute-Matérn(weapons) × slot-Matérn × opponent-features(smalls only) × gated-sentinel(conditional) + ICM residuals; πBO archetype priors; BOCA warm-start; ~2-4× sample efficiency. Renumbered from 6 — depends on Phase 6 cloud federation for multi-hull validation
+Phase 8:   Quality-Diversity ───────────────── Build archetype mapping (pyribs). Renumbered from 7
+Phase 9:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost). Renumbered from 8
 ```
 
 **Throughput phases (T1-T4)** are cross-cutting infrastructure improvements documented in `docs/reference/throughput-optimization.md`. They can be implemented independently but Phase 5B (sequential evaluation) requires T1-T3. Research complete.
@@ -328,7 +329,7 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 - `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D design: empirical-Bayes shrinkage of A2 toward a heuristic-predicted regression prior (HN + triple-goal rank correction). Rejected alternatives include the original conditioning-paradigm design (CUPED / FWL / PDS lasso / ICP — refuted by `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite, MISO, one-factor CFA, and per-frame Java harness tracking.
 - `docs/reference/phase5e-shape-revision.md` — Phase 5E design: Box-Cox replaces rank shape; rejected alternatives (CFS, EM-Tobit, full MAP-Elites); Phase 5G (adversarial curriculum) research.
 - `docs/reference/phase5f-regime-segmented-optimization.md` — Phase 5F design: CMDP feasibility-aligned regime mask; one-run-per-regime; rejected alternatives (scalar penalty, archive-over-single-run, curriculum across regimes, multi-fidelity-by-tier, Pareto); 16-field 2026-04-17 literature sweep.
-- `docs/reference/phase6-search-space-compression.md` — Phase 6 design: custom BoTorch GP composite kernel (SAAS on hullmods, transformed-overlap + 7-attribute Matérn on weapons, 5-dim slot-feature Matérn, opponent features on smalls only, gated-sentinel conditional, ICM per-item + per-slot residuals); πBO archetype priors; BOCA warm-start; rejected alternatives (Ma-Blaschko tree, HyperMapper off-the-shelf, NAS weight-sharing, BOCS binary monomials, GFlowNets, Hearthstone MESB, silent hard-fill smalls); 10-field 2026-04-17 literature sweep + compiler-autotuning deep-dive.
+- `docs/reference/phase7-search-space-compression.md` — Phase 7 design: custom BoTorch GP composite kernel (SAAS on hullmods, transformed-overlap + 7-attribute Matérn on weapons, 5-dim slot-feature Matérn, opponent features on smalls only, gated-sentinel conditional, ICM per-item + per-slot residuals); πBO archetype priors; BOCA warm-start; rejected alternatives (Ma-Blaschko tree, HyperMapper off-the-shelf, NAS weight-sharing, BOCS binary monomials, GFlowNets, Hearthstone MESB, silent hard-fill smalls); 10-field 2026-04-17 literature sweep + compiler-autotuning deep-dive.
 - `docs/reference/multi-fidelity-strategy.md` — Multi-fidelity strategy (heuristic vs simulation tiers).
 
 ### Key Findings
@@ -580,7 +581,86 @@ Phase 5E is the biggest signal-quality win per engineering-hour among the fitnes
 
 ---
 
-## Phase 6: Structured Search-Space Representation
+## Phase 6: Cloud Worker Federation
+
+### Goal
+Spend $N of compute and get $N of useful data — linear $→data scaling from $10 validation runs to $1000+ catalog campaigns. Unlocks multi-hull × multi-regime studies that would take weeks on the workstation. Full design in `docs/reference/phase6-cloud-worker-federation.md`.
+
+### Status
+**PLANNED (NEXT).** Precondition validated 2026-04-18: CPU cloud instances (AWS c7i.2xlarge, Hetzner CCX33) run Starsector at 2.2-2.4× local per-instance throughput after the LWJGL XRandR warmup fix (`instance_manager.py::_start_xvfb` now runs `xrandr --query` after Xvfb socket is ready). The original "GPU required" claim in spec 22 was a misdiagnosis of the XRandR mode-enumeration bug.
+
+### Dependencies
+- Phase 3 (`InstancePool` — worker-local parallelism unchanged)
+- Phase 4 (`StagedEvaluator` already async-friendly)
+- Phase 5F (planned; `(hull, regime)` is the natural federation unit — cloud federation and 5F are mutually enabling)
+- Python libs: `hcloud` (Hetzner), `boto3` (AWS), `redis`, `apache-libcloud` (provider abstraction), `packer` (image baking)
+
+### Key design decisions
+
+**Study federation is the #1 architectural lever.** Optuna TPE (with `constant_liar=True`) degrades to random-sampling above ~30 in-flight trials per study. A $1000 mega-study wastes ~85% of spend as random sampling. Federation: many independent studies keyed by `(hull, regime, seed)`, each with ≤24 workers. Outer parallelism via the campaign manager; inner parallelism stays in TPE's efficient regime. For BREADTH (which $1000 buys), federation beats any single-study scaling on a multimodal landscape.
+
+**Provider choice: Hetzner CCX33 Ashburn primary, AWS c7a us-west-2 fallback.** Hetzner is ~11% cheaper per matchup ($0.00109 vs $0.00123), has zero spot preemption, and Ashburn VA is 25-35 ms from NC. Existing `scripts/cloud/*.sh` already target it. AWS fallback for capacity diversification and spot-fleet diversification when Hetzner is full. Skip GPU cloud (not needed), ARM (LWJGL x86_64 only), DigitalOcean/Vultr/Linode (no spot).
+
+**Sampler per study**: TPE default at ≤24 workers. CatCMAwM (already supported via `--sampler=catcma`) above 24. Hybrid schedule (random → CatCMAwM → TPE) for studies needing both breadth and precision.
+
+**Packer pre-baked images** cut worker cold-start from ~5 min to ~30s. At 200 workers, saves ~3 hours of wasted wall-clock per campaign. Images include `x11-xserver-utils` (needed for the XRandR warmup fix to work — see spec 22).
+
+**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; manager auto-terminates at 100%. Per-worker `max_lifetime_hours` (default 4). Tag-based sweeper cron as orthogonal backstop. Teardown discipline enforced by `trap EXIT` in all launch scripts and by the `.claude/skills/cloud-worker-ops.md` SOP.
+
+**Orchestrator topology**: workstation holds the single Optuna Study (no distributed storage). Workers are pure `BuildSpec → CombatResult` evaluators. Study state is local SQLite per `(hull, regime, seed)`; workers rsync `study.db` back periodically. No PostgreSQL / JournalStorage / GrpcStorageProxy complexity — explicitly rejected because JournalStorage + GrpcProxy is broken in Optuna 4.2-4.4 (issue #6084) and direct PostgreSQL adds ops burden.
+
+### Deliverables
+
+1. **`src/starsector_optimizer/campaign.py`** — campaign manager daemon (~500 LOC):
+   - `CampaignConfig` (frozen dataclass from YAML)
+   - `CampaignManager` (main orchestration loop, Redis-backed study queues)
+   - `CostLedger` (append-only JSONL, real-time cap enforcement)
+   - `PlateauDetector` (50-trial windowed best-fitness slope; auto-release workers)
+   - `WorkerAllocator` (provider-agnostic via Libcloud)
+
+2. **`src/starsector_optimizer/cloud_provider.py`** — provider abstraction ABC with Hetzner + AWS concrete subclasses; Mock for offline tests.
+
+3. **`src/starsector_optimizer/worker_agent.py`** — on-worker Python script: connects to orchestrator Redis, runs existing `run_optimizer.py` with queue-backed `InstancePool`, periodic study.db rsync back, self-terminate on `max_lifetime_hours`.
+
+4. **`scripts/cloud/bake_image.sh`** — Packer wrapper for both Hetzner and AWS. One command rebuilds the baked image on game or dependency update.
+
+5. **`scripts/cloud/federation/`** — new subdirectory: `launch_campaign.sh`, `status.sh`, `teardown.sh`, `final_audit.sh`.
+
+6. **`docs/specs/29-campaign.md`** — formal spec for `CampaignConfig`, YAML schema, protocol between orchestrator and workers.
+
+7. **`.claude/skills/cloud-worker-ops.md`** — SOP for running campaigns. Invoked by future Claude sessions on any cloud-campaign ask.
+
+8. **`experiments/cloud-campaign-validation/`** — three validation runs: $10 smoke → $100 breadth → $200 real Phase 5F regime validation.
+
+### Testing
+- Unit: plateau detector on synthetic traces, cost ledger monotonicity, `CloudProvider` mock interface compliance.
+- Integration: $10 smoke test completes in <1 hour, study.db has ≥100 trials, cost logged within 5% of actual.
+- Cost-cap test: inject fake $100/hr worker into ledger; manager must terminate within 1 minute of crossing budget.
+- Preemption test (AWS): deliberately terminate a worker mid-study; another worker picks up the same trial within 2 minutes.
+- Teardown audit: `final_audit.sh` reports zero tagged resources after any campaign exit.
+
+### Expected impact
+- 2-hour burst of 30 workers delivers ~360 builds (vs 56 builds in 8-hour workstation run) for **$7.80** (Hetzner) or **$9** (AWS spot).
+- $1000 budget = ~49,000 builds = full Phase 5F validation (40 hulls × 4 regimes × ~300 builds) in 1-2 weeks of burst runs.
+- Frees the workstation for interactive work (editing, analysis, ad-hoc experiments).
+- Precondition for Phase 7 (BoTorch GP): cross-hull validation at 30+ hulls is not feasible on the workstation alone.
+
+### Rejected alternatives (full rationale in `phase6-cloud-worker-federation.md` §2-3)
+- **One mega-study with 100-200 workers**: TPE saturation wastes 85% of budget as random.
+- **PostgreSQL + GrpcStorageProxy storage**: ops burden; not needed when federation keeps each study's SQLite local.
+- **JournalStorage + GrpcStorageProxy**: broken combination (Optuna #6084).
+- **Ray / Ray Tune**: no Hetzner support; custom node_provider is 100-LOC.
+- **SkyPilot / dstack / Modal / Covalent**: no Hetzner support; GPU/AI-focused.
+- **Kubernetes / EKS / Fargate**: overkill for single-operator bursts; cluster overhead dominates.
+- **Apache Airflow / Prefect / Dagster**: pipeline schedulers, not bursty batch compute.
+- **GPU cloud instances**: not needed — CPU is 2.4× local per-instance after XRandR fix.
+- **AWS Batch array jobs**: ~30-60s scheduler latency per job transition; direct EC2 Fleet is simpler.
+- **EBS Fast Snapshot Restore (FSR)**: volume creation credits cap at 10 concurrent; breaks at 50-worker bursts.
+- **AWS Auto Scaling Warm Pools**: not cost-effective at $1000 scale (~$16/mo EBS idle); worth it at $10k+.
+
+---
+
+## Phase 7: Structured Search-Space Representation
 
 ### Goal
 Replace the Phase 4 Optuna TPE/CatCMAwM surrogate with a custom BoTorch Gaussian Process whose kernel composes subspace-specific priors. Target 2–4× sample efficiency at the 200–500 trial regime by exploiting known structure (weapon attributes, slot geometry, hullmod sparsity, role archetypes) that is invariant to game updates.
@@ -651,7 +731,7 @@ Follows BaCO (Hellsten 2024 arXiv:2212.11142 Eq. 3–5) for product structure + 
   4. Addressability gate: small-slot posterior prefers IPDAI + Dual Flak on missile-heavy opponent pools at p < 0.05.
   5. Hammerhead replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` — compare top-10 composition and convergence trace.
 
-### Rejected alternatives (full rationale in `phase6-search-space-compression.md` §4)
+### Rejected alternatives (full rationale in `phase7-search-space-compression.md` §4)
 
 - **Keep Optuna TPE with attribute warm-start only** — insufficient (~1.3× vs ~3× for full kernel).
 - **Ma-Blaschko additive tree kernel** — subsumed by gated-sentinel + SAAS.
@@ -666,7 +746,7 @@ Follows BaCO (Hellsten 2024 arXiv:2212.11142 Eq. 3–5) for product structure + 
 - **REMBO / ALEBO** — random linear subspaces fail on within-group interactions.
 - **Standalone BOCA pilot** — commit-forever risk; retained only as SAAS warm-start.
 
-Full design, theoretical grounding (mixed-categorical BO, SAASBO, ICM, πBO, naval architecture, Starsector community meta, compiler-autotuning BaCO deep-dive), and rejected-alternative chain in `docs/reference/phase6-search-space-compression.md`.
+Full design, theoretical grounding (mixed-categorical BO, SAASBO, ICM, πBO, naval architecture, Starsector community meta, compiler-autotuning BaCO deep-dive), and rejected-alternative chain in `docs/reference/phase7-search-space-compression.md`.
 
 ### Expected impact
 - 2–4× aggregate sample efficiency at N = 200–500 (conservative composition: SAASBO 2–5×, BaCO kernel 1.36–1.56×, πBO 2–5× if priors correct, slot-feature pooling 1.1–1.3×).
@@ -675,7 +755,7 @@ Full design, theoretical grounding (mixed-categorical BO, SAASBO, ICM, πBO, nav
 
 ---
 
-## Phase 7: Quality-Diversity
+## Phase 8: Quality-Diversity
 
 ### Goal
 Discover the full map of viable build archetypes using MAP-Elites.
@@ -725,7 +805,7 @@ Discover the full map of viable build archetypes using MAP-Elites.
 
 ---
 
-## Phase 8: Neural Surrogate
+## Phase 9: Neural Surrogate
 
 ### Goal
 Train ML models that predict combat outcomes from build parameters, reducing simulation dependency by ~70%.

@@ -1,0 +1,8 @@
+=== Hetzner CCX33 benchmark config ===
+Server:        sim-worker-0 (ccx33, Ashburn VA)
+IP:            178.156.215.49
+Hull:          hammerhead
+Instances:     2
+sim-budget:    6
+Results dir:   /home/sdai/ClaudeCode/experiments/cloud-benchmark-2026-04-18/results-ccx33
+

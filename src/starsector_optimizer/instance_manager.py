@@ -423,6 +423,19 @@ class InstancePool:
         else:
             logger.warning("Xvfb :%d may not be ready (socket not found)", inst.display_num)
 
+        # Warm XRandR: LWJGL 2.x crashes on some Xvfb builds (Ubuntu 24.04)
+        # if the first XRandR query hits an uninitialized mode list. Running
+        # `xrandr --query` as a client forces the extension to populate state.
+        try:
+            subprocess.run(
+                ["xrandr", "--query"],
+                env={**os.environ, "DISPLAY": f":{inst.display_num}"},
+                check=False, timeout=5,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+            logger.warning("xrandr warmup skipped on :%d (%s)", inst.display_num, e)
+
     def _start_game(self, inst: GameInstance) -> None:
         """Launch game process with DISPLAY set to instance's Xvfb."""
         env = os.environ.copy()

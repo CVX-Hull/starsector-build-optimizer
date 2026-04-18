@@ -1,0 +1,270 @@
+16:12:24 starsector_optimizer.parser WARNING: Skipping corrupted hullmod id: 'all point-defense weapons deal %s more damage to all targets."'
+16:12:24 starsector_optimizer.parser INFO: Loaded game data: 200 hulls (175 with weapon slots), 146 weapons, 129 hullmods (68 hidden)
+16:12:24 starsector_optimizer.optimizer INFO: Preflight check passed for hammerhead (54 opponents)
+/opt/optimizer/src/starsector_optimizer/optimizer.py:174: ExperimentalWarning: Argument ``multivariate`` is an experimental feature. The interface can change in the future.
+  return optuna.samplers.TPESampler(
+/opt/optimizer/src/starsector_optimizer/optimizer.py:174: ExperimentalWarning: Argument ``constant_liar`` is an experimental feature. The interface can change in the future.
+  return optuna.samplers.TPESampler(
+/opt/optimizer/src/starsector_optimizer/optimizer.py:194: ExperimentalWarning: WilcoxonPruner is experimental (supported from v3.6.0). The interface can change in the future.
+  return optuna.pruners.WilcoxonPruner(
+16:13:11 starsector_optimizer.optimizer INFO: Warm-started study with 7 stock + 500 heuristic trials (from 50000 candidates)
+16:13:11 starsector_optimizer.optimizer INFO: Starting staged evaluation: 2 instances, 10 active / 54 total opponents
+16:13:14 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 1/10 vs phantom_Elite → instance 0
+16:13:14 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 1/10 vs sunder_Support → instance 1
+16:13:15 starsector_optimizer.instance_manager INFO: Instance 0: clicked launcher Play button
+16:13:15 starsector_optimizer.instance_manager INFO: Instance 0: launched with 1 matchups
+16:13:16 starsector_optimizer.instance_manager INFO: Instance 1: clicked launcher Play button
+16:13:16 starsector_optimizer.instance_manager INFO: Instance 1: launched with 1 matchups
+16:14:06 starsector_optimizer.optimizer INFO:   Trial 1016 rung 1/10 vs phantom_Elite: PLAYER (score=1.500, mean=1.500)
+/opt/optimizer/src/starsector_optimizer/optimizer.py:641: UserWarning: The best trial has no intermediate values so WilcoxonPruner cannot prune trials. If you have added the best trial with Study.add_trial, please consider setting intermediate_values argument.
+  elif ifb.trial.should_prune():
+16:14:06 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:14:06 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 2/10 vs mule_Starting → instance 0
+16:14:06 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:14:50 starsector_optimizer.optimizer INFO:   Trial 1017 rung 1/10 vs sunder_Support: PLAYER (score=1.434, mean=1.434)
+16:14:50 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:14:50 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 2/10 vs enforcer_Balanced → instance 1
+16:14:50 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:15:17 starsector_optimizer.optimizer INFO:   Trial 1016 rung 2/10 vs mule_Starting: PLAYER (score=1.500, mean=1.500)
+16:15:17 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:15:17 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 3/10 vs berserker_Assault → instance 0
+16:15:17 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:15:38 starsector_optimizer.optimizer INFO:   Trial 1017 rung 2/10 vs enforcer_Balanced: PLAYER (score=1.500, mean=1.467)
+16:15:38 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:15:38 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 3/10 vs condor_Support → instance 1
+16:15:38 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:15:50 starsector_optimizer.optimizer INFO:   Trial 1016 rung 3/10 vs berserker_Assault: PLAYER (score=1.500, mean=1.500)
+16:15:50 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:15:50 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 4/10 vs harbinger_Strike → instance 0
+16:15:50 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:16:27 starsector_optimizer.optimizer INFO:   Trial 1016 rung 4/10 vs harbinger_Strike: PLAYER (score=1.500, mean=1.500)
+16:16:27 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:16:27 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 5/10 vs enforcer_Balanced → instance 0
+16:16:27 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:16:34 starsector_optimizer.optimizer INFO:   Trial 1017 rung 3/10 vs condor_Support: PLAYER (score=1.500, mean=1.478)
+16:16:34 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:16:34 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 4/10 vs manticore_Support → instance 1
+16:16:34 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:17:10 starsector_optimizer.optimizer INFO:   Trial 1016 rung 5/10 vs enforcer_Balanced: PLAYER (score=1.500, mean=1.500)
+16:17:10 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:17:10 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 6/10 vs manticore_Support → instance 0
+16:17:10 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:17:31 starsector_optimizer.optimizer INFO:   Trial 1017 rung 4/10 vs manticore_Support: PLAYER (score=1.500, mean=1.484)
+16:17:31 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:17:31 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 5/10 vs mule_Starting → instance 1
+16:17:31 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:18:07 starsector_optimizer.optimizer INFO:   Trial 1016 rung 6/10 vs manticore_Support: PLAYER (score=1.500, mean=1.500)
+16:18:07 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:18:07 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 7/10 vs mule_Fighter_Support → instance 0
+16:18:07 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:18:43 starsector_optimizer.optimizer INFO:   Trial 1017 rung 5/10 vs mule_Starting: PLAYER (score=1.500, mean=1.487)
+16:18:43 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:18:43 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 6/10 vs harbinger_Strike → instance 1
+16:18:44 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:19:18 starsector_optimizer.optimizer INFO:   Trial 1017 rung 6/10 vs harbinger_Strike: PLAYER (score=1.500, mean=1.489)
+16:19:18 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:19:18 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 7/10 vs berserker_Assault → instance 1
+16:19:18 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:19:28 starsector_optimizer.optimizer INFO:   Trial 1016 rung 7/10 vs mule_Fighter_Support: ENEMY (score=-0.943, mean=1.151)
+16:19:28 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:19:28 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 8/10 vs sunder_Support → instance 0
+16:19:28 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:19:47 starsector_optimizer.optimizer INFO:   Trial 1017 rung 7/10 vs berserker_Assault: PLAYER (score=1.500, mean=1.491)
+16:19:47 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:19:47 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 8/10 vs phantom_Elite → instance 1
+16:19:47 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:20:17 starsector_optimizer.optimizer INFO:   Trial 1017 rung 8/10 vs phantom_Elite: PLAYER (score=1.500, mean=1.492)
+16:20:17 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:20:17 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 9/10 vs condor_Attack → instance 1
+16:20:17 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:20:49 starsector_optimizer.optimizer INFO:   Trial 1016 rung 8/10 vs sunder_Support: PLAYER (score=1.430, mean=1.186)
+16:20:49 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:20:49 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 9/10 vs condor_Attack → instance 0
+16:20:49 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:21:25 starsector_optimizer.optimizer INFO:   Trial 1017 rung 9/10 vs condor_Attack: ENEMY (score=-1.000, mean=1.215)
+16:21:25 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:21:25 starsector_optimizer.optimizer INFO: Dispatch trial 1017 rung 10/10 vs mule_Fighter_Support → instance 1
+16:21:25 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:22:04 starsector_optimizer.optimizer INFO:   Trial 1016 rung 9/10 vs condor_Attack: ENEMY (score=-1.000, mean=0.943)
+16:22:04 starsector_optimizer.optimizer INFO: Progress: 0 finalized + 0 pruned / 6 budget, in-flight=2, best=0.200
+16:22:04 starsector_optimizer.optimizer INFO: Dispatch trial 1016 rung 10/10 vs condor_Support → instance 0
+16:22:04 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:22:41 starsector_optimizer.optimizer INFO:   Trial 1016 rung 10/10 vs condor_Support: PLAYER (score=1.500, mean=0.999)
+16:22:41 starsector_optimizer.optimizer INFO:   Trial 1016 COMPLETE (twfe=0.101, eb=0.101, ranked=0.500)
+16:22:42 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 1/10 vs berserker_Assault → instance 0
+16:22:42 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:22:50 starsector_optimizer.optimizer INFO:   Trial 1017 rung 10/10 vs mule_Fighter_Support: TIMEOUT (score=0.316, mean=1.125)
+16:22:50 starsector_optimizer.optimizer INFO:   Trial 1017 COMPLETE (twfe=0.180, eb=0.180, ranked=1.000)
+16:22:51 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 1/10 vs condor_Attack → instance 1
+16:22:51 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:23:10 starsector_optimizer.optimizer INFO:   Trial 1018 rung 1/10 vs berserker_Assault: PLAYER (score=1.500, mean=1.500)
+16:23:10 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 2/10 vs phantom_Elite → instance 0
+16:23:10 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:23:40 starsector_optimizer.optimizer INFO:   Trial 1018 rung 2/10 vs phantom_Elite: PLAYER (score=1.500, mean=1.500)
+16:23:43 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 3/10 vs harbinger_Strike → instance 0
+16:23:43 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:24:06 starsector_optimizer.optimizer INFO:   Trial 1019 rung 1/10 vs condor_Attack: ENEMY (score=-1.000, mean=-1.000)
+16:24:06 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 2/10 vs mule_Starting → instance 1
+16:24:06 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:24:29 starsector_optimizer.optimizer INFO:   Trial 1018 rung 3/10 vs harbinger_Strike: PLAYER (score=1.500, mean=1.500)
+16:24:29 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 4/10 vs mule_Starting → instance 0
+16:24:29 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:25:30 starsector_optimizer.optimizer INFO:   Trial 1019 rung 2/10 vs mule_Starting: TIMEOUT (score=0.328, mean=-0.336)
+16:25:30 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 3/10 vs manticore_Support → instance 1
+16:25:30 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:25:37 starsector_optimizer.optimizer INFO:   Trial 1018 rung 4/10 vs mule_Starting: PLAYER (score=1.500, mean=1.500)
+16:25:37 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 5/10 vs manticore_Support → instance 0
+16:25:37 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:26:21 starsector_optimizer.optimizer INFO:   Trial 1019 rung 3/10 vs manticore_Support: PLAYER (score=1.500, mean=0.276)
+16:26:21 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 4/10 vs berserker_Assault → instance 1
+16:26:21 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:26:24 starsector_optimizer.optimizer INFO:   Trial 1018 rung 5/10 vs manticore_Support: PLAYER (score=1.500, mean=1.500)
+16:26:24 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 6/10 vs mule_Fighter_Support → instance 0
+16:26:24 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:26:51 starsector_optimizer.optimizer INFO:   Trial 1019 rung 4/10 vs berserker_Assault: PLAYER (score=1.500, mean=0.582)
+16:26:51 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 5/10 vs mule_Fighter_Support → instance 1
+16:26:51 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:27:51 starsector_optimizer.optimizer INFO:   Trial 1018 rung 6/10 vs mule_Fighter_Support: TIMEOUT (score=0.089, mean=1.265)
+16:27:51 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 7/10 vs condor_Support → instance 0
+16:27:51 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:28:16 starsector_optimizer.optimizer INFO:   Trial 1019 rung 5/10 vs mule_Fighter_Support: TIMEOUT (score=0.265, mean=0.519)
+16:28:16 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 6/10 vs enforcer_Balanced → instance 1
+16:28:16 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:28:36 starsector_optimizer.optimizer INFO:   Trial 1018 rung 7/10 vs condor_Support: PLAYER (score=1.500, mean=1.298)
+16:28:36 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 8/10 vs enforcer_Balanced → instance 0
+16:28:36 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:29:05 starsector_optimizer.optimizer INFO:   Trial 1019 rung 6/10 vs enforcer_Balanced: PLAYER (score=1.500, mean=0.682)
+16:29:05 starsector_optimizer.optimizer INFO: Dispatch trial 1019 rung 7/10 vs sunder_Support → instance 1
+16:29:05 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:29:24 starsector_optimizer.optimizer INFO:   Trial 1018 rung 8/10 vs enforcer_Balanced: PLAYER (score=1.500, mean=1.324)
+16:29:24 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 9/10 vs sunder_Support → instance 0
+16:29:24 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:30:30 starsector_optimizer.optimizer INFO:   Trial 1019 rung 7/10 vs sunder_Support: TIMEOUT (score=0.156, mean=0.607)
+16:30:30 starsector_optimizer.optimizer INFO:   Trial 1019 PRUNED at rung 7
+16:30:31 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 1/10 vs mule_Starting → instance 1
+16:30:31 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:30:41 starsector_optimizer.optimizer INFO:   Trial 1018 rung 9/10 vs sunder_Support: ENEMY (score=-1.000, mean=1.065)
+16:30:42 starsector_optimizer.optimizer INFO: Dispatch trial 1018 rung 10/10 vs condor_Attack → instance 0
+16:30:42 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:31:30 starsector_optimizer.optimizer INFO:   Trial 1020 rung 1/10 vs mule_Starting: PLAYER (score=1.500, mean=1.500)
+16:31:30 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 2/10 vs berserker_Assault → instance 1
+16:31:30 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:31:52 starsector_optimizer.optimizer INFO:   Trial 1018 rung 10/10 vs condor_Attack: ENEMY (score=-1.000, mean=0.859)
+16:31:52 starsector_optimizer.optimizer INFO:   Trial 1018 COMPLETE (twfe=0.104, eb=0.104, ranked=0.667)
+16:31:53 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 1/10 vs harbinger_Strike → instance 0
+16:31:53 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:31:58 starsector_optimizer.optimizer INFO:   Trial 1020 rung 2/10 vs berserker_Assault: PLAYER (score=1.500, mean=1.500)
+16:31:58 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 3/10 vs condor_Support → instance 1
+16:31:58 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:32:34 starsector_optimizer.optimizer INFO:   Trial 1021 rung 1/10 vs harbinger_Strike: PLAYER (score=1.500, mean=1.500)
+16:32:34 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 2/10 vs condor_Support → instance 0
+16:32:34 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:32:55 starsector_optimizer.optimizer INFO:   Trial 1020 rung 3/10 vs condor_Support: PLAYER (score=1.500, mean=1.500)
+16:32:55 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 4/10 vs sunder_Support → instance 1
+16:32:55 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:33:25 starsector_optimizer.optimizer INFO:   Trial 1021 rung 2/10 vs condor_Support: PLAYER (score=1.500, mean=1.500)
+16:33:25 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 3/10 vs condor_Attack → instance 0
+16:33:25 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:34:18 starsector_optimizer.optimizer INFO:   Trial 1020 rung 4/10 vs sunder_Support: TIMEOUT (score=0.069, mean=1.142)
+16:34:18 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 5/10 vs manticore_Support → instance 1
+16:34:18 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:34:42 starsector_optimizer.optimizer INFO:   Trial 1021 rung 3/10 vs condor_Attack: ENEMY (score=-1.000, mean=0.667)
+16:34:42 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 4/10 vs phantom_Elite → instance 0
+16:34:42 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:35:05 starsector_optimizer.optimizer INFO:   Trial 1020 rung 5/10 vs manticore_Support: PLAYER (score=1.500, mean=1.214)
+16:35:05 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 6/10 vs phantom_Elite → instance 1
+16:35:05 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:35:15 starsector_optimizer.optimizer INFO:   Trial 1021 rung 4/10 vs phantom_Elite: PLAYER (score=1.500, mean=0.875)
+16:35:15 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 5/10 vs mule_Fighter_Support → instance 0
+16:35:15 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:35:35 starsector_optimizer.optimizer INFO:   Trial 1020 rung 6/10 vs phantom_Elite: PLAYER (score=1.500, mean=1.262)
+16:35:35 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 7/10 vs condor_Attack → instance 1
+16:35:35 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:36:40 starsector_optimizer.optimizer INFO:   Trial 1021 rung 5/10 vs mule_Fighter_Support: TIMEOUT (score=-0.096, mean=0.681)
+16:36:40 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 6/10 vs enforcer_Balanced → instance 0
+16:36:40 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:36:57 starsector_optimizer.optimizer INFO:   Trial 1020 rung 7/10 vs condor_Attack: ENEMY (score=-0.945, mean=0.946)
+16:36:57 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 8/10 vs mule_Fighter_Support → instance 1
+16:36:57 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:37:28 starsector_optimizer.optimizer INFO:   Trial 1021 rung 6/10 vs enforcer_Balanced: PLAYER (score=1.500, mean=0.817)
+16:37:28 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 7/10 vs manticore_Support → instance 0
+16:37:28 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:38:06 starsector_optimizer.optimizer INFO:   Trial 1020 rung 8/10 vs mule_Fighter_Support: PLAYER (score=1.500, mean=1.016)
+16:38:06 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 9/10 vs harbinger_Strike → instance 1
+16:38:06 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:38:11 starsector_optimizer.optimizer INFO:   Trial 1021 rung 7/10 vs manticore_Support: PLAYER (score=1.500, mean=0.915)
+16:38:11 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 8/10 vs mule_Starting → instance 0
+16:38:11 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:38:45 starsector_optimizer.optimizer INFO:   Trial 1020 rung 9/10 vs harbinger_Strike: PLAYER (score=1.500, mean=1.069)
+16:38:45 starsector_optimizer.optimizer INFO: Dispatch trial 1020 rung 10/10 vs enforcer_Balanced → instance 1
+16:38:45 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:39:36 starsector_optimizer.optimizer INFO:   Trial 1021 rung 8/10 vs mule_Starting: PLAYER (score=1.500, mean=0.988)
+16:39:36 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 9/10 vs sunder_Support → instance 0
+16:39:36 starsector_optimizer.instance_manager INFO: Instance 0: queued 1 matchup(s) for mission restart
+16:39:36 starsector_optimizer.optimizer INFO:   Trial 1020 rung 10/10 vs enforcer_Balanced: PLAYER (score=1.500, mean=1.112)
+16:39:36 starsector_optimizer.optimizer INFO:   Trial 1020 COMPLETE (twfe=0.233, eb=0.233, ranked=1.000)
+16:40:35 starsector_optimizer.optimizer INFO:   Trial 1021 rung 9/10 vs sunder_Support: PLAYER (score=1.244, mean=1.016)
+16:40:35 starsector_optimizer.optimizer INFO: Progress: 4 finalized + 1 pruned / 6 budget, in-flight=1, best=1.000
+16:40:35 starsector_optimizer.optimizer INFO: Dispatch trial 1021 rung 10/10 vs berserker_Assault → instance 1
+16:40:35 starsector_optimizer.instance_manager INFO: Instance 1: queued 1 matchup(s) for mission restart
+16:40:57 starsector_optimizer.optimizer INFO:   Trial 1021 rung 10/10 vs berserker_Assault: PLAYER (score=1.500, mean=1.065)
+16:40:57 starsector_optimizer.optimizer INFO:   Trial 1021 COMPLETE (twfe=0.150, eb=0.150, ranked=0.600)
+16:40:57 starsector_optimizer.optimizer INFO: Progress: 5 finalized + 1 pruned / 6 budget, in-flight=0, best=1.000
+16:40:57 starsector_optimizer.optimizer INFO: Run summary: 5 completed + 1 pruned in 1666.1s (10.8 trials/hr); EB activated on 0/5 finalized (0%); mean |Δ|=0.0000
+Loading game data from /opt/starsector...
+Loaded 200 hulls, 146 weapons
+Hull size: DESTROYER, opponents: 54
+
+============================================================
+Top 10 builds for hammerhead (1019 completed, 1 pruned, 1022 total)
+============================================================
+
+#1 fitness=1.0000
+  Weapons: WS 001=chaingun, WS 002=heavymg, WS 003=hammer, WS 004=hammer, WS 005=lightdualmg, WS 006=amblaster
+  Hullmods: fluxdistributor, safetyoverrides
+  Vents=10, Caps=9
+
+#2 fitness=1.0000
+  Weapons: WS 002=heavymg, WS 005=lightneedler, WS 006=lrpdlaser, WS 007=vulcan, WS 008=taclaser
+  Hullmods: autorepair, expanded_cargo_holds, neural_interface, stabilizedshieldemitter
+  Vents=18, Caps=19
+
+#3 fitness=0.6667
+  Weapons: WS 001=chaingun, WS 002=chaingun, WS 003=sabot, WS 004=sabot, WS 005=pdlaser, WS 006=pdlaser, WS 007=mininglaser, WS 008=pdlaser
+  Hullmods: advancedoptics, missleracks
+  Vents=18, Caps=17
+
+#4 fitness=0.6000
+  Weapons: WS 001=heavymauler, WS 002=hveldriver, WS 003=annihilator, WS 004=heatseeker, WS 005=pdlaser, WS 006=pdlaser, WS 007=pdlaser, WS 008=pdlaser
+  Hullmods: heavyarmor, targetingunit, turretgyros
+  Vents=12, Caps=12
+
+#5 fitness=0.5000
+  Weapons: WS 002=heavymg, WS 004=gorgon, WS 005=lightneedler, WS 006=lrpdlaser, WS 007=vulcan
+  Hullmods: autorepair, expanded_cargo_holds, neural_interface, stabilizedshieldemitter
+  Vents=18, Caps=19
+
+#6 fitness=0.2000
+  Weapons: WS 001=heavymortar, WS 002=heavymortar, WS 003=harpoon, WS 004=harpoon, WS 005=railgun, WS 006=railgun, WS 007=pdlaser, WS 008=pdlaser
+  Hullmods: blast_doors, missleracks, targetingunit
+  Vents=12, Caps=13
+
+#7 fitness=0.2000
+  Weapons: WS 001=heavyac, WS 002=heavyac, WS 003=gorgon, WS 004=gorgon, WS 005=vulcan, WS 006=vulcan, WS 007=vulcan, WS 008=vulcan
+  Hullmods: missleracks, targetingunit
+  Vents=16, Caps=15
+
+#8 fitness=0.2000
+  Weapons: WS 001=heavyneedler, WS 002=heavyneedler, WS 003=harpoon, WS 004=harpoon, WS 005=lrpdlaser, WS 006=lrpdlaser, WS 007=lrpdlaser, WS 008=lrpdlaser
+  Hullmods: targetingunit
+  Vents=16, Caps=17
+
+#9 fitness=0.2000
+  Weapons: WS 001=chaingun, WS 002=heavymg, WS 003=hammer, WS 004=hammer, WS 005=lightdualmg, WS 006=lightdualmg
+  Hullmods: fluxdistributor, safetyoverrides
+  Vents=12, Caps=11
+
+#10 fitness=0.2000
+  Weapons: WS 001=heavymauler, WS 002=hveldriver, WS 003=annihilator, WS 004=heatseeker, WS 005=pdlaser, WS 006=pdlaser, WS 007=pdlaser, WS 008=pdlaser
+  Hullmods: targetingunit, turretgyros
+  Vents=20, Caps=19
