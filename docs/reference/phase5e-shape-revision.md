@@ -31,7 +31,7 @@ The obvious patch is "filter out hullmods whose CSV tags include `no_drop`, `no_
 
 > Methods leveraging computation scale better than methods leveraging human knowledge.
 
-If exploit hullmods are genuinely strong *within the current opponent pool*, the correct fix is to grow the opponent pool until adversarial signal exposes the exploits — not to hand-curate the search space. The roadmap treats exploit exposure as a Phase 5F adversarial-curriculum question, not a filter.
+The bitter-lesson framing rejects a *silent hard-coded filter* of rare-faction hullmods. Two distinct, non-silent follow-ups are on the roadmap: **Phase 5F** (regime-segmented optimization — user explicitly opts into a progression tier; `search_space.py` masks components per the user's chosen regime; framed as CMDP feasibility alignment rather than human-knowledge injection — see `phase5f-regime-segmented-optimization.md` §2.1 and §4.6 for why this is not a bitter-lesson violation), and **Phase 5G** (adversarial opponent curriculum — grow the opponent pool until the signal itself exposes exploits; research continues in §2.1 below).
 
 ---
 

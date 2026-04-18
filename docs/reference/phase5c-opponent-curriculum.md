@@ -98,7 +98,7 @@ For the TWFE-deconfounding research that is the estimator *downstream* of 5C's o
 
 **What it was.** The 2026-04-17 Hammerhead run revealed 89% of top builds exploited rare-faction hullmods (`shrouded_lens`, `fragment_coordinator`, `neural_integrator`) that carry CSV tags indicating they're supposed to be unobtainable in normal play. A one-line filter in `search_space.py:get_eligible_hullmods` would remove them.
 
-**Why rejected.** Encodes the claim "these hullmods are unintended" into the search space rather than letting the adversarial signal expose it. If the opponent pool is insufficient to discriminate exploits from genuinely strong builds, the correct fix is pool growth (Phase 5F in the roadmap — adversarial curriculum via PSRO / main-exploiter loop). Filtering the search space is a Sutton-style human-knowledge injection we should not make permanent.
+**Why rejected.** A *silent, hard-coded* filter encodes the claim "these hullmods are unintended" into the search space — a Sutton-style human-knowledge injection. The roadmap offers two non-silent follow-ups instead: **Phase 5F** (regime-segmented optimization — user explicitly opts into a progression regime; `search_space.py` masks components per the chosen regime; framed as CMDP feasibility alignment rather than a designer-intent claim — see `phase5f-regime-segmented-optimization.md` §4.6 for why this is distinct from the rejection here), and **Phase 5G** (adversarial opponent curriculum via PSRO / main-exploiter loop — let the opponent pool grow until adversarial signal exposes the exploits).
 
 ---
 
