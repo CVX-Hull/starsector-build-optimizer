@@ -148,6 +148,14 @@ Phase 5F is **orthogonal** to 5A–E. It changes the optimizer's input space, no
 - 5D (EB shrinkage of A2): `X_i` covariate vector is invariant to regime (engine-computed + scorer components), so the prior regression can in principle be fit on the union of regime trials. Default per-regime study is simpler and maps to the EB literature's one-population assumption; pooling is a research extension.
 - 5E (Box-Cox shape): refit `λ̂` per regime.
 
+### 3.5.1 Candidate regime-conditioned covariates (opt-in, post-5D)
+
+The 2026-04-18 TTK-signal investigation (see `docs/reference/phase5d-covariate-adjustment.md` §7, artifacts in `experiments/phase5d-ttk-signal-2026-04-18/`) found that build-mean `duration_seconds` is a causally post-treatment descendant of Y (Cinelli-Forney-Pearl 2022 Model 17) but empirically delivers significant Δρ lift on production-sized runs (+0.136 at n=56 on the overnight log) where EB7 has not saturated. The lift did not appear on the 485-build calibration log, and is expected to be archetype-dependent — Hammerhead is a quick-kill/burst hull whose TTK is a strong α-mediator, whereas attrition hulls (HEF Paragon, armor-tank Onslaught) may have weaker duration→α coupling.
+
+A clean integration: extend `RegimeConfig` with a per-hull / per-regime `eb_extra_covariates: frozenset[str]` that lets `_build_covariate_vector` opt a hull into an 8th (or 9th) column. Pre-battle projected TTK `log(effective_hp / total_dps)` is the causally clean default; raw build-mean `duration_seconds` is available as an opt-in for archetypes where an Eggers-Tuñón placebo monitor shows the partial-correlation within tolerance. The monitor runs every `cv_recalc_interval`-equivalent update and emits a warn (or reverts to EB7) if partial-corr(duration, α̂ | X) drifts past a threshold.
+
+**Not proposed for the 5F initial ship.** TTK opt-in is an *extension* of the feature — it belongs after 5F's presets are validated and a second hull's overnight log replicates the calibration/overnight regime split.
+
 ---
 
 ## 4. Rejected alternatives

@@ -519,3 +519,71 @@ Two differences between the replay and the original §2.7 p=7 projection of Δρ
 **Implication**: the +0.02 ship gate is expected to clear only after a production run collects authoritative Java `engine_stats`. The pre-5D-log replay is a lower bound. The implementation is correct; the empirical validation has to come from a fresh overnight run with the deployed mod.
 
 **What to do next**: deploy Phase 5D and run an overnight Hammerhead campaign. The first ~200 trials will exercise the Python fallback (and should match or slightly exceed the replay numbers); subsequent trials with `engine_stats` populated should progressively close the gap toward the p=16 reference.
+
+---
+
+## 7. TTK-signal investigation (2026-04-18)
+
+**Status**: benchmarked; conclusions Hammerhead-only (single-hull), pending live cross-hull validation. Not shipped. Artifacts in `experiments/phase5d-ttk-signal-2026-04-18/`.
+
+### 7.1 Question
+
+Should `duration_seconds` (combat time, right-censored at the 300 s harness timeout) enter the EB prior as an 8th covariate — either raw, as a pre-battle projection `log(effective_hp / total_dps)`, or as a Weibull-AFT residual — or alternatively be added as a lexicographic ε-tiebreaker inside `Y_ij`?
+
+### 7.2 Literature triangulation (9 agents, tool-verified)
+
+- **Empirical** (internal eval log exploration): matchup-level `ρ(duration, fitness) = −0.72`, within-wins `−0.51`, bimodal distribution (21.5% quick kills < 50 s, 36.8% grinds 150–300 s, 15.5% clipped timeouts).
+- **Causal inference** (Cinelli-Forney-Pearl 2022 Model 17; Rosenbaum 1984; Montgomery-Nyhan-Torres 2018): raw duration is a *descendant of Y* — the canonical "bad control" pattern that wrecked 5D v1. Placebo test (Eggers-Tuñón 2024, AJPS doi 10.1111/ajps.12818) confirms contamination at both n=485 (p=0.032) and n=56 (p=10⁻⁷).
+- **Survival analysis** (Cragg 1971 hurdle; Atem et al. 2017 censored covariates; Collett AFT residuals): informative right-censoring at 300 s requires hurdle or AFT-residualization; naive substitution is biased.
+- **Empirical Bayes methodology** (Morris 1983 self-correction; Riley et al. 2019 min-n rules): τ̂²-floor + ridge auto-regularization make p=7→p=8 safe at n ≥ 80; the hazard is noisy-covariate attenuation (Armstrong-Kline-Sun 2025), not degrees-of-freedom.
+- **Multi-objective literature** (Miettinen 1999; Cococcioni-Pappalardo-Sergeyev 2018; SSCAIT/AIIDE tournament precedent): lexicographic (outcome ≫ duration) is the formally correct framing if "duration matters infinitesimally less than outcome." Weighted sum has known non-convex-front pathologies; multi-objective BO (qEHVI) costs 4–6 weeks of rework.
+- **Game-AI precedent** (OpenAI Five, AlphaStar, FTW, DareFightingICE): time enters via the RL discount factor γ, not as a reward term. Blizzard/Riot treat TTK as a *diagnostic*, not a *target*. Lanchester square law argues for TTK as an attrition quality but breaks for alpha-strike regimes.
+- **Starsector mechanics** (PPT + 0.25 %/s CR decay + "hard fought" recoup + fleet-scale amortization): TTK carries real *campaign-layer* value the sim cannot otherwise see. Hammerhead specifically is a quick-kill/burst/SO-brawler archetype (AAF + SO variants), so its TTK is an especially good α-mediator; attrition-oriented hulls (HEF Paragon, armor-tank Onslaught) may not share this property.
+
+### 7.3 Empirical benchmark — two regimes, opposite conclusions
+
+LOOO Δρ over 10 anchor probes, 200 bootstraps, all against the *same* shipped `eb_shrinkage` + `triple_goal_rank` end-to-end code.
+
+| Log | n | opps/build | Δρ(EB8_dur − EB7) | Paired-bootstrap CI | Sig |
+|---|---:|---:|---:|---|---|
+| `hammerhead-twfe-2026-04-13` (calibration, sparse) | 485 | ~6 | +0.004 | [−0.003, +0.010] | NS |
+| `hammerhead-overnight-2026-04-13` (production-like, dense) | 56 | 10 | **+0.136** | [+0.079, +0.194] | **sig** |
+
+At n=485, EB7 saturates the available pre-battle signal and the 8th-covariate family lands inside a ±0.01 Δρ noise band. At n=56 (the production-run regime), EB shrinkage has room for an additional informative covariate and duration / TTK / AFT residual all deliver significant lift.
+
+### 7.4 Synthetic multi-hull stress test (162 scenarios)
+
+Grid: n ∈ {100, 250, 500}, k ∈ {10, 30}, SNR ∈ {0.3, 1, 3}, R²(X7→α) ∈ {0.2, 0.5, 0.8}, duration_regime ∈ {clean, collider, mediator}. 10 reps per cell. Metric: Δρ(α̂, α_true).
+
+| regime | EB7 | EB8_dur | EB8_ttk | EB9_ttk_dur |
+|---|---:|---:|---:|---:|
+| clean (duration ⊥ α) | 0.004 | 0.004 | 0.004 | 0.004 |
+| collider (dur = g(α, Y) + ε) | 0.004 | 0.014 | 0.004 | 0.014 |
+| mediator (dur = f(α) + ε) | 0.004 | 0.025 | 0.004 | 0.025 |
+
+Duration helps across the full (n, SNR, R²) grid **only in non-null regimes**. The null "clean" regime produces at most 0.002 Δρ loss — the bad-control hazard predicted by Case-17 theory does not catastrophically materialize in this EB setup because build-mean aggregation over ~7–10 matchups shrinks the per-matchup ε-noise component ~√N×, leaving the α-mediator signal dominant.
+
+### 7.5 Lexicographic ε-tiebreaker — uniformly negative
+
+At ε ∈ {0.001, 0.01, 0.1}, on both real logs and all estimators, `Y_new = Y − ε·(duration/300)` loses 0.005–0.12 Δρ vs ε=0. The tiebreaker does not compose with EB shrinkage when `hp_differential` is already a continuous score with no hard-tier structure to break. **Rejected.**
+
+### 7.6 Implications for the 5D-as-shipped p=7 set
+
+1. The single-hull data disagree across regimes, so the shipped p=7 choice is *neither validated nor refuted* by this investigation. On the calibration log (n=485) p=7 is saturating; on the overnight log (n=56) p=7 is the weaker starting point and p=8 would help.
+2. The §4.5 rejection of the conditioning-paradigm v1 still holds: v1 used covariates that were *transformations of the scorer* (i.e., scorer-component-derived Y-descendants), which is a strictly worse bad-control pattern than duration. Duration's build-mean-aggregation makes its ε-collider leakage small; scorer-transform covariates have no such protection.
+3. The **"exclude post-matchup features by construction"** rule of §2.5 remains the safe default. Duration is not admitted unconditionally — only after hull/regime-conditioned validation.
+
+### 7.7 Recommendation
+
+- **Do not ship** TTK-related covariates or the lexicographic tiebreaker unconditionally. Keep EB7 shipped.
+- **Route via Phase 5F**: treat duration (or its log-TTK pre-battle proxy) as a candidate *regime-conditioned* covariate. Archetypes where TTK is a strong α-mediator (quick-kill hulls, SO brawlers, mid-regime campaign econ) opt in; attrition archetypes opt out.
+- **Prerequisite for opt-in**: a live overnight campaign on at least one non-Hammerhead hull covering a different archetype (e.g., Paragon or Onslaught for attrition) with a per-hull `RegimeConfig`-gated EB covariate toggle. The Eggers-Tuñón placebo should be run automatically as part of the ship gate.
+- **Defer**: Weibull-AFT residual, Heckman two-step — complexity cost exceeds the marginal benefit demonstrated in 7.3.
+- **Defer**: multi-objective / Pareto / qEHVI — the single-scalar formulation is adequate given lexicographic is rejected and weighted-sum has the usual pathologies.
+
+### 7.8 Open questions
+
+- Does the n=56 overnight-log gain reproduce on a second Hammerhead overnight run? (Need a replication to rule out the 2026-04-13 overnight log being a lucky draw.)
+- Does the archetype hypothesis generalize? Specifically: what is Δρ(EB8_dur − EB7) on an *attrition* hull's production-sized log?
+- Is the placebo test a useful *runtime* monitor — could `_apply_eb_shrinkage` compute partial-corr(duration, α̂ | X) on each update and emit a warn if it drifts below a threshold? (Would make "opt-in with placebo gate" a self-enforcing invariant.)
+- Can we emit any of the other orphaned signals (`overload_count`, `peak_time_remaining`, AI flags) in a pre-battle-projected form that clears the Case-17 admissibility bar? (Agent 1 orphaned-fields inventory.)
