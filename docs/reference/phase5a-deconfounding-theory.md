@@ -198,7 +198,7 @@ Pure mean rewards specialists. Pure minimax is too conservative. The literature 
 
 **Multi-objective decomposition** (DECA): Project scores onto top-k SVD dimensions. Report a fitness vector, not a scalar. Use Optuna's multi-objective optimization (NSGA-II) to find Pareto-optimal builds. This is the most information-preserving approach but adds optimizer complexity.
 
-### Recommended: Trimmed mean for now, multi-objective as Phase 6
+### Recommended: Trimmed mean for now, multi-objective as Phase 7
 
 The trimmed mean is a one-line change to the aggregation function. Multi-objective requires rethinking the Optuna integration but aligns with the Phase 5 doc's mention of "multi-objective decomposition."
 

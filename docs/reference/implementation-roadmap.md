@@ -26,8 +26,9 @@ Phase 5D:  EB Shrinkage of A2 (fusion) ────── PLANNED — replaces A
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── PLANNED — simulation-validated in experiments/signal-quality-2026-04-17
 Phase 5F:  Regime-Segmented Optimization ──── PLANNED — user-selectable progression tier (mask hullmods/weapons/hulls by rarity tags at search_space.py); CMDP feasibility alignment. Default `mid` reclaims ~80% of compute budget from the Hammerhead 89% exploit cluster
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
-Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
-Phase 7:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost)
+Phase 6:   Structured Search-Space Repr ───── PLANNED — custom BoTorch GP: SAAS(hullmods) × transformed-overlap+attribute-Matérn(weapons) × slot-Matérn × opponent-features(smalls only) × gated-sentinel(conditional) + ICM residuals; πBO archetype priors; BOCA warm-start; ~2-4× sample efficiency
+Phase 7:   Quality-Diversity ───────────────── Build archetype mapping (pyribs). Renumbered from 6
+Phase 8:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost). Renumbered from 7
 ```
 
 **Throughput phases (T1-T4)** are cross-cutting infrastructure improvements documented in `docs/reference/throughput-optimization.md`. They can be implemented independently but Phase 5B (sequential evaluation) requires T1-T3. Research complete.
@@ -268,7 +269,7 @@ Complete. 437 tests passing across all test files. Previously tested with a 203-
    - Final output: ranked builds with confidence intervals and per-opponent matchup profiles
 
 7. **Result logging and visualization**
-   - Append-only JSONL log (feeds both TimeoutTuner and Phase 7 surrogate)
+   - Append-only JSONL log (feeds both TimeoutTuner and Phase 8 surrogate)
    - Per-trial: build spec, repaired build, all opponent scores, heartbeat trajectories
    - Convergence curves, per-opponent win rates, build comparison table
 
@@ -327,6 +328,7 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 - `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D design: empirical-Bayes shrinkage of A2 toward a heuristic-predicted regression prior (HN + triple-goal rank correction). Rejected alternatives include the original conditioning-paradigm design (CUPED / FWL / PDS lasso / ICP — refuted by `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite, MISO, one-factor CFA, and per-frame Java harness tracking.
 - `docs/reference/phase5e-shape-revision.md` — Phase 5E design: Box-Cox replaces rank shape; rejected alternatives (CFS, EM-Tobit, full MAP-Elites); Phase 5G (adversarial curriculum) research.
 - `docs/reference/phase5f-regime-segmented-optimization.md` — Phase 5F design: CMDP feasibility-aligned regime mask; one-run-per-regime; rejected alternatives (scalar penalty, archive-over-single-run, curriculum across regimes, multi-fidelity-by-tier, Pareto); 16-field 2026-04-17 literature sweep.
+- `docs/reference/phase6-search-space-compression.md` — Phase 6 design: custom BoTorch GP composite kernel (SAAS on hullmods, transformed-overlap + 7-attribute Matérn on weapons, 5-dim slot-feature Matérn, opponent features on smalls only, gated-sentinel conditional, ICM per-item + per-slot residuals); πBO archetype priors; BOCA warm-start; rejected alternatives (Ma-Blaschko tree, HyperMapper off-the-shelf, NAS weight-sharing, BOCS binary monomials, GFlowNets, Hearthstone MESB, silent hard-fill smalls); 10-field 2026-04-17 literature sweep + compiler-autotuning deep-dive.
 - `docs/reference/multi-fidelity-strategy.md` — Multi-fidelity strategy (heuristic vs simulation tiers).
 
 ### Key Findings
@@ -567,7 +569,102 @@ Phase 5E is the biggest signal-quality win per engineering-hour among the fitnes
 
 ---
 
-## Phase 6: Quality-Diversity
+## Phase 6: Structured Search-Space Representation
+
+### Goal
+Replace the Phase 4 Optuna TPE/CatCMAwM surrogate with a custom BoTorch Gaussian Process whose kernel composes subspace-specific priors. Target 2–4× sample efficiency at the 200–500 trial regime by exploiting known structure (weapon attributes, slot geometry, hullmod sparsity, role archetypes) that is invariant to game updates.
+
+### Dependencies
+- Phase 1 (data layer — `WeaponAttributes`, `ShipHull`, `.ship` JSON parser)
+- Phase 4 (ask-tell loop, Optuna `BaseSampler` plugin hooks)
+- Phase 5A–C (TWFE fitness, pruner, opponent curriculum — unchanged; feed the GP)
+- Phase 5F (regime-segmented `(hull, regime)` study unit — one GP per pair)
+- Python libraries: botorch, gpytorch, pyro (for SAAS NUTS posterior)
+
+### Key design decisions (from 10-field 2026-04-17 sweep + compiler-autotuning deep-dive)
+
+**Composite product kernel.** Single GP, product structure across subspaces:
+
+```
+k(x, x') = k_hullmods(SAAS) · k_weapon_id(transformed-overlap) · k_weapon_attr(Matérn, 7-dim)
+         · k_slot(Matérn, 5-dim) · k_opp_small(Matérn, 3-dim, smalls only)
+         · k_op(Matérn, 3-dim) · 1_gated_sentinel(inactive-slot handling)
+         + k_item_residual(ICM) + k_slot_residual(ICM)
+```
+
+Follows BaCO (Hellsten 2024 arXiv:2212.11142 Eq. 3–5) for product structure + gated-sentinel, SAAS (Eriksson-Jankowiak 2021 arXiv:2103.00349) for the hullmod-boolean sparsity prior, Garrido-Merchán & Hernández-Lobato 2020 for the transformed-overlap categorical kernel, and ICM (Bonilla 2007, Álvarez 2011 arXiv:1106.6251) for the per-item + per-slot residual structure. The residual structure mirrors the Phase 5D empirical-Bayes fusion paradigm (α̂_TWFE + covariate prior) — the same "combine noisy measurements of a latent by Bayes rule" pattern applied one level up.
+
+**7-attribute weapon vector for game-update transfer.** `(damage_type, weapon_type, size, op_cost, sustained_dps, flux_per_second, range)` — every field present in `weapon_data.csv` + `.wpn` JSON for every Starsector version since 0.95a. A new weapon added in a future patch inherits the attribute-kernel prior zero-shot.
+
+**5-dim slot-feature vector for cross-slot kernel similarity.** `(forward_projection, arc_width, is_turret, lateral_offset, longitudinal_offset)`, all sourced from `.ship` JSON. Pools observations across slots of similar geometry within a hull (3 forward hardpoints ≈ 3 similar decisions, not 3 independent); sets up multi-hull transfer for free.
+
+**Opponent-conditional small slots via kernel inputs, not rules.** 3-dim opponent summary `(has_missiles_frac, has_fighters_frac, mean_armor_rating)` concatenated to small-slot posteriors only. Preserves the load-bearing empirical constraint from community meta (§2.8 of phase6 doc): smalls shift against missile boats / carriers / brawlers / phase flankers; medium and large slots are hull-conditional.
+
+**πBO archetype priors — hull-conditional mixture with decay.** Nine community-stable archetype *modes* (SO brawler, long-range sniper, kinetic-HE brawler, broadside, turret-flex, burst-missile, PD-carrier, flanker, phase striker — stable across 0.95→0.98) as a Gaussian-mixture density over **normalized** attribute × slot × hullmod space. Per-hull feasibility mask computed at hull-load from `.ship` JSON + ship-system registry drops infeasible modes to zero weight (Wolf can't realize broadside or turret-flex; only Paragon in vanilla gets the ATC ship system needed for turret-flex). Initial weights uniform over feasible modes — no meta-hull coverage bias. Self-correcting mixture weights (Hvarfner 2023 arXiv:2304.00397) online-downweight modes disagreeing with per-hull data. Acquisition multiplied by `π(x)^(β/t)` (Hvarfner 2022 arXiv:2204.11051). β = 5 default; 2–5× speedup if priors are correct, ≤ 1.5× overhead if adversarial. Community meta supplies the vocabulary of modes, not the per-hull weights — generalizes cleanly to non-meta hulls (Gemini, Mudskipper) and mod/patch hulls without manual configuration.
+
+**Hull-size normalization for cross-hull mode definitions.** Raw `range` and `op_cost` do not transfer across hull sizes (700 range is long for a frigate, short for a capital). Kernel inputs use `range / max_weapon_range_per_hull_size` and `op_cost / hull.ordnance_points`, plus `hull_size` (FRIGATE/DESTROYER/CRUISER/CAPITAL_SHIP) as a 4-level ordinal context feature. Archetype mode means defined in the normalized space work across all hull sizes without rescaling.
+
+**AI pilotability is absorbed, not hardcoded.** Combat simulation is AI-vs-AI by construction (Phase 2 combat harness), so the optimizer's deployment distribution is "ship in a fleet piloted by the vanilla Starsector combat AI" — not "ship piloted by the player." The AI is known to mispilot several community-top archetypes (SO brawler, phase striker, burst-missile — see §2.10 of the phase6 doc for the full table) that were designed for player piloting. Rather than hardcode AI-compatibility flags per mode (rejected because AI behavior changes across patches and pilotability interacts with hull), the self-correcting mixture update empirically downweights modes the AI mispilots — AI-hostile modes produce worse-than-predicted fitness and their mixture weight collapses via the Hvarfner 2023 marginal-likelihood-ratio update. Player-piloted flagship optimization is out of scope (would require engine-level input injection) and is deferred indefinitely.
+
+**BOCA warm-start pilot.** 30 Latin-hypercube-seeded trials at the start of each new `(hull, regime)` pair; random-forest importance scores empirical-Bayes-initialize SAAS lengthscale priors. Insurance against the cold-start problem; drops out after ~100 main-BO trials.
+
+**BoTorch as Optuna sampler plugin.** Custom `BaseSampler` wrapping `SaasFullyBayesianSingleTaskGP` with a custom product kernel. Posterior inference via NUTS/HMC — 1–2 hour wallclock overhead over a 200-trial run, acceptable.
+
+### Deliverables
+
+1. **`src/starsector_optimizer/surrogate.py`** — custom BoTorch kernel module:
+   - `CompositeShipBuildKernel` (product kernel from §3.1 of phase6 doc)
+   - `SAASHullmodKernel` (half-Cauchy ARD over hullmod booleans)
+   - `TransformedOverlapKernel` (Garrido-Merchán 2020)
+   - `AttributeMaternKernel` (7-dim weapon attributes)
+   - `SlotFeatureMaternKernel` (5-dim slot features)
+   - `OpponentFeatureKernel` (3-dim, small-slot inputs only)
+   - `GatedSentinelEncoder` (conditional slot handling)
+   - `ItemResidualKernel`, `SlotResidualKernel` (ICM, shrinkage priors)
+
+2. **`src/starsector_optimizer/botorch_sampler.py`** — Optuna `BaseSampler` subclass wrapping the composite GP.
+
+3. **BOCA warm-start phase** in `optimizer.py`: 30-trial Latin-hypercube seed + RF-importance computation + SAAS prior initialization.
+
+4. **πBO acquisition layer**: nine-mode GMM prior density, decay-weighted EI.
+
+5. **Opponent feature plumbing**: `(has_missiles_frac, has_fighters_frac, mean_armor_rating)` computation per trial; threaded into small-slot kernel inputs only.
+
+### Testing
+- **Unit**: each kernel component in isolation (synthetic recovery tests — known SAAS sparsity, known transformed-overlap patterns, known attribute smoothness).
+- **Integration**: BoTorch sampler ↔ existing Phase 4 ask-tell loop; TWFE (5A) feeds the GP without modification.
+- **Ship gate (4 synthetic + 1 replay, from phase6 doc §5.1)**:
+  1. Rank-correlation gate on held-out synthetic fitness: top-10 ρ ≥ 0.70 (baseline TPE ≈ 0.45).
+  2. Cold-start gate: new hull reaches 2000-trial TPE top-10 within 500 Phase-6 trials.
+  3. Game-update gate: 5 new synthetic weapons interpolated from attributes — posterior mean within 0.2 σ with zero observations.
+  4. Addressability gate: small-slot posterior prefers IPDAI + Dual Flak on missile-heavy opponent pools at p < 0.05.
+  5. Hammerhead replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` — compare top-10 composition and convergence trace.
+
+### Rejected alternatives (full rationale in `phase6-search-space-compression.md` §4)
+
+- **Keep Optuna TPE with attribute warm-start only** — insufficient (~1.3× vs ~3× for full kernel).
+- **Ma-Blaschko additive tree kernel** — subsumed by gated-sentinel + SAAS.
+- **NAS weight-sharing (DARTS / OFA)** — doesn't transfer (no trainable tensor to share).
+- **HyperMapper / BaCO off-the-shelf** — missing SAAS on the hullmod subspace.
+- **Pure SAASBO (no mixed-space kernel)** — bad categorical handling.
+- **BOCS horseshoe monomials** — binary-only; our 150-level weapon categoricals break it.
+- **GFlowNets** — need 10⁵+ evaluations.
+- **Fantasy-sports ILP** — presumes pre-fit per-component projections (the thing we're building).
+- **Hearthstone MESB behavior-descriptor search** — needs phenotype→genotype map.
+- **Silent rule-based small-slot fills** — explicitly rejected by user (smalls are opponent-conditional).
+- **REMBO / ALEBO** — random linear subspaces fail on within-group interactions.
+- **Standalone BOCA pilot** — commit-forever risk; retained only as SAAS warm-start.
+
+Full design, theoretical grounding (mixed-categorical BO, SAASBO, ICM, πBO, naval architecture, Starsector community meta, compiler-autotuning BaCO deep-dive), and rejected-alternative chain in `docs/reference/phase6-search-space-compression.md`.
+
+### Expected impact
+- 2–4× aggregate sample efficiency at N = 200–500 (conservative composition: SAASBO 2–5×, BaCO kernel 1.36–1.56×, πBO 2–5× if priors correct, slot-feature pooling 1.1–1.3×).
+- At Hammerhead-scale 650 trials / 24 h, 3× efficiency ≈ current 3-day run output in 24 h.
+- Game-update transfer zero-shot for new weapons with attribute profiles near existing ones.
+
+---
+
+## Phase 7: Quality-Diversity
 
 ### Goal
 Discover the full map of viable build archetypes using MAP-Elites.
@@ -598,7 +695,7 @@ Discover the full map of viable build archetypes using MAP-Elites.
    - Re-rank elites by simulation fitness; fills ~60-80% of heuristic-optimal cells
 
 4. **Surrogate refinement (DSA-ME pattern)**
-   - Train correction model on Phase B sim results (TabPFN or CatBoost from Phase 7)
+   - Train correction model on Phase B sim results (TabPFN or CatBoost from Phase 8)
    - Re-illuminate with `heuristic + correction` as fitness
    - Validate new/changed elites with simulation
    - 2-3 refinement rounds until archive stabilizes
@@ -617,7 +714,7 @@ Discover the full map of viable build archetypes using MAP-Elites.
 
 ---
 
-## Phase 7: Neural Surrogate
+## Phase 8: Neural Surrogate
 
 ### Goal
 Train ML models that predict combat outcomes from build parameters, reducing simulation dependency by ~70%.
@@ -759,7 +856,7 @@ Validate end-to-end with real combat:
 3. **Eagle optimization** — 30 builds × 5 opponents = 150 sims (~1.5 hours)
 4. **Verify results** — compare optimizer output to known community builds
 
-**Collects ~400 sim results** — enough to start Phase 7 surrogate training (TabPFN at N<300).
+**Collects ~400 sim results** — enough to start Phase 8 surrogate training (TabPFN at N<300).
 
 **Estimated time:** 1 day. Zero cloud cost.
 
@@ -787,11 +884,11 @@ Single machine: all hulls sequential (8 parallel game instances)
 | Priority hulls | 10 | Local (8 inst) | ~10K | ~35h | $0 |
 | All cruisers+capitals | 40 | Local (8 inst) | ~38K | ~133h | $0 |
 | All combat-relevant | 118 | 3 × g4dn.2xl | ~112K | ~47h | ~$35 |
-| + QD validation (Phase 6) | 118 | 3 × g4dn.2xl | ~150K | ~63h | ~$47 |
+| + QD validation (Phase 7) | 118 | 3 × g4dn.2xl | ~150K | ~63h | ~$47 |
 
 **Machine setup (cloud):** ~2 minutes per machine (parallel). Game dir is 361MB.
 
-#### Stage 4: Local — Analysis + Phase 7 Training
+#### Stage 4: Local — Analysis + Phase 8 Training
 
 Collect results from cloud machines. With 10K+ sim results accumulated:
 1. Train CatBoost surrogate on full dataset
@@ -808,7 +905,7 @@ Local: create study.db → heuristic warm-start → small sim validation
   ↓ scp study.db
 Cloud: load_study → heavy simulation (n_jobs=8)
   ↓ scp study.db + evaluation_log.jsonl
-Local: load_study → analysis + Phase 7 training
+Local: load_study → analysis + Phase 8 training
 ```
 
 Each hull gets its own study. No cross-machine coordination needed — machines run independent hulls.
@@ -844,8 +941,9 @@ See `docs/specs/22-cloud-deployment.md` for deployment scripts, cloud-init confi
 6. **Throughput T1-T3** before Phase 5 — Phase 5B (sequential evaluation) requires persistent sessions and mixed-build batching. Without them, sequential evaluation has 78% startup overhead and is worse than the current approach.
 7. **Phase 5** improves signal quality and budget efficiency — the optimizer works without it but converges faster with it
 8. **Throughput T4** (cloud) when local isn't enough — linear scaling to 32-64 instances
-9. **Phase 6** discovers build archetypes (MAP-Elites) — the most exciting output but needs the pipeline
-10. **Phase 7** improves efficiency (~70% sim reduction) via neural surrogate — optional, the system works without it
+9. **Phase 6** replaces the Phase 4 surrogate with a composite kernel matching ship-build structure — 2–4× sample efficiency, game-update transfer, addressable smalls retained
+10. **Phase 7** discovers build archetypes (MAP-Elites) — the most exciting output but needs the pipeline
+11. **Phase 8** improves efficiency (~70% sim reduction) via neural surrogate — optional, the system works without it
 
 Each phase is independently testable and shippable. Phase 1 alone produces a useful heuristic analysis tool. Phases 1-3 produce a batch simulation framework. Phases 1-4 produce an optimizer. Phases 1-4 + T1-T3 + Phase 5 produce a complete build discovery system.
 
@@ -853,9 +951,9 @@ Each phase is independently testable and shippable. Phase 1 alone produces a use
 
 | Stage | Work | Dependencies | Duration |
 |---|---|---|---|
-| Stage 1: Local code dev | Phase 4-6 Python code, tests, heuristic validation | Phases 1-3.5 complete | 2-3 days |
+| Stage 1: Local code dev | Phase 4-7 Python code, tests, heuristic validation | Phases 1-3.5 complete | 2-3 days |
 | Stage 2: Local sim validation | End-to-end with 2 instances, opponent pool validation | Stage 1 | 1 day |
 | Stage 3: Cloud full optimization | 10-118 hulls on Hetzner CCX33 | Stage 2, Hetzner account | 12-63h wall-clock |
-| Stage 4: Analysis + surrogate | Phase 7 training, visualization | Stage 3 results | 1 day |
+| Stage 4: Analysis + surrogate | Phase 8 training, visualization | Stage 3 results | 1 day |
 
 **Total: ~5 days of active development + 1-3 days of cloud compute wall-clock.**

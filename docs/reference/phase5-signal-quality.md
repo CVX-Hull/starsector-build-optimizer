@@ -231,9 +231,11 @@ Phases A+B together provide ~2–3× more optimization progress per wall-clock h
 
 **Phase 4 (Optimizer)**: Signal quality improvements sit directly in the evaluation/scoring layer. The ask-tell loop, repair, deduplication, and warm-start are unchanged. OptimizerConfig gains new fields for the scoring enhancements.
 
-**Phase 6 (Quality-Diversity)**: Better signal quality directly benefits MAP-Elites archive construction. Cleaner fitness → more accurate elites → better coverage. Multi-fidelity evaluation can be shared.
+**Phase 6 (Structured Search-Space Representation)**: Cleaner fitness from TWFE + EB shrinkage is the `y` signal fed to the Phase 6 composite-kernel GP. The surrogate's sample-efficiency gains compose with signal-quality gains — a cleaner estimator + a better-structured surrogate both help the same trial budget go further.
 
-**Phase 7 (Neural Surrogate)**: The richer per-opponent telemetry from multi-objective decomposition provides better features for surrogate training. Control variate correction provides a principled way to combine surrogate and simulation predictions.
+**Phase 7 (Quality-Diversity)**: Better signal quality directly benefits MAP-Elites archive construction. Cleaner fitness → more accurate elites → better coverage. Multi-fidelity evaluation can be shared.
+
+**Phase 8 (Neural Surrogate)**: The richer per-opponent telemetry from multi-objective decomposition provides better features for surrogate training. Control variate correction provides a principled way to combine surrogate and simulation predictions.
 
 ---
 

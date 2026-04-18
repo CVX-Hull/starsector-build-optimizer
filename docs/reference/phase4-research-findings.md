@@ -131,7 +131,7 @@ Since we use Optuna TPE (not BoTorch GP), the prior-mean approach is implemented
 
 ---
 
-## 5. Neural Surrogate Features (Phase 7 Preparation)
+## 5. Neural Surrogate Features (Phase 8 Preparation)
 
 ### Heartbeat Trajectory Features
 
@@ -193,7 +193,7 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 
 ## 7. Open Questions
 
-1. **Heuristic calibration**: Can we improve R² above 0.75 by calibrating heuristic weights against simulation results? If yes, switch to full MFBO. Integration test confirmed the gap is large: heuristic top-3 all had negative sim fitness (logistics hullmod spam scores well heuristically but fails in combat). This is a Phase 7 task.
+1. **Heuristic calibration**: Can we improve R² above 0.75 by calibrating heuristic weights against simulation results? If yes, switch to full MFBO. Integration test confirmed the gap is large: heuristic top-3 all had negative sim fitness (logistics hullmod spam scores well heuristically but fails in combat). This is a Phase 8 task.
 
 2. **Repair collision rate**: **Resolved — 0% collisions.** Measured: 50,000 random builds on Wolf (smallest hull, 70D), all unique after repair. 2,000 builds each on Eagle (77D) and Onslaught (86D) also 0% collisions. The search space is so vast that the greedy OP-drop repair produces sufficiently diverse outputs. The BuildCache is retained as a safety net but won't save sim budget in practice. No need for priority-list encoding.
 
@@ -311,7 +311,7 @@ CCX33 is sufficient: Starsector is single-threaded per instance, Xvfb is near-ze
 
 **constant_liar works correctly after transfer.** It operates on RUNNING trials — after transfer, all trials are COMPLETE or FAILED. Clean up any zombie RUNNING trials before resuming.
 
-**Each hull gets its own study.** No cross-machine coordination needed. Results also logged to shared JSONL for Phase 7 surrogate training.
+**Each hull gets its own study.** No cross-machine coordination needed. Results also logged to shared JSONL for Phase 8 surrogate training.
 
 ### Concrete Search Space Dimensions (from real game data)
 

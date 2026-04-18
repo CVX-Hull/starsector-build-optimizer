@@ -141,7 +141,7 @@ Formula: `lambda = 4 + floor(3 * ln(N_co + N_ca))`. At d=60: lambda ≈ 16-17. T
 ### When to Use
 
 - **As Optuna sampler**: For refinement after TPE has identified promising regions
-- **As pyribs emitter**: For quality-diversity (Phase 6) — natural batch parallelism matches instance count
+- **As pyribs emitter**: For quality-diversity (Phase 7) — natural batch parallelism matches instance count
 - **NOT as primary optimizer**: Only tested up to ~40D, requires 1000-5000 evaluations (too many for expensive sim)
 
 ### Implementation via OptunaHub
@@ -305,7 +305,7 @@ Select 5-6 stock opponents per hull size, covering archetypes:
 ### Recommendation Summary
 
 1. **Use Optuna TPE** as primary optimizer with warm-start, repair, deduplication
-2. **Use CatCMAwM** as MAP-Elites emitter (Phase 6) and optional refinement sampler
+2. **Use CatCMAwM** as MAP-Elites emitter (Phase 7) and optional refinement sampler
 3. **Use SMAC3** only if we discover conditional parameter spaces that repair cannot handle
 4. **Keep Bounce** as reference for benchmarking discussions only
 5. **Benchmark on heuristic proxy first** before committing simulation budget

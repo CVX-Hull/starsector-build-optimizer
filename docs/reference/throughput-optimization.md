@@ -408,9 +408,11 @@ COPY optimizer/ /opt/optimizer/
 
 **Phase 4 (Optimizer):** The `optimize_hull()` function's inner loop changes from flat batch evaluation to staged evaluation. The ask-tell interface with Optuna is preserved. `OptimizerConfig` gains new fields for staged evaluation parameters.
 
-**Phase 6 (Quality-Diversity):** Higher throughput directly benefits MAP-Elites archive construction. More evaluations per hour means faster archive filling and more refinement rounds.
+**Phase 6 (Structured Search-Space Representation):** Custom BoTorch GP kernel work is computational overhead per acquisition (HMC for SAASBO), not per evaluation. Higher evaluation throughput is complementary — more trials per day with a better surrogate.
 
-**Phase 7 (Neural Surrogate):** Richer per-matchup telemetry from the staged evaluator (individual opponent results with timestamps) provides better training data for surrogate models.
+**Phase 7 (Quality-Diversity):** Higher throughput directly benefits MAP-Elites archive construction. More evaluations per hour means faster archive filling and more refinement rounds.
+
+**Phase 8 (Neural Surrogate):** Richer per-matchup telemetry from the staged evaluator (individual opponent results with timestamps) provides better training data for surrogate models.
 
 ---
 

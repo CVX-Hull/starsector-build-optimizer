@@ -74,7 +74,7 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 ## Key Design Decisions
 
 1. **Optuna TPE** as primary optimizer — clean ask-tell API, batch parallelism via constant_liar, swappable samplers via OptunaHub
-2. **CatCMAwM** as QD emitter for Phase 6 — joint Gaussian + categorical distribution via cmaes library
+2. **CatCMAwM** as QD emitter for Phase 7 — joint Gaussian + categorical distribution via cmaes library
 3. **Heuristic warm-start** — 50K random builds scored with heuristic, top-500 seed the Optuna study
 4. **Repair operators** for constraint handling — literature consensus over penalty or constrained generation
 5. **CMA-MAE + CatCMA** for quality-diversity — discovers diverse build archetypes, not just one optimum

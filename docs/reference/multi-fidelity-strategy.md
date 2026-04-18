@@ -99,7 +99,7 @@ for _ in range(sim_budget):
 
 ### When to Upgrade to Full MFBO
 
-If heuristic calibration improves R² above 0.75 (after Phase 7 surrogate correction), switch to BoTorch's `SingleTaskMultiFidelityGP` with `qMultiFidelityKnowledgeGradient`. The infrastructure is the same — just swap the acquisition function.
+If heuristic calibration improves R² above 0.75 (after Phase 8 surrogate correction), switch to BoTorch's `SingleTaskMultiFidelityGP` with `qMultiFidelityKnowledgeGradient`. The infrastructure is the same — just swap the acquisition function.
 
 ---
 
