@@ -28,11 +28,26 @@ packages:
   # NOTE: No openjdk — game bundles its own JRE (jre_linux/)
 
 runcmd:
-  - curl -LsSf https://astral.sh/uv/install.sh | sh
+  # Install uv with retry + verification. cloud-init runcmd items do NOT run
+  # under `set -e`, so a silently-failed `curl | sh` would leak past unless
+  # we hard-gate the `/tmp/cloud-init-done` marker on a successful install.
+  # Observed 2026-04-18 Phase 5E deploy: without this gate, deploy.sh saw
+  # the done marker but uv was missing → `/root/.local/bin/uv: No such file`.
+  - |
+    set -e
+    for attempt in 1 2 3; do
+      curl -LsSf --retry 3 --max-time 120 https://astral.sh/uv/install.sh | sh && break
+      echo "uv install attempt ${attempt} failed; sleeping 10s"
+      sleep 10
+    done
+    test -x /root/.local/bin/uv || { echo "FATAL: uv install failed"; exit 1; }
+    /root/.local/bin/uv --version
   # Null ALSA config for headless audio
   - |
     cat > /etc/asound.conf << 'EOF'
     pcm.!default { type null }
     ctl.!default { type null }
     EOF
+  # Only touch the done marker if everything above succeeded. runcmd ordering
+  # is sequential; if the uv block above exits non-zero this line never runs.
   - touch /tmp/cloud-init-done

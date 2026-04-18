@@ -55,16 +55,30 @@ Run all of these. Failure on any one = STOP.
 Use the existing per-provider scripts directly — no campaign manager needed yet:
 ```bash
 # Hetzner single-worker smoke
-./scripts/cloud/deploy.sh 1 ccx33 ash            # ~3 min
+./scripts/cloud/deploy.sh 1 ccx33 ash,hil,fsn1,nbg1   # ~3-5 min
 ./scripts/cloud/run.sh <hull_id> 0 --sim-budget 20
 ./scripts/cloud/collect.sh 1
-./scripts/cloud/teardown.sh 1                     # ALWAYS finish with teardown
+./scripts/cloud/teardown.sh 1                         # ALWAYS finish with teardown
 
 # AWS single-worker smoke
 ./scripts/cloud/aws/deploy.sh c7i.2xlarge
 ./scripts/cloud/aws/run_benchmark.sh 2 20 <hull_id>
-./scripts/cloud/aws/teardown.sh                   # cleans all tagged resources
+./scripts/cloud/aws/teardown.sh                       # cleans all tagged resources
 ```
+
+**Location fallback (Hetzner)**: `deploy.sh` accepts a comma-separated list of locations and tries each in order until one has CCX33 capacity. Ashburn (`ash`) is geographically closest from NC but is frequently out of CCX33 stock — **put `hil` (Hillsboro) second**; it tends to have capacity when Ashburn doesn't. Observed 2026-04-18 during Phase 5E validation: `ash` returned `resource_unavailable` immediately while `hil` deployed in ~3 min.
+
+**Post-deploy verification happens automatically**: `deploy.sh` now runs a smoke import after `uv sync` to confirm the Phase 5D + 5E pipeline is loadable on each worker. If verification fails, the script exits non-zero and tells you to run teardown + retry. The pre-2026-04-18 script would print "All machines deployed" despite downstream failures — that silent-success mode is gone.
+
+### Iterating on code after deploy (`sync-code.sh`)
+
+When you're iterating locally and want to push only code changes to existing workers — without recreating them — use `sync-code.sh`:
+```bash
+./scripts/cloud/sync-code.sh            # rsync src/ tests/ scripts/ to ALL workers
+./scripts/cloud/sync-code.sh 0          # just sim-worker-0
+./scripts/cloud/sync-code.sh all true   # force a uv sync too (deps drifted)
+```
+By default it detects `pyproject.toml` / `uv.lock` drift via `git diff` and runs `uv sync` when needed. Always finishes with a post-sync import smoke so broken syntax surfaces before the next long-running experiment launches. This is the canonical path for the "deploy once → iterate locally → push code only" workflow; during Phase 5E validation I had to hand-roll `rsync` because this script didn't exist yet.
 
 ### For a real campaign ($50-$1000 budget)
 
@@ -142,39 +156,38 @@ ps -C java -o pid,etime,%cpu,cmd
 
 Common causes: Xvfb died, Starsector JVM hung, heartbeat file stale. `pkill -9 java; pkill -9 Xvfb` and let the instance_manager restart logic kick in; if 3 restarts fail, treat as broken worker and rebuild/replace.
 
-## Teardown discipline
+### SSH commands hang or return exit 255
 
-**After every cloud work session, run this audit:**
-
+Every ssh invocation from orchestration code must close stdin. Without it, ssh can inherit a live stdin from the parent shell and either hang indefinitely or exit 255 under background-mode execution. Always append `</dev/null`:
 ```bash
-echo "=== Hetzner ==="
-hcloud server list
+ssh $SSH_OPTS root@"$IP" 'pkill -9 java; echo done' </dev/null
+```
+All scripts in `scripts/cloud/` follow this pattern; if you're writing one-off ssh loops, match it.
 
-echo "=== AWS instances ==="
-aws ec2 describe-instances --region us-east-1 \
-  --filters 'Name=tag:Project,Values=starsector-*' \
-            'Name=instance-state-name,Values=pending,running,stopping,stopped' \
-  --query 'Reservations[].Instances[].[InstanceId,State.Name,Tags[?Key==`Project`].Value|[0]]' \
-  --output text
+### Deploy says "All N machines deployed" but `uv run ...` fails
 
-echo "=== AWS SGs ==="
-aws ec2 describe-security-groups --region us-east-1 \
-  --filters 'Name=tag:Project,Values=starsector-*' \
-  --query 'SecurityGroups[].GroupId' --output text
+Pre-2026-04-18 `deploy.sh` would report success even when the cloud-init uv install silently failed (runcmd runs without `set -e`). Two fixes are in place now:
 
-echo "=== AWS keypairs ==="
-aws ec2 describe-key-pairs --region us-east-1 \
-  --filters 'Name=tag:Project,Values=starsector-*' \
-  --query 'KeyPairs[].KeyName' --output text
+1. `cloud-init.yaml` wraps the uv install in a script with `set -e` and retries up to 3× before touching `/tmp/cloud-init-done`. If the uv binary doesn't land, the done marker is never written and `deploy.sh` times out loudly instead of proceeding.
+2. `deploy.sh` runs a post-install import smoke (`from starsector_optimizer.optimizer import _shape_fitness`) and hard-fails if it errors.
 
-echo "=== AWS volumes ==="
-aws ec2 describe-volumes --region us-east-1 \
-  --filters 'Name=tag:Project,Values=starsector-*' \
-            'Name=status,Values=available' \
-  --query 'Volumes[].VolumeId' --output text
+If either of these is ever bypassed, the failure mode to watch for is: deploy appears to succeed, but the first `ssh worker 'uv run ...'` returns `bash: line 1: /root/.local/bin/uv: No such file or directory`. Fix on a running worker by rerunning the install manually:
+```bash
+ssh $SSH_OPTS root@"$IP" 'curl -LsSf https://astral.sh/uv/install.sh | sh && /root/.local/bin/uv --version' </dev/null
+ssh $SSH_OPTS root@"$IP" 'cd /opt/optimizer && /root/.local/bin/uv sync' </dev/null
 ```
 
-Expected: every section empty. Anything non-empty = clean up before ending session.
+## Teardown discipline
+
+**After every cloud work session, run:**
+
+```bash
+./scripts/cloud/final_audit.sh
+```
+
+Exits 0 if every section is empty across both providers (Hetzner servers, AWS instances/SGs/keypairs/volumes in us-east-1 and us-west-2, all filtered to `starsector-*` tags); exits 1 and prints what leaked otherwise. Use this as the last command of every session — a non-zero exit is a signal to run the corresponding teardown before logging off.
+
+The no-arg `./scripts/cloud/teardown.sh` form discovers every `sim-worker-*` on Hetzner via `hcloud server list` and deletes them. It's strictly safer than the legacy `teardown.sh N` form — if a previous deploy created 5 workers and the caller passes 3, the old form leaked two. Auto-discovery also verifies with a post-delete list to confirm zero remaining.
 
 **If you're ending a session with active campaigns running**: that's an explicit user decision. Confirm with the user before leaving resources alive. Default posture is "no active resources at session end."
 
@@ -195,7 +208,7 @@ Expected: every section empty. Anything non-empty = clean up before ending sessi
 - **Empirical validation** (the 2026-04-18 AWS + Hetzner bench that overturned "GPU required"): `experiments/cloud-benchmark-2026-04-18/RESULTS.md`
 - **Cloud deployment spec**: `docs/specs/22-cloud-deployment.md`
 - **Existing scripts**:
-  - Hetzner: `scripts/cloud/{deploy,run,status,collect,teardown}.sh`
+  - Hetzner: `scripts/cloud/{deploy,sync-code,run,status,collect,teardown,final_audit}.sh`
   - AWS: `scripts/cloud/aws/{deploy,run_benchmark,teardown}.sh`
   - Cloud-init: `scripts/cloud/cloud-init.yaml`
 - **LWJGL XRandR fix** (critical): `src/starsector_optimizer/instance_manager.py::_start_xvfb`
