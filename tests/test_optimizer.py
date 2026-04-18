@@ -828,34 +828,6 @@ class TestStagedEvaluator:
                     f"expected raw PLAYER win score in [1.0, 1.5]"
                 )
 
-    def test_rank_shaping_spreads_cluster(self, wolf_hull, game_data):
-        """Rank shaping spreads clustered sim values across (0, 1]."""
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import HullSize
-
-        pool = self._make_mock_pool()
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
-        config = OptimizerConfig(sim_budget=10, warm_start_n=3, warm_start_sample_n=20)
-
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # Sim-evaluated trials should have rank-shaped values in (0, 1]
-        sim_trials = [t for t in study.trials
-                      if t.state == optuna.trial.TrialState.COMPLETE
-                      and t.value is not None
-                      and t.value > 0 and t.value <= 1.0]
-        assert len(sim_trials) >= 3, "Need enough sim trials to verify rank spread"
-        # All values should be in valid rank range
-        for trial in sim_trials:
-            assert 0.0 < trial.value <= 1.0, (
-                f"Trial {trial.number} value {trial.value} outside rank range (0, 1]"
-            )
-        # With multiple trials, rank values should span a range (not all identical)
-        values = [t.value for t in sim_trials]
-        assert max(values) > min(values), (
-            f"Rank-shaped values should spread: got {values}"
-        )
-
     def test_intermediate_reports_are_raw_scores(self, wolf_hull, game_data):
         """Intermediate trial.report() values are raw combat_fitness, not cumulative z-scores."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -993,7 +965,7 @@ class TestStagedEvaluator:
 
 
     def test_twfe_fitness_in_finalize(self, wolf_hull, game_data):
-        """study.tell() receives rank-shaped value derived from TWFE alpha."""
+        """study.tell() receives Box-Cox-shaped value derived from TWFE alpha."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
 
@@ -1007,9 +979,11 @@ class TestStagedEvaluator:
                       and t.value is not None
                       and len(t.intermediate_values) > 0]
         assert len(sim_trials) > 0
-        # Values should be rank-shaped (0, 1]
+        # Post-A3 Box-Cox output is in [0, 1] (the population minimum maps
+        # to exactly 0 via min-max rescale; the pre-5E rank shape never hit
+        # 0 because rank/n >= 1/n).
         for trial in sim_trials:
-            assert 0.0 < trial.value <= 1.0
+            assert 0.0 <= trial.value <= 1.0
 
     def test_incumbent_tracking(self, wolf_hull, game_data):
         """After evaluating builds, incumbent tracks the best build's opponents."""
@@ -1634,3 +1608,334 @@ class TestEvalLogAuditFields:
             assert "covariate_vector" in rec
             assert len(rec["covariate_vector"]) == 7
             assert all(isinstance(x, float) for x in rec["covariate_vector"])
+
+
+class TestShapeFitness:
+    """Phase 5E — Box-Cox A3 replaces quantile rank. Tests cover the pure
+    `_shape_fitness` function, its `_ShapeDiag` side-band, and end-to-end
+    eval-log + logging behaviour through `optimize_hull`.
+    """
+
+    # --- Pure-function tests (no StagedEvaluator required) ---
+
+    def test_config_has_shape_field(self):
+        """OptimizerConfig carries a ShapeConfig with the documented defaults."""
+        from starsector_optimizer.models import ShapeConfig
+
+        config = OptimizerConfig()
+        assert isinstance(config.shape, ShapeConfig)
+        assert config.shape.min_samples == 8
+        assert config.shape.positivise_epsilon == 1e-6
+        assert not hasattr(config, "rank_fitness")
+
+    def test_shape_fitness_returns_diag_tuple(self):
+        """`_shape_fitness` returns `(float, _ShapeDiag)`; Box-Cox vs passthrough
+        cases populate exactly one of `lam` / `passthrough_reason`."""
+        from starsector_optimizer.optimizer import _shape_fitness, _ShapeDiag
+        from starsector_optimizer.models import ShapeConfig
+
+        cfg = ShapeConfig()
+        # n=0 → passthrough (n<=1)
+        val, diag = _shape_fitness(0.5, [], cfg)
+        assert isinstance(diag, _ShapeDiag)
+        assert diag.lam is None
+        assert diag.passthrough_reason == "n<1"
+        # Box-Cox case: need n >= min_samples and ptp >= eps
+        import random
+        rng = random.Random(0)
+        completed = [rng.gauss(0, 1) for _ in range(20)]
+        val, diag = _shape_fitness(0.3, completed, cfg)
+        assert diag.lam is not None
+        assert isinstance(diag.lam, float)
+        assert diag.passthrough_reason is None
+
+    def test_shape_fitness_n_zero_returns_half(self):
+        """Empty completed-values population → exactly 0.5 with reason `n<1`."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+
+        val, diag = _shape_fitness(1.234, [], ShapeConfig())
+        assert val == 0.5
+        assert diag.passthrough_reason == "n<1"
+
+    def test_shape_fitness_n_one_returns_half(self):
+        """Single-value population → exactly 0.5 with reason `n<1`."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+
+        val, diag = _shape_fitness(0.0, [0.7], ShapeConfig())
+        assert val == 0.5
+        assert diag.passthrough_reason == "n<1"
+
+    def test_shape_fitness_passthrough_below_min_samples(self):
+        """Below min_samples: min-max scaling of the input against the
+        growing population — monotone in eb_fitness, preserves warm-up
+        ordering for TPE before Box-Cox activates."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+
+        cfg = ShapeConfig()
+        # n=5 completed, min_samples=8 → passthrough
+        completed = [0.1, 0.3, 0.5, 0.7, 0.9]
+        val_low, diag_low = _shape_fitness(0.1, completed, cfg)
+        val_mid, diag_mid = _shape_fitness(0.5, completed, cfg)
+        val_high, diag_high = _shape_fitness(0.9, completed, cfg)
+        for diag in (diag_low, diag_mid, diag_high):
+            assert diag.lam is None
+            assert diag.passthrough_reason == "n<min_samples"
+        # Monotone
+        assert val_low < val_mid < val_high
+        assert 0.0 <= val_low <= val_high <= 1.0
+
+    def test_shape_fitness_handles_identical_values(self):
+        """8+ identical population → no scipy exception; output is 0.5
+        via the `ptp < eps` branch (not `n<1`)."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+
+        completed = [0.42] * 10  # n=10, constant population
+        val, diag = _shape_fitness(0.42, completed, ShapeConfig())
+        assert val == 0.5
+        assert diag.passthrough_reason == "constant"
+        assert diag.lam is None
+
+    def test_shape_fitness_raises_on_non_finite_input(self):
+        """Contract: non-finite eb_fitness raises ValueError — upstream NaN
+        is an invariant violation, fail fast."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+        import math
+
+        cfg = ShapeConfig()
+        completed = list(range(10))
+        for bad in (float("nan"), float("inf"), -math.inf):
+            with pytest.raises(ValueError, match="[Nn]on-finite"):
+                _shape_fitness(bad, completed, cfg)
+
+    def test_shape_fitness_in_unit_interval(self):
+        """All outputs ∈ [0, 1] for any input distribution."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+        import random
+
+        cfg = ShapeConfig()
+        rng = random.Random(0)
+        population = [rng.gauss(0.5, 0.2) for _ in range(30)]
+        inputs = [-1.0, -0.1, 0.0, 0.5, 1.0, 2.5]
+        inputs.extend(rng.random() for _ in range(20))
+        for eb in inputs:
+            val, _ = _shape_fitness(eb, population, cfg)
+            assert 0.0 <= val <= 1.0
+
+    def test_shape_fitness_preserves_spearman_rho(self):
+        """Spearman ρ(shaped, eb) == 1.0 over a batch of Box-Cox-shaped
+        values computed against a frozen population."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+        from scipy.stats import spearmanr
+        import random
+
+        # In production `eb_fitness` is always appended to the population
+        # BEFORE `_shape_fitness` is called, so the input is always inside
+        # the population range. Feed population members as inputs to mirror
+        # that contract; outlier behaviour (saturation at 0/1) is covered
+        # by `test_shape_fitness_clips_outlier_current_trial`.
+        rng = random.Random(1)
+        population = [rng.gauss(0.5, 0.2) for _ in range(50)]
+        shaped = [_shape_fitness(v, population, ShapeConfig())[0]
+                  for v in population]
+        rho, _ = spearmanr(population, shaped)
+        assert rho == pytest.approx(1.0, abs=1e-9)
+
+    def test_shape_fitness_monotone_within_snapshot(self):
+        """For a fixed population snapshot, _shape_fitness is strictly
+        monotone in eb_fitness — catches sign-flip bugs in the λ<0 regime."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+        import random
+
+        rng = random.Random(2)
+        population = [rng.gauss(0.5, 0.1) for _ in range(50)]
+        # 100-point sweep across the population range
+        lo, hi = min(population), max(population)
+        sweep = [lo + i * (hi - lo) / 99 for i in range(100)]
+        shaped = [_shape_fitness(x, population, ShapeConfig())[0]
+                  for x in sweep]
+        # Strictly non-decreasing
+        for a, b in zip(shaped[:-1], shaped[1:]):
+            assert a <= b + 1e-12, f"Monotonicity violated: {a} > {b}"
+
+    def test_shape_fitness_clips_outlier_current_trial(self):
+        """Current eb_fitness above or below the population range is clipped
+        into [0, 1] — outlier cannot escape the unit interval."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+
+        cfg = ShapeConfig()
+        population = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+        # Extreme outliers
+        val_high, _ = _shape_fitness(50.0, population, cfg)
+        val_low, _ = _shape_fitness(-50.0, population, cfg)
+        assert val_high == 1.0
+        assert val_low == 0.0
+
+    def test_shape_fitness_ceiling_saturation_collapses(self):
+        """Synthetic bimodal exploit-cluster (mirrors Phase 5E simulation):
+        post-Box-Cox, < 5% of values saturate at ≥ 0.99."""
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+        import random
+
+        cfg = ShapeConfig()
+        rng = random.Random(3)
+        # 90% exploit cluster at ~0.8, 10% at ~0.0 — mirrors sim
+        population = [
+            (0.8 + rng.gauss(0, 0.1)) if rng.random() < 0.9
+            else rng.gauss(0.0, 0.3)
+            for _ in range(200)
+        ]
+        # Map every population value through _shape_fitness against itself
+        shaped = [_shape_fitness(x, population, cfg)[0] for x in population]
+        ceiling_frac = sum(1 for v in shaped if v >= 0.99) / len(shaped)
+        assert ceiling_frac < 0.05, (
+            f"Ceiling saturation {ceiling_frac:.1%} ≥ 5%; "
+            "Box-Cox should open up the top quartile"
+        )
+
+    # --- End-to-end integration tests ---
+
+    def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
+        """Reuse TestEvalLogAuditFields' mock-pool pattern (engine_stats-aware)."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import (
+            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+        )
+        from starsector_optimizer.instance_manager import InstancePool
+
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = num_instances
+        es = EngineStats(
+            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+        )
+
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            player_destroyed = winner == "ENEMY"
+            enemy_destroyed = winner == "PLAYER"
+            player = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=player_destroyed,
+                hull_fraction=0.0 if player_destroyed else 0.7,
+                armor_fraction=0.0 if player_destroyed else 0.8,
+                cr_remaining=0.0 if player_destroyed else 0.5,
+                peak_time_remaining=0.0 if player_destroyed else 100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                overload_count=0,
+            )
+            enemy = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=enemy_destroyed,
+                hull_fraction=0.0 if enemy_destroyed else 0.7,
+                armor_fraction=0.0 if enemy_destroyed else 0.8,
+                cr_remaining=0.0 if enemy_destroyed else 0.5,
+                peak_time_remaining=0.0 if enemy_destroyed else 100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner=winner, duration_seconds=60.0,
+                player_ships=(player,), enemy_ships=(enemy,),
+                player_ships_destroyed=1 if player_destroyed else 0,
+                enemy_ships_destroyed=1 if enemy_destroyed else 0,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=es,
+            )
+
+        mock_pool.run_matchup = mock_run_matchup
+        return mock_pool
+
+    def test_shape_fitness_spreads_cluster(self, wolf_hull, game_data):
+        """End-to-end: completed-trial values ∈ (0, 1] and span a range;
+        ceiling fraction is small (A3 actually opens up the top quartile)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(
+            sim_budget=10, warm_start_n=3, warm_start_sample_n=20,
+        )
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        sim_trials = [t for t in study.trials
+                      if t.state == optuna.trial.TrialState.COMPLETE
+                      and t.value is not None
+                      and 0.0 < t.value <= 1.0]
+        assert len(sim_trials) >= 3
+        values = [t.value for t in sim_trials]
+        assert max(values) > min(values)
+        for v in values:
+            assert 0.0 < v <= 1.0
+        ceiling_frac = sum(1 for v in values if v >= 0.99) / len(values)
+        assert ceiling_frac <= 0.1, (
+            f"ceiling fraction {ceiling_frac:.1%} > 10%; Box-Cox should "
+            "keep the top quartile open"
+        )
+
+    def test_eval_log_records_shape_diag(self, wolf_hull, game_data, tmp_path):
+        """After 10 trials, JSONL rows carry shape_lambda + shape_passthrough_reason.
+        Early rows show passthrough (reason populated); later rows show a fitted λ."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        import json
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        recs = [json.loads(l) for l in log_path.read_text().splitlines()]
+        completed = [r for r in recs if not r["pruned"]]
+        assert len(completed) >= 10
+        for rec in completed:
+            assert "shape_lambda" in rec
+            assert "shape_passthrough_reason" in rec
+        # First few completed rows are passthrough (n < 8).
+        early = completed[:4]
+        for rec in early:
+            assert rec["shape_lambda"] is None
+            assert rec["shape_passthrough_reason"] is not None
+        # At least one later row should have an active λ.
+        active = [r for r in completed if r["shape_lambda"] is not None]
+        assert len(active) >= 1, (
+            "Expected at least one Box-Cox-active row after min_samples threshold"
+        )
+
+    def test_shape_first_activation_logged_once(self, wolf_hull, game_data, caplog):
+        """The 'A3 Box-Cox activated' INFO log fires exactly once per run."""
+        import logging
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(
+            sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
+        )
+        with caplog.at_level(logging.INFO, logger="starsector_optimizer.optimizer"):
+            optimize_hull("wolf", game_data, pool, opp_pool, config)
+        activation_records = [r for r in caplog.records
+                              if "Box-Cox activated" in r.getMessage()]
+        assert len(activation_records) == 1, (
+            f"Expected 1 activation log, got {len(activation_records)}"
+        )

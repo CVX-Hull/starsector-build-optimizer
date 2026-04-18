@@ -1,6 +1,6 @@
 # Phase 5E — A3 Shape Revision
 
-> **Status**: Research complete, implementation planned. Simulation validation in `experiments/signal-quality-2026-04-17/`.
+> **Status**: Implemented 2026-04-18. Ceiling collapsed 50× and top-5 identification lifted 14× on the 2026-04-18 synthetic re-validation under Phase 5D. Original simulation validation in `experiments/signal-quality-2026-04-17/`; post-5D re-validation in `experiments/signal-quality-5d-2026-04-18/`.
 
 Findings from the 900-trial Hammerhead TWFE run (`experiments/hammerhead-twfe-2026-04-13/`, 2026-04-17) that motivate a revision to the A3 fitness-shaping step of the Phase 5A signal-quality pipeline.
 
@@ -114,6 +114,47 @@ The simulation introduced a `ρ_α_truth` metric — Spearman ρ on the raw α *
 
 This diagnostic proves that on the Hammerhead regime the bottleneck is A3, not A1.
 
+### 3.4 Post-5D revalidation — 2026-04-18
+
+Phase 5D shipped on 2026-04-18 (EB shrinkage + triple-goal at A2′). The 5E decision needed to be re-validated against the new baseline. `experiments/signal-quality-5d-2026-04-18/signal_validation_5d.py` layered 5D's EB step into the harness and re-ran seven strategies: A0 (pre-5D baseline), A (5D + rank), D (5D + Box-Cox), H (CAT + 5D + rank), I (Tobit + 5D + Box-Cox), J (CAT + 5D + Box-Cox), K (full stack).
+
+Headline metrics (300 builds × 50 opponents × 10 active × 20 seeds, empirical censoring 10.6%):
+
+| Strategy | ρ vs truth | Exploit-spread ρ | Ceiling % | Top-5 | Top-10 | Top-25 |
+|---|---|---|---|---|---|---|
+| A0: pre-5D (TWFE+rank) | 0.463 ± 0.050 | 0.368 | 25.3% | 0.05 | 0.09 | 0.18 |
+| A: 5D + rank (baseline) | 0.737 ± 0.030 | 0.683 | 25.3% | 0.03 | 0.07 | 0.24 |
+| D: 5D + Box-Cox | 0.743 ± 0.031 | 0.689 | 0.3% | 0.43 | 0.46 | 0.46 |
+| H: CAT + 5D + rank | 0.744 ± 0.036 | 0.692 | 25.3% | 0.07 | 0.11 | 0.27 |
+| I: Tobit + 5D + Box-Cox | 0.656 ± 0.051 | 0.588 | 0.4% | 0.29 | 0.34 | 0.39 |
+| J: CAT + 5D + Box-Cox | 0.751 ± 0.041 | 0.700 | 0.4% | 0.43 | 0.40 | 0.46 |
+| K: CAT + Tobit + 5D + Box-Cox | 0.655 ± 0.065 | 0.586 | 0.4% | 0.30 | 0.31 | 0.39 |
+
+Key paired Wilcoxon results:
+
+- **A (5D) vs A0 (pre-5D): Δρ = +0.273, p < 0.001** — 5D itself dominates the ρ gain in this synthetic.
+- **D (5D + Box-Cox) vs A: Δρ = +0.006, p = 0.55** — ρ delta is near-zero because D and A share α̂_EBT. The win is mechanical.
+- **Ceiling fraction A → D: 25.3% → 0.3%** (50× reduction).
+- **Top-5 overlap A → D: 0.03 → 0.43** (14× improvement — the metric that matters for TPE exploitation of the top quartile).
+- **J (CAT + 5D + Box-Cox) vs A: Δρ = +0.014, p = 0.019** — CAT's observation-side gain is small but significant.
+- **I / K (Tobit variants): Δρ ≈ −0.09 vs D/J** — new 5D-specific pathology: σ̂_i² is computed from OLS residuals inside `apply_5d()` but Tobit produces a different α̂ distribution, so the EB step shrinks Tobit α̂ in the wrong direction. Not a production concern (we never ship Tobit), but worth noting.
+
+**Calibration sweep** (`calibration_report.md`, 4 regimes of covariate-noise multiplier):
+
+| noise× | prior ρ upper-bound | Δρ A vs A0 | Δ ceiling D-A | Δ top-5 D-A | Δρ J vs A |
+|---|---|---|---|---|---|
+| 0.5× | 0.914 | +0.382 | −0.249 | +0.50 | −0.005 |
+| 1.0× | 0.767 | +0.271 | −0.249 | +0.44 | +0.002 |
+| 2.0× | 0.547 | +0.130 | −0.249 | +0.26 | +0.008 |
+| 4.0× | 0.343 | +0.047 | −0.249 | +0.20 | +0.012 |
+
+Δρ A vs A0 tracks prior strength from +0.38 (strong prior) down to +0.05 (weak prior). At noise×4 (prior ρ ≈ 0.343, the regime that best matches real Hammerhead scorer components), 5D's synthetic ρ gain collapses to +0.047 — matching the shipped production Δρ = +0.036 on LOOO. This confirms that both synthetic runs (here and the original Phase 5D fusion at `experiments/phase5d-covariate-2026-04-17/FUSION_REPORT.md`) overstate the real-world 5D gain by ~10× because synthetic covariates are linear noisy proxies of `q` while real scorer components are near-constant within the 89% exploit cluster. **This is orthogonal to the 5E decision**: Box-Cox's ceiling and top-k gains are invariant across the entire covariate-strength range — the A3 transform sits downstream of α̂_EBT and doesn't care how strong the α̂ is.
+
+Files:
+- `experiments/signal-quality-5d-2026-04-18/signal_validation_5d.py` — 5D-aware harness.
+- `experiments/signal-quality-5d-2026-04-18/REPORT.md` — full Wilcoxon tables.
+- `experiments/signal-quality-5d-2026-04-18/calibration_sweep.py`, `calibration_report.md` — covariate-strength robustness check.
+
 ---
 
 ## 4. Accepted path forward
@@ -128,6 +169,21 @@ Ranked by leverage × confidence × engineering cost:
    - Tobit: when per-matchup censoring exceeds ~30%.
    - CFS: when the opponent pool contains many more hard opponents than active-per-trial.
    - Main-exploiter: when the failure mode is exploit-vs-counter adversarial dynamics (requires a real rock-paper-scissors signal, not a flat-uplift feature).
+
+### 4.1 Implementation notes (shipped 2026-04-18)
+
+- **Entry point**: `src/starsector_optimizer/optimizer.py::_shape_fitness(eb_fitness, completed_values, config)`. Pure function returning `(float, _ShapeDiag)`. The evaluator's `_finalize_build` calls it after appending `eb_fitness` to `_completed_fitness_values` so the current trial is always inside the population range.
+- **Config**: `ShapeConfig(min_samples: int = 8, positivise_epsilon: float = 1e-6)` in `models.py`, accessed via `OptimizerConfig.shape`.
+- **Refit cadence — deviation from §4 item 1**: λ is refit on every `_finalize_build` call, not "every N trials" as the original proposal suggested. Rationale: at n=300 the scipy MLE costs ~1ms per call (0.3s total wall-clock vs matchup latency measured in minutes). Batched refit would save nothing and would introduce a `(λ, shift, min, max)` cache-coherence burden against the rolling min-max rescale window.
+- **`min_samples=8` rationale — plan-introduced floor, not research-doc prescription**. Chosen by analogy to `EBShrinkageConfig.eb_min_builds=8`: Box-Cox MLE is part of the same MLE family and destabilises under ~8 samples. Below the floor, `_shape_fitness` returns the min-max-scaled `eb_fitness` — monotone in `eb_fitness`, preserves warm-up ordering for TPE before Box-Cox activates.
+- **Non-finite input contract**: raises `ValueError`. Contract shift vs `_apply_eb_shrinkage` (which does not guard) — upstream NaN is an invariant violation in TWFE or EB shrinkage, not unknown game data, so the forward-compat "warn, don't crash" principle does not apply. Documented here + pinned at `test_shape_fitness_raises_on_non_finite_input`.
+- **Failure-score bypass**: inherited from the existing `_finalize_build` structure — `failure_score` is told to Optuna directly at the failure sites and never enters `_completed_fitness_values`.
+- **Outlier handling**: in production `eb_fitness` is always appended to `_completed_fitness_values` before `_shape_fitness` is called, so the input is always inside the population range. The pre-transform clamp in `_shape_fitness` (clipping to `[positivised.min(), positivised.max()]` before `boxcox(..., lmbda=λ)`) is a defence against test fixtures where a caller passes an out-of-range value; under that path the output saturates at 0 or 1.
+- **Logging**: three new log events.
+  - First-activation INFO log fires once when Box-Cox first runs (n ≥ min_samples, ptp ≥ eps): `"A3 Box-Cox activated at n=%d completed builds (first λ=%.3f)"`.
+  - Per-trial completion line replaces `ranked=%.3f` with `shaped=%.3f, λ=%s` where `λ` is either the fitted value or `pt:<reason>` during passthrough.
+  - End-of-run summary sibling to the EB summary: `"A3 Box-Cox summary: %d Box-Cox trials (λ mean=%.3f, std=%.3f), %d passthrough (%s)"`.
+- **JSONL schema additions**: `shape_lambda: float | null` and `shape_passthrough_reason: str | null`. Absent on pruned records; present on all completed records. See spec 24 §JSONL schema.
 
 ---
 

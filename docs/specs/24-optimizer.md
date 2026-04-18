@@ -29,6 +29,7 @@ Frozen dataclass configuring the optimization run.
 | `combat_fitness` | `CombatFitnessConfig` | `CombatFitnessConfig()` | Embedded fitness config (engagement threshold, tier weights, etc.). Single source of truth — no duplication. |
 | `twfe` | `TWFEConfig` | `TWFEConfig()` | TWFE deconfounding + opponent selection parameters (ridge, iterations, trim, anchors, incumbent overlap). See spec 28. |
 | `eb` | `EBShrinkageConfig` | `EBShrinkageConfig()` | Empirical-Bayes shrinkage parameters for A2′ (τ² floor, triple-goal toggle, min builds, OLS ridge). See spec 28. |
+| `shape` | `ShapeConfig` | `ShapeConfig()` | A3 Box-Cox output-warping parameters. `ShapeConfig(min_samples: int = 8, positivise_epsilon: float = 1e-6)`. Below `min_samples`, A3 falls through to min-max scaling (Box-Cox MLE is unstable under ~8 samples; floor chosen by analogy to `eb_min_builds`). `positivise_epsilon` guards the `shift = min - eps` positivise step and the constant-population `ptp < eps` fallback. |
 | `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
@@ -127,7 +128,10 @@ class StagedEvaluator:
 - `_burn_in_fitness: list[float]` — per-build TWFE fitness during burn-in (cleared after anchor lock)
 - `_builds_evaluated: int` — count for burn-in threshold
 - `_completed_records: dict[int, _EBRecord]` — narrow covariate records for every finalized build, used by A2′ EB shrinkage at each finalize call
-- `_completed_fitness_values: list[float]` — post-A1/A2′ fitness values for A3 rank shaping
+- `_completed_fitness_values: list[float]` — post-A2′ EB posterior means; A3 Box-Cox reads this list on every `_finalize_build` call to re-fit λ and rescale
+- `_shape_lambda_history: list[float]` — per-trial fitted Box-Cox λ values (non-passthrough only); source for the end-of-run A3 summary log
+- `_shape_passthrough_reasons: collections.Counter[str]` — histogram of passthrough causes (`"n<1"`, `"n<min_samples"`, `"constant"`) for the end-of-run summary
+- `_shape_first_activation_logged: bool` — one-shot flag guarding the "A3 Box-Cox activated at n=… (first λ=…)" INFO log
 
 **`run()` algorithm (async coordinator):**
 
@@ -225,7 +229,7 @@ raw combat_fitness score
   → record in ScoreMatrix
   → A1: TWFE decomposition (α_i + β_j) → trimmed_alpha
   → A2′: EB shrinkage toward γ̂ᵀX regression prior + triple-goal rank correction
-  → A3: rank-based fitness shaping (finalization only)
+  → A3: Box-Cox output warping + min-max rescale (finalization only)
   → study.tell()
 ```
 
@@ -244,11 +248,19 @@ Covariate vector `X_i` assembled by `_build_covariate_vector(record)`, 7 compone
 
 When `record.engine_stats is None` (replay on pre-5D logs, or test fixtures), features 1-3 fall back to `record.scorer_result.effective_stats.{flux_capacity, flux_dissipation, armor_rating}` with a `warnings.warn` for operator visibility. In production runs with the deployed Java mod, this fallback never triggers.
 
-**A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2′) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
+**A3 — Box-Cox Output Warping:** Final fitness passed through `scipy.stats.boxcox` fit on the population of completed EB posterior means (`_completed_fitness_values`). The transform is monotone (preserves Spearman ρ) and restores α̂-proportional gradient at the tails — the pre-5E quantile rank was also monotone but discarded magnitude information, compressing the top quartile into an evenly-spaced grid that TPE's `l(x)` could not exploit. The current trial's `eb_fitness` is transformed under the same λ via the `boxcox(scalar, lmbda=λ)` overload, then min-max rescaled against the transformed population to produce a `[0, 1]` output for JSONL schema stability. λ is refit on every `_finalize_build` call (≈1ms at n=300; batched refit saves nothing vs matchup latency and would create a (λ, shift, min, max) cache-coherence burden against the rolling rescale window).
+
+Passthrough fallbacks:
+- `n <= 1`: returns exactly `0.5` (preserves the pre-5E n≤1 contract).
+- `n < config.shape.min_samples` (default 8) or `ptp(_completed_fitness_values) < positivise_epsilon`: returns `eb_fitness` min-max-scaled against the completed-values window (monotone, preserves ordering for TPE warm-up). When the population itself is effectively constant (`hi - lo < eps`), returns `0.5`.
+
+**Non-finite `eb_fitness` raises `ValueError`** — a non-finite value here indicates an upstream NaN propagation bug in TWFE or EB shrinkage, not unknown game data, so the forward-compat "warn, don't crash" principle does not apply. Fail fast so the bug surfaces at the earliest possible frame.
+
+`config.shape.min_samples` and `config.shape.positivise_epsilon` live on `ShapeConfig` (see the `OptimizerConfig` table above). `min_samples=8` was chosen by analogy to `eb_min_builds=8` — Box-Cox MLE is part of the same MLE family and destabilises under ~8 samples.
 
 **Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the rung position (0-based, no A1/A2′/A3). `WilcoxonPruner` pairs values at the same rung across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences at the same evaluation position, and anchor-first ordering ensures the first rungs compare the same opponents post-burn-in.
 
-**Failure scores** (`failure_score`, default -2.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
+**Failure scores** (`failure_score`, default -2.0) bypass all transformations — they are told directly to the study and are clearly below any Box-Cox-shaped value in [0, 1]. Box-Cox inherits this bypass for free since `failure_score` never enters `_completed_fitness_values` (the bypass happens earlier in `_finalize_build`, at the same call sites that handled failures before 5E).
 
 ### `preflight_check(hull_id, game_data, instance_pool, opponent_pool) -> None`
 
@@ -316,19 +328,23 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
   "twfe_fitness": 0.18,
   "engine_stats": {"eff_max_flux": 12000.0, "eff_flux_dissipation": 800.0, "eff_armor_rating": 1050.0},
   "covariate_vector": [12000.0, 800.0, 1050.0, 4200.0, 1100.0, 0.55, 0.71],
+  "shape_lambda": 0.73,
+  "shape_passthrough_reason": null,
   "fitness": 0.23,
   "timestamp": "2026-04-11T14:32:15"
 }
 ```
 
 Schema:
-- `fitness`: rank-shaped value in [0, 1] told to Optuna (completed builds) or raw mean (pruned builds).
-- `raw_fitness`: the post-A2′ scalar fed into A3 rank shaping. Semantically stable across 5A → 5D: its *content* changed from CV-corrected to EB-shrunk, but its role ("final scalar before rank shaping") is unchanged.
+- `fitness`: Box-Cox-shaped value in [0, 1] told to Optuna (completed builds) or raw mean (pruned builds).
+- `raw_fitness`: the post-A2′ scalar fed into A3 Box-Cox shaping. Semantically stable across 5A → 5E: its *content* changed from CV-corrected (5A) to EB-shrunk (5D), and the A3 transform downstream of it changed from quantile rank (pre-5E) to Box-Cox (5E), but its role ("final scalar immediately before the A3 transform") is unchanged.
 - `eb_fitness`: explicit EB posterior (post-triple-goal if enabled). Added in 5D for auditability. For completed builds under 5D this equals `raw_fitness`; the redundant write makes it unambiguous that EB was applied. Unset for pruned builds (TWFE α̂ is unstable with few observations; no shrinkage is applied at prune time).
-- `twfe_fitness`: pre-shrinkage α̂ from the TWFE decomposition. Completed builds only. Paired with `eb_fitness` the JSONL reconstructs the full twfe→eb→ranked pipeline; without it, downstream analysis cannot distinguish raw TWFE from EB posterior.
+- `twfe_fitness`: pre-shrinkage α̂ from the TWFE decomposition. Completed builds only. Paired with `eb_fitness` the JSONL reconstructs the full twfe→eb→shaped pipeline; without it, downstream analysis cannot distinguish raw TWFE from EB posterior.
 - `engine_stats`: Java SETUP-phase engine readings (flux capacity, dissipation, armor rating). Completed builds only. Absent when Java did not emit `setup_stats` (pre-5D replay logs).
 - `covariate_vector`: the 7-dim X_i in §2.7 order (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `composite_score`) used by EB shrinkage for this build. Completed builds only.
-- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
+- `shape_lambda`: fitted Box-Cox λ for this trial's A3 transform, or `null` during A3 passthrough (first 7 trials or constant-population edge cases). Added in 5E for diagnostic visibility into how the transform is evolving as the completed-values distribution grows.
+- `shape_passthrough_reason`: one of `"n<1"`, `"n<min_samples"`, `"constant"` when A3 fell back to min-max scaling, or `null` when Box-Cox ran. Added in 5E.
+- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector`, `shape_lambda`, `shape_passthrough_reason` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
 
 ## Study Persistence
 

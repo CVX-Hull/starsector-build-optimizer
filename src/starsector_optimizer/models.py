@@ -471,6 +471,21 @@ class EBShrinkageConfig:
 
 
 @dataclass(frozen=True)
+class ShapeConfig:
+    """Phase 5E A3 Box-Cox output-warping parameters.
+
+    `min_samples` is the floor below which the A3 step falls through to
+    min-max scaling (Box-Cox MLE destabilises under ~8 samples; chosen by
+    analogy to `EBShrinkageConfig.eb_min_builds`).
+    `positivise_epsilon` guards the `shift = min - eps` positivise step
+    and the constant-population `ptp < eps` fallback.
+    See spec 24 §A3 Box-Cox Output Warping.
+    """
+    min_samples: int = 8
+    positivise_epsilon: float = 1e-6
+
+
+@dataclass(frozen=True)
 class ImportanceResult:
     """Parameter importance analysis result from fANOVA."""
     importances: dict[str, float]  # param_name -> importance (0.0–1.0, sums to ~1.0)

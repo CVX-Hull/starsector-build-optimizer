@@ -202,8 +202,8 @@ _finalize_build():
     twfe_fitness = _score_matrix.build_alpha(trial_number, config.twfe)  # A1
     _completed_records[trial_number] = _EBRecord(...)
     eb_fitness = _apply_eb_shrinkage(trial_number, twfe_fitness)          # A2′
-    ranked_fitness = _rank_fitness(eb_fitness)                            # A3
-    study.tell(trial, ranked_fitness)
+    shaped_fitness, shape_diag = _shape_fitness(eb_fitness)               # A3 (Box-Cox)
+    study.tell(trial, shaped_fitness)
 
 _apply_eb_shrinkage(trial_number, twfe_fitness):
     if score_matrix.n_builds < config.eb.eb_min_builds:
@@ -218,7 +218,7 @@ _apply_eb_shrinkage(trial_number, twfe_fitness):
     return float(alpha_eb[indices.index(trial_number)])
 ```
 
-See spec 24 for the full signal quality pipeline including A3 rank shaping and JSONL evaluation log schema.
+See spec 24 for the full signal quality pipeline including A3 Box-Cox shaping and JSONL evaluation log schema.
 
 ## Design Rationale
 

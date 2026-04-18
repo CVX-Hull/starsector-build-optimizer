@@ -11,8 +11,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import random as _random
 import shutil
+from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,10 +24,11 @@ import numpy as np
 import optuna
 from optuna.distributions import CategoricalDistribution, IntDistribution
 from optuna.trial import TrialState, create_trial
+from scipy.stats import boxcox
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig, EngineStats, GameData, HullSize, MatchupConfig, ScorerResult, ShipHull, TWFEConfig
+from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig, EngineStats, GameData, HullSize, MatchupConfig, ScorerResult, ShapeConfig, ShipHull, TWFEConfig
 from .combat_fitness import combat_fitness
 from .deconfounding import ScoreMatrix, eb_shrinkage, triple_goal_rank
 from .opponent_pool import (
@@ -55,6 +59,7 @@ class OptimizerConfig:
     combat_fitness: CombatFitnessConfig = field(default_factory=CombatFitnessConfig)
     twfe: TWFEConfig = field(default_factory=TWFEConfig)
     eb: EBShrinkageConfig = field(default_factory=EBShrinkageConfig)
+    shape: ShapeConfig = field(default_factory=ShapeConfig)
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
@@ -465,11 +470,16 @@ class StagedEvaluator:
         self._builds_evaluated: int = 0
         # A2′: EB shrinkage — per-build covariate cache for every finalized build
         self._completed_records: dict[int, _EBRecord] = {}
-        # A3: Completed fitness values for rank-based shaping
+        # A3: post-A2′ EB posterior means; the Box-Cox fit reads this list
+        # on every _finalize_build call to re-fit λ and rescale.
         self._completed_fitness_values: list[float] = []
         # A2′ summary (reported at end of run)
         self._eb_activated_count: int = 0  # trials where twfe != eb (EB moved alpha)
         self._eb_shrinkage_magnitudes: list[float] = []  # |eb - twfe| per completed trial
+        # A3 summary (reported at end of run)
+        self._shape_lambda_history: list[float] = []  # non-passthrough λ values
+        self._shape_passthrough_reasons: Counter[str] = Counter()
+        self._shape_first_activation_logged: bool = False
         self._run_start_time: float = 0.0
         self._trials_pruned: int = 0
 
@@ -560,6 +570,23 @@ class StagedEvaluator:
             "EB activated on %d/%d finalized (%.0f%%); mean |Δ|=%.4f",
             completed, self._trials_pruned, elapsed, rate,
             self._eb_activated_count, finalized, eb_rate * 100.0, mean_abs,
+        )
+        lam_hist = self._shape_lambda_history
+        pt_total = sum(self._shape_passthrough_reasons.values())
+        if lam_hist:
+            lam_mean = float(np.mean(lam_hist))
+            lam_std = float(np.std(lam_hist))
+        else:
+            lam_mean = 0.0
+            lam_std = 0.0
+        pt_breakdown = ", ".join(
+            f"{reason}={count}"
+            for reason, count in self._shape_passthrough_reasons.most_common()
+        ) or "none"
+        logger.info(
+            "A3 Box-Cox summary: %d Box-Cox trials (λ mean=%.3f, std=%.3f), "
+            "%d passthrough (%s)",
+            len(lam_hist), lam_mean, lam_std, pt_total, pt_breakdown,
         )
 
     def _track_eb_summary(self, twfe: float, eb: float) -> None:
@@ -709,15 +736,21 @@ class StagedEvaluator:
         )
         # A2′: EB shrinkage + optional triple-goal rank correction
         eb_fitness = self._apply_eb_shrinkage(ifb.trial.number, twfe_fitness)
-        # A3: rank-based shaping
+        # A3: Box-Cox output warping (falls through to min-max scaling below
+        # shape.min_samples or on constant-population edge cases).
         self._completed_fitness_values.append(eb_fitness)
-        ranked_fitness = self._rank_fitness(eb_fitness)
+        shaped_fitness, shape_diag = _shape_fitness(
+            eb_fitness, self._completed_fitness_values, self._config.shape,
+        )
+        self._track_shape_summary(shape_diag)
 
-        self._cache.put(ifb.build, ranked_fitness)
-        self._study.tell(ifb.trial, ranked_fitness)
+        self._cache.put(ifb.build, shaped_fitness)
+        self._study.tell(ifb.trial, shaped_fitness)
         logger.info(
-            "  Trial %d COMPLETE (twfe=%.3f, eb=%.3f, ranked=%.3f)",
-            ifb.trial.number, twfe_fitness, eb_fitness, ranked_fitness,
+            "  Trial %d COMPLETE (twfe=%.3f, eb=%.3f, shaped=%.3f, λ=%s)",
+            ifb.trial.number, twfe_fitness, eb_fitness, shaped_fitness,
+            f"{shape_diag.lam:.2f}" if shape_diag.lam is not None
+                else f"pt:{shape_diag.passthrough_reason}",
         )
 
         if self._eval_log_path:
@@ -725,12 +758,14 @@ class StagedEvaluator:
             covariate = _build_covariate_vector(record)
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
-                ifb.build, ifb.completed_results, ranked_fitness,
+                ifb.build, ifb.completed_results, shaped_fitness,
                 raw_fitness=eb_fitness,
                 eb_fitness=eb_fitness,
                 twfe_fitness=twfe_fitness,
                 engine_stats=ifb.engine_stats,
                 covariate_vector=covariate.tolist(),
+                shape_lambda=shape_diag.lam,
+                shape_passthrough_reason=shape_diag.passthrough_reason,
                 pruned=False, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
@@ -901,13 +936,109 @@ class StagedEvaluator:
             time_mult=self._config.matchup_time_mult,
         )
 
-    def _rank_fitness(self, fitness: float) -> float:
-        """A3: Convert fitness to quantile rank in [0, 1]."""
-        n = len(self._completed_fitness_values)
-        if n <= 1:
-            return 0.5
-        rank = sum(1 for v in self._completed_fitness_values if v <= fitness)
-        return rank / n
+    def _track_shape_summary(self, diag: _ShapeDiag) -> None:
+        """Accumulate A3 Box-Cox activation stats for the end-of-run log.
+
+        Emits the one-shot "A3 Box-Cox activated" INFO log the first time
+        the transform runs cleanly (both `diag.lam is not None` and no
+        passthrough reason). The `transformed_constant` edge case
+        populates both `lam` and `passthrough_reason` — we record λ for
+        the history but still count the passthrough reason for the summary
+        breakdown, and do not treat it as the first clean activation.
+        """
+        if diag.lam is not None:
+            self._shape_lambda_history.append(diag.lam)
+        if diag.passthrough_reason is not None:
+            self._shape_passthrough_reasons[diag.passthrough_reason] += 1
+        if (
+            diag.lam is not None
+            and diag.passthrough_reason is None
+            and not self._shape_first_activation_logged
+        ):
+            logger.info(
+                "A3 Box-Cox activated at n=%d completed builds (first λ=%.3f)",
+                len(self._completed_fitness_values), diag.lam,
+            )
+            self._shape_first_activation_logged = True
+
+
+@dataclass(frozen=True)
+class _ShapeDiag:
+    """Diagnostic side-band from `_shape_fitness`.
+
+    `lam` carries the fitted Box-Cox λ when the transform ran, else None;
+    `passthrough_reason` is populated exactly when `lam is None`.
+    """
+    lam: float | None
+    passthrough_reason: str | None
+
+
+def _shape_fitness(
+    eb_fitness: float,
+    completed_values: Sequence[float],
+    config: ShapeConfig,
+) -> tuple[float, _ShapeDiag]:
+    """A3 — Box-Cox output warping of the EB posterior mean to [0, 1].
+
+    Pure function. Fits λ via `scipy.stats.boxcox` on the positivised
+    completed-values population, transforms the current `eb_fitness` under
+    the same λ, and min-max rescales the transformed value into [0, 1]
+    for JSONL schema stability. Monotone in `eb_fitness` (preserves Spearman
+    ρ) and gradient-preserving at the tails — replaces the pre-5E quantile
+    rank that discarded top-quartile magnitudes.
+
+    Passthrough fallbacks:
+      * `n <= 1` → return exactly 0.5 (preserves pre-5E n≤1 contract)
+      * `n < config.min_samples` → min-max scaling against the population
+      * `ptp(completed_values) < config.positivise_epsilon` → 0.5 (constant)
+
+    Raises `ValueError` on non-finite `eb_fitness` — upstream NaN is an
+    invariant violation in TWFE or EB shrinkage, not unknown game data,
+    so warn-don't-crash does not apply.
+    """
+    if not math.isfinite(eb_fitness):
+        raise ValueError(f"Non-finite eb_fitness: {eb_fitness}")
+
+    values = np.asarray(completed_values, dtype=float)
+    n = len(values)
+    if n <= 1:
+        return 0.5, _ShapeDiag(lam=None, passthrough_reason="n<1")
+
+    eps = config.positivise_epsilon
+    ptp = float(np.ptp(values))
+    if n < config.min_samples:
+        lo, hi = float(values.min()), float(values.max())
+        if hi - lo < eps:
+            return 0.5, _ShapeDiag(lam=None, passthrough_reason="constant")
+        val = float(np.clip((eb_fitness - lo) / (hi - lo), 0.0, 1.0))
+        return val, _ShapeDiag(lam=None, passthrough_reason="n<min_samples")
+    if ptp < eps:
+        return 0.5, _ShapeDiag(lam=None, passthrough_reason="constant")
+
+    shift = float(values.min()) - eps
+    positivised = values - shift
+    transformed, lam = boxcox(positivised)
+    # Clamp current eb_fitness to the population's positivised range before
+    # transform — Box-Cox requires strictly-positive inputs, and outliers
+    # outside the population range must saturate at the interval boundary
+    # anyway. The pre-transform clamp is monotone-equivalent to the post-
+    # transform clip and avoids NaN propagation for extreme `eb_fitness`.
+    pos_current = float(np.clip(
+        eb_fitness - shift, positivised.min(), positivised.max(),
+    ))
+    current = boxcox(np.array([pos_current]), lmbda=lam)
+    lo, hi = float(transformed.min()), float(transformed.max())
+    if hi - lo < eps:
+        # Pathological λ collapsed the transformed population — report with
+        # a distinct reason so the JSONL doesn't show "Box-Cox ran with λ=x"
+        # paired with a constant 0.5 output.
+        return 0.5, _ShapeDiag(
+            lam=float(lam), passthrough_reason="transformed_constant",
+        )
+    val = float(np.clip(
+        (float(current[0]) - lo) / (hi - lo), 0.0, 1.0,
+    ))
+    return val, _ShapeDiag(lam=float(lam), passthrough_reason=None)
 
 
 def _append_eval_log(
@@ -923,6 +1054,8 @@ def _append_eval_log(
     twfe_fitness: float | None = None,
     engine_stats: "EngineStats | None" = None,
     covariate_vector: list[float] | None = None,
+    shape_lambda: float | None = None,
+    shape_passthrough_reason: str | None = None,
     pruned: bool = False,
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
@@ -932,9 +1065,11 @@ def _append_eval_log(
     Completed builds write the full audit triple:
       - twfe_fitness: pre-shrinkage α̂ from TWFE decomposition
       - eb_fitness:   post-shrinkage posterior mean (γ̂ᵀX fused with α̂)
-      - fitness / raw_fitness: post-A3 rank-shaped value fed to Optuna
+      - fitness / raw_fitness: post-A3 Box-Cox-shaped value fed to Optuna
+      - shape_lambda / shape_passthrough_reason: A3 diagnostic — λ when
+        Box-Cox ran, reason string when A3 fell through to min-max scaling
     plus `engine_stats` + `covariate_vector` so the EB computation is reproducible
-    from the log alone. Pruned builds omit these EB-specific fields.
+    from the log alone. Pruned builds omit these EB/A3-specific fields.
     """
     record = {
         "hull_id": hull_id,
@@ -977,6 +1112,11 @@ def _append_eval_log(
         }
     if covariate_vector is not None:
         record["covariate_vector"] = [float(x) for x in covariate_vector]
+    if not pruned:
+        record["shape_lambda"] = (
+            float(shape_lambda) if shape_lambda is not None else None
+        )
+        record["shape_passthrough_reason"] = shape_passthrough_reason
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")

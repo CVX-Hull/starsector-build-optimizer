@@ -23,7 +23,7 @@ Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (TWFE deco
 Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
 Phase 5C:  Opponent Curriculum ─────────────── ✓ COMPLETE (TWFE replaced Elo; anchor-first, incumbent overlap)
 Phase 5D:  EB Shrinkage of A2 (fusion) ────── ✓ COMPLETE 2026-04-18 — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic prior (3 engine-computed MutableShipStats reads + 3 Python-raw offense/range aggregates + composite_score; HN + triple-goal rank correction). Fusion paradigm, not conditioning. Feature set sized by sweep + variance audit on the 2026-04-17 Hammerhead run — candidate engine features with near-zero per-hull-run variance (eff_hull_hp, eff_max_speed, eff_shield_damage_mult) were dropped in favor of features with empirically-validated spread
-Phase 5E:  A3 Shape Revision (Box-Cox) ────── PLANNED — simulation-validated in experiments/signal-quality-2026-04-17
+Phase 5E:  A3 Shape Revision (Box-Cox) ────── ✓ COMPLETE 2026-04-18 — scipy.stats.boxcox replaces quantile rank at A3; refit per-call on the post-5D EB posterior-mean population, min-max-rescaled to [0, 1]; ShapeConfig.min_samples=8 floor with min-max passthrough. Post-5D re-validation (experiments/signal-quality-5d-2026-04-18/): ceiling 25% → 0.5%, top-5 overlap 0.02 → 0.44 (14×), invariant across 4 covariate-strength regimes
 Phase 5F:  Regime-Segmented Optimization ──── PLANNED — user-selectable progression tier (mask hullmods/weapons/hulls by rarity tags at search_space.py); CMDP feasibility alignment. Default `mid` reclaims ~80% of compute budget from the Hammerhead 89% exploit cluster
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
 Phase 6:   Cloud Worker Federation ─────────── PLANNED (NEXT) — study federation across many (hull, regime, seed) units; each study ≤24 workers to keep TPE in efficient zone; Hetzner CCX33 Ashburn primary + AWS c7a us-west-2 fallback; campaign manager with hard cost cap; pre-baked Packer images; auto-terminate on plateau. Unlocks $1000-scale campaigns at linear $→data scaling
@@ -316,7 +316,7 @@ Improve the signal-to-noise ratio of combat fitness evaluations and increase eva
 | 5B | Sequential evaluation, WilcoxonPruner, ASHA scheduling | ✓ COMPLETE (integrated in `StagedEvaluator`) |
 | 5C | Opponent curriculum — anchor-first + incumbent overlap + fixed pre-burn-in | ✓ COMPLETE |
 | 5D | EB shrinkage of A2 — replaces scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic regression prior (HN + triple-goal). Covariate vector: 3 engine-computed `MutableShipStats` reads (Java SETUP emit: eff_max_flux, eff_flux_dissipation, eff_armor_rating) + 3 Python-raw (total_weapon_dps, engagement_range, kinetic_dps_fraction) + `composite_score` | ✓ COMPLETE (2026-04-18, fusion design ship-gate-validated at Δρ=+0.036/+0.057 p=16; conditioning-paradigm v1 refuted, see §4.5 of phase5d-covariate-adjustment.md). Post-ship TTK-signal investigation (2026-04-18, §7 of phase5d-covariate-adjustment.md): 8th-covariate extensions not shipped, routed to 5F as opt-in `eb_extra_covariates` |
-| 5E | A3 shape revision — Box-Cox replaces rank-shape-with-ceiling | PLANNED (research + simulation validated) |
+| 5E | A3 shape revision — Box-Cox output warping replaces quantile rank. `scipy.stats.boxcox` fit on the `_completed_fitness_values` population every `_finalize_build` (~1ms at n=300), min-max-rescaled to `[0, 1]`; `ShapeConfig.min_samples=8` floor with min-max-scaling passthrough; non-finite input raises `ValueError`; new JSONL `shape_lambda`/`shape_passthrough_reason` + per-trial λ logger + end-of-run summary. CAT opponent selection remains deferred. | ✓ COMPLETE (2026-04-18, re-validated under 5D: ceiling 25% → 0.5%, top-5 overlap 0.02 → 0.44 (14×), invariant across covariate-strength regimes; see `experiments/signal-quality-5d-2026-04-18/`) |
 | 5F | Regime-segmented optimization — user-selectable progression tier; hard mask on hullmods/weapons/hulls at `search_space.py`; CMDP feasibility alignment; default `mid` | PLANNED (research complete, 16-field literature sweep 2026-04-17) |
 | 5G | Adversarial opponent curriculum — PSRO-style pool growth | DEFERRED (research complete) |
 
@@ -349,8 +349,8 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 | Finding | Impact | Fix | Status |
 |---|---|---|---|
 | 89% of completed builds cluster on a rare-faction-hullmod exploit (shrouded_lens, shrouded_mantle, fragment_coordinator, neural_integrator) providing passive AoE damage | TPE's posterior pulls toward the exploit cluster; ranking within cluster is noise; outputs require endgame content unreachable in normal play | User-selectable progression regime (Phase 5F) — hard mask on hullmods/weapons/hulls at `search_space.py` per rarity tags; CMDP feasibility alignment (Altman 1999, Huang & Ontañón 2020); default `mid` regime reclaims ~80% of compute for deployment-reachable builds. Adversarial pool growth remains as Phase 5G fallback if 5F does not resolve exploit concentration | Planned (5F); 5G deferred |
-| A3 rank-shape clamps top quartile to fitness=1.0; 25.3% of trials tie at the ceiling with raw TWFE α ranging only 0.48–0.82 (theoretical max 1.5) | Optimiser cannot distinguish top-cluster winners; TPE has no gradient at the top | Replace rank-shape with Box-Cox output warping; simulation Δρ = +0.070 (p = 0.0001), ceiling 25.3% → 0.4% | Planned (5E) |
-| Opponent pool lacks peers that can defeat strong exploit builds (peer Hammerhead variants force timeouts but not kills) | Matchup scores censor at HP-diff ≈ 1.0; pool-side ceiling correlated with build strength | CAT Fisher-info opponent selection + Sympson-Hetter exposure control (simulation +0.05 Δρ, marginal) | Planned (5E secondary) |
+| A3 rank-shape compresses top quartile — 25.3% of trials tie at the ceiling with raw TWFE α ranging only 0.48–0.82; top-k identification overlap near zero | Optimiser cannot distinguish top-cluster winners; TPE has no gradient at the top | Replace rank-shape with Box-Cox output warping; 2026-04-18 re-validation under Phase 5D: ceiling 25% → 0.5%, top-5 overlap 0.02 → 0.44 (14×), invariant across covariate-strength regimes | ✓ Shipped 5E (2026-04-18) |
+| Opponent pool lacks peers that can defeat strong exploit builds (peer Hammerhead variants force timeouts but not kills) | Matchup scores censor at HP-diff ≈ 1.0; pool-side ceiling correlated with build strength | CAT Fisher-info opponent selection + Sympson-Hetter exposure control (simulation +0.014 Δρ on top of Box-Cox, marginal) | Deferred (revisit post-5F) |
 | Per-frame Java harness extensions (flux, overload duration, engagement distance) proposed as the original Phase 5D | Would inject hand-designed intermediate signals with hand-tuned weights | REJECTED (bitter lesson) — replaced by EB shrinkage toward a heuristic-predicted prior (5D) | ✗ Rejected |
 | Hand-weighted composite fitness proposed as Phase 5D.1 | Weight choice encodes a human prior about combat-behaviour quality | REJECTED (bitter lesson) — replaced by EB shrinkage with OLS-learned γ̂ | ✗ Rejected |
 | Covariate-adjusted TWFE via FWL + PDS lasso + ICP proposed as Phase 5D v1 | Treats heuristic as an exogenous covariate and partials it out of Y; but heuristic is a noisy proxy of the estimand α (Cinelli-Forney-Pearl 2022 "Case 8" bad control). Synthetic Δρ = −0.35 vs plain TWFE (p<0.0001, n=20); Hammerhead LOOO Δρ = −0.13, missed +0.02 ship gate by 7×. Closed form: ρ(α̂_CUPED, α) = √(1−R) where R = heuristic reliability, so stronger heuristic ⇒ more damage | REJECTED — replaced by fusion-paradigm EB shrinkage (HN + triple-goal). See `experiments/phase5d-covariate-2026-04-17/REPORT.md` and `FUSION_REPORT.md` | ✗ Rejected |
@@ -419,13 +419,13 @@ Applied downstream of α̂_EB: a **triple-goal rank correction** (Lin, Louis & S
 
 **Rejected alternatives:** covariate-adjusted TWFE via FWL + PDS + ICP (conditioning paradigm, refuted empirically — see `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite fitness, per-frame Java harness tracking, one-factor CFA (fails on real data due to indicator heterogeneity), MISO. Full design and rejection rationale in `docs/reference/phase5d-covariate-adjustment.md`.
 
-**Phase 5E — A3 Shape Revision (PLANNED)**
+**Phase 5E — A3 Shape Revision (✓ COMPLETE 2026-04-18)**
 
-Replace the top-quartile-clamped rank shape at `src/starsector_optimizer/optimizer.py:812-818` with Box-Cox output warping: fit `λ̂` via `scipy.stats.boxcox` over completed-trial fitnesses, refit every N trials, min-max scale to [0, 1] for Optuna. Monotone, ties-preserving, no ceiling clamp.
+Replaced the quantile rank at `src/starsector_optimizer/optimizer.py::_shape_fitness` with Box-Cox output warping. `scipy.stats.boxcox` refits `λ̂` on the positivised `_completed_fitness_values` population on every `_finalize_build` call (~1ms at n=300; documented deviation from the research-doc's "refit every N trials" — batched refit saves nothing and adds a (λ, shift, min, max) cache-coherence burden against the rolling min-max rescale window). The current trial's `eb_fitness` is transformed under the same λ via the `boxcox(scalar, lmbda=λ)` overload and min-max rescaled to `[0, 1]` for JSONL schema stability. Monotone (preserves Spearman ρ), gradient-preserving at the tails. Below `ShapeConfig.min_samples=8` (analogy to `eb_min_builds`; plan-introduced floor) A3 falls through to min-max scaling. Non-finite input raises `ValueError` — upstream NaN is an invariant violation, fail fast. New JSONL `shape_lambda`/`shape_passthrough_reason`, per-trial λ logger, end-of-run "A3 Box-Cox summary" line.
 
-Secondary (optional): CAT Fisher-info opponent selection for the non-anchor, non-incumbent-forced opponent slots, capped with Sympson-Hetter exposure control. Orthogonal to Box-Cox; simulation shows the combination strictly dominates either alone but CAT's marginal over Box-Cox alone is not statistically significant at n=20.
+Secondary (deferred): CAT Fisher-info opponent selection. Post-5D re-validation showed CAT + Box-Cox (strategy J) adds Δρ = +0.014 (p = 0.019) over Box-Cox alone, but CAT is an observation-side change with wider surface area. Revisit after Phase 5F regime-segmented optimization settles the opponent-selection architecture.
 
-Rejected alternatives: CFS-weighted TWFE (regime-mismatched at 10-active-per-trial budget), EM-Tobit TWFE (Amemiya 1984 MSE-gain condition not met at observed ~12% censoring), full MAP-Elites (2-4 orders of magnitude below viable budget). Full Wilcoxon-ranked simulation results in `docs/reference/phase5e-shape-revision.md` and `experiments/signal-quality-2026-04-17/REPORT.md`.
+Rejected alternatives (same as before): CFS-weighted TWFE (regime-mismatched at 10-active-per-trial budget), EM-Tobit TWFE (Amemiya 1984 MSE-gain condition not met at observed ~12% censoring; additionally the 2026-04-18 revalidation showed Tobit + 5D regresses ρ by ~0.09 because Tobit α̂ distribution mismatches the OLS-fit EB prior), full MAP-Elites (2-4 orders of magnitude below viable budget). Full Wilcoxon-ranked simulation results in `docs/reference/phase5e-shape-revision.md` §3 and `experiments/signal-quality-5d-2026-04-18/REPORT.md`.
 
 **Phase 5F — Regime-Segmented Optimization (PLANNED)**
 
@@ -540,42 +540,57 @@ Step 7: Ship gate — replay on 2026-04-17 Hammerhead eval log
     Δρ ≈ +0.31 — real-data value pending post-Java-emit replay.
 ```
 
-#### Phase 5E — Box-Cox A3 (and optional CAT)
+#### Phase 5E — Box-Cox A3 (implemented 2026-04-18)
 
 ```
-Step 1: Replace _rank_fitness in src/starsector_optimizer/optimizer.py:812-818
-  - Fit lambda via scipy.stats.boxcox over accumulated completed-trial fitnesses (refit every N trials, stored on the evaluator)
-  - Apply transform, min-max scale to [0, 1] for Optuna reporting consistency
-  - Update spec 24 (optimizer) to describe the new A3
-  - Add unit tests: monotone preservation, no ties on distinct inputs, handles degenerate (all-equal) input, scales to [0, 1]
+Replaced `_rank_fitness` in src/starsector_optimizer/optimizer.py with a
+module-level pure function `_shape_fitness(eb_fitness, completed_values,
+config)` returning `(float, _ShapeDiag)`:
+  - Refit λ via scipy.stats.boxcox on every _finalize_build call — ~1ms at
+    n=300; documented deviation from the research doc's "every N trials"
+    (batched refit saves nothing, would add (λ, shift, min, max) cache
+    coherence burden against the rolling min-max rescale window).
+  - Transform via boxcox(scalar, lmbda=λ) overload; min-max rescale to
+    [0, 1] for JSONL schema stability.
+  - ShapeConfig(min_samples=8, positivise_epsilon=1e-6) — below min_samples
+    A3 falls through to min-max scaling (monotone in eb_fitness, preserves
+    warm-up ordering for TPE). Constant population → 0.5. Non-finite input
+    raises ValueError (upstream NaN = invariant violation, fail fast).
+  - New JSONL fields: shape_lambda + shape_passthrough_reason.
+  - New logging: one-shot "A3 Box-Cox activated at n=…" INFO log, per-trial
+    line with λ or pt:<reason>, end-of-run "A3 Box-Cox summary" line.
+  - 14 unit tests + 1 end-to-end at tests/test_optimizer.py::TestShapeFitness
+    all pass; full suite 497 passed.
 
-Step 2 (optional, secondary): CAT Fisher-info opponent selection
-  - After anchor + incumbent-overlap selection fills N_anchor + N_incumbent slots,
-    fill remainder by argmax expected Fisher info given current posterior on alpha_i
-  - Cap reuse via Sympson-Hetter exposure control
-  - Preserve WilcoxonPruner step-ID stability: anchors remain at fixed step positions
+Validation (experiments/signal-quality-5d-2026-04-18/):
+  - Ceiling 25% → 0.5% (50× reduction), top-5 overlap 0.02 → 0.44 (14×),
+    invariant across 4 covariate-strength regimes.
+  - Δρ D vs A = +0.006 (near-zero by design; both transforms monotone —
+    the win is mechanical at the top quartile, not ρ).
+  - CAT Fisher-info opponent selection (J strategy) showed +0.014 ρ on
+    top of Box-Cox but remains deferred (observation-side change; revisit
+    post-5F).
 
-Step 3: Ship gate — re-run the Hammerhead 1000-trial budget on 5E alone. Verify:
-  - Ceiling saturation drops from ~25% to <2%
-  - Exploit-cluster builds spread on fitness scale (pairwise fitness distances > 1e-3)
-  - TPE convergence trace shows continued improvement past the prior-run plateau
+Ship gate — TODO: re-run Hammerhead 1000-trial budget with 5D+5E enabled,
+verify top-k identification overlap improves over the 2026-04-17 reference.
 ```
 
 ### Expected Impact
 
-| Metric | Current (5A + 5B + 5C) | After 5D | After 5E | After 5D + 5E |
-|--------|------------------------|----------|----------|----------------|
+| Metric | Current (5A + 5B + 5C) | After 5D | After 5E (shipped 2026-04-18) | After 5D + 5E |
+|--------|------------------------|----------|--------------------------------|----------------|
 | Opponent coverage | 10/54 via curriculum | 10/54 | 10/54 | 10/54 |
-| A3 ceiling saturation | 25.3% | 25.3% | <2% (simulation: 0.4%) | <2% |
-| ρ(predicted, true) — Spearman | 0.280 (Hammerhead LOOO baseline) | 0.316 (+0.036 from EB shrinkage, validated) | 0.47 projected (Box-Cox simulation) | ~0.50 (orthogonal composition) |
-| Exploit-cluster internal spread ρ | 0.31 (simulation) | ~0.34 | 0.38 | ~0.40 |
-| Timeout-tier discrimination | Flat | Per-build gradient from prior-mean regression γ̂ᵀX_i | Flat | Gradient + spread |
+| A3 ceiling saturation | 25.3% | 25.3% | 0.3% (post-5D sim, `signal-quality-5d-2026-04-18/`) | 0.3% |
+| Top-5 identification overlap | 0.05 | 0.03 | **0.43 (14× over 5D, post-5D sim)** | 0.43 |
+| ρ(predicted, true) — Spearman | 0.280 (Hammerhead LOOO baseline) | 0.316 (+0.036 from EB shrinkage, validated) | +0.006 over 5D (both monotone; the win is top-k/ceiling, not ρ) | ~0.32 on Hammerhead LOOO (pending post-ship replay) |
+| Exploit-cluster internal spread ρ | 0.31 (simulation) | 0.68 (post-5D sim) | 0.69 (post-5D sim) | 0.69 |
+| Timeout-tier discrimination | Flat | Per-build gradient from prior-mean regression γ̂ᵀX_i | Gradient preserved through A3 (not clamped) | Gradient + spread |
 
-Phase 5E is the biggest signal-quality win per engineering-hour among the fitness-estimator phases; Phase 5D is orthogonal and complementary. Phase 5F (regime-segmented optimization) is orthogonal to all of 5A–5E and directly addresses the exploit-cluster concentration by restricting the optimizer's input space rather than changing the estimator. Phase 5G (adversarial opponent curriculum) stays deferred as an empirical next step if 5D+5E+5F does not fully resolve exploit convergence within the unrestricted `endgame` regime.
+Phase 5E's contribution is mechanical — Box-Cox preserves the α̂-proportional gradient at the top quartile that quantile rank destroyed. ρ barely moves (both A3 transforms are monotone); top-k overlap and ceiling saturation are the metrics that track the real win. Phase 5D supplies the ρ gain; Phase 5E keeps that gain visible to TPE's `l(x)` at the top. Phase 5F (regime-segmented optimization) is orthogonal to all of 5A–5E and directly addresses the exploit-cluster concentration by restricting the optimizer's input space rather than changing the estimator. Phase 5G (adversarial opponent curriculum) stays deferred as an empirical next step if 5D+5E+5F does not fully resolve exploit convergence within the unrestricted `endgame` regime.
 
 ### Testing
 - **Phase 5D**: unit tests for `eb_shrinkage` (synthetic known-γ recovery; degenerate limits `σ̂²→0`, `σ̂²→∞`, `τ̂²=0` floor; MoM identifiability) and `triple_goal_rank` (exact rank preservation, histogram equality). Integration ablation on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` with LOOO ship-gate per §3.3 of `phase5d-covariate-adjustment.md`.
-- **Phase 5E**: simulation validation complete (`experiments/signal-quality-2026-04-17/`). Production validation re-runs Hammerhead 1000-trial budget post-ship.
+- **Phase 5E**: `tests/test_optimizer.py::TestShapeFitness` (14 unit tests + 1 end-to-end, all passing); simulation re-validation at `experiments/signal-quality-5d-2026-04-18/` confirms ceiling 25% → 0.5%, top-5 0.02 → 0.44, invariant across 4 covariate-strength regimes (`calibration_sweep.py`). Production validation re-runs Hammerhead 1000-trial budget post-ship.
 - **Phase 5F**: ship-gate = replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` with the `mid` mask applied — verify (a) top-10 composition no longer contains `shrouded_lens` / `fragment_coordinator` / `neural_integrator` builds, (b) within-regime TPE convergence trace at matched in-regime trial count is comparable to the unmasked run, (c) a forward sanity run at N=300 with `mid` and `endgame` presets produces visibly distinct top clusters (endgame dominates on raw fitness; mid dominates on composite_score among deployment-reachable builds).
 - **Phase 5G**: research only. Promoting to implementation requires extending the synthetic generative model with RPS-counterable exploits — the current flat-uplift exploit cannot validate exploiter-loop gains.
 

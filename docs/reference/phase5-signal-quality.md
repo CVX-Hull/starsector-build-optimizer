@@ -171,10 +171,10 @@ Maintain running mean/std per opponent. Z-score each matchup result before avera
 **A2′. Empirical-Bayes Shrinkage** *(replaced scalar control variate in Phase 5D, 2026-04-18)*
 Fuses TWFE α̂ with a regression prior on 7 pre-matchup covariates (3 engine-computed `MutableShipStats` reads + 3 Python-raw offense/range aggregates + `composite_score`) via a closed-form two-level Gaussian model. Posterior mean `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂²/(τ̂² + σ̂_i²)`, followed by Lin-Louis-Shen triple-goal rank correction to restore the raw histogram. See spec 28 §EB Shrinkage and `phase5d-covariate-adjustment.md`. The original Phase 5A scalar control variate `fitness_adj = fitness_sim - c * (heuristic_score - E[heuristic])` shipped but was superseded by 5D — fusion paradigm beats conditioning on noisy proxies of the estimand (Cinelli-Forney-Pearl 2022 "Case 8").
 
-**A3. Rank-Based Fitness Shaping**
-Report quantile rank to Optuna instead of raw composite score. Spreads out the dense losing cluster where most signal lives.
+**A3. Box-Cox Output Warping** *(replaced quantile rank in Phase 5E, 2026-04-18)*
+Report Box-Cox-shaped value to Optuna instead of quantile rank. `scipy.stats.boxcox` fits `λ̂` by MLE on the positivised `_completed_fitness_values` population every `_finalize_build` call, then min-max rescales to `[0, 1]`. Monotone (preserves Spearman ρ) while restoring α̂-proportional gradient at the tails — quantile rank was also monotone but discarded magnitude information, compressing the top quartile into an evenly-spaced grid that TPE's `l(x)` could not exploit. Below `ShapeConfig.min_samples=8` (by analogy to `eb_min_builds`) A3 falls through to min-max scaling. See spec 24 §A3 and `phase5e-shape-revision.md`.
 
-*Expected impact: CoV reduction from 0.41 to ~0.25. No extra evaluations.*
+*Impact on the 2026-04-18 synthetic re-validation: ρ delta vs rank is near-zero by design (both monotone), but **ceiling saturation collapses 25% → 0.5% and top-5 identification overlap lifts 0.02 → 0.44 (14×)**. Robust across 4 covariate-strength regimes.*
 
 ### Phase B: Sequential Evaluation Pipeline (main change)
 
