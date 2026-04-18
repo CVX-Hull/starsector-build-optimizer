@@ -10,6 +10,7 @@ from __future__ import annotations
 import abc
 import base64
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Sequence
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,12 @@ if TYPE_CHECKING:
 
 _TAG_KEY = "Project"
 _TAG_PREFIX = "starsector"
+
+# SG deletion has to wait for ENI detachment from terminated instances; the
+# AWS-observed upper bound is ~3 min. Polling every 10s keeps the probe loop
+# tight without hammering the API.
+_SG_DELETE_DEADLINE_SECONDS = 300.0
+_SG_DELETE_POLL_INTERVAL_SECONDS = 10.0
 _HETZNER_STUB_MESSAGE = (
     "HetznerProvider is stubbed; implement when campaign budget >= $500. "
     "Hetzner's ~13% per-matchup advantage amortizes only at larger scale. "
@@ -162,6 +169,13 @@ class AWSProvider(CloudProvider):
             "SecurityGroupIds": [sg_id],
             "UserData": user_data_b64,
             "InstanceMarketOptions": {"MarketType": "spot"},
+            # Default device name for Ubuntu AMIs. Without DeleteOnTermination:
+            # true the root volume persists as "available" for a few minutes
+            # after instance termination, triggering a transient audit leak.
+            "BlockDeviceMappings": [{
+                "DeviceName": "/dev/sda1",
+                "Ebs": {"DeleteOnTermination": True},
+            }],
             "TagSpecifications": [
                 {
                     "ResourceType": "instance",
@@ -214,16 +228,16 @@ class AWSProvider(CloudProvider):
                 for itype in config.instance_types
             ],
         }]
+        # Fleet type is "instant" — ephemeral, no fleet resource left behind
+        # to clean up. `MaintenanceStrategies` (CapacityRebalance) is only
+        # valid on `Type="maintain"` fleets per EC2 API; we rely on the
+        # Redis janitor + matchup_id dedup to recover from spot interruption
+        # instead of pre-interruption capacity rebalancing.
+        spot_options: dict[str, Any] = {
+            "AllocationStrategy": config.spot_allocation_strategy,
+        }
         response = client.create_fleet(
-            SpotOptions={
-                "AllocationStrategy": config.spot_allocation_strategy,
-                "MaintenanceStrategies": {
-                    "CapacityRebalance": {
-                        "ReplacementStrategy": "launch"
-                        if config.capacity_rebalancing else "no-op",
-                    },
-                },
-            },
+            SpotOptions=spot_options,
             TargetCapacitySpecification={
                 "TotalTargetCapacity": target,
                 "DefaultTargetCapacityType": "spot",
@@ -292,6 +306,15 @@ class AWSProvider(CloudProvider):
             logger.warning("delete_launch_template failed in %s: %s", region, e)
 
     def _delete_security_group(self, region: str, tag: str) -> None:
+        """Delete the SG, retrying past AWS's ENI-detach delay.
+
+        After `terminate_instances` returns, AWS keeps the instance's ENIs
+        attached to the SG for up to ~3 min while the network teardown runs.
+        Attempting delete during this window fails with DependencyViolation.
+        We poll-retry rather than leaving a leak for final_audit.sh to flag —
+        the retry is bounded so a genuinely stuck SG (e.g. still used by an
+        unexpected instance we missed) still surfaces.
+        """
         client = self._client(region)
         try:
             existing = client.describe_security_groups(
@@ -302,14 +325,21 @@ class AWSProvider(CloudProvider):
             return
         if not existing:
             return
-        try:
-            client.delete_security_group(GroupId=existing[0]["GroupId"])
-            logger.info("deleted security group %s in %s", tag, region)
-        except Exception as e:
-            # SG deletion can race with in-flight instance tear-downs (AWS
-            # holds the SG until all instances fully terminate). Log + move
-            # on; final_audit.sh will flag any persistent leak.
-            logger.warning("delete_security_group failed in %s: %s", region, e)
+        group_id = existing[0]["GroupId"]
+        deadline = time.monotonic() + _SG_DELETE_DEADLINE_SECONDS
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                client.delete_security_group(GroupId=group_id)
+                logger.info("deleted security group %s in %s", tag, region)
+                return
+            except Exception as e:
+                last_error = e
+                time.sleep(_SG_DELETE_POLL_INTERVAL_SECONDS)
+        logger.warning(
+            "delete_security_group gave up after %.0fs in %s: %s",
+            _SG_DELETE_DEADLINE_SECONDS, region, last_error,
+        )
 
     # ---- introspection -------------------------------------------------------
 
