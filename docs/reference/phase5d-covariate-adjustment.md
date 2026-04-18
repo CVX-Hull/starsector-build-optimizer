@@ -20,7 +20,7 @@ Three categories of pre-matchup signal are available per build:
 
 The current shipped A2 uses only (1). The question this doc answers: **which subset of these signals should form the covariate vector `X_i` in the empirical-Bayes prior regression — and at what dimension?**
 
-The answer — derived in §2.7 from a feature-count × dataset-size sweep on a realistic-throughput simulator — is a conservative **8-feature** vector: 4 engine-computed stats from the Java harness + 3 Python primitives + 1 calibrated heuristic scalar. Rationale and the rejected higher-dimensional alternative are in §2.7.
+The answer — derived in §2.7 from (a) a feature-count × dataset-size sweep on a realistic-throughput simulator and (b) an empirical variance audit on the 2026-04-17 Hammerhead run — is a conservative **7-feature** vector: 3 engine-computed physics stats + 3 Python-raw offense/range aggregates + 1 calibrated heuristic scalar. Rationale and the rejected higher-dimensional alternatives are in §2.7.
 
 The post-matchup outputs of the harness (`duration_seconds`, `hp_differential`, `damage_efficiency`, `overload_count_differential`, `peak_time_remaining`, `armor_fraction_remaining`) are **excluded by design** — see §2.5.
 
@@ -43,8 +43,8 @@ where:
 
 - **`α̂_i`** is the Phase 5A TWFE estimate of build i's fitness.
 - **`σ̂_i²`** is its squared standard error. Computed from TWFE residuals as `σ̂_ε² / n_i`, where `σ̂_ε²` is the pooled residual variance and `n_i` is the number of opponents build i was evaluated against.
-- **`X_i ∈ ℝ^8`** is the pre-matchup covariate vector — 4 engine-computed stats + 3 Python primitives + 1 calibrated heuristic scalar, standardized column-wise. Full feature list and selection rationale in §2.7.
-- **`γ ∈ ℝ^9`** (OLS coefficient vector including intercept) defines the regression prior mean `γᵀ [1, X_i]`.
+- **`X_i ∈ ℝ^7`** is the pre-matchup covariate vector — 3 engine-computed physics stats + 3 Python-raw offense/range aggregates + 1 calibrated heuristic scalar, standardized column-wise. Full feature list and selection rationale in §2.7.
+- **`γ ∈ ℝ^8`** (OLS coefficient vector including intercept) defines the regression prior mean `γᵀ [1, X_i]`.
 - **`τ²`** is the residual variance of α around the regression prior — the unexplained between-build variance.
 
 Both `γ` and `τ²` are estimated empirically from the same data they will be applied to — this is the "empirical" in empirical Bayes, after Robbins 1956 / Efron & Morris 1975 / Ignatiadis & Wager 2022.
@@ -81,7 +81,7 @@ The residual variance of `α̂` around the OLS fit decomposes additively into `�
 - High `τ̂²` (heuristic is a weak predictor of α overall) → `w_i → 1` uniformly → prior contributes little.
 - Low `τ̂²` (heuristic strongly predicts α) → `w_i < 1` → prior pulls hard.
 
-The whole computation is closed-form, ~10 lines of NumPy, O(N·k) per pass where N = #builds, k = 8. Sub-millisecond at our scale.
+The whole computation is closed-form, ~10 lines of NumPy, O(N·k) per pass where N = #builds, k = 7. Sub-millisecond at our scale.
 
 ### 2.3 Where it lives in the pipeline
 
@@ -178,51 +178,77 @@ A synthetic sweep (504 cells = 6 seeds × {200, 368, 900} N × {0,1,2,4,8,13,20}
 
 Full report: `experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`.
 
-#### The 8-feature ship set
+#### Variance audit against the 2026-04-17 Hammerhead run
 
-Targeting p = 8 (the knee of the diminishing-returns curve, p/N = 0.04 at N = 200):
+Before finalizing the feature list, candidate engine-computed and Python-raw features were cross-checked against their empirical variance on the 313-build Hammerhead log. Several plausible candidates from first principles turned out to have near-zero variance in per-hull runs:
+
+| Candidate feature | Modifying hullmods in our Python model | Usage in Hammerhead run | Variance verdict |
+|---|---|---:|---|
+| `eff_max_flux` | flux_capacitors (raw 0–20) + any flux mods | capacitors always varying | **HIGH** ✓ |
+| `eff_flux_dissipation` | flux_vents (raw 0–20) + safetyoverrides | vents always varying | **HIGH** ✓ |
+| `eff_armor_rating` | heavyarmor (1 build), shield_shunt (32), assault_package (85) | 10–27% modified | **MODERATE** ✓ |
+| `eff_hull_hp` | reinforcedhull (8 builds), assault_package partial | 3–27% modified | **LOW–MODERATE** ✗ |
+| `eff_max_speed` | safetyoverrides (1 build) | 0.3% | **NEAR-ZERO** ✗ |
+| `eff_shield_damage_mult` | hardenedshieldemitter (10 builds) | 3.2% | **NEAR-ZERO** ✗ |
+
+`eff_max_speed` and `eff_shield_damage_mult` are defensible *in theory* (speed governs engagement-range control, shield efficiency is a 2.5× multiplier on shield EHP in cross-hull runs), but **within a per-hull run** they are effectively hull-constants. `eff_hull_hp` sits on the margin — the Reinforced-Bulkheads binary + Assault-Package partial bonus probably yields ±20–30% spread, borderline informative — but the low-confidence variance argues for dropping in the initial ship set. All three can return if the design generalizes to cross-hull aggregation.
+
+The three surviving engine features — `eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating` — each have well-established continuous variance from raw build primitives (capacitors, vents) plus the scattered effects of the exploit-cluster hullmods (shrouded_lens, escort_package, neural_integrator, assault_package). The Java engine's authoritative hullmod-effect computation captures these cleanly; our Python `compute_effective_stats` would miss the 50+ unmodeled hullmods' contributions.
+
+#### The 7-feature ship set
+
+Targeting p = 7 after the variance audit (sweep interpolation at p = 7 between p = 4 and p = 8: Δρ ≈ +0.30 at N = 368, well above the +0.02 gate):
 
 | # | Feature | Source | Tier |
 |---|---|---|---|
 | 1 | `eff_max_flux` | Java `MutableShipStats.getMaxFlux()` at SETUP | Engine-computed |
 | 2 | `eff_flux_dissipation` | Java `MutableShipStats.getFluxDissipation().getModifiedValue()` | Engine-computed |
 | 3 | `eff_armor_rating` | Java armor grid + stat bonuses, post-hullmod | Engine-computed |
-| 4 | `eff_hull_hp` | Java `ship.getHullSpec().getHitpoints() × hull_hp_mult` | Engine-computed |
-| 5 | `total_weapon_dps` | Python — raw sum of equipped-weapon DPS, no type weighting | Python raw |
-| 6 | `n_hullmods` | `len(Build.hullmods)` | Python raw |
-| 7 | `op_used_fraction` | `Build.op_spent / hull.ordnance_points` | Python raw |
-| 8 | `composite_score` | `ScorerResult.composite_score` | Python composite (calibrated) |
+| 4 | `total_weapon_dps` | Python — raw sum of equipped-weapon DPS, no type weighting | Python raw |
+| 5 | `engagement_range` | Python `ScorerResult.engagement_range` (DPS-weighted mean) | Python raw |
+| 6 | `kinetic_dps_fraction` | Python `kinetic_dps / max(total_dps, ε)` — hard-flux pressure axis | Python raw |
+| 7 | `composite_score` | `ScorerResult.composite_score` | Python composite (calibrated) |
 
-Coverage of information axes: flux-cap (1), flux-sustain (2), armor-defense (3), hull-defense (4), offense (5), build-complexity (6), investment-intensity (7), calibrated ensemble (8). Each axis gets exactly one feature.
+Coverage of information axes: flux-cap (1), flux-sustain (2), armor-defense (3), offense magnitude (4), engagement style (5), hard-flux pressure (6), calibrated ensemble (7). Missing axes — hull-HP, speed, shield — are hull-constants in per-hull runs and would add variance only in cross-hull contexts.
 
-#### What's dropped from the earlier 16-feature candidate
+#### Why each Python-raw feature (4–6) is admissible
 
-| Dropped | Reason |
-|---|---|
-| `kinetic_dps`, `he_dps`, `energy_dps`, `fragmentation_dps` | Type decomposition is a theory; raw `total_weapon_dps` is admissible as a pure sum |
-| `flux_balance`, `flux_efficiency` | Subsumed by engine-computed flux capacity + dissipation |
-| `effective_hp`, `armor_ehp`, `shield_ehp` | Subsumed by engine-computed armor + hull HP + flux cap |
-| `range_coherence`, `engagement_range`, `damage_mix`, `op_efficiency` | Hand-weighted composites; drop for conservatism |
-| `flux_vents`, `flux_capacitors` | Already baked into `eff_max_flux` / `eff_flux_dissipation` — direct redundancy |
+- **`total_weapon_dps`** — sum over equipped weapons of their sustained DPS (`damage_per_shot × burst_size / cycle_time`). No type weighting, no range gating, no burst adjustment. A pure sum of game-data primitives; admissible as a raw aggregate.
+- **`engagement_range`** — DPS-weighted mean weapon range, already computed by `scorer.py:90–95`. Predicts kite-vs-brawl dynamics; high variance from weapon choice plus targeting-unit hullmods (16% usage). "DPS-weighted mean" is a pure statistic of the build's weapon list, not a hand-picked composite.
+- **`kinetic_dps_fraction`** — the ratio of kinetic DPS to total DPS. Kinetic damage forces hard flux (per game-mechanics.md §5), which dissipates only when shields are down and soft flux is cleared. A build dealing 80% kinetic pressures flux very differently than one dealing 20% kinetic, even at identical `total_weapon_dps`. Added to recover the hard-flux axis the earlier 8-feature set missed.
 
-Features 1–4 **replace** hand-engineered Python equivalents rather than supplementing them. This is the bitter-lesson move — the engine's hullmod-effect computation is authoritative.
+#### What's dropped from all prior candidate sets
 
-#### Expected Δρ at p = 8
+| Dropped | From | Reason |
+|---|---|---|
+| `kinetic_dps`, `he_dps`, `energy_dps`, `fragmentation_dps` | 16-feature v1 | Type decomposition is a theory; `total_weapon_dps` + `kinetic_dps_fraction` covers the relevant axes |
+| `flux_balance`, `flux_efficiency` | 16-feature v1 | Subsumed by engine-computed flux capacity + dissipation |
+| `effective_hp`, `armor_ehp`, `shield_ehp` | 16-feature v1 | Subsumed by engine-computed armor (+ eff_hull_hp/shield_eff dropped for variance) |
+| `range_coherence`, `damage_mix`, `op_efficiency` | 16-feature v1 | Hand-weighted composites; conservative drop |
+| `flux_vents`, `flux_capacitors` | 16-feature v1 | Baked into `eff_max_flux` / `eff_flux_dissipation` |
+| `n_hullmods` | 8-feature v2 | Hammerhead empirical ρ with fitness = 0.039 (no signal); type matters, not count, and type-indicators would bake exploit mods into the prior |
+| `op_used_fraction` | 8-feature v2 | Repair operator greedily fills OP; observed 0.95–1.0 range → near-zero variance |
+| `eff_hull_hp` | 9-feature v3 | Only 1 Python-modeled HP hullmod; Assault Package provides some variance but it's an exploit-cluster mod |
+| `eff_max_speed` | 9-feature v3 | Only 1/313 builds used the sole speed-modifying hullmod (Safety Overrides) |
+| `eff_shield_damage_mult` | 9-feature v3 | Only 10/313 builds used Hardened Shields; `advancedshieldemitter` modifies turn rate, not efficiency |
 
-Interpolating from the sweep (FEATURE_COUNT_REPORT.md §Findings):
+#### Expected Δρ at p = 7
 
-| N | Expected Δρ(HN − A0) at p = 8, p_noise = 0 |
+Interpolating from `FEATURE_COUNT_REPORT.md` between p = 4 (+0.28) and p = 8 (+0.32):
+
+| N | Expected Δρ(HN − A0) at p = 7, p_noise = 0 |
 |---|---:|
-| 200 | +0.337 |
-| 368 | +0.323 |
-| 900 | +0.352 |
+| 200 | ≈ +0.32 |
+| 368 | ≈ +0.31 |
+| 900 | ≈ +0.34 |
 
-All three clear the ship gate by ≥ 16×. The current 16-feature validation (§3.3) observed +0.036 on 5-probe Hammerhead LOOO. The 8-feature set's projected Δρ drops by ~0.03 on synthetic but is expected to recover most of that on real data where the engine-computed features strictly dominate the dropped Python composites.
+All clear the +0.02 ship gate by ≥ 15×.
 
 #### When to revisit
 
-- **Add the 9th / 10th feature** (kinetic_dps and he_dps) only if ship-gate is tight post-validation. Sweep shows Δρ gain ≈ +0.02 at N ≥ 368; negligible at N = 200.
-- **Drop to p = 6** (remove n_hullmods + op_used_fraction) only if production runs routinely land at N < 150. Not expected given current throughput.
+- **Add back `eff_hull_hp`, `eff_max_speed`, `eff_shield_damage_mult`** for cross-hull aggregate runs where they regain real variance. Per-hull runs remain at p = 7.
+- **Add `mean_damage_per_shot`** (DPS-weighted) only if ship-gate is tight post-validation and armor-penetration burst matters empirically — this is mild theory injection and is a last resort.
+- **Drop to p = 6** (remove `kinetic_dps_fraction`) only if production runs routinely land at N < 150. Not expected given current throughput.
 
 ---
 
@@ -236,9 +262,9 @@ All three clear the ship gate by ≥ 16×. The current 16-feature validation (§
   - `TWFEResult` named tuple returning `(alpha, beta, sigma_i)`, where `sigma_i` comes from pooled residual MSE / n_i.
   - `eb_shrinkage(alpha, sigma_i, X_build, tau2_floor_frac=0.05) → (alpha_eb, gamma, tau2)`: the two-level EB closed-form from §2.2.
   - `triple_goal_rank(posterior, raw) → alpha_ebt`: the one-line histogram substitution from §2.4.
-- **`src/starsector_optimizer/optimizer.py`** — delete `_apply_control_variate`, `_refit_control_variate`, `_cv_beta`, `_cv_heuristic_mean`. Replace with one call to `eb_shrinkage` at `_finalize_build`. Route the build's 8-dim feature vector from the trial params + parsed `EngineStats`.
-- **`src/starsector_optimizer/combat_fitness.py`** — expose per-build pre-matchup feature vector combining `ScorerResult.composite_score`, `total_weapon_dps`, `n_hullmods`, `op_used_fraction` with the 4 engine-computed stats from `EngineStats`.
-- **`src/starsector_optimizer/result_parser.py`** — add `EngineStats` dataclass (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `eff_hull_hp`) and parse the new `setup_stats` block from the matchup result JSON.
+- **`src/starsector_optimizer/optimizer.py`** — delete `_apply_control_variate`, `_refit_control_variate`, `_cv_beta`, `_cv_heuristic_mean`. Replace with one call to `eb_shrinkage` at `_finalize_build`. Route the build's 7-dim feature vector from the trial params + parsed `EngineStats`.
+- **`src/starsector_optimizer/combat_fitness.py`** — expose per-build pre-matchup feature vector combining `ScorerResult.composite_score`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction` (new — simple ratio of existing per-type DPS) with the 3 engine-computed stats from `EngineStats`.
+- **`src/starsector_optimizer/result_parser.py`** — add `EngineStats` dataclass (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`) and parse the new `setup_stats` block from the matchup result JSON.
 - **`src/starsector_optimizer/models.py`** — add `ShrinkageConfig` frozen dataclass with `enable: bool = True`, `tau2_floor_frac: float = 0.05`, `triple_goal: bool = True`. Replace the scalar `_cv_beta` fields in `OptimizerConfig` with this.
 - **`docs/specs/28-deconfounding.md`** — extend to describe the EB shrinkage step with σ_i estimation and the triple-goal correction.
 - **`docs/specs/09-combat-protocol.md`**, **`docs/specs/12-result-writer.md`**, **`docs/specs/13-combat-harness-plugin.md`** — extend `MatchupResult` schema with `setup_stats` block; document the SETUP-phase emit.
@@ -249,13 +275,12 @@ All three clear the ship gate by ≥ 16×. The current 16-feature validation (§
   - `ship.getMutableStats().getMaxFlux().getModifiedValue()` → `eff_max_flux`
   - `ship.getMutableStats().getFluxDissipation().getModifiedValue()` → `eff_flux_dissipation`
   - Summed armor across the `ArmorGridAPI` (or bonus-adjusted base) → `eff_armor_rating`
-  - `ship.getHullSpec().getHitpoints() × ship.getMutableStats().getHullBonus().getModifiedValue()` → `eff_hull_hp`
 
-  Stash the 4-tuple on the matchup state.
-- **`combat-harness/src/main/java/starsector/combatharness/ResultWriter.java`** — extend the emitted JSON with `"setup_stats": {eff_max_flux, eff_flux_dissipation, eff_armor_rating, eff_hull_hp}` alongside the existing combat outcomes.
+  Stash the 3-tuple on the matchup state. (Hull-HP, speed, and shield-efficiency reads are deferred; they have near-zero empirical variance in per-hull runs — see §2.7 variance audit.)
+- **`combat-harness/src/main/java/starsector/combatharness/ResultWriter.java`** — extend the emitted JSON with `"setup_stats": {eff_max_flux, eff_flux_dissipation, eff_armor_rating}` alongside the existing combat outcomes.
 - Java tests and integration test covering the new emit (spec-driven — see `.claude/skills/ddd-tdd.md`).
 
-No new Python runtime dependencies. `scipy.linalg.lstsq` + NumPy is sufficient. Estimated code size: ~80 lines net in `deconfounding.py`, ~15 lines deleted from `optimizer.py`, ~40 lines total Java (CombatHarnessPlugin + ResultWriter + test), ~25 lines Python parser + EngineStats dataclass, ~30 lines of spec updates.
+No new Python runtime dependencies. `scipy.linalg.lstsq` + NumPy is sufficient. Estimated code size: ~80 lines net in `deconfounding.py`, ~15 lines deleted from `optimizer.py`, ~30 lines total Java (CombatHarnessPlugin + ResultWriter + test), ~20 lines Python parser + EngineStats dataclass, ~30 lines of spec updates.
 
 ### 3.2 Tests
 

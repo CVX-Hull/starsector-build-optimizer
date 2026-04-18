@@ -22,7 +22,7 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
 Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (TWFE deconfounding, control variate, rank shape)
 Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
 Phase 5C:  Opponent Curriculum ─────────────── ✓ COMPLETE (TWFE replaced Elo; anchor-first, incumbent overlap)
-Phase 5D:  EB Shrinkage of A2 (fusion) ────── PLANNED — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward an 8-covariate heuristic prior (4 engine-computed MutableShipStats reads + 3 Python primitives + composite_score; HN + triple-goal rank correction). Fusion paradigm, not conditioning
+Phase 5D:  EB Shrinkage of A2 (fusion) ────── PLANNED — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic prior (3 engine-computed MutableShipStats reads + 3 Python-raw offense/range aggregates + composite_score; HN + triple-goal rank correction). Fusion paradigm, not conditioning. Feature set sized by sweep + variance audit on the 2026-04-17 Hammerhead run — candidate engine features with near-zero per-hull-run variance (eff_hull_hp, eff_max_speed, eff_shield_damage_mult) were dropped in favor of features with empirically-validated spread
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── PLANNED — simulation-validated in experiments/signal-quality-2026-04-17
 Phase 5F:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E
 Phase 6:   Quality-Diversity ───────────────── Build archetype mapping (pyribs)
@@ -312,7 +312,7 @@ Improve the signal-to-noise ratio of combat fitness evaluations and increase eva
 | 5A | TWFE decomposition + control variate + rank shape | ✓ COMPLETE (integrated in `StagedEvaluator`) |
 | 5B | Sequential evaluation, WilcoxonPruner, ASHA scheduling | ✓ COMPLETE (integrated in `StagedEvaluator`) |
 | 5C | Opponent curriculum — anchor-first + incumbent overlap + fixed pre-burn-in | ✓ COMPLETE |
-| 5D | EB shrinkage of A2 — replaces scalar CV with empirical-Bayes shrinkage of α̂ toward an 8-covariate heuristic regression prior (HN + triple-goal). Covariate vector: 4 engine-computed `MutableShipStats` reads (Java SETUP emit) + 3 Python primitives + `composite_score` | PLANNED (fusion design ship-gate-validated; feature-count sweep validated at p=8; conditioning-paradigm v1 refuted, see §4.5 of phase5d-covariate-adjustment.md) |
+| 5D | EB shrinkage of A2 — replaces scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic regression prior (HN + triple-goal). Covariate vector: 3 engine-computed `MutableShipStats` reads (Java SETUP emit: eff_max_flux, eff_flux_dissipation, eff_armor_rating) + 3 Python-raw (total_weapon_dps, engagement_range, kinetic_dps_fraction) + `composite_score` | PLANNED (fusion design ship-gate-validated; feature-count sweep + empirical variance audit drove p=7 selection; conditioning-paradigm v1 refuted, see §4.5 of phase5d-covariate-adjustment.md) |
 | 5E | A3 shape revision — Box-Cox replaces rank-shape-with-ceiling | PLANNED (research + simulation validated) |
 | 5F | Adversarial opponent curriculum — PSRO-style pool growth | DEFERRED (research complete) |
 
@@ -336,7 +336,7 @@ The first Hammerhead run (63 trials, 2026-04-13, `experiments/hammerhead-overnig
 | All opponents weighted equally in fitness | Beating a buffalo counts same as beating condor_Attack | TWFE decomposition — β_j captures opponent difficulty, α_i is schedule-adjusted | ✓ Fixed (5A) |
 | Random opponent ordering | WilcoxonPruner only pruned 11% of trials | Anchor-first ordering + rung-based step IDs for full pruner overlap | ✓ Fixed (5C) |
 | Frequent heartbeat timeouts (~every 3-5 min) | ~30-40% throughput loss on 4 instances | Robot pixel-polling + heartbeat touch-not-delete | ✓ Fixed |
-| `combat_fitness` ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Auxiliary signals (8-dim X: 4 engine-computed MutableShipStats + 3 Python primitives + composite_score) enter an EB prior on α̂_i via a between-build regression; shrinkage weights α̂_i vs γ̂ᵀX_i by relative precision | Planned (5D) |
+| `combat_fitness` ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Auxiliary signals (7-dim X: 3 engine-computed MutableShipStats + 3 Python-raw offense/range aggregates + composite_score) enter an EB prior on α̂_i via a between-build regression; shrinkage weights α̂_i vs γ̂ᵀX_i by relative precision | Planned (5D) |
 
 #### From second run (900 trials, 2026-04-17, `experiments/hammerhead-twfe-2026-04-13/`)
 
@@ -392,18 +392,17 @@ Posterior mean:
     w_i    = τ̂² / (τ̂² + σ̂_i²)
 ```
 
-`X_i` is the 8-dim pre-matchup covariate vector — selected by feature-count × dataset-size sweep (`experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`) targeting the p ≈ 8 diminishing-returns knee:
+`X_i` is the 7-dim pre-matchup covariate vector — selected by feature-count × dataset-size sweep (`experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`) **and** an empirical variance audit on the 2026-04-17 Hammerhead run (see §2.7 of `phase5d-covariate-adjustment.md`):
 
 1. `eff_max_flux` — Java `MutableShipStats.getMaxFlux()` at SETUP
 2. `eff_flux_dissipation` — Java `MutableShipStats.getFluxDissipation()` at SETUP
 3. `eff_armor_rating` — Java armor-grid summed post-hullmod
-4. `eff_hull_hp` — Java `ship.getHullSpec().getHitpoints() × hull_hp_mult`
-5. `total_weapon_dps` — Python raw sum over equipped weapons (no type weighting)
-6. `n_hullmods` — Python `len(Build.hullmods)`
-7. `op_used_fraction` — Python `op_spent / hull.ordnance_points`
-8. `composite_score` — Python `ScorerResult.composite_score` (calibrated heuristic scalar)
+4. `total_weapon_dps` — Python raw sum over equipped weapons (no type weighting)
+5. `engagement_range` — Python `ScorerResult.engagement_range` (DPS-weighted mean)
+6. `kinetic_dps_fraction` — Python `kinetic_dps / max(total_dps, ε)` (hard-flux pressure axis)
+7. `composite_score` — Python `ScorerResult.composite_score` (calibrated heuristic scalar)
 
-Engine-computed features 1–4 **replace** Python-side `compute_effective_stats` equivalents; the engine's hullmod-effect computation is authoritative. Closed-form, ~10 lines of NumPy, sub-millisecond per pass.
+Engine-computed features 1–3 **replace** Python-side `compute_effective_stats` equivalents; the engine's hullmod-effect computation is authoritative. Candidate engine features `eff_hull_hp`, `eff_max_speed`, and `eff_shield_damage_mult` were **dropped after the variance audit** — in per-hull runs they are effectively hull-constants (0.3–3% of Hammerhead builds used the relevant modifiers) and add no signal. They return as candidates if the design generalizes to cross-hull aggregation. Closed-form, ~10 lines of NumPy, sub-millisecond per pass.
 
 Applied downstream of α̂_EB: a **triple-goal rank correction** (Lin, Louis & Shen 1999) that preserves the EB rank ordering but substitutes the empirical TWFE α̂ histogram, preventing regression-to-the-mean compression from dulling Optuna's top-tail exploitation signal. Call the composed output `α̂_EBT`; that is the value fed to Phase 5E (Box-Cox).
 
@@ -433,15 +432,16 @@ Research-complete in `docs/reference/phase5e-shape-revision.md` §2.1. Deferred 
 Step 1: Java harness — emit setup_stats
   - combat-harness/.../CombatHarnessPlugin.java: at end of SETUP state,
     read MutableShipStats for eff_max_flux, eff_flux_dissipation,
-    eff_armor_rating, eff_hull_hp. Stash on matchup state.
+    eff_armor_rating. Stash on matchup state. (Hull-HP, speed, shield-eff
+    excluded — near-zero per-hull-run variance; see §2.7 variance audit.)
   - ResultWriter.java: extend JSON with "setup_stats": {...}.
-  - Java unit + integration tests covering the 4-field emit.
+  - Java unit + integration tests covering the 3-field emit.
   - Update specs 09-combat-protocol, 12-result-writer, 13-combat-harness-plugin.
 
 Step 2: Python parser — EngineStats
   - src/starsector_optimizer/result_parser.py: add EngineStats dataclass
-    (eff_max_flux, eff_flux_dissipation, eff_armor_rating, eff_hull_hp);
-    parse the setup_stats block.
+    (eff_max_flux, eff_flux_dissipation, eff_armor_rating); parse the
+    setup_stats block.
 
 Step 3: Extend src/starsector_optimizer/deconfounding.py
   - twfe_decompose returns (alpha, beta, sigma_i) — new sigma_i from pooled
@@ -458,11 +458,11 @@ Step 4: Delete A2 scalar control variate from src/starsector_optimizer/optimizer
   - In _finalize_build: call eb_shrinkage then triple_goal_rank, feeding the
     result into the existing A3 (or Box-Cox under Phase 5E) stage.
 
-Step 5: Route pre-matchup 8-dim X_i through src/starsector_optimizer/combat_fitness.py
+Step 5: Route pre-matchup 7-dim X_i through src/starsector_optimizer/combat_fitness.py
   - Expose per-build X_i = [eff_max_flux, eff_flux_dissipation,
-    eff_armor_rating, eff_hull_hp, total_weapon_dps, n_hullmods,
-    op_used_fraction, composite_score]. Engine stats from parsed EngineStats;
-    Python primitives from Build + ScorerResult.
+    eff_armor_rating, total_weapon_dps, engagement_range,
+    kinetic_dps_fraction, composite_score]. Engine stats from parsed
+    EngineStats; Python primitives from Build + ScorerResult.
   - Post-matchup harness outputs remain un-routed (Stage-1 timing rule).
 
 Step 6: Add ShrinkageConfig to models.py (enable, tau2_floor_frac,
@@ -482,8 +482,8 @@ Step 7: Ship gate — replay on 2026-04-17 Hammerhead eval log
   - Reference values validated in experiments/phase5d-covariate-2026-04-17/
     phase5d_fusion_validation.py (p=16): A0=0.280, A=0.259, EB=0.316,
     Δρ=+0.036 vs A0, +0.057 vs A.
-  - Projected at p=8 from feature_count_sweep.py (N≈368, synthetic):
-    Δρ ≈ +0.32 — real-data value pending post-Java-emit replay.
+  - Projected at p=7 from feature_count_sweep.py (N≈368, synthetic):
+    Δρ ≈ +0.31 — real-data value pending post-Java-emit replay.
 ```
 
 #### Phase 5E — Box-Cox A3 (and optional CAT)
