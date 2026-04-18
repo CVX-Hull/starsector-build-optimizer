@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Panic-button: stop all Starsector optimizer processes and clean up.
 
-Prefer Ctrl-C on the orchestrator — that triggers `InstancePool.__exit__` →
+Prefer Ctrl-C on the orchestrator — that triggers `LocalInstancePool.__exit__` →
 `teardown()` which writes shutdown signals and terminates processes cleanly.
 
 Use this script when:

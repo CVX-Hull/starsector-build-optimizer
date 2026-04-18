@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import shutil
 import subprocess
 import time
@@ -19,6 +20,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TextIO
 
+from .evaluator_pool import EvaluatorPool
 from .models import CombatResult, MatchupConfig
 from .result_parser import parse_results_file, write_queue_file
 
@@ -127,20 +129,24 @@ class GameInstance:
         return self.saves_common / "combat_harness_shutdown.data"
 
 
-class InstancePool:
-    """Manages N parallel game instances for combat evaluation.
+class LocalInstancePool(EvaluatorPool):
+    """Manages N parallel local game instances for combat evaluation.
+
+    Implements the EvaluatorPool ABC. Pool owns worker-selection; callers
+    invoke run_matchup(matchup) concurrently from up to num_workers threads
+    and the pool internally claims a free GameInstance for each call.
 
     Usage::
 
         config = InstanceConfig(game_dir=Path("game/starsector"), num_instances=4)
-        with InstancePool(config) as pool:
-            pool.setup()
-            result = pool.run_matchup(0, matchup)  # blocks until complete
+        with LocalInstancePool(config) as pool:
+            result = pool.run_matchup(matchup)  # blocks until complete
     """
 
     def __init__(self, config: InstanceConfig) -> None:
         self._config = config
         self._instances: list[GameInstance] = []
+        self._free_instances: queue.Queue[GameInstance] = queue.Queue()
 
     @property
     def game_dir(self) -> Path:
@@ -148,8 +154,8 @@ class InstancePool:
         return self._config.game_dir
 
     @property
-    def num_instances(self) -> int:
-        """Number of managed game instances."""
+    def num_workers(self) -> int:
+        """Number of concurrent matchups this pool can dispatch."""
         return len(self._instances)
 
     def setup(self) -> None:
@@ -169,12 +175,14 @@ class InstancePool:
             )
         self._config.instance_root.mkdir(parents=True, exist_ok=True)
         self._instances = []
+        self._free_instances = queue.Queue()
         for i in range(self._config.num_instances):
             work_dir = self._config.instance_root / f"instance_{i:03d}"
             display_num = self._config.xvfb_base_display + i
             inst = GameInstance(instance_id=i, work_dir=work_dir, display_num=display_num)
             self._create_work_dir(inst)
             self._instances.append(inst)
+            self._free_instances.put(inst)
 
     def teardown(self) -> None:
         """Signal all instances to shut down, then kill processes."""
@@ -186,14 +194,20 @@ class InstancePool:
             self._kill_instance(inst)
             inst.state = InstanceState.STOPPED
 
-    def run_matchup(self, instance_id: int, matchup: MatchupConfig) -> CombatResult:
-        """Run a single matchup on the specified instance. Blocks until complete.
+    def run_matchup(self, matchup: MatchupConfig) -> CombatResult:
+        """Run a single matchup on a pool-chosen instance. Blocks until complete.
 
-        Thread-safe per instance_id (each id called from at most one thread).
-        Raises InstanceError if the instance fails unrecoverably.
+        Thread-safe: up to num_workers concurrent calls are serialized through
+        the internal free-instance queue. Raises InstanceError if the chosen
+        instance fails unrecoverably.
         """
-        inst = self._instances[instance_id]
+        inst = self._free_instances.get()
+        try:
+            return self._run_matchup_on(inst, matchup)
+        finally:
+            self._free_instances.put(inst)
 
+    def _run_matchup_on(self, inst: GameInstance, matchup: MatchupConfig) -> CombatResult:
         # Clean restart if memory threshold exceeded
         if inst.total_matchups_processed >= self._config.clean_restart_matchups:
             self._kill_instance(inst)
@@ -225,7 +239,7 @@ class InstancePool:
                 inst.state = InstanceState.IDLE
                 if not results:
                     raise InstanceError(
-                        f"Instance {instance_id}: no results parsed")
+                        f"Instance {inst.instance_id}: no results parsed")
                 return results[0]
 
             if self._is_process_exited(inst):
@@ -256,13 +270,7 @@ class InstancePool:
                     continue
 
         raise InstanceError(
-            f"Instance {instance_id} in unexpected state: {inst.state}")
-
-    def __enter__(self) -> InstancePool:
-        return self
-
-    def __exit__(self, *args) -> None:
-        self.teardown()
+            f"Instance {inst.instance_id} in unexpected state: {inst.state}")
 
     # --- Work directory creation ---
 

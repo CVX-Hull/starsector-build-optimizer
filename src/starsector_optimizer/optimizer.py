@@ -27,7 +27,8 @@ from optuna.trial import TrialState, create_trial
 from scipy.stats import boxcox
 
 from .calibration import generate_diverse_builds
-from .instance_manager import InstanceError, InstancePool
+from .evaluator_pool import EvaluatorPool
+from .instance_manager import InstanceError
 from .models import (
     Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig,
     EngineStats, GameData, HullSize, MatchupConfig,
@@ -111,7 +112,7 @@ class BuildCache:
 def preflight_check(
     hull_id: str,
     game_data: GameData,
-    instance_pool: InstancePool,
+    pool: EvaluatorPool,
     opponent_pool: OpponentPool,
 ) -> None:
     """Validate all prerequisites before launching expensive simulation.
@@ -124,7 +125,10 @@ def preflight_check(
                          f"Available: {sorted(list(game_data.hulls.keys())[:10])}...")
 
     hull = game_data.hulls[hull_id]
-    game_dir = instance_pool.game_dir
+    game_dir = getattr(pool, "game_dir", None)
+    if game_dir is None:
+        # CloudWorkerPool has no local game_dir; skip the local-file checks.
+        return
 
     # Combat harness mod deployed
     mod_jar = game_dir / "mods" / "combat-harness" / "jars" / "combat-harness.jar"
@@ -449,7 +453,7 @@ class StagedEvaluator:
         hull: ShipHull,
         hull_id: str,
         game_data: GameData,
-        instance_pool: InstancePool,
+        pool: EvaluatorPool,
         opponent_pool: OpponentPool,
         cache: BuildCache,
         config: OptimizerConfig,
@@ -460,7 +464,7 @@ class StagedEvaluator:
         self._hull = hull
         self._hull_id = hull_id
         self._game_data = game_data
-        self._instance_pool = instance_pool
+        self._pool = pool
         self._cache = cache
         self._config = config
         self._distributions = distributions
@@ -504,48 +508,44 @@ class StagedEvaluator:
         in the main thread between wait() calls — no locks needed.
         """
         import time
-        from collections import deque
         from concurrent.futures import ThreadPoolExecutor, Future, wait, FIRST_COMPLETED
 
         self._run_start_time = time.time()
-        num_inst = self._instance_pool.num_instances
+        num_workers = self._pool.num_workers
         logger.info(
-            "Starting staged evaluation: %d instances, %d active / %d total opponents",
-            num_inst,
+            "Starting staged evaluation: %d workers, %d active / %d total opponents",
+            num_workers,
             min(self._config.active_opponents, len(self._opponents)),
             len(self._opponents),
         )
 
-        with ThreadPoolExecutor(max_workers=num_inst) as executor:
-            pending: dict[Future, tuple[int, _InFlightBuild]] = {}
-            free_instances: deque[int] = deque(range(num_inst))
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            pending: dict[Future, _InFlightBuild] = {}
 
-            self._fill_instances(executor, pending, free_instances)
+            self._fill_workers(executor, pending, num_workers)
 
             while pending:
                 done, _ = wait(pending.keys(), return_when=FIRST_COMPLETED)
 
                 for future in done:
-                    inst_id, ifb = pending.pop(future)
+                    ifb = pending.pop(future)
                     self._dispatched.discard(ifb.trial.number)
 
                     try:
                         result = future.result()
                     except InstanceError:
                         logger.error(
-                            "Instance %d failed for trial %d, scoring as %s",
-                            inst_id, ifb.trial.number,
+                            "Worker failed for trial %d, scoring as %s",
+                            ifb.trial.number,
                             self._config.failure_score,
                         )
                         self._study.tell(ifb.trial, self._config.failure_score)
                         self._trials_completed += 1
                         if ifb in self._queue:
                             self._queue.remove(ifb)
-                        free_instances.append(inst_id)
                         continue
 
                     self._handle_result(ifb, result)
-                    free_instances.append(inst_id)
 
                     if (self._trials_completed % self._config.log_interval == 0
                             or not pending):
@@ -559,8 +559,8 @@ class StagedEvaluator:
                             self._config.sim_budget, len(self._queue), best,
                         )
 
-                # Dispatch new work to all freed instances
-                self._fill_instances(executor, pending, free_instances)
+                # Dispatch new work up to the worker cap
+                self._fill_workers(executor, pending, num_workers)
 
         self._log_run_summary()
 
@@ -608,23 +608,23 @@ class StagedEvaluator:
         if diff > 1e-9:
             self._eb_activated_count += 1
 
-    def _fill_instances(self, executor, pending, free_instances) -> None:
-        """Dispatch matchups to all free instances."""
-        while free_instances:
+    def _fill_workers(self, executor, pending, num_workers) -> None:
+        """Dispatch matchups up to the worker concurrency cap. Pool owns
+        worker-selection; we only throttle to num_workers simultaneously
+        in flight so we don't over-subscribe the executor.
+        """
+        while len(pending) < num_workers:
             work = self._next_matchup()
             if work is None:
                 break
             ifb, matchup = work
-            inst_id = free_instances.popleft()
             logger.info(
-                "Dispatch trial %d rung %d/%d vs %s → instance %d",
+                "Dispatch trial %d rung %d/%d vs %s",
                 ifb.trial.number, ifb.rung + 1, len(ifb.opponents),
-                ifb.opponents[ifb.next_opponent_index], inst_id,
+                ifb.opponents[ifb.next_opponent_index],
             )
-            future = executor.submit(
-                self._instance_pool.run_matchup, inst_id, matchup,
-            )
-            pending[future] = (inst_id, ifb)
+            future = executor.submit(self._pool.run_matchup, matchup)
+            pending[future] = ifb
 
     def _next_matchup(self) -> tuple[_InFlightBuild, MatchupConfig] | None:
         """Pick the highest-priority matchup to dispatch next."""
@@ -1253,12 +1253,12 @@ def _append_eval_log(
 def optimize_hull(
     hull_id: str,
     game_data: GameData,
-    instance_pool: InstancePool,
+    pool: EvaluatorPool,
     opponent_pool: OpponentPool,
     config: OptimizerConfig,
 ) -> optuna.Study:
     """Main optimization entry point. Returns the Optuna study."""
-    preflight_check(hull_id, game_data, instance_pool, opponent_pool)
+    preflight_check(hull_id, game_data, pool, opponent_pool)
     hull = game_data.hulls[hull_id]
     space = build_search_space(hull, game_data, config.regime)
     distributions = define_distributions(space, fixed_params=config.fixed_params)
@@ -1304,14 +1304,15 @@ def optimize_hull(
             target_space=space,
         )
 
-    warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)
+    game_dir = getattr(pool, "game_dir", None)
+    warm_start(study, hull, game_data, config, game_dir=game_dir)
 
     evaluator = StagedEvaluator(
         study=study,
         hull=hull,
         hull_id=hull_id,
         game_data=game_data,
-        instance_pool=instance_pool,
+        pool=pool,
         opponent_pool=opponent_pool,
         cache=BuildCache(),
         config=config,

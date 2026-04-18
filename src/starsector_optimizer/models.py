@@ -6,6 +6,7 @@ Defines all dataclasses, enums, and computed properties used across modules.
 from __future__ import annotations
 
 import logging
+import dataclasses
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -536,6 +537,130 @@ REGIME_PRESETS: dict[str, RegimeConfig] = {
     "late": REGIME_LATE,
     "endgame": REGIME_ENDGAME,
 }
+
+
+# ---- Phase 6: Cloud Worker Federation ----------------------------------------
+
+
+@dataclass(frozen=True)
+class StudyConfig:
+    """One row in the campaign YAML's studies: list.
+
+    A StudyConfig with seeds=(0, 1, 2) fans out into three Optuna studies
+    (one subprocess each) sharing hull/regime/sampler/budget settings.
+    See docs/specs/22-cloud-deployment.md.
+    """
+    hull: str
+    regime: str
+    seeds: tuple[int, ...]
+    budget_per_study: int
+    workers_per_study: int
+    sampler: str
+
+
+@dataclass(frozen=True)
+class GlobalAutoStopConfig:
+    """Mirrors the YAML global_auto_stop: nested block."""
+    on_budget: str = "hard"              # "hard" | "soft"
+    on_plateau: bool = True
+
+
+@dataclass(frozen=True)
+class CampaignConfig:
+    """Top-level campaign descriptor loaded from YAML.
+
+    Immutable after `load_campaign_config`. __repr__ redacts the Tailscale
+    auth key so accidental logging does not leak it. Never pickled across
+    subprocesses; child processes re-parse the YAML path + pick up secrets
+    via env vars. See docs/specs/22-cloud-deployment.md.
+    """
+    name: str
+    budget_usd: float
+    provider: str                                   # "aws"
+    regions: tuple[str, ...]
+    instance_types: tuple[str, ...]
+    spot_allocation_strategy: str                   # "price-capacity-optimized"
+    capacity_rebalancing: bool
+    max_concurrent_workers: int
+    min_workers_to_start: int
+    partial_fleet_policy: str                       # "proceed_half_speed" | "abort"
+    ami_ids_by_region: dict[str, str]
+    ssh_key_name: str
+    tailscale_authkey_secret: str
+    studies: tuple[StudyConfig, ...]
+    global_auto_stop: GlobalAutoStopConfig = field(default_factory=GlobalAutoStopConfig)
+    max_lifetime_hours: float = 6.0
+    visibility_timeout_seconds: float = 120.0
+    janitor_interval_seconds: float = 60.0
+    worker_poll_margin_seconds: float = 5.0
+    fleet_provision_timeout_seconds: float = 600.0
+    result_timeout_seconds: float = 900.0
+    ledger_heartbeat_interval_seconds: float = 60.0
+    ledger_warn_thresholds: tuple[float, ...] = (0.5, 0.8, 0.95)
+    base_flask_port: int = 9000
+    teardown_retry_delay_seconds: float = 10.0
+    teardown_thread_join_seconds: float = 5.0
+
+    def __repr__(self) -> str:
+        fields = []
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            if f.name == "tailscale_authkey_secret":
+                value = "***REDACTED***"
+            fields.append(f"{f.name}={value!r}")
+        return f"CampaignConfig({', '.join(fields)})"
+
+
+@dataclass(frozen=True)
+class WorkerConfig:
+    """Per-worker config injected by cloud-init env vars at VM boot.
+
+    Immutable; the worker reads once at startup and never re-reads. __repr__
+    redacts bearer_token. Never serialized into the cost ledger or study DB.
+    """
+    campaign_id: str
+    worker_id: str
+    study_id: str
+    redis_host: str
+    redis_port: int
+    http_endpoint: str
+    bearer_token: str
+    max_lifetime_hours: float = 6.0
+    http_retry_count: int = 3
+    http_retry_base_seconds: float = 1.0
+    http_retry_max_seconds: float = 30.0
+    http_retry_backoff_multiplier: float = 2.0
+    http_post_timeout_seconds: float = 30.0
+    worker_poll_margin_seconds: float = 5.0
+    num_instances_per_worker: int = 2
+
+    def __repr__(self) -> str:
+        fields = []
+        for f in dataclasses.fields(self):
+            value = getattr(self, f.name)
+            if f.name == "bearer_token":
+                value = "***REDACTED***"
+            fields.append(f"{f.name}={value!r}")
+        return f"WorkerConfig({', '.join(fields)})"
+
+
+@dataclass(frozen=True)
+class CostLedgerEntry:
+    """One JSONL row in ~/starsector-campaigns/<name>/ledger.jsonl.
+
+    All fields primitive and secret-free. timestamp is ISO-8601 UTC.
+    """
+    timestamp: str
+    event_type: str                                 # "worker_heartbeat" | "worker_terminated" | "campaign_end"
+    worker_id: str
+    region: str
+    instance_type: str
+    hours_elapsed: float
+    delta_usd: float
+    cumulative_usd: float
+
+
+# ---- End Phase 6 -------------------------------------------------------------
 
 
 @dataclass(frozen=True)

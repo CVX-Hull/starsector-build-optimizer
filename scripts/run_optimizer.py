@@ -3,6 +3,7 @@
 
 import argparse
 import logging
+import os
 import signal
 import sys
 
@@ -12,13 +13,13 @@ from pathlib import Path
 
 from starsector_optimizer.models import REGIME_PRESETS
 from starsector_optimizer.parser import load_game_data
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.opponent_pool import discover_opponent_pool, get_opponents
 from starsector_optimizer.optimizer import OptimizerConfig, optimize_hull
 
 
 def _install_signal_handlers() -> None:
-    """Route SIGTERM/SIGHUP to KeyboardInterrupt so `with InstancePool(...)`
+    """Route SIGTERM/SIGHUP to KeyboardInterrupt so `with LocalInstancePool(...)`
     unwinds cleanly and game JVMs + Xvfb don't orphan.
 
     SIGINT already raises KeyboardInterrupt by default (Ctrl-C works).
@@ -58,6 +59,16 @@ def main():
                              "enqueued as warm-start seeds. Requires the prior "
                              "study to exist in the same --study-db. Typos fail "
                              "at argparse rather than at study-load time.")
+    parser.add_argument("--worker-pool", choices=["local", "cloud"], default="local",
+                        help="Where workers live. 'local' uses LocalInstancePool "
+                             "(JVMs on this host); 'cloud' uses CloudWorkerPool "
+                             "(workstation-as-orchestrator, AWS spot VMs; see "
+                             "docs/specs/22-cloud-deployment.md).")
+    parser.add_argument("--campaign-config", type=Path, default=None,
+                        help="Campaign YAML path. Required when --worker-pool=cloud.")
+    parser.add_argument("--study-idx", type=int, default=0,
+                        help="Study index within the campaign (used to compute "
+                             "Flask listener port). Required when --worker-pool=cloud.")
     args = parser.parse_args()
 
     if (args.warm_start_from_regime is not None
@@ -159,22 +170,54 @@ def main():
         _print_results(study, args.hull, game_data)
         return
 
-    instance_config = InstanceConfig(
-        game_dir=args.game_dir,
-        num_instances=args.num_instances,
-    )
-    try:
-        with InstancePool(instance_config) as pool:
-            pool.setup()
-            study = optimize_hull(
-                args.hull, game_data, pool, opponent_pool, config,
-            )
-    except KeyboardInterrupt:
-        logging.getLogger(__name__).warning(
-            "Interrupted — InstancePool.__exit__ ran teardown; if any JVMs/Xvfb "
-            "remain, use `uv run python scripts/stop_optimizer.py`."
+    if args.worker_pool == "cloud":
+        if args.campaign_config is None:
+            parser.error("--worker-pool=cloud requires --campaign-config")
+        from starsector_optimizer.campaign import load_campaign_config
+        from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
+        import redis as redis_module
+        campaign = load_campaign_config(args.campaign_config)
+        redis_client = redis_module.Redis(
+            host="localhost", port=6379, decode_responses=True,
         )
-        sys.exit(130)
+        study_cfg = campaign.studies[args.study_idx]
+        study_id = f"{study_cfg.hull}__{study_cfg.regime}__seed{study_cfg.seeds[0]}"
+        pool = CloudWorkerPool(
+            study_id=study_id,
+            redis_client=redis_client,
+            flask_port=campaign.base_flask_port + args.study_idx,
+            bearer_token=os.environ.get("STARSECTOR_BEARER_TOKEN", ""),
+            workers_per_study=study_cfg.workers_per_study,
+            result_timeout_seconds=campaign.result_timeout_seconds,
+            visibility_timeout_seconds=campaign.visibility_timeout_seconds,
+            janitor_interval_seconds=campaign.janitor_interval_seconds,
+        )
+        try:
+            with pool:
+                study = optimize_hull(
+                    args.hull, game_data, pool, opponent_pool, config,
+                )
+        except KeyboardInterrupt:
+            logging.getLogger(__name__).warning(
+                "Interrupted — CloudWorkerPool.__exit__ ran teardown."
+            )
+            sys.exit(130)
+    else:
+        instance_config = InstanceConfig(
+            game_dir=args.game_dir,
+            num_instances=args.num_instances,
+        )
+        try:
+            with LocalInstancePool(instance_config) as pool:
+                study = optimize_hull(
+                    args.hull, game_data, pool, opponent_pool, config,
+                )
+        except KeyboardInterrupt:
+            logging.getLogger(__name__).warning(
+                "Interrupted — LocalInstancePool.__exit__ ran teardown; if any "
+                "JVMs/Xvfb remain, use `uv run python scripts/stop_optimizer.py`."
+            )
+            sys.exit(130)
 
     _print_results(study, args.hull, game_data)
 

@@ -26,7 +26,7 @@ Phase 5D:  EB Shrinkage of A2 (fusion) ────── ✓ COMPLETE 2026-04-1
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── ✓ COMPLETE 2026-04-18 — scipy.stats.boxcox replaces quantile rank at A3; refit per-call on the post-5D EB posterior-mean population, min-max-rescaled to [0, 1]; ShapeConfig.min_samples=8 floor with min-max passthrough. Post-5D re-validation (experiments/signal-quality-5d-2026-04-18/): ceiling 25% → 0.5%, top-5 overlap 0.02 → 0.44 (14×), invariant across 4 covariate-strength regimes
 Phase 5F:  Regime-Segmented Optimization ──── complete (2026-04-18) — user-selectable loadout regime (hullmods + weapons; NOT hulls and NOT opponents per open-world framing) masked at search_space.py; one Optuna study per (hull, regime); cross-regime warm-start via `--warm-start-from-regime`. Default `early` (most conservative component-availability baseline)
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
-Phase 6:   Cloud Worker Federation ─────────── PLANNED (NEXT) — study federation across many (hull, regime, seed) units; each study ≤24 workers to keep TPE in efficient zone; Hetzner CCX33 Ashburn primary + AWS c7a us-west-2 fallback; campaign manager with hard cost cap; pre-baked Packer images; auto-terminate on plateau. Unlocks $1000-scale campaigns at linear $→data scaling
+Phase 6:   Cloud Worker Federation ─────────── PLANNED (NEXT) — study federation across many (hull, regime, seed) units; each study ≤24 workers to keep TPE in efficient zone; AWS c7a.2xlarge spot us-east-1+us-east-2 primary (existing quota ample at ~224 VMs), Hetzner CCX33 as post-$500 scale-up; campaign manager with hard cost cap; pre-baked Packer images; auto-terminate on plateau. $85 MVP: sampler bake-off (TPE vs CatCMAwM) BEFORE the prep, then 8 hulls × early × ~600 trials using the winning sampler
 Phase 7:   Structured Search-Space Repr ───── PLANNED — custom BoTorch GP: SAAS(hullmods) × transformed-overlap+attribute-Matérn(weapons) × slot-Matérn × opponent-features(smalls only) × gated-sentinel(conditional) + ICM residuals; πBO archetype priors; BOCA warm-start; ~2-4× sample efficiency. Renumbered from 6 — depends on Phase 6 cloud federation for multi-hull validation
 Phase 8:   Quality-Diversity ───────────────── Build archetype mapping (pyribs). Renumbered from 7
 Phase 9:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost). Renumbered from 8
@@ -160,11 +160,11 @@ Complete. 24 unit tests + 14 result parser tests passing. Integration-tested: 2 
 
 **Modules:**
 - `src/starsector_optimizer/result_parser.py` — Parse combat result JSON ↔ Python dataclasses, write queue files
-- `src/starsector_optimizer/instance_manager.py` — `InstancePool` manages N parallel game instances
+- `src/starsector_optimizer/instance_manager.py` — `LocalInstancePool` manages N parallel game instances (renamed from `InstancePool` in Phase 6; implements `EvaluatorPool` ABC)
 
 **Key classes:**
 - `InstanceConfig` — Pool configuration (game_dir, num_instances, batch_size, timeouts)
-- `InstancePool` — Main class: `setup()` → `evaluate(matchups)` → `teardown()`
+- `LocalInstancePool` — Main class: `setup()` → `run_matchup(matchup)` → `teardown()` (Phase 6 EvaluatorPool ABC subclass)
 - `GameInstance` — Tracks a single game instance (process handles, state, work directory)
 
 **Per-instance work directory:** Symlinks (absolute paths via `.resolve()`) to shared game files, real directories for `saves/`, `data/config/`, `data/variants/` (including subdirs), `mods/`. Total ~4MB per instance.
@@ -603,46 +603,61 @@ Phase 5E's contribution is mechanical — Box-Cox preserves the α̂-proportiona
 Spend $N of compute and get $N of useful data — linear $→data scaling from $10 validation runs to $1000+ catalog campaigns. Unlocks multi-hull × multi-regime studies that would take weeks on the workstation. Full design in `docs/reference/phase6-cloud-worker-federation.md`.
 
 ### Status
-**PLANNED (NEXT).** Precondition validated 2026-04-18: CPU cloud instances (AWS c7i.2xlarge, Hetzner CCX33) run Starsector at 2.2-2.4× local per-instance throughput after the LWJGL XRandR warmup fix (`instance_manager.py::_start_xvfb` now runs `xrandr --query` after Xvfb socket is ready). The original "GPU required" claim in spec 22 was a misdiagnosis of the XRandR mode-enumeration bug.
+**Infrastructure complete (2026-04-18).** Python modules (`campaign.py`, `cloud_provider.py`, `cloud_worker_pool.py`, `worker_agent.py`, `evaluator_pool.py`), spec 22 rewrite, Packer AMI template, and operator scripts (`launch_campaign.sh`, `status.sh`, `teardown.sh`, `final_audit.sh`, `probe.sh`, `bake_image.sh`) are shipped. Tests green (577/577). Validation probe, pipeline smoke, sampler benchmark, and prep campaign deferred to operational sessions. CPU cloud viability validated 2026-04-18 (2.2-2.4× local per-instance) with the LWJGL XRandR fix in `instance_manager.py::_start_xvfb`.
+
+### Budget staging
+**$85 combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget** (figures pinned by `experiments/phase6-planning/cost_model.py`). Campaign is **AWS-primary** (c7a.2xlarge spot, us-east-1 + us-east-2) because existing account vCPU quota is already ample (1,280 spot vCPU across the two regions = 160 eight-vCPU instances) — no quota ticket needed. Hetzner stays as a $500+ scale-up path. Line items:
+
+| Line | Cost |
+| --- | --- |
+| Validation probe + pipeline smoke | $1.35 |
+| **Sampler benchmark (runs BEFORE prep)** — 2 hulls × [TPE-24, CatCMAwM-24, CatCMAwM-48] × 1 hr | $14.83 |
+| Prep campaign — 8 hulls × `early` × 1 seed × 600 trials (incl 3% preemption) | $60.79 |
+| Slack | $5.00 |
+| **Total** | **$82 (rounded to $85)** |
+
+Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1-2 calendar days.
 
 ### Dependencies
-- Phase 3 (`InstancePool` — worker-local parallelism unchanged)
-- Phase 4 (`StagedEvaluator` already async-friendly)
-- Phase 5F (complete 2026-04-18; `(hull, regime)` is the natural federation unit — cloud federation and 5F are mutually enabling)
-- Python libs: `hcloud` (Hetzner), `boto3` (AWS), `redis`, `apache-libcloud` (provider abstraction), `packer` (image baking)
+- Phase 3 (`LocalInstancePool` — worker-local parallelism unchanged; renamed from `InstancePool` to become one backend of the `EvaluatorPool` ABC)
+- Phase 4 (`StagedEvaluator` — refactored to consume `EvaluatorPool` instead of the concrete pool)
+- Phase 5F (complete 2026-04-18; `(hull, regime, seed)` is the natural federation unit — cloud federation and 5F are mutually enabling)
+- Python libs: `boto3` (AWS, shipped), `redis`, `flask`, `pyyaml`, `packer` (image baking). Test-only: `moto` (AWS mocking), `fakeredis`. `hcloud-python` / `apache-libcloud` deferred to post-Phase-7 Hetzner scale-up path.
+- **No external lead-time blockers**. AWS quota is already sufficient; Hetzner quota ticket is deferred until the $500+ scale-up path activates.
 
 ### Key design decisions
 
 **Study federation is the #1 architectural lever.** Optuna TPE (with `constant_liar=True`) degrades to random-sampling above ~30 in-flight trials per study. A $1000 mega-study wastes ~85% of spend as random sampling. Federation: many independent studies keyed by `(hull, regime, seed)`, each with ≤24 workers. Outer parallelism via the campaign manager; inner parallelism stays in TPE's efficient regime. For BREADTH (which $1000 buys), federation beats any single-study scaling on a multimodal landscape.
 
-**Provider choice: Hetzner CCX33 Ashburn primary, AWS c7a us-west-2 fallback.** Hetzner is ~11% cheaper per matchup ($0.00109 vs $0.00123), has zero spot preemption, and Ashburn VA is 25-35 ms from NC. Existing `scripts/cloud/*.sh` already target it. AWS fallback for capacity diversification and spot-fleet diversification when Hetzner is full. Skip GPU cloud (not needed), ARM (LWJGL x86_64 only), DigitalOcean/Vultr/Linode (no spot).
+**Provider choice: AWS c7a.2xlarge spot primary for the $85 MVP, Hetzner deferred to $500+.** AWS is ~13% more expensive per matchup ($0.00123 vs Hetzner $0.00109) but existing account quota covers the 96-VM target with no lead time, while Hetzner's default 10-VM cap requires a 1-2 business-day ticket. At $85 the AWS premium is cheaper than a human-day of waiting; the trade inverts above $500 where the absolute cost delta (~$60+) exceeds a human-day of engineering. Skip GPU cloud (not needed), ARM (LWJGL x86_64 only), DigitalOcean/Vultr/Linode (no spot).
+
+**Two-region spread** (us-east-1 + us-east-2, 48 VMs each) for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` + `CapacityRebalancing` + diversified instance-type list (c7a.2xlarge, c7i.2xlarge, c7a.4xlarge, c7i.4xlarge) drops preemption rate to ~3%. A $1 **pre-flight validation probe** runs 24h before the campaign (2 spot VMs per target region from production AMI, boot test, record signal, tear down). **Graceful degradation**: if only 48-60 of 96 target VMs provision (spot-pool depletion), the campaign runs at half-speed rather than aborting — partial fleet is a latency problem, not a correctness problem. Below `min_workers_to_start` (default 48) it waits or aborts.
 
 **Sampler per study**: TPE default at ≤24 workers. CatCMAwM (already supported via `--sampler=catcma`) above 24. Hybrid schedule (random → CatCMAwM → TPE) for studies needing both breadth and precision.
 
-**Packer pre-baked images** cut worker cold-start from ~5 min to ~30s. At 200 workers, saves ~3 hours of wasted wall-clock per campaign. Images include `x11-xserver-utils` (needed for the XRandR warmup fix to work — see spec 22).
+**Packer pre-baked images — in scope from day 1, even at $85.** Marginal dollar savings are small (~$1); the load-bearing arguments are tail-latency collapse under burst provisioning, removal of bulk-apt / PyPI failure modes from the hot path, cheap mid-campaign worker replacement, and zero-cost amortization into future $500+ campaigns. AWS AMIs are region-scoped — build in us-east-1, `aws ec2 copy-image` to us-east-2 (~3-5 min, one-time; repeat on every Packer rebuild). Images include `x11-xserver-utils` (needed for the XRandR warmup fix — see spec 22).
 
-**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; manager auto-terminates at 100%. Per-worker `max_lifetime_hours` (default 4). Tag-based sweeper cron as orthogonal backstop. Teardown discipline enforced by `trap EXIT` in all launch scripts and by the `.claude/skills/cloud-worker-ops.md` SOP.
+**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; `CostLedger.record_heartbeat` raises `BudgetExceeded` at 100%. Per-worker `max_lifetime_hours` (default **6**; 6 covers the prep's 4.1-hour wall-clock — 4 would self-kill mid-run). Deferred operational backstops: tag-based sweeper cron and CloudWatch billing alarm. Teardown discipline: three layers — in-process `try/finally`, `atexit.register`, and shell `trap EXIT` in `launch_campaign.sh`. SOP at `.claude/skills/cloud-worker-ops.md`.
 
-**Orchestrator topology**: workstation holds the single Optuna Study (no distributed storage). Workers are pure `BuildSpec → CombatResult` evaluators. Study state is local SQLite per `(hull, regime, seed)`; workers rsync `study.db` back periodically. No PostgreSQL / JournalStorage / GrpcStorageProxy complexity — explicitly rejected because JournalStorage + GrpcProxy is broken in Optuna 4.2-4.4 (issue #6084) and direct PostgreSQL adds ops burden.
+**Orchestrator topology**: workstation holds every Optuna Study (no distributed storage). Workers are pure `MatchupConfig → CombatResult` evaluators — they never touch Optuna. Study state is local SQLite per `(hull, regime, seed)` on the orchestrator subprocess that owns it; `study.db` never leaves the orchestrator. Workers run `worker_agent.py` which pulls from Redis via `BRPOPLPUSH source → processing` and POSTs results to a per-study Flask listener. No PostgreSQL / JournalStorage / GrpcStorageProxy complexity — explicitly rejected because JournalStorage + GrpcProxy is broken in Optuna 4.2-4.4 (issue #6084) and direct PostgreSQL adds ops burden.
 
 ### Deliverables
 
-1. **`src/starsector_optimizer/campaign.py`** — campaign manager daemon (~500 LOC):
-   - `CampaignConfig` (frozen dataclass from YAML)
-   - `CampaignManager` (main orchestration loop, Redis-backed study queues)
-   - `CostLedger` (append-only JSONL, real-time cap enforcement)
-   - `PlateauDetector` (50-trial windowed best-fitness slope; auto-release workers)
-   - `WorkerAllocator` (provider-agnostic via Libcloud)
+1. **`src/starsector_optimizer/campaign.py`** — campaign manager (~400 LOC):
+   - `CampaignConfig` / `StudyConfig` / `WorkerConfig` / `CostLedgerEntry` / `GlobalAutoStopConfig` (frozen dataclasses in `models.py`; `__repr__` redacts secrets)
+   - `CampaignManager` (supervisor: provision EC2 Fleet → spawn subprocess-per-study → monitor → three-layer teardown)
+   - `CostLedger` (append-only JSONL + `fsync` per row + `BudgetExceeded` at cap)
+   - Plateau detector deferred to a follow-up commit
 
-2. **`src/starsector_optimizer/cloud_provider.py`** — provider abstraction ABC with Hetzner + AWS concrete subclasses; Mock for offline tests.
+2. **`src/starsector_optimizer/cloud_provider.py`** — `CloudProvider` ABC + `AWSProvider` (boto3 direct) + `HetznerProvider` `NotImplementedError` stub (unlock at $500+). Tests use `moto` for AWS mocking; no `MockProvider` class ships.
 
-3. **`src/starsector_optimizer/worker_agent.py`** — on-worker Python script: connects to orchestrator Redis, runs existing `run_optimizer.py` with queue-backed `InstancePool`, periodic study.db rsync back, self-terminate on `max_lifetime_hours`.
+3. **`src/starsector_optimizer/cloud_worker_pool.py` + `worker_agent.py`** — orchestrator-side pool (Redis reliable-queue + Flask `POST /result` listener + janitor thread) and on-worker loop (env-loaded `WorkerConfig`, `BRPOPLPUSH` source→processing, drive local `LocalInstancePool`, POST result, self-terminate on `max_lifetime_hours`). Worker never imports `repair` — AST-enforced.
 
-4. **`scripts/cloud/bake_image.sh`** — Packer wrapper for both Hetzner and AWS. One command rebuilds the baked image on game or dependency update.
+4. **`scripts/cloud/bake_image.sh`** — Packer wrapper for AWS. Builds AMI in us-east-1 then `aws ec2 copy-image` to us-east-2.
 
-5. **`scripts/cloud/federation/`** — new subdirectory: `launch_campaign.sh`, `status.sh`, `teardown.sh`, `final_audit.sh`.
+5. **`scripts/cloud/{launch_campaign,status,teardown,final_audit,probe}.sh`** — flat operator scripts; no `federation/` subdirectory. All pre-Phase-6 scripts (`deploy.sh`, `run.sh`, `collect.sh`, `sync-code.sh`, `cloud-init.yaml`, `aws/`) deleted.
 
-6. **`docs/specs/29-campaign.md`** — formal spec for `CampaignConfig`, YAML schema, protocol between orchestrator and workers.
+6. **`docs/specs/22-cloud-deployment.md`** — rewritten for Phase 6 architecture, preserving operationally load-bearing material (cloud-init packages, LWJGL/XRandR narrative, Lessons Learned). No new spec 29.
 
 7. **`.claude/skills/cloud-worker-ops.md`** — SOP for running campaigns. Invoked by future Claude sessions on any cloud-campaign ask.
 
@@ -656,10 +671,11 @@ Spend $N of compute and get $N of useful data — linear $→data scaling from $
 - Teardown audit: `final_audit.sh` reports zero tagged resources after any campaign exit.
 
 ### Expected impact
-- 2-hour burst of 30 workers delivers ~360 builds (vs 56 builds in 8-hour workstation run) for **$7.80** (Hetzner) or **$9** (AWS spot).
-- $1000 budget = ~49,000 builds = full Phase 5F validation (40 hulls × 4 regimes × ~300 builds) in 1-2 weeks of burst runs.
+- **$85 Phase 7 prep sequence** delivers (a) an empirically-selected sampler via the $14.83 pre-prep bake-off (§10 of `phase6-cloud-worker-federation.md`) and (b) cross-hull (F→D→C→CAP) early-regime data across 8 hulls × ~600 trials in ~4.1 hours at 96 AWS spot VMs split 48-48 across us-east-1 + us-east-2. Phase 7's attribute-kernel + per-hull role-mode mixture weights need exactly this cross-size transfer evidence to validate. Early-regime targeting is deliberate: late/endgame optima recover community meta, while early is the zone where novel-build discovery is load-bearing and also the tighter kernel test. Endgame follow-up is a cheap (~$15-20) supplementary run if Phase 7 reveals a gap.
+- 2-hour burst of 30 workers delivers ~360 builds (vs 56 builds in 8-hour workstation run) for **~$9** (AWS spot).
+- $1000 budget = ~49,000 builds = full Phase 5F validation (40 hulls × 4 regimes × ~300 builds) in 1-2 weeks of burst runs (post-Phase 7).
 - Frees the workstation for interactive work (editing, analysis, ad-hoc experiments).
-- Precondition for Phase 7 (BoTorch GP): cross-hull validation at 30+ hulls is not feasible on the workstation alone.
+- Precondition for Phase 7 (BoTorch GP): cross-hull validation at 8+ hulls is not feasible on the workstation alone.
 
 ### Rejected alternatives (full rationale in `phase6-cloud-worker-federation.md` §2-3)
 - **One mega-study with 100-200 workers**: TPE saturation wastes 85% of budget as random.

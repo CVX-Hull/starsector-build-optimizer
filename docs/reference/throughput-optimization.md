@@ -21,7 +21,7 @@ The optimizer evaluates ship builds by running AI-vs-AI combat in parallel Stars
 9. **After matchup** — writes results + done signal, calls `endCombat()`, Robot dismisses results screen
 10. **Mission restart** — TitleScreenPlugin detects new queue on title screen, auto-navigates to fresh mission
 
-Each game instance runs on its own Xvfb virtual display (1920x1080x24) with Mesa/llvmpipe software rendering. The `InstancePool` manages 4-8 parallel instances with health monitoring via heartbeat files.
+Each game instance runs on its own Xvfb virtual display (1920x1080x24) with Mesa/llvmpipe software rendering. The `LocalInstancePool` manages 4-8 parallel instances with health monitoring via heartbeat files.
 
 ### File Protocol
 
@@ -35,7 +35,7 @@ Each game instance runs on its own Xvfb virtual display (1920x1080x24) with Mesa
 
 ### Per-Instance Work Directory
 
-Symlinks to shared game files (~20GB read-only), real directories for `saves/`, `data/config/`, `data/variants/`, and `mods/` (~4MB per instance). Created by `InstancePool._create_work_dir()`.
+Symlinks to shared game files (~20GB read-only), real directories for `saves/`, `data/config/`, `data/variants/`, and `mods/` (~4MB per instance). Created by `LocalInstancePool._create_work_dir()`.
 
 ### Current Timing Breakdown
 
@@ -309,7 +309,7 @@ Player builds are constructed programmatically. Enemy variants (stock opponents)
 - Remove `write_variant_to_all()` calls from `evaluate_build()` / `optimize_hull()`
 - Remove `clean_optimizer_variants()`
 - Include build specs in matchup queue JSON instead of variant file references
-- `InstancePool._create_work_dir()` no longer needs variant directory management
+- `LocalInstancePool._create_work_dir()` no longer needs variant directory management
 
 #### Phase T2: Persistent Game Session — REVISED (Robot-click mission restart)
 
@@ -352,7 +352,7 @@ New `StagedEvaluator` class in `optimizer.py` that replaces the current flat `ev
 4. If `trial.should_prune()`: tell Optuna, discard remaining opponents
 5. If not pruned: enqueue build for next opponent
 
-**Instance pool interaction:** `InstancePool.evaluate()` is unchanged — it receives a list of matchups and returns results. The staged evaluator composes and routes; the pool executes.
+**Instance pool interaction:** `LocalInstancePool.evaluate()` is unchanged — it receives a list of matchups and returns results. The staged evaluator composes and routes; the pool executes.
 
 #### Phase T4: Cloud Deployment (Infrastructure, when local isn't enough)
 

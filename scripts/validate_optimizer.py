@@ -19,7 +19,7 @@ from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.repair import repair_build
 from starsector_optimizer.scorer import heuristic_score
 from starsector_optimizer.variant import build_to_build_spec
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.opponent_pool import (
     OpponentPool, generate_matchups, hp_differential, get_opponents,
 )
@@ -61,7 +61,7 @@ config = InstanceConfig(
     num_instances=NUM_INSTANCES,
     xvfb_base_display=200,
 )
-pool = InstancePool(config)
+pool = LocalInstancePool(config)
 pool.setup()
 
 try:
@@ -113,7 +113,7 @@ try:
         # Evaluate matchups across instances
         all_results = []
         for i, m in enumerate(all_matchups):
-            all_results.append(pool.run_matchup(i % pool.num_instances, m))
+            all_results.append(pool.run_matchup(m))
 
         # Map results back to each build
         results_by_build = {vid: [] for vid in variant_ids}

@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(messag
 
 from pathlib import Path
 from starsector_optimizer.models import MatchupConfig
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 
 GAME_DIR = Path("game/starsector")
 
@@ -41,7 +41,7 @@ matchups = [
 ]
 
 print(f"Setting up instance pool ({config.num_instances} instance)...")
-pool = InstancePool(config)
+pool = LocalInstancePool(config)
 pool.setup()
 
 print(f"Work dir: {pool._instances[0].work_dir}")
@@ -53,7 +53,7 @@ try:
     start = time.monotonic()
     results = []
     for i, m in enumerate(matchups):
-        result = pool.run_matchup(i % pool.num_instances, m)
+        result = pool.run_matchup(m)
         results.append(result)
     elapsed = time.monotonic() - start
 

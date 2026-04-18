@@ -1,46 +1,27 @@
-#!/bin/bash
-# Delete all sim-worker-* machines on Hetzner.
+#!/usr/bin/env bash
+# Terminate every EC2 instance tagged Project=starsector-<campaign-name>
+# across all 4 US regions. Idempotent — safe to run repeatedly.
 #
 # Usage:
-#   ./teardown.sh                # delete every sim-worker-* that exists
-#   ./teardown.sh 4              # legacy: delete sim-worker-0..3 by count
-#
-# Discovering live servers via `hcloud server list` is safer than trusting a
-# caller-supplied count — if a previous deploy created 5 workers but the
-# caller passes 3, two leaked servers keep accruing cost until the next
-# audit. The no-arg form is the preferred invocation.
+#   scripts/cloud/teardown.sh <campaign-name>
 set -euo pipefail
 
-if [ $# -ge 1 ]; then
-    NUM_MACHINES=$1
-    echo "Legacy mode — deleting sim-worker-0..$((NUM_MACHINES - 1)) by index..."
-    TARGETS=()
-    for i in $(seq 0 $((NUM_MACHINES - 1))); do
-        TARGETS+=("sim-worker-${i}")
-    done
-else
-    echo "Discovering sim-worker-* servers on Hetzner..."
-    mapfile -t TARGETS < <(hcloud server list -o noheader -o columns=name \
-        | grep '^sim-worker-' || true)
-    if [ ${#TARGETS[@]} -eq 0 ]; then
-        echo "No sim-worker-* servers found. Nothing to delete."
-        exit 0
-    fi
-fi
+CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
+TAG="starsector-$CAMPAIGN"
 
-echo "Targets: ${TARGETS[*]}"
-for name in "${TARGETS[@]}"; do
-    echo "  Deleting ${name}..."
-    hcloud server delete "$name" 2>/dev/null || echo "  ${name} not found (already gone?)"
+for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  ids=$(aws ec2 describe-instances \
+    --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+              "Name=instance-state-name,Values=pending,running" \
+    --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null || true)
+  if [[ -z "$ids" ]]; then
+    echo "  $region: no instances tagged $TAG"
+    continue
+  fi
+  echo "  $region: terminating $(echo "$ids" | wc -w) instances: $ids"
+  aws ec2 terminate-instances --region "$region" --instance-ids $ids >/dev/null
 done
 
-echo ""
-echo "Post-teardown audit:"
-REMAINING=$(hcloud server list -o noheader -o columns=name 2>/dev/null \
-    | grep '^sim-worker-' || true)
-if [ -n "$REMAINING" ]; then
-    echo "  WARNING: these sim-worker-* servers still exist:"
-    echo "$REMAINING" | sed 's/^/    /'
-    exit 1
-fi
-echo "  Clean — zero sim-worker-* servers remaining."
+echo
+echo "Teardown complete. Run scripts/cloud/final_audit.sh $CAMPAIGN to verify."

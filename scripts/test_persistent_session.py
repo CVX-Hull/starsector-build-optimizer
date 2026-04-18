@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.models import MatchupConfig, BuildSpec
 
 
@@ -36,7 +36,7 @@ def main():
 
     config = InstanceConfig(game_dir=Path("game/starsector"), num_instances=1,
                             heartbeat_timeout_seconds=180.0)
-    pool = InstancePool(config)
+    pool = LocalInstancePool(config)
     pool.setup()
 
     enemies = ["buffalo_Standard", "bastillon_Standard", "berserker_Assault", "buffalo_Standard"]
@@ -44,7 +44,7 @@ def main():
         matchup = make_matchup(f"test_{i}", enemy)
         start = time.time()
         try:
-            result = pool.run_matchup(0, matchup)
+            result = pool.run_matchup(matchup)
             elapsed = time.time() - start
             print(f"Matchup {i} vs {enemy}: {result.winner} in {elapsed:.1f}s "
                   f"(game={result.duration_seconds:.1f}s)")

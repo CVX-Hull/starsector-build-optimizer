@@ -10,7 +10,7 @@ The optimizer proposes ship builds via Optuna's TPE sampler, repairs them to fea
 - **Baldwinian recording:** Raw params recorded with repaired score via tell
 - **Build cache:** Hash-based deduplication prevents wasted simulation budget
 - **Staged evaluation:** Opponents evaluated incrementally with WilcoxonPruner — poor builds pruned early, freeing slots for new builds
-- **Async parallel dispatch:** Each instance runs 1 matchup at a time via `InstancePool.run_matchup()`. A ThreadPoolExecutor coordinator dispatches work to all instances in parallel, processing results as they arrive (promote-on-arrival, async ASHA)
+- **Async parallel dispatch:** Each worker runs 1 matchup at a time via `EvaluatorPool.run_matchup(matchup)`. A ThreadPoolExecutor coordinator dispatches work to all workers in parallel (sized by `pool.num_workers`), processing results as they arrive (promote-on-arrival, async ASHA). The pool (either `LocalInstancePool` on the workstation or `CloudWorkerPool` over Tailscale+Redis) owns worker-selection internally; `StagedEvaluator` does not track worker IDs.
 
 ## Classes
 
@@ -104,7 +104,7 @@ class StagedEvaluator:
         hull: ShipHull,
         hull_id: str,
         game_data: GameData,
-        instance_pool: InstancePool,
+        pool: EvaluatorPool,
         opponent_pool: OpponentPool,
         cache: BuildCache,
         config: OptimizerConfig,

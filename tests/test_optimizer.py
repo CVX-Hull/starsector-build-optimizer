@@ -333,19 +333,19 @@ class TestWarmStart:
 
 
 class TestOptimizeHullIntegration:
-    """Tests using mocked InstancePool to verify ask-tell loop correctness."""
+    """Tests using mocked LocalInstancePool to verify ask-tell loop correctness."""
 
     def _make_mock_pool(self, *, num_instances=1):
-        """Create a mock InstancePool with run_matchup returning synthetic CombatResults."""
+        """Create a mock LocalInstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = num_instances
+        mock_pool.num_workers = num_instances
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
                 fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
@@ -417,11 +417,11 @@ class TestOptimizeHullIntegration:
         call_count = [0]
         original_run = pool.run_matchup
 
-        def failing_run(instance_id, matchup):
+        def failing_run(matchup):
             call_count[0] += 1
             if call_count[0] == 2:  # Fail on second matchup
                 raise InstanceError("Test failure")
-            return original_run(instance_id, matchup)
+            return original_run(matchup)
 
         pool.run_matchup = failing_run
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -445,8 +445,8 @@ class TestPreflightCheck:
     def test_invalid_hull_id_raises(self, game_data):
         """Unknown hull_id raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
-        pool = MagicMock(spec=InstancePool)
+        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="not found"):
@@ -455,8 +455,8 @@ class TestPreflightCheck:
     def test_missing_mod_raises(self, game_data):
         """Missing combat harness mod raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
-        pool = MagicMock(spec=InstancePool)
+        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("/tmp/fake_game_dir")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="combat-harness"):
@@ -465,14 +465,14 @@ class TestPreflightCheck:
     def test_enabled_mods_missing_combat_harness(self, game_data, tmp_path):
         """enabled_mods.json without combat_harness raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
         # Set up fake game dir with mod jar but wrong enabled_mods
         mods_dir = tmp_path / "mods" / "combat-harness" / "jars"
         mods_dir.mkdir(parents=True)
         (mods_dir / "combat-harness.jar").touch()
         enabled_mods = tmp_path / "mods" / "enabled_mods.json"
         enabled_mods.write_text('{"enabledMods": ["other_mod"]}')
-        pool = MagicMock(spec=InstancePool)
+        pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = tmp_path
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         with pytest.raises(ValueError, match="combat_harness"):
@@ -481,8 +481,8 @@ class TestPreflightCheck:
     def test_valid_config_passes(self, game_data):
         """Valid config passes without raising."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
-        pool = MagicMock(spec=InstancePool)
+        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         preflight_check("wolf", game_data, pool, opp_pool)  # Should not raise
@@ -490,8 +490,8 @@ class TestPreflightCheck:
     def test_missing_opponent_variant_raises(self, game_data):
         """Opponent variant not found raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import InstancePool, InstanceConfig
-        pool = MagicMock(spec=InstancePool)
+        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("nonexistent_variant",)})
         with pytest.raises(ValueError, match="nonexistent_variant"):
@@ -563,16 +563,16 @@ class TestStagedEvaluator:
     """Tests for the staged evaluation loop with ASHA-style pruning."""
 
     def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
-        """Create a mock InstancePool with run_matchup returning synthetic CombatResults."""
+        """Create a mock LocalInstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = num_instances
+        mock_pool.num_workers = num_instances
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
             player_destroyed = winner == "ENEMY"
             enemy_destroyed = winner == "PLAYER"
@@ -625,9 +625,9 @@ class TestStagedEvaluator:
         call_count = [0]
         original_run = pool.run_matchup
 
-        def counting_run(instance_id, matchup):
+        def counting_run(matchup):
             call_count[0] += 1
-            return original_run(instance_id, matchup)
+            return original_run(matchup)
 
         pool.run_matchup = counting_run
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -697,9 +697,9 @@ class TestStagedEvaluator:
         all_matchup_ids = []
         original_run = pool.run_matchup
 
-        def tracking_run(instance_id, matchup):
+        def tracking_run(matchup):
             all_matchup_ids.append(matchup.matchup_id)
-            return original_run(instance_id, matchup)
+            return original_run(matchup)
 
         pool.run_matchup = tracking_run
 
@@ -758,9 +758,9 @@ class TestStagedEvaluator:
         all_matchup_ids = []
         original_run = pool.run_matchup
 
-        def tracking_run(instance_id, matchup):
+        def tracking_run(matchup):
             all_matchup_ids.append(matchup.matchup_id)
-            return original_run(instance_id, matchup)
+            return original_run(matchup)
 
         pool.run_matchup = tracking_run
 
@@ -782,11 +782,11 @@ class TestStagedEvaluator:
         call_count = [0]
         original_run = pool.run_matchup
 
-        def sometimes_failing(instance_id, matchup):
+        def sometimes_failing(matchup):
             call_count[0] += 1
             if call_count[0] == 1:
                 raise InstanceError("First matchup fails")
-            return original_run(instance_id, matchup)
+            return original_run(matchup)
 
         pool.run_matchup = sometimes_failing
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -867,11 +867,11 @@ class TestStagedEvaluator:
         call_count = [0]
         original_run = pool.run_matchup
 
-        def always_fails(instance_id, matchup):
+        def always_fails(matchup):
             call_count[0] += 1
             if call_count[0] <= 2:
                 raise InstanceError("Simulated failure")
-            return original_run(instance_id, matchup)
+            return original_run(matchup)
 
         pool.run_matchup = always_fails
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -1121,19 +1121,24 @@ class TestParallelDispatch:
     """Tests for async parallel instance dispatch."""
 
     def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
-        """Create a mock pool with run_matchup tracking instance_id."""
+        """Create a mock pool with run_matchup tracking calling thread_id.
+
+        Phase 6: pool owns worker selection internally; the test tracks
+        thread identity as a proxy for "distinct workers used concurrently."
+        """
+        import threading
         from unittest.mock import MagicMock
         from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = num_instances
-        mock_pool._call_log = []  # track (instance_id, matchup_id)
+        mock_pool.num_workers = num_instances
+        mock_pool._call_log = []  # track (thread_id, matchup_id)
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
-            mock_pool._call_log.append((instance_id, m.matchup_id))
+            mock_pool._call_log.append((threading.get_ident(), m.matchup_id))
             player_destroyed = winner == "ENEMY"
             enemy_destroyed = winner == "PLAYER"
             player_ship = ShipCombatResult(
@@ -1173,7 +1178,10 @@ class TestParallelDispatch:
         return mock_pool
 
     def test_all_instances_used(self, game_data):
-        """With num_instances=3 and multiple opponents, all 3 instance_ids get work."""
+        """With num_workers=3 and multiple opponents, at least 3 distinct
+        threads call run_matchup — evidence StagedEvaluator's ThreadPoolExecutor
+        is dispatching in parallel per pool.num_workers.
+        """
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
 
@@ -1184,9 +1192,9 @@ class TestParallelDispatch:
 
         optimize_hull("wolf", game_data, pool, opp_pool, config)
 
-        used_instances = {inst_id for inst_id, _ in pool._call_log}
-        assert used_instances == {0, 1, 2}, (
-            f"Expected all instances used, got: {used_instances}"
+        used_threads = {tid for tid, _ in pool._call_log}
+        assert len(used_threads) >= 3, (
+            f"Expected at least 3 distinct threads, got: {used_threads}"
         )
 
     def test_single_instance_works(self, game_data):
@@ -1215,7 +1223,7 @@ class TestParallelDispatch:
         lock = threading.Lock()
         original_run = pool.run_matchup
 
-        def tracking_run(instance_id, matchup):
+        def tracking_run(matchup):
             prefix = matchup.matchup_id.split("_vs_")[0]
             with lock:
                 active_trials[prefix] = active_trials.get(prefix, 0) + 1
@@ -1223,7 +1231,7 @@ class TestParallelDispatch:
                     max_concurrent.get(prefix, 0), active_trials[prefix],
                 )
             try:
-                return original_run(instance_id, matchup)
+                return original_run(matchup)
             finally:
                 with lock:
                     active_trials[prefix] -= 1
@@ -1379,21 +1387,21 @@ class TestStagedEvaluatorEBIntegration:
     """Integration tests for EB shrinkage in StagedEvaluator."""
 
     def _make_mock_pool(self, *, winner="PLAYER", num_instances=1, engine_stats=None):
-        """Mock InstancePool returning CombatResults with optional engine_stats."""
+        """Mock LocalInstancePool returning CombatResults with optional engine_stats."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
             CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
         )
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = num_instances
+        mock_pool.num_workers = num_instances
         default_es = engine_stats or EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
         )
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
                 fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
@@ -1493,16 +1501,16 @@ class TestEvalLogAuditFields:
         from starsector_optimizer.models import (
             CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
         )
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = 1
+        mock_pool.num_workers = 1
         default_es = engine_stats or EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
         )
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
                 fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
@@ -1810,16 +1818,16 @@ class TestShapeFitness:
         from starsector_optimizer.models import (
             CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
         )
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = num_instances
+        mock_pool.num_workers = num_instances
         es = EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
         )
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
             player_destroyed = winner == "ENEMY"
             enemy_destroyed = winner == "PLAYER"
@@ -1950,13 +1958,13 @@ class TestRegimeStudyIsolation:
         from starsector_optimizer.models import (
             CombatResult, ShipCombatResult, DamageBreakdown,
         )
-        from starsector_optimizer.instance_manager import InstancePool
+        from starsector_optimizer.instance_manager import LocalInstancePool
 
-        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool = MagicMock(spec=LocalInstancePool)
         mock_pool.game_dir = Path("game/starsector")
-        mock_pool.num_instances = num_instances
+        mock_pool.num_workers = num_instances
 
-        def mock_run_matchup(instance_id, matchup):
+        def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
                 fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,

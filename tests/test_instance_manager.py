@@ -18,7 +18,7 @@ from starsector_optimizer.instance_manager import (
     GameInstance,
     InstanceConfig,
     InstanceError,
-    InstancePool,
+    LocalInstancePool,
     InstanceState,
     PROTOCOL_FILES,
 )
@@ -87,7 +87,7 @@ def config(fake_game_dir, tmp_path):
 
 @pytest.fixture
 def pool(config):
-    return InstancePool(config)
+    return LocalInstancePool(config)
 
 
 @pytest.fixture(autouse=True)
@@ -215,12 +215,12 @@ class TestFileManagement:
 # --- Instance Pool Properties ---
 
 
-class TestInstancePoolProperties:
+class TestLocalInstancePoolProperties:
 
-    def test_num_instances(self, pool, config):
-        """num_instances property returns correct count after setup."""
+    def test_num_workers(self, pool, config):
+        """num_workers property (EvaluatorPool ABC) returns instance count."""
         pool.setup()
-        assert pool.num_instances == config.num_instances
+        assert pool.num_workers == config.num_instances
 
 
 # --- Health Monitoring Tests ---
@@ -378,7 +378,7 @@ class TestDisplayNumbering:
 
     def test_xvfb_display_numbers(self, config):
         """Instances get base+0, base+1, ..."""
-        pool = InstancePool(config)
+        pool = LocalInstancePool(config)
         pool.setup()
 
         displays = [inst.display_num for inst in pool._instances]
@@ -392,7 +392,7 @@ class TestDisplayNumbering:
             num_instances=3,
             xvfb_base_display=50,
         )
-        pool = InstancePool(cfg)
+        pool = LocalInstancePool(cfg)
         pool.setup()
 
         displays = [inst.display_num for inst in pool._instances]
@@ -411,7 +411,7 @@ class TestSetupLoadPreflight:
             instance_root=tmp_path / "inst",
             num_instances=100,
         )
-        pool = InstancePool(cfg)
+        pool = LocalInstancePool(cfg)
         with pytest.raises(InstanceError, match="exceeds host capacity"):
             pool.setup()
 
@@ -421,9 +421,9 @@ class TestSetupLoadPreflight:
             instance_root=tmp_path / "inst",
             num_instances=1,
         )
-        pool = InstancePool(cfg)
+        pool = LocalInstancePool(cfg)
         pool.setup()
-        assert pool.num_instances == 1
+        assert pool.num_workers == 1
 
     def test_message_names_safe_max(self, fake_game_dir, tmp_path, monkeypatch):
         # cpu=9 → safe_max = 9 // 3 = 3; num=6 trips the preflight.
@@ -433,7 +433,7 @@ class TestSetupLoadPreflight:
             instance_root=tmp_path / "inst",
             num_instances=6,
         )
-        pool = InstancePool(cfg)
+        pool = LocalInstancePool(cfg)
         with pytest.raises(InstanceError, match="max 3"):
             pool.setup()
 
@@ -445,7 +445,7 @@ class TestContextManager:
 
     def test_context_manager_calls_teardown(self, config):
         """__exit__ calls teardown."""
-        pool = InstancePool(config)
+        pool = LocalInstancePool(config)
         pool.setup()
 
         with patch.object(pool, "teardown") as mock_td:
@@ -620,7 +620,7 @@ class TestPersistentSession:
             num_instances=1,
             clean_restart_matchups=10,
         )
-        pool = InstancePool(cfg)
+        pool = LocalInstancePool(cfg)
         pool.setup()
         inst = pool._instances[0]
         inst.total_matchups_processed = 10

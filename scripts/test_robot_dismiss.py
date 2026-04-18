@@ -9,7 +9,7 @@ from pathlib import Path
 
 sys.path.insert(0, "src")
 
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.models import BuildSpec, MatchupConfig
 
 logging.basicConfig(
@@ -36,13 +36,13 @@ def main():
         num_instances=1,
         heartbeat_timeout_seconds=300.0,
     )
-    pool = InstancePool(config)
+    pool = LocalInstancePool(config)
     pool.setup()
     inst = pool._instances[0]
     display = f":{inst.display_num}"
 
     print("Running first matchup...")
-    result = pool.run_matchup(0, matchup)
+    result = pool.run_matchup(matchup)
     print(f"Matchup done: {result.winner} ({result.duration_seconds:.0f}s game)")
 
     # Robot dismiss was launched BEFORE endCombat in the same frame

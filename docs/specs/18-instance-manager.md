@@ -1,6 +1,29 @@
 # Instance Manager Specification
 
-Manages N parallel Starsector game instances for batch combat evaluation on a single machine. Defined in `src/starsector_optimizer/instance_manager.py`.
+Manages N parallel Starsector game instances for batch combat evaluation on a single machine. Defined in `src/starsector_optimizer/instance_manager.py`. Implements the `EvaluatorPool` ABC from `src/starsector_optimizer/evaluator_pool.py`.
+
+## `EvaluatorPool` (ABC, defined in `evaluator_pool.py`)
+
+Cross-backend contract for matchup dispatch. Two concrete subclasses ship: `LocalInstancePool` (this module, `--worker-pool local`) and `CloudWorkerPool` (spec 22, `--worker-pool cloud`). `StagedEvaluator` (spec 24) depends only on this ABC — `isinstance(pool, LocalInstancePool)` or `isinstance(pool, CloudWorkerPool)` anywhere outside `scripts/run_optimizer.py` is a lint failure.
+
+```python
+class EvaluatorPool(abc.ABC):
+    @abc.abstractmethod
+    def setup(self) -> None: ...
+    @abc.abstractmethod
+    def teardown(self) -> None: ...
+    @abc.abstractmethod
+    def run_matchup(self, matchup: MatchupConfig) -> CombatResult: ...
+    def __enter__(self) -> "EvaluatorPool":
+        self.setup(); return self
+    def __exit__(self, *args) -> None:
+        self.teardown()
+    @property
+    @abc.abstractmethod
+    def num_workers(self) -> int: ...
+```
+
+`run_matchup` takes no `worker_id` — the pool owns concurrency internally and serializes concurrent `run_matchup` calls up to `num_workers`.
 
 ## Classes
 
@@ -71,28 +94,32 @@ Mutable dataclass tracking a single game instance.
 - `heartbeat_path` → `saves_common / "combat_harness_heartbeat.txt.data"`
 - `shutdown_signal_path` → `saves_common / "combat_harness_shutdown.data"`
 
-### `InstancePool`
+### `LocalInstancePool`
 
-Main class managing N parallel game instances. Acts as a resource manager — provides per-instance blocking execution. The optimizer drives concurrency via ThreadPoolExecutor.
+`EvaluatorPool` implementation for the local workstation. Manages N parallel game instances and provides blocking per-matchup execution. Pool owns concurrency — `StagedEvaluator` calls `run_matchup(matchup)` from up to `num_workers` threads concurrently and the pool routes each call to a free instance internally.
 
 ```python
-class InstancePool:
+class LocalInstancePool(EvaluatorPool):
     def __init__(self, config: InstanceConfig) -> None: ...
     def setup(self) -> None: ...
     def teardown(self) -> None: ...
-    def run_matchup(self, instance_id: int, matchup: MatchupConfig) -> CombatResult: ...
+    def run_matchup(self, matchup: MatchupConfig) -> CombatResult: ...   # no worker_id
     @property
-    def num_instances(self) -> int: ...
+    def num_workers(self) -> int: ...                                    # == config.num_instances
     @property
     def game_dir(self) -> Path: ...
-    def __enter__(self) -> InstancePool: ...
+    def __enter__(self) -> "LocalInstancePool": ...
     def __exit__(self, *args) -> None: ...
     # Internal methods
+    def _claim_instance(self) -> GameInstance: ...                       # blocks until an instance is free
+    def _release_instance(self, inst: GameInstance) -> None: ...
     def _is_instance_reusable(self, inst: GameInstance) -> bool: ...
     def _assign_next_batch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None: ...
     def _restart_or_raise(self, inst: GameInstance, matchup: MatchupConfig) -> None: ...
     def _write_shutdown_signal(self, inst: GameInstance) -> None: ...
 ```
+
+Free-instance bookkeeping (`_claim_instance` / `_release_instance`) uses an internal `queue.Queue[GameInstance]` primed with all instances after `setup()`. The old `StagedEvaluator.free_instances: deque[int]` pattern is retired — callers no longer track worker IDs.
 
 ## Per-Instance Work Directory
 
@@ -139,21 +166,22 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
    - Copy `mods/combat-harness/` and `mods/enabled_mods.json`
    - Create `saves/common/`, `screenshots/`
 
-### `run_matchup(instance_id, matchup)`
+### `run_matchup(matchup)`
 
-Run a single matchup on the specified instance. Blocks until complete. Thread-safe per instance_id (each id called from at most one thread at a time). Raises `InstanceError` if the instance fails unrecoverably.
+Run a single matchup on a pool-chosen instance. Blocks until complete. Thread-safe; concurrent calls from up to `num_workers` threads are serialized through the internal free-instance queue. Raises `InstanceError` if the chosen instance fails unrecoverably.
 
-1. Get instance by id. If `total_matchups_processed >= clean_restart_matchups`, kill instance, reset counter.
-2. If `_is_instance_reusable(inst)`: `_assign_next_batch(inst, [matchup])` (game still running, reuse via mission restart). Otherwise: `_assign_and_launch(inst, [matchup])` (full Xvfb + game launch).
-3. Poll loop (every `poll_interval_seconds`):
-   - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. Set state IDLE. Return `results[0]`.
+1. `inst = self._claim_instance()` — blocks on an internal `queue.Queue` until an instance is free.
+2. If `inst.total_matchups_processed >= clean_restart_matchups`, kill instance, reset counter.
+3. If `_is_instance_reusable(inst)`: `_assign_next_batch(inst, [matchup])` (game still running, reuse via mission restart). Otherwise: `_assign_and_launch(inst, [matchup])` (full Xvfb + game launch).
+4. Poll loop (every `poll_interval_seconds`):
+   - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. Set state IDLE. Return `results[0]` via a `finally:` that calls `self._release_instance(inst)`.
    - **Process check:** If game process exited without done signal → FAILED. Call `_restart_or_raise()`. Continue polling.
    - **Heartbeat check:** If STARTING and heartbeat fresh → RUNNING. If STARTING and startup timed out → FAILED, `_restart_or_raise()`. If RUNNING and heartbeat fresh → update timestamp. If RUNNING and heartbeat stale > timeout → FAILED, `_restart_or_raise()`.
-4. Instance stays alive in IDLE after returning. Game is on title screen (or transitioning via Robot dismiss). TitleScreenPlugin will detect the next queue written by a subsequent `run_matchup()` call.
+5. Instance stays alive in IDLE after returning. Game is on title screen (or transitioning via Robot dismiss). TitleScreenPlugin will detect the next queue written by a subsequent `run_matchup()` call.
 
-### `num_instances` (property)
+### `num_workers` (property)
 
-Returns `len(self._instances)`. Used by the optimizer to determine ThreadPoolExecutor concurrency.
+Returns `len(self._instances)`. Required by the `EvaluatorPool` ABC; `StagedEvaluator` uses it to size its `ThreadPoolExecutor`.
 
 ### `_restart_or_raise(inst, matchup)`
 

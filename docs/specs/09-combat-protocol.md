@@ -149,7 +149,7 @@ See spec 19 for detailed field mapping. Note: `overload_count` lives under `flux
 
 Defined in `src/starsector_optimizer/instance_manager.py`:
 
-- `InstancePool.run_matchup(instance_id, matchup)` — run single matchup on specified instance, return result
+- `LocalInstancePool.run_matchup(matchup)` — run single matchup on a pool-chosen instance, return result. Concrete implementation of the `EvaluatorPool` ABC (spec 18).
 - Handles per-instance work directories, Xvfb displays, health monitoring, crash recovery
 
-See spec 18 for full design.
+See spec 18 for full design, and spec 22 for the parallel `CloudWorkerPool` implementation used by Phase 6 cloud campaigns.

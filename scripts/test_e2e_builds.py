@@ -21,7 +21,7 @@ logging.basicConfig(
 
 from pathlib import Path
 from starsector_optimizer.models import BuildSpec, MatchupConfig
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 
 GAME_DIR = Path("game/starsector")
 OPPONENT = "dominator_Assault"
@@ -104,7 +104,7 @@ print("E2E Build Verification Test")
 print(f"3 Eagle builds vs {OPPONENT}")
 print("=" * 60)
 
-pool = InstancePool(config)
+pool = LocalInstancePool(config)
 pool.setup()
 
 try:
@@ -126,7 +126,7 @@ try:
         print(f"  Vents={build.flux_vents}, Caps={build.flux_capacitors}")
 
         t0 = time.monotonic()
-        result = pool.run_matchup(0, matchup)
+        result = pool.run_matchup(matchup)
         elapsed = time.monotonic() - t0
 
         print(f"  Winner: {result.winner}")

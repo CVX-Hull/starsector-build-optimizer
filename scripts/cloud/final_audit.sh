@@ -1,107 +1,57 @@
-#!/bin/bash
-# End-of-session audit — confirm zero cloud resources are still accruing cost.
-# Run after every campaign, every smoke test, every abort.
+#!/usr/bin/env bash
+# End-of-session audit — confirm zero AWS resources accrue cost for this
+# campaign across all 4 US regions (even the ones the campaign YAML didn't
+# target). Mandatory final step per .claude/skills/cloud-worker-ops.md.
 #
-# Exit code 0: all clean.
-# Exit code 1: leaked resource detected (listed in stdout).
+# Usage:
+#   scripts/cloud/final_audit.sh <campaign-name>
 #
-# Covers both providers in one pass so we don't leave orphans on the side we
-# forgot to check. The list of things to check mirrors the "Teardown
-# discipline" section of .claude/skills/cloud-worker-ops.md.
+# Exit 0: clean. Exit 1: leaked resource (listed in stdout).
 set -uo pipefail
 
-LEAKS=""
-record_leak() { LEAKS="$LEAKS\n  - $1"; }
+CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
+TAG="starsector-$CAMPAIGN"
+LEAKED=0
 
-echo "=== Hetzner ==="
-if command -v hcloud >/dev/null 2>&1; then
-    SERVERS=$(hcloud server list -o noheader -o columns=name 2>/dev/null \
-        | grep '^sim-worker-' || true)
-    if [ -n "$SERVERS" ]; then
-        echo "LEAK: sim-worker-* servers still running:"
-        echo "$SERVERS" | sed 's/^/  /'
-        record_leak "hetzner servers: $SERVERS"
-    else
-        echo "  no sim-worker-* servers"
-    fi
-else
-    echo "  hcloud not installed on this host — skipping"
+echo "=== AWS audit for Project=$TAG ==="
+
+for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  instances=$(aws ec2 describe-instances --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
+    --query 'Reservations[].Instances[].[InstanceId,State.Name]' \
+    --output text 2>/dev/null)
+  if [[ -n "$instances" ]]; then
+    echo "LEAK in $region: instances:"
+    echo "$instances" | sed 's/^/    /'
+    LEAKED=1
+  else
+    echo "  $region: no instances"
+  fi
+
+  sgs=$(aws ec2 describe-security-groups --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+    --query 'SecurityGroups[].GroupId' --output text 2>/dev/null)
+  if [[ -n "$sgs" ]]; then
+    echo "LEAK in $region: SGs: $sgs"
+    LEAKED=1
+  fi
+
+  volumes=$(aws ec2 describe-volumes --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+              "Name=status,Values=available" \
+    --query 'Volumes[].VolumeId' --output text 2>/dev/null)
+  if [[ -n "$volumes" ]]; then
+    echo "LEAK in $region: volumes: $volumes"
+    LEAKED=1
+  fi
+done
+
+if [[ $LEAKED -ne 0 ]]; then
+  echo
+  echo "FINAL AUDIT: LEAKS DETECTED. Run:"
+  echo "  scripts/cloud/teardown.sh $CAMPAIGN"
+  exit 1
 fi
-
-echo ""
-echo "=== AWS instances (us-east-1, us-west-2) ==="
-if command -v aws >/dev/null 2>&1; then
-    for region in us-east-1 us-west-2; do
-        INSTANCES=$(aws ec2 describe-instances --region "$region" \
-            --filters 'Name=tag:Project,Values=starsector-*' \
-                      'Name=instance-state-name,Values=pending,running,stopping,stopped' \
-            --query 'Reservations[].Instances[].[InstanceId,State.Name,Tags[?Key==`Project`].Value|[0]]' \
-            --output text 2>/dev/null)
-        if [ -n "$INSTANCES" ]; then
-            echo "LEAK in $region: instances still alive:"
-            echo "$INSTANCES" | sed 's/^/  /'
-            record_leak "aws instances in $region"
-        else
-            echo "  $region: no starsector-* instances"
-        fi
-    done
-
-    echo ""
-    echo "=== AWS security groups ==="
-    for region in us-east-1 us-west-2; do
-        SGS=$(aws ec2 describe-security-groups --region "$region" \
-            --filters 'Name=tag:Project,Values=starsector-*' \
-            --query 'SecurityGroups[].GroupId' --output text 2>/dev/null)
-        if [ -n "$SGS" ]; then
-            echo "LEAK in $region: security groups:"
-            echo "$SGS" | sed 's/^/  /'
-            record_leak "aws SGs in $region: $SGS"
-        else
-            echo "  $region: no starsector-* SGs"
-        fi
-    done
-
-    echo ""
-    echo "=== AWS key pairs ==="
-    for region in us-east-1 us-west-2; do
-        KPS=$(aws ec2 describe-key-pairs --region "$region" \
-            --filters 'Name=tag:Project,Values=starsector-*' \
-            --query 'KeyPairs[].KeyName' --output text 2>/dev/null)
-        if [ -n "$KPS" ]; then
-            echo "LEAK in $region: key pairs:"
-            echo "$KPS" | sed 's/^/  /'
-            record_leak "aws keypairs in $region: $KPS"
-        else
-            echo "  $region: no starsector-* keypairs"
-        fi
-    done
-
-    echo ""
-    echo "=== AWS orphaned volumes (available, not attached) ==="
-    for region in us-east-1 us-west-2; do
-        VOLS=$(aws ec2 describe-volumes --region "$region" \
-            --filters 'Name=tag:Project,Values=starsector-*' \
-                      'Name=status,Values=available' \
-            --query 'Volumes[].VolumeId' --output text 2>/dev/null)
-        if [ -n "$VOLS" ]; then
-            echo "LEAK in $region: orphaned volumes:"
-            echo "$VOLS" | sed 's/^/  /'
-            record_leak "aws orphan volumes in $region: $VOLS"
-        else
-            echo "  $region: no starsector-* volumes"
-        fi
-    done
-else
-    echo "  aws CLI not installed — skipping"
-fi
-
-echo ""
-if [ -n "$LEAKS" ]; then
-    echo "FINAL AUDIT: LEAKS DETECTED$(printf "$LEAKS")"
-    echo ""
-    echo "Clean up before ending session:"
-    echo "  ./scripts/cloud/teardown.sh                   # Hetzner"
-    echo "  ./scripts/cloud/aws/teardown.sh               # AWS"
-    exit 1
-fi
-echo "FINAL AUDIT: clean — zero resources accruing cost."
+echo
+echo "FINAL AUDIT: clean — zero resources accruing cost for $CAMPAIGN."

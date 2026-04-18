@@ -19,7 +19,7 @@ from starsector_optimizer.calibration import generate_diverse_builds
 from starsector_optimizer.scorer import heuristic_score
 from starsector_optimizer.repair import repair_build
 from starsector_optimizer.variant import build_to_build_spec
-from starsector_optimizer.instance_manager import InstanceConfig, InstancePool
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.opponent_pool import (
     OpponentPool, generate_matchups, compute_fitness, hp_differential, get_opponents,
 )
@@ -63,7 +63,7 @@ config = InstanceConfig(
     num_instances=2,
     xvfb_base_display=200,
 )
-pool = InstancePool(config)
+pool = LocalInstancePool(config)
 pool.setup()
 
 try:
@@ -93,7 +93,7 @@ try:
         t0 = time.monotonic()
         results = []
         for i, m in enumerate(matchups):
-            results.append(pool.run_matchup(i % pool.num_instances, m))
+            results.append(pool.run_matchup(m))
         elapsed = time.monotonic() - t0
 
         build_results = []

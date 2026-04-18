@@ -1,21 +1,47 @@
-#!/bin/bash
-# Check optimizer status on cloud machines.
-# Usage: ./status.sh [num_machines]
+#!/usr/bin/env bash
+# Tail the cost ledger + show per-study trial counts + best fitness for a
+# running campaign. Safe to run concurrently with a campaign; read-only.
+#
+# Usage:
+#   scripts/cloud/status.sh <campaign-name>
 set -euo pipefail
 
-NUM_MACHINES=${1:-1}
-SSH_KEY_FILE="$HOME/.ssh/starsector-opt"
-SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR -i $SSH_KEY_FILE"
+CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
+LEDGER="$HOME/starsector-campaigns/$CAMPAIGN/ledger.jsonl"
 
-for i in $(seq 0 $((NUM_MACHINES - 1))); do
-    IP=$(hcloud server describe "sim-worker-${i}" -o format='{{.PublicNet.IPv4.IP}}' 2>/dev/null) || { echo "sim-worker-${i}: not found"; continue; }
-    echo "=== sim-worker-${i} ($IP) ==="
+if [[ ! -f "$LEDGER" ]]; then
+  echo "[status] no ledger at $LEDGER — has the campaign started?" >&2
+  exit 2
+fi
 
-    # Check if optimizer is running
-    RUNNING=$(ssh $SSH_OPTS root@"$IP" "pgrep -f run_optimizer.py >/dev/null && echo 'RUNNING' || echo 'STOPPED'" 2>/dev/null) || RUNNING="UNREACHABLE"
-    echo "  Status: $RUNNING"
+echo "=== Cost ledger tail ==="
+tail -5 "$LEDGER" | uv run python -c "
+import json, sys
+for line in sys.stdin:
+    row = json.loads(line)
+    print(f'  {row[\"timestamp\"]}  worker={row[\"worker_id\"]}  '
+          f'delta=\${row[\"delta_usd\"]:.4f}  '
+          f'cumulative=\${row[\"cumulative_usd\"]:.2f}')
+"
 
-    # Show last 5 lines of log
-    ssh $SSH_OPTS root@"$IP" "tail -5 /opt/optimizer/run.log 2>/dev/null" | sed 's/^/  /' || true
-    echo ""
+echo
+echo "=== Cumulative cost ==="
+uv run python -c "
+import json
+total = 0.0
+with open('$LEDGER') as f:
+    for line in f:
+        total = json.loads(line)['cumulative_usd']
+print(f'\${total:.2f}')
+"
+
+echo
+echo "=== Active AWS instances (Project=starsector-$CAMPAIGN) ==="
+for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  count=$(aws ec2 describe-instances \
+    --region "$region" \
+    --filters "Name=tag:Project,Values=starsector-$CAMPAIGN" \
+              "Name=instance-state-name,Values=pending,running" \
+    --query 'length(Reservations[].Instances[])' --output text 2>/dev/null || echo "?")
+  echo "  $region: $count"
 done
