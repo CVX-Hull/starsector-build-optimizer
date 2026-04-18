@@ -317,3 +317,9 @@ All computational overhead is negligible compared to the 5-minute combat simulat
 - Balduzzi et al. (2018), "Re-evaluating Evaluation" — NeurIPS. Nash averaging.
 - Omidshafiei et al. (2019), "α-Rank" — Scientific Reports. Evolutionary game evaluation.
 - Bucci (2002), "A Mathematical Framework for the Study of Coevolution" — FOGA.
+
+---
+
+## A2 — superseded by Phase 5D (2026-04-18)
+
+The original Phase 5A A2 stage — a scalar control variate `α̂_i − β̂_cv · (h_i − h̄)` using only `composite_score` — was replaced in Phase 5D by empirical-Bayes shrinkage over a 7-dim pre-matchup covariate vector (fusion paradigm: α̂_TWFE and γ̂ᵀX are treated as noisy measurements of the same latent α and combined by Bayes rule, never subtracted). The A1 TWFE theory in this document is unchanged. See `docs/reference/phase5d-covariate-adjustment.md` for the fusion derivation and `docs/specs/28-deconfounding.md` §EB Shrinkage (A2′) for the normative spec.

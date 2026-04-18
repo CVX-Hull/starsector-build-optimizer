@@ -22,7 +22,7 @@ Throughput (T1-T4): Cross-cutting ─────────── Persistent s
 Phase 5A:  Signal Quality — Normalization ──── ✓ COMPLETE (TWFE deconfounding, control variate, rank shape)
 Phase 5B:  Signal Quality — Multi-fidelity ── ✓ COMPLETE (WilcoxonPruner, ASHA scheduling)
 Phase 5C:  Opponent Curriculum ─────────────── ✓ COMPLETE (TWFE replaced Elo; anchor-first, incumbent overlap)
-Phase 5D:  EB Shrinkage of A2 (fusion) ────── PLANNED — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic prior (3 engine-computed MutableShipStats reads + 3 Python-raw offense/range aggregates + composite_score; HN + triple-goal rank correction). Fusion paradigm, not conditioning. Feature set sized by sweep + variance audit on the 2026-04-17 Hammerhead run — candidate engine features with near-zero per-hull-run variance (eff_hull_hp, eff_max_speed, eff_shield_damage_mult) were dropped in favor of features with empirically-validated spread
+Phase 5D:  EB Shrinkage of A2 (fusion) ────── ✓ COMPLETE 2026-04-18 — replaces A2 scalar CV with empirical-Bayes shrinkage of α̂ toward a 7-covariate heuristic prior (3 engine-computed MutableShipStats reads + 3 Python-raw offense/range aggregates + composite_score; HN + triple-goal rank correction). Fusion paradigm, not conditioning. Feature set sized by sweep + variance audit on the 2026-04-17 Hammerhead run — candidate engine features with near-zero per-hull-run variance (eff_hull_hp, eff_max_speed, eff_shield_damage_mult) were dropped in favor of features with empirically-validated spread
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── PLANNED — simulation-validated in experiments/signal-quality-2026-04-17
 Phase 5F:  Regime-Segmented Optimization ──── PLANNED — user-selectable progression tier (mask hullmods/weapons/hulls by rarity tags at search_space.py); CMDP feasibility alignment. Default `mid` reclaims ~80% of compute budget from the Hammerhead 89% exploit cluster
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
@@ -385,7 +385,7 @@ Shipped in `src/starsector_optimizer/optimizer.py` opponent-selection path:
 
 Full design and rejected alternatives in `docs/reference/phase5c-opponent-curriculum.md`.
 
-**Phase 5D — EB Shrinkage of A2 (PLANNED)**
+**Phase 5D — EB Shrinkage of A2 (COMPLETE, 2026-04-18)**
 
 Two-level Gaussian hierarchical model replacing the shipped scalar A2:
 
@@ -399,9 +399,9 @@ Posterior mean:
 
 `X_i` is the 7-dim pre-matchup covariate vector — selected by feature-count × dataset-size sweep (`experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`) **and** an empirical variance audit on the 2026-04-17 Hammerhead run (see §2.7 of `phase5d-covariate-adjustment.md`):
 
-1. `eff_max_flux` — Java `MutableShipStats.getMaxFlux()` at SETUP
-2. `eff_flux_dissipation` — Java `MutableShipStats.getFluxDissipation()` at SETUP
-3. `eff_armor_rating` — Java armor-grid summed post-hullmod
+1. `eff_max_flux` — Java `MutableShipStats.getFluxCapacity().getModifiedValue()` at SETUP
+2. `eff_flux_dissipation` — Java `MutableShipStats.getFluxDissipation().getModifiedValue()` at SETUP
+3. `eff_armor_rating` — Java `MutableShipStats.getArmorBonus().computeEffective(hullSpec.getArmorRating())` at SETUP
 4. `total_weapon_dps` — Python raw sum over equipped weapons (no type weighting)
 5. `engagement_range` — Python `ScorerResult.engagement_range` (DPS-weighted mean)
 6. `kinetic_dps_fraction` — Python `kinetic_dps / max(total_dps, ε)` (hard-flux pressure axis)
@@ -468,7 +468,15 @@ Research-complete in `docs/reference/phase5e-shape-revision.md` §2.1. Renumbere
 
 ### Implementation Plans
 
-#### Phase 5D — EB Shrinkage of A2
+#### Phase 5D — EB Shrinkage of A2 (IMPLEMENTED 2026-04-18)
+
+Implementation differs from the plan below in two file-placement details (see `docs/reference/phase5d-covariate-adjustment.md` §5):
+- `EngineStats` lives in `models.py` (not `result_parser.py`) — project convention for frozen domain dataclasses.
+- Covariate assembly lives in `optimizer.py::_build_covariate_vector` (not `combat_fitness.py`) — the vector needs optimizer-owned state.
+
+Java accessors verified via `javap` on 2026-04-18: the API method is `getFluxCapacity()` (not `getMaxFlux()`) and armor uses `getArmorBonus().computeEffective(hullSpec.getArmorRating())`. NaN values cannot pass through the game's bundled org.json, so the `setup_stats` block is OMITTED on a failed SETUP read rather than emitting NaN (Python parser treats absence as `engine_stats=None`, same as pre-5D log replay).
+
+Original implementation plan (historical reference):
 
 ```
 Step 1: Java harness — emit setup_stats

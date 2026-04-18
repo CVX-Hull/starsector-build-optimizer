@@ -28,6 +28,7 @@ Frozen dataclass configuring the optimization run.
 | `n_ei_candidates` | `int` | `256` | EI candidates per sample |
 | `combat_fitness` | `CombatFitnessConfig` | `CombatFitnessConfig()` | Embedded fitness config (engagement threshold, tier weights, etc.). Single source of truth — no duplication. |
 | `twfe` | `TWFEConfig` | `TWFEConfig()` | TWFE deconfounding + opponent selection parameters (ridge, iterations, trim, anchors, incumbent overlap). See spec 28. |
+| `eb` | `EBShrinkageConfig` | `EBShrinkageConfig()` | Empirical-Bayes shrinkage parameters for A2′ (τ² floor, triple-goal toggle, min builds, OLS ridge). See spec 28. |
 | `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
@@ -38,9 +39,6 @@ Frozen dataclass configuring the optimization run.
 | `log_interval` | `int` | `10` | Log progress every N completed trials |
 | `failure_score` | `float` | `-2.0` | Score assigned to failed/invalid builds (InstanceError or validation failure). Must be ≤ `CombatFitnessConfig.no_engagement_score` to prevent crashes from scoring above non-engagement. |
 | `stock_build_scale_mult` | `float` | `2.0` | Multiplier for stock build warm-start values relative to heuristic (stock value = `warm_start_scale * stock_build_scale_mult`) |
-| `cv_min_samples` | `int` | `30` | Evaluations before estimating control variate correlation |
-| `cv_rho_threshold` | `float` | `0.3` | Minimum \|ρ\| to activate control variate correction |
-| `cv_recalc_interval` | `int` | `10` | Re-estimate control variate parameters every N completions |
 | `active_opponents` | `int` | `10` | Maximum opponents evaluated per build. If pool has fewer than K opponents, all are used. |
 | `eval_log_path` | `Path \| None` | `None` | Path for JSONL evaluation log. If None, no log is written. |
 
@@ -67,10 +65,25 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 | `build_spec` | `BuildSpec` | required | Serializable build spec |
 | `variant_id` | `str` | required | Unique variant ID (`{hull_id}_opt_{trial.number:06d}`) |
 | `opponents` | `tuple[str, ...]` | required | Active opponent subset (anchors first, then shuffled; incumbent overlap forced after burn-in) |
-| `heuristic_val` | `float` | `0.0` | Heuristic composite score for control variate (A2) |
+| `scorer_result` | `ScorerResult` | required | Full heuristic scorer output — provides `composite_score` + the covariate fields `total_dps`, `kinetic_dps`, `engagement_range`, `effective_stats` used by A2′ EB shrinkage |
+| `engine_stats` | `EngineStats \| None` | `None` | Post-SETUP Java-engine-computed effective flux capacity / dissipation / armor rating for this build. Populated on arrival of the first matchup result with a non-null `result.engine_stats`; subsequent results are idempotent (same player ship each matchup). `None` until first result arrives, or when Java did not emit `setup_stats` (replay / old logs). |
 | `completed_results` | `list[CombatResult]` | `[]` | Results accumulated so far |
 | `raw_scores` | `list[float]` | `[]` | Per-opponent raw `combat_fitness()` values (parallel to `completed_results`) |
 | `next_opponent_index` | `int` | `0` | Which opponent to evaluate next |
+
+`_InFlightBuild` is a mutable controller record, not a domain model. Design Principle 2's immutability applies to frozen domain classes (`Build`, `EffectiveStats`, `ScorerResult`) — in-flight evaluation state is allowed to mutate.
+
+### `_EBRecord`
+
+Frozen dataclass caching the narrow subset of `_InFlightBuild` needed for EB shrinkage after a build finalizes. Private to `StagedEvaluator`.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `trial_number` | `int` | Optuna trial number — key into `_completed_records` |
+| `scorer_result` | `ScorerResult` | Full scorer output, frozen |
+| `engine_stats` | `EngineStats \| None` | Engine-computed SETUP stats, `None` if Java didn't emit |
+
+Drops `completed_results`, `raw_scores`, `build_spec`, and the Optuna `trial` handle from the retained state (~10× memory reduction at 2000-trial scale).
 
 **Properties:**
 - `rung` → `next_opponent_index` (ASHA rung = number of opponents evaluated)
@@ -113,11 +126,8 @@ class StagedEvaluator:
 - `_burn_in_scores: dict[str, list[float]]` — per-opponent raw scores during burn-in (cleared after anchor lock)
 - `_burn_in_fitness: list[float]` — per-build TWFE fitness during burn-in (cleared after anchor lock)
 - `_builds_evaluated: int` — count for burn-in threshold
-- `_cv_pairs: list[tuple[float, float]]` — (heuristic_val, twfe_fitness) pairs for A2 correlation estimation
-- `_cv_coefficient: float` — A2 control variate coefficient c = Cov(f,h)/Var(h)
-- `_cv_heuristic_mean: float` — A2 running mean of heuristic scores
-- `_cv_active: bool` — A2 active when |ρ| > cv_rho_threshold
-- `_completed_fitness_values: list[float]` — post-A1/A2 fitness values for A3 rank shaping
+- `_completed_records: dict[int, _EBRecord]` — narrow covariate records for every finalized build, used by A2′ EB shrinkage at each finalize call
+- `_completed_fitness_values: list[float]` — post-A1/A2′ fitness values for A3 rank shaping
 
 **`run()` algorithm (async coordinator):**
 
@@ -206,7 +216,7 @@ Created via `_create_pruner(config)` factory:
 
 `WilcoxonPruner(p_threshold=config.wilcoxon_p_threshold, n_startup_steps=config.wilcoxon_n_startup_steps)`. Uses a Wilcoxon signed-rank test to compare a trial's intermediate values against the best trial's values at the same steps. Step IDs are rung positions (0-based), so all trials share steps 0..N-1 regardless of which opponents they face. With anchor-first ordering post-burn-in, the first rung positions compare the same high-discrimination opponents across trials. No `n_opponents` parameter needed.
 
-### Fitness Function — Signal Quality Pipeline (A1→A2→A3)
+### Fitness Function — Signal Quality Pipeline (A1→A2′→A3)
 
 Raw per-matchup scores from `combat_fitness()` (spec 25) pass through three composable transformations before reaching Optuna:
 
@@ -214,18 +224,29 @@ Raw per-matchup scores from `combat_fitness()` (spec 25) pass through three comp
 raw combat_fitness score
   → record in ScoreMatrix
   → A1: TWFE decomposition (α_i + β_j) → trimmed_alpha
-  → A2: control variate correction (if active)
+  → A2′: EB shrinkage toward γ̂ᵀX regression prior + triple-goal rank correction
   → A3: rank-based fitness shaping (finalization only)
   → study.tell()
 ```
 
 **A1 — TWFE Deconfounding (spec 28):** Raw `combat_fitness()` scores are recorded into a `ScoreMatrix` instance via `record(trial_number, opp_id, raw)`. At build finalization, `build_alpha(trial_number, config.twfe)` decomposes the accumulated score matrix into build quality (α_i) and opponent difficulty (β_j), then applies trimmed mean (dropping `trim_worst` worst residuals per build). The α_i estimate is schedule-adjusted — comparable across builds that faced different opponent subsets. All observations (including from pruned builds) contribute to β estimates, improving α for subsequent builds.
 
-**A2 — Control Variate Correction:** `fitness_adj = twfe_fitness - c * (heuristic_score - E[heuristic])`. Correlation ρ estimated from `(heuristic_val, twfe_fitness)` pairs after `cv_min_samples` completions. Applied only when |ρ| > `cv_rho_threshold`. Re-estimated every `cv_recalc_interval` completions. The `heuristic_score` is computed per-build at trial creation time in `_ask_new_trial` (cheap CPU-only computation). Note: TWFE alpha has different distributional properties than the prior z-scored mean, so CV correlation strength may differ.
+**A2′ — Empirical-Bayes Shrinkage (spec 28):** At every finalize, construct the full α̂-vector, σ̂_i²-vector, and 7-column covariate matrix X for all finalized builds in `_completed_records`. Call `eb_shrinkage(alpha, sigma_sq, X, config.eb)` to produce posterior means `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂² / (τ̂² + σ̂_i²)`. When `config.eb.triple_goal` is True, pass through `triple_goal_rank()` to preserve the EB rank ordering while restoring the empirical α̂ histogram. When `score_matrix.n_builds < config.eb.eb_min_builds`, skip shrinkage entirely and return raw α̂ (stability guard for the first few trials).
 
-**A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
+Covariate vector `X_i` assembled by `_build_covariate_vector(record)`, 7 components in order:
+1. `eff_max_flux` from `record.engine_stats`
+2. `eff_flux_dissipation` from `record.engine_stats`
+3. `eff_armor_rating` from `record.engine_stats`
+4. `total_weapon_dps` from `record.scorer_result.total_dps`
+5. `engagement_range` from `record.scorer_result.engagement_range`
+6. `kinetic_dps_fraction` = `record.scorer_result.kinetic_dps / max(total_dps, ε)`
+7. `composite_score` from `record.scorer_result.composite_score`
 
-**Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the rung position (0-based, no A1/A2/A3). `WilcoxonPruner` pairs values at the same rung across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences at the same evaluation position, and anchor-first ordering ensures the first rungs compare the same opponents post-burn-in.
+When `record.engine_stats is None` (replay on pre-5D logs, or test fixtures), features 1-3 fall back to `record.scorer_result.effective_stats.{flux_capacity, flux_dissipation, armor_rating}` with a `warnings.warn` for operator visibility. In production runs with the deployed Java mod, this fallback never triggers.
+
+**A3 — Rank-Based Fitness Shaping:** Final fitness converted to quantile rank in [0, 1] against the population of completed (post-A1/A2′) fitness values. Spreads out the dense "shades of losing" cluster where most signal lives.
+
+**Intermediate `trial.report()` values** use raw `combat_fitness()` scores reported at the rung position (0-based, no A1/A2′/A3). `WilcoxonPruner` pairs values at the same rung across trials via signed-rank test — it does NOT mix intermediate report values with final `study.tell()` values. Raw scores are appropriate for the signed-rank test since it compares paired differences at the same evaluation position, and anchor-first ordering ensures the first rungs compare the same opponents post-burn-in.
 
 **Failure scores** (`failure_score`, default -2.0) bypass all transformations — they are told directly to the study and are clearly below any rank in [0, 1].
 
@@ -291,12 +312,17 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
   "pruned": true,
   "opponent_order": ["doom_Strike", "aurora_Assault", "dominator_Assault", "dominator_XIV_Elite", "eagle_Assault"],
   "raw_fitness": -0.35,
+  "eb_fitness": -0.35,
   "fitness": 0.23,
   "timestamp": "2026-04-11T14:32:15"
 }
 ```
 
-For completed builds, `fitness` is the rank-shaped value (quantile in [0, 1]) told to Optuna; `raw_fitness` is the TWFE α + CV-corrected value before rank shaping (for analysis). For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `opponents_evaluated < opponents_total` indicates early termination.
+Schema:
+- `fitness`: rank-shaped value in [0, 1] told to Optuna (completed builds) or raw mean (pruned builds).
+- `raw_fitness`: the post-A2′ scalar fed into A3 rank shaping. Semantically stable across 5A → 5D: its *content* changed from CV-corrected to EB-shrunk, but its role ("final scalar before rank shaping") is unchanged.
+- `eb_fitness`: explicit EB posterior (post-triple-goal if enabled). Added in 5D for auditability. For completed builds under 5D this equals `raw_fitness`; the redundant write makes it unambiguous that EB was applied. Unset for pruned builds (TWFE α̂ is unstable with few observations; no shrinkage is applied at prune time).
+- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `opponents_evaluated < opponents_total` indicates early termination.
 
 ## Study Persistence
 

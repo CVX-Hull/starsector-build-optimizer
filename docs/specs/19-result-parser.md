@@ -32,6 +32,41 @@ Parse a single result dict from the Java JSON output into a `CombatResult` datac
 | `aggregate.enemy_ships_destroyed` | `enemy_ships_destroyed` | |
 | `aggregate.player_ships_retreated` | `player_ships_retreated` | |
 | `aggregate.enemy_ships_retreated` | `enemy_ships_retreated` | |
+| `setup_stats.player.eff_max_flux` | `engine_stats.eff_max_flux` | Phase 5D — Java-engine-computed effective stat read at end of SETUP. See `EngineStats` below. |
+| `setup_stats.player.eff_flux_dissipation` | `engine_stats.eff_flux_dissipation` | Phase 5D |
+| `setup_stats.player.eff_armor_rating` | `engine_stats.eff_armor_rating` | Phase 5D |
+
+### `EngineStats` dataclass
+
+Frozen dataclass in `models.py` (NOT `result_parser.py` — all domain dataclasses live in `models.py`) carrying Java-engine-computed pre-matchup effective stats:
+
+```python
+@dataclass(frozen=True)
+class EngineStats:
+    eff_max_flux: float
+    eff_flux_dissipation: float
+    eff_armor_rating: float
+```
+
+Added as an optional field on `CombatResult`:
+
+```python
+engine_stats: EngineStats | None = None
+```
+
+### `setup_stats` parsing — tolerant path
+
+This is the **only** tolerant parse path in `result_parser.py` (all other fields remain fail-loud). Reason: (a) `setup_stats` is a new block that must coexist with pre-5D result JSON during replay on historical logs, and (b) a malformed setup block should not kill an 8-hour production run over a one-off Java hiccup.
+
+| Condition | Outcome |
+|---|---|
+| `setup_stats` key absent | `engine_stats = None` (no warning — legitimate pre-5D result) |
+| `setup_stats` present but missing `"player"` key | `warnings.warn`, `engine_stats = None` |
+| `setup_stats.player` missing any of `eff_max_flux`/`eff_flux_dissipation`/`eff_armor_rating` | `warnings.warn`, `engine_stats = None` |
+| Any value is NaN or non-float-convertible | `warnings.warn`, `engine_stats = None` |
+| All three values present and finite | `engine_stats = EngineStats(...)` |
+
+Requires `import warnings` and `import math` in `result_parser.py`.
 
 ### `parse_results_file(path: Path) -> list[CombatResult]`
 

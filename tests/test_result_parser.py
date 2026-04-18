@@ -8,6 +8,7 @@ from starsector_optimizer.models import (
     BuildSpec,
     CombatResult,
     DamageBreakdown,
+    EngineStats,
     MatchupConfig,
     ShipCombatResult,
 )
@@ -240,3 +241,65 @@ class TestWriteQueueFile:
         assert len(queue_data[0]["player_builds"]) == 2
         assert queue_data[0]["player_builds"][0]["variant_id"] == "eagle_test"
         assert queue_data[0]["player_builds"][1]["variant_id"] == "wolf_test"
+
+
+class TestParseSetupStats:
+    """Phase 5D — tolerant parsing of the new Java setup_stats block."""
+
+    def test_populates_engine_stats(self):
+        data = dict(SAMPLE_RESULT)
+        data["setup_stats"] = {
+            "player": {
+                "eff_max_flux": 12000.0,
+                "eff_flux_dissipation": 800.0,
+                "eff_armor_rating": 1050.0,
+            }
+        }
+        result = parse_combat_result(data)
+        assert isinstance(result.engine_stats, EngineStats)
+        assert result.engine_stats.eff_max_flux == pytest.approx(12000.0)
+        assert result.engine_stats.eff_flux_dissipation == pytest.approx(800.0)
+        assert result.engine_stats.eff_armor_rating == pytest.approx(1050.0)
+
+    def test_missing_block_is_none_no_warn(self):
+        """Absent setup_stats → engine_stats=None, NO warning (legitimate pre-5D)."""
+        import warnings as _warnings
+
+        # SAMPLE_RESULT has no setup_stats
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")  # fail if any warning raised
+            result = parse_combat_result(SAMPLE_RESULT)
+        assert result.engine_stats is None
+
+    def test_missing_player_key_warns(self):
+        data = dict(SAMPLE_RESULT)
+        data["setup_stats"] = {"enemy": {"eff_max_flux": 1000.0}}
+        with pytest.warns(UserWarning, match="player"):
+            result = parse_combat_result(data)
+        assert result.engine_stats is None
+
+    def test_missing_subkey_warns(self):
+        data = dict(SAMPLE_RESULT)
+        data["setup_stats"] = {
+            "player": {
+                "eff_max_flux": 12000.0,
+                # eff_flux_dissipation missing
+                "eff_armor_rating": 1050.0,
+            }
+        }
+        with pytest.warns(UserWarning):
+            result = parse_combat_result(data)
+        assert result.engine_stats is None
+
+    def test_nan_value_warns(self):
+        data = dict(SAMPLE_RESULT)
+        data["setup_stats"] = {
+            "player": {
+                "eff_max_flux": float("nan"),
+                "eff_flux_dissipation": 800.0,
+                "eff_armor_rating": 1050.0,
+            }
+        }
+        with pytest.warns(UserWarning, match="NaN"):
+            result = parse_combat_result(data)
+        assert result.engine_stats is None

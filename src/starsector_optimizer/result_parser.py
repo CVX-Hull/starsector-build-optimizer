@@ -7,11 +7,14 @@ combat harness mod. See spec 19 for field mapping details.
 from __future__ import annotations
 
 import json
+import math
+import warnings
 from pathlib import Path
 
 from .models import (
     CombatResult,
     DamageBreakdown,
+    EngineStats,
     MatchupConfig,
     ShipCombatResult,
 )
@@ -35,6 +38,38 @@ def _parse_ship(data: dict) -> ShipCombatResult:
     )
 
 
+def _parse_setup_stats(data: dict) -> EngineStats | None:
+    """Tolerant parse of the Phase 5D setup_stats block.
+
+    Deliberate deviation from the fail-loud default elsewhere in this module:
+    pre-5D result JSON has no setup_stats key, and a single Java-side hiccup
+    should not kill an 8-hour production run. All other fields remain
+    fail-loud (bare `data[key]` indexing).
+    """
+    setup = data.get("setup_stats")
+    if setup is None:
+        return None  # pre-5D log or no emission — legitimate, no warning
+    player = setup.get("player")
+    if player is None:
+        warnings.warn(
+            "setup_stats present but missing 'player' key", UserWarning, stacklevel=2,
+        )
+        return None
+    try:
+        values = (
+            float(player["eff_max_flux"]),
+            float(player["eff_flux_dissipation"]),
+            float(player["eff_armor_rating"]),
+        )
+    except (KeyError, TypeError, ValueError) as e:
+        warnings.warn(f"Malformed setup_stats, skipping: {e}", UserWarning, stacklevel=2)
+        return None
+    if any(math.isnan(v) for v in values):
+        warnings.warn(f"setup_stats contains NaN: {values}", UserWarning, stacklevel=2)
+        return None
+    return EngineStats(*values)
+
+
 def parse_combat_result(data: dict) -> CombatResult:
     """Parse a single result dict from Java JSON into CombatResult."""
     return CombatResult(
@@ -47,6 +82,7 @@ def parse_combat_result(data: dict) -> CombatResult:
         enemy_ships_destroyed=data["aggregate"]["enemy_ships_destroyed"],
         player_ships_retreated=data["aggregate"]["player_ships_retreated"],
         enemy_ships_retreated=data["aggregate"]["enemy_ships_retreated"],
+        engine_stats=_parse_setup_stats(data),
     )
 
 

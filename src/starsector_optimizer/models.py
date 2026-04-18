@@ -371,6 +371,19 @@ class ShipCombatResult:
 
 
 @dataclass(frozen=True)
+class EngineStats:
+    """Java-engine-computed effective stats read at end of SETUP.
+
+    Populated by `CombatHarnessPlugin.doSetup()` via `MutableShipStats` accessors
+    after hullmod effects are applied. Used by Phase 5D EB shrinkage to regress
+    TWFE α̂ on authoritative engine values rather than Python recomputed ones.
+    """
+    eff_max_flux: float
+    eff_flux_dissipation: float
+    eff_armor_rating: float
+
+
+@dataclass(frozen=True)
 class CombatResult:
     """Full result from a single combat matchup."""
     matchup_id: str
@@ -382,6 +395,7 @@ class CombatResult:
     enemy_ships_destroyed: int
     player_ships_retreated: int
     enemy_ships_retreated: int
+    engine_stats: EngineStats | None = None
 
 
 @dataclass(frozen=True)
@@ -440,6 +454,20 @@ class TWFEConfig:
     n_anchors: int = 3
     anchor_burn_in: int = 30
     min_disc_samples: int = 5
+
+
+@dataclass(frozen=True)
+class EBShrinkageConfig:
+    """Empirical-Bayes shrinkage parameters for the Phase 5D A2′ stage.
+
+    Controls fusion of TWFE α̂ with a 7-covariate regression prior:
+        α̂_EB_i = w_i · α̂_i + (1 − w_i) · γ̂ᵀ[1, X_i],  w_i = τ̂² / (τ̂² + σ̂_i²)
+    See spec 28 §EB Shrinkage (A2′).
+    """
+    tau2_floor_frac: float = 0.05
+    triple_goal: bool = True
+    eb_min_builds: int = 8
+    ols_ridge: float = 1e-4
 
 
 @dataclass(frozen=True)

@@ -17,15 +17,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
 import optuna
 from optuna.distributions import CategoricalDistribution, IntDistribution
 from optuna.trial import TrialState, create_trial
 
 from .calibration import generate_diverse_builds
 from .instance_manager import InstanceError, InstancePool
-from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, GameData, HullSize, MatchupConfig, ShipHull, TWFEConfig
+from .models import Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig, EngineStats, GameData, HullSize, MatchupConfig, ScorerResult, ShipHull, TWFEConfig
 from .combat_fitness import combat_fitness
-from .deconfounding import ScoreMatrix
+from .deconfounding import ScoreMatrix, eb_shrinkage, triple_goal_rank
 from .opponent_pool import (
     OpponentPool,
     get_opponents,
@@ -53,6 +54,7 @@ class OptimizerConfig:
     n_ei_candidates: int = 256
     combat_fitness: CombatFitnessConfig = field(default_factory=CombatFitnessConfig)
     twfe: TWFEConfig = field(default_factory=TWFEConfig)
+    eb: EBShrinkageConfig = field(default_factory=EBShrinkageConfig)
     sampler: str = "tpe"
     fixed_params: dict[str, bool | int | str] | None = None
     study_storage: str | None = None
@@ -63,9 +65,6 @@ class OptimizerConfig:
     log_interval: int = 10
     failure_score: float = -2.0
     stock_build_scale_mult: float = 2.0
-    cv_min_samples: int = 30
-    cv_rho_threshold: float = 0.3
-    cv_recalc_interval: int = 10
     active_opponents: int = 10
     eval_log_path: Path | None = None
 
@@ -184,21 +183,6 @@ def _create_sampler(config: OptimizerConfig) -> optuna.samplers.BaseSampler:
         mod = optunahub.load_module("samplers/catcmawm")
         return mod.CatCmawmSampler()
     raise ValueError(f"Unknown sampler: {config.sampler!r}")
-
-
-def _pearson_r(xs: list[float], ys: list[float]) -> float:
-    """Pearson correlation coefficient. Returns 0.0 if n < 2 or either std ≈ 0."""
-    n = len(xs)
-    if n < 2:
-        return 0.0
-    x_mean = sum(xs) / n
-    y_mean = sum(ys) / n
-    x_std = (sum((x - x_mean) ** 2 for x in xs) / (n - 1)) ** 0.5
-    y_std = (sum((y - y_mean) ** 2 for y in ys) / (n - 1)) ** 0.5
-    if x_std < _EPSILON or y_std < _EPSILON:
-        return 0.0
-    cov = sum((x - x_mean) * (y - y_mean) for x, y in zip(xs, ys)) / (n - 1)
-    return cov / (x_std * y_std)
 
 
 def _create_pruner(config: OptimizerConfig) -> optuna.pruners.BasePruner:
@@ -347,14 +331,20 @@ def warm_start(
 
 @dataclass
 class _InFlightBuild:
-    """Tracks a build progressing through staged opponent evaluation."""
+    """Tracks a build progressing through staged opponent evaluation.
+
+    Mutable controller record — NOT a domain model. Design Principle 2
+    immutability applies to frozen domain classes (`Build`, `EffectiveStats`,
+    `ScorerResult`), not to transient per-build evaluation state.
+    """
 
     trial: optuna.Trial
     build: Build
     build_spec: BuildSpec
     variant_id: str
     opponents: tuple[str, ...]
-    heuristic_val: float = 0.0
+    scorer_result: ScorerResult  # full heuristic output; replaces heuristic_val
+    engine_stats: EngineStats | None = None  # from first result with non-null
     completed_results: list[CombatResult] = field(default_factory=list)
     raw_scores: list[float] = field(default_factory=list)
     next_opponent_index: int = 0
@@ -367,6 +357,64 @@ class _InFlightBuild:
     @property
     def is_complete(self) -> bool:
         return self.next_opponent_index >= len(self.opponents)
+
+
+@dataclass(frozen=True)
+class _EBRecord:
+    """Narrow finalized-build record for Phase 5D EB shrinkage.
+
+    Drops `completed_results`, `raw_scores`, `build_spec`, and the Optuna
+    `trial` handle relative to `_InFlightBuild` (~10× memory reduction at
+    2000-trial scale).
+    """
+    trial_number: int
+    scorer_result: ScorerResult
+    engine_stats: EngineStats | None
+
+
+def _build_covariate_vector(record: _EBRecord) -> np.ndarray:
+    """Assemble the 7-dim covariate vector for EB shrinkage (§2.7 order).
+
+    Order:
+        0. eff_max_flux          (engine, or Python fallback)
+        1. eff_flux_dissipation  (engine, or Python fallback)
+        2. eff_armor_rating      (engine, or Python fallback)
+        3. total_weapon_dps      (raw unweighted sum from ScorerResult.total_dps)
+        4. engagement_range      (DPS-weighted mean from ScorerResult)
+        5. kinetic_dps_fraction  (kinetic_dps / max(total_dps, ε))
+        6. composite_score       (calibrated heuristic scalar)
+    """
+    sr = record.scorer_result
+    total_dps = sr.total_dps
+    kin_frac = sr.kinetic_dps / max(total_dps, _EPSILON)
+    if record.engine_stats is not None:
+        es = record.engine_stats
+        eff_flux, eff_diss, eff_arm = (
+            es.eff_max_flux, es.eff_flux_dissipation, es.eff_armor_rating,
+        )
+    else:
+        # Test-fixture / replay-only fallback: in deployed production runs,
+        # Java always emits setup_stats so this branch never triggers.
+        # Mixing Java- and Python-sourced rows in one X matrix introduces a
+        # measurement-source confound; `eb_min_builds` gates early rows but
+        # a long-lived miss (Java mod absent) would bias γ̂. Flagged at WARN.
+        fallback = sr.effective_stats
+        eff_flux, eff_diss, eff_arm = (
+            fallback.flux_capacity,
+            fallback.flux_dissipation,
+            fallback.armor_rating,
+        )
+        import warnings as _w
+        _w.warn(
+            f"engine_stats missing for trial {record.trial_number}; "
+            "using Python compute_effective_stats fallback (replay/test only)",
+            UserWarning,
+            stacklevel=2,
+        )
+    return np.array([
+        eff_flux, eff_diss, eff_arm,
+        total_dps, sr.engagement_range, kin_frac, sr.composite_score,
+    ])
 
 
 class StagedEvaluator:
@@ -415,11 +463,8 @@ class StagedEvaluator:
         self._burn_in_scores: dict[str, list[float]] = {}
         self._burn_in_fitness: list[float] = []
         self._builds_evaluated: int = 0
-        # A2: Control variate estimation state
-        self._cv_pairs: list[tuple[float, float]] = []
-        self._cv_coefficient: float = 0.0
-        self._cv_heuristic_mean: float = 0.0
-        self._cv_active: bool = False
+        # A2′: EB shrinkage — per-build covariate cache for every finalized build
+        self._completed_records: dict[int, _EBRecord] = {}
         # A3: Completed fitness values for rank-based shaping
         self._completed_fitness_values: list[float] = []
 
@@ -531,6 +576,10 @@ class StagedEvaluator:
         ifb.raw_scores.append(raw)
         ifb.completed_results.append(result)
         ifb.next_opponent_index += 1
+        # Capture engine_stats from first non-null result (same player ship
+        # across all opponents, so subsequent reads would be idempotent).
+        if ifb.engine_stats is None and result.engine_stats is not None:
+            ifb.engine_stats = result.engine_stats
 
         raw_mean = sum(ifb.raw_scores) / len(ifb.raw_scores)
         # Report raw score at rung position (0-based).  Every trial evaluates
@@ -594,9 +643,7 @@ class StagedEvaluator:
             self._trials_completed += 1
             return None
 
-        h_val = heuristic_score(
-            build, self._hull, self._game_data,
-        ).composite_score
+        scorer_result = heuristic_score(build, self._hull, self._game_data)
         active = self._select_opponents(trial.number)
         return _InFlightBuild(
             trial=trial,
@@ -604,11 +651,11 @@ class StagedEvaluator:
             build_spec=build_spec,
             variant_id=variant_id,
             opponents=tuple(active),
-            heuristic_val=h_val,
+            scorer_result=scorer_result,
         )
 
     def _finalize_build(self, ifb: _InFlightBuild) -> None:
-        """Compute final fitness via A1→A2→A3 pipeline, tell Optuna, cache, log."""
+        """Compute final fitness via A1→A2′→A3 pipeline, tell Optuna, cache, log."""
         # A1: TWFE decomposition — schedule-adjusted build quality
         twfe_fitness = self._score_matrix.build_alpha(
             ifb.trial.number, self._config.twfe,
@@ -616,27 +663,63 @@ class StagedEvaluator:
         self._builds_evaluated += 1
         self._update_incumbent(ifb, twfe_fitness)
         self._update_burn_in(ifb, twfe_fitness)
-        # A2: control variate correction
-        cv_fitness = self._apply_control_variate(twfe_fitness, ifb.heuristic_val)
-        self._cv_pairs.append((ifb.heuristic_val, twfe_fitness))
-        self._maybe_update_cv()
+        # Cache a narrow EB record BEFORE shrinkage so this build is in the fit.
+        self._completed_records[ifb.trial.number] = _EBRecord(
+            trial_number=ifb.trial.number,
+            scorer_result=ifb.scorer_result,
+            engine_stats=ifb.engine_stats,
+        )
+        # A2′: EB shrinkage + optional triple-goal rank correction
+        eb_fitness = self._apply_eb_shrinkage(ifb.trial.number, twfe_fitness)
         # A3: rank-based shaping
-        self._completed_fitness_values.append(cv_fitness)
-        ranked_fitness = self._rank_fitness(cv_fitness)
+        self._completed_fitness_values.append(eb_fitness)
+        ranked_fitness = self._rank_fitness(eb_fitness)
 
         self._cache.put(ifb.build, ranked_fitness)
         self._study.tell(ifb.trial, ranked_fitness)
-        logger.info("  Trial %d COMPLETE (twfe=%.3f, ranked=%.3f)",
-                    ifb.trial.number, twfe_fitness, ranked_fitness)
+        logger.info(
+            "  Trial %d COMPLETE (twfe=%.3f, eb=%.3f, ranked=%.3f)",
+            ifb.trial.number, twfe_fitness, eb_fitness, ranked_fitness,
+        )
 
         if self._eval_log_path:
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
                 ifb.build, ifb.completed_results, ranked_fitness,
-                raw_fitness=cv_fitness,
+                raw_fitness=eb_fitness,
+                eb_fitness=eb_fitness,
                 pruned=False, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
+
+    def _apply_eb_shrinkage(
+        self, trial_number: int, twfe_fitness: float,
+    ) -> float:
+        """A2′ — EB shrinkage of TWFE α̂ toward γ̂ᵀX regression prior.
+
+        Returns raw α̂ unchanged when `score_matrix.n_builds < eb_min_builds`
+        (stability guard: OLS fit on too few builds is unstable).
+        """
+        eb_cfg = self._config.eb
+        if self._score_matrix.n_builds < eb_cfg.eb_min_builds:
+            return twfe_fitness
+
+        indices: list[int] = list(self._completed_records.keys())
+        alphas = np.array([
+            self._score_matrix.build_alpha(i, self._config.twfe) for i in indices
+        ])
+        sigma_sqs = np.array(
+            [self._score_matrix.build_sigma_sq(i) for i in indices]
+        )
+        X = np.vstack([
+            _build_covariate_vector(self._completed_records[i]) for i in indices
+        ])
+        alpha_eb, _, _, _ = eb_shrinkage(alphas, sigma_sqs, X, eb_cfg)
+        if eb_cfg.triple_goal:
+            alpha_out = triple_goal_rank(alpha_eb, alphas)
+        else:
+            alpha_out = alpha_eb
+        return float(alpha_out[indices.index(trial_number)])
 
     def _prune_build(self, ifb: _InFlightBuild) -> None:
         """Tell Optuna PRUNED, log partial results."""
@@ -773,42 +856,6 @@ class StagedEvaluator:
             time_mult=self._config.matchup_time_mult,
         )
 
-    def _apply_control_variate(
-        self, sim_fitness: float, heuristic_val: float,
-    ) -> float:
-        """A2: Adjust fitness using heuristic as control variate."""
-        if not self._cv_active:
-            return sim_fitness
-        return sim_fitness - self._cv_coefficient * (
-            heuristic_val - self._cv_heuristic_mean
-        )
-
-    def _maybe_update_cv(self) -> None:
-        """A2: Re-estimate control variate parameters if enough data."""
-        n = len(self._cv_pairs)
-        if n < self._config.cv_min_samples:
-            return
-        if n % self._config.cv_recalc_interval != 0 and self._cv_active:
-            return
-        hs = [p[0] for p in self._cv_pairs]
-        fs = [p[1] for p in self._cv_pairs]
-        rho = _pearson_r(hs, fs)
-        if abs(rho) > self._config.cv_rho_threshold:
-            h_mean = sum(hs) / n
-            h_var = sum((h - h_mean) ** 2 for h in hs) / (n - 1)
-            if h_var < _EPSILON:
-                self._cv_active = False
-                return
-            cov = sum(
-                (h - h_mean) * (f - sum(fs) / n)
-                for h, f in self._cv_pairs
-            ) / (n - 1)
-            self._cv_coefficient = cov / h_var
-            self._cv_heuristic_mean = h_mean
-            self._cv_active = True
-        else:
-            self._cv_active = False
-
     def _rank_fitness(self, fitness: float) -> float:
         """A3: Convert fitness to quantile rank in [0, 1]."""
         n = len(self._completed_fitness_values)
@@ -827,6 +874,7 @@ def _append_eval_log(
     fitness: float,
     *,
     raw_fitness: float | None = None,
+    eb_fitness: float | None = None,
     pruned: bool = False,
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
@@ -861,6 +909,8 @@ def _append_eval_log(
         "fitness": fitness,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if eb_fitness is not None:
+        record["eb_fitness"] = eb_fitness
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
         f.write(json.dumps(record) + "\n")

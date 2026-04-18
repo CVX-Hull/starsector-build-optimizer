@@ -95,7 +95,11 @@ Positive = player winning the attrition war. Negative = losing. Zero = even exch
 
 ### `aggregate_combat_fitness(results, mode, config) -> float`
 
-Standalone utility for simple aggregation of `combat_fitness` scores. The optimizer uses TWFE decomposition (spec 28) for fitness aggregation instead of this function.
+Standalone utility for simple aggregation of `combat_fitness` scores. The optimizer does NOT call this. The optimizer runs the A1→A2′→A3 signal-quality pipeline in `optimizer.py`:
+
+1. **A1 TWFE decomposition** (spec 28) via `ScoreMatrix`
+2. **A2′ EB shrinkage** (spec 28) — fuses the TWFE estimate with a 7-covariate regression prior assembled by `optimizer.py::_build_covariate_vector` from `ScorerResult` (this module's sibling `scorer.py`) and `EngineStats` (Java SETUP read). The covariate assembly lives in the optimizer, not in `combat_fitness.py`, because it crosses optimizer-owned state — scorer output plus SETUP engine reads. `combat_fitness` remains a pure scalar function of one `CombatResult`.
+3. **A3 rank shaping**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

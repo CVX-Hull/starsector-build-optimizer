@@ -65,4 +65,32 @@ class ResultWriterTest {
         assertEquals(0, json.getInt("player_ships_retreated"));
         assertEquals(1, json.getInt("enemy_ships_retreated"));
     }
+
+    @Test
+    void buildSetupStatsJSONContainsPlayerBlock() throws Exception {
+        JSONObject json = ResultWriter.buildSetupStatsJSON(12000f, 800f, 1050f);
+
+        assertTrue(json.has("player"));
+        JSONObject player = json.getJSONObject("player");
+        assertEquals(12000f, (float) player.getDouble("eff_max_flux"), 0.01f);
+        assertEquals(800f, (float) player.getDouble("eff_flux_dissipation"), 0.01f);
+        assertEquals(1050f, (float) player.getDouble("eff_armor_rating"), 0.01f);
+    }
+
+    @Test
+    void buildSetupStatsJSONPropagatesZeros() throws Exception {
+        JSONObject json = ResultWriter.buildSetupStatsJSON(0f, 0f, 0f);
+
+        JSONObject player = json.getJSONObject("player");
+        assertEquals(0f, (float) player.getDouble("eff_max_flux"), 0.01f);
+        assertEquals(0f, (float) player.getDouble("eff_flux_dissipation"), 0.01f);
+        assertEquals(0f, (float) player.getDouble("eff_armor_rating"), 0.01f);
+    }
+
+    @Test
+    void buildSetupStatsJSONRejectsNaN() {
+        // Game's bundled org.json rejects NaN in put(). Caller must check.
+        assertThrows(Exception.class, () ->
+                ResultWriter.buildSetupStatsJSON(Float.NaN, 800f, 1050f));
+    }
 }

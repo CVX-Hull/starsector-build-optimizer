@@ -45,6 +45,10 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private float matchupStartTime;
     private boolean contactMade = false;
     private int waitingFrameCount = 0;
+    // Phase 5D — engine-computed player SETUP stats, populated in doSetup()
+    private float currentEffMaxFlux = Float.NaN;
+    private float currentEffFluxDissipation = Float.NaN;
+    private float currentEffArmorRating = Float.NaN;
     private int frameCount = 0;
 
     @Override
@@ -124,6 +128,30 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                     + " mods=" + spec.hullmods.length);
         }
 
+        // Phase 5D — read engine-computed player SETUP stats after loadout swap.
+        // These feed the A2′ EB shrinkage regression prior. Any null-path stores
+        // NaN so the Python parser flags it as malformed (always-emit policy).
+        currentEffMaxFlux = Float.NaN;
+        currentEffFluxDissipation = Float.NaN;
+        currentEffArmorRating = Float.NaN;
+        if (!playerShips.isEmpty()) {
+            ShipAPI p = playerShips.get(0);
+            if (p.getMutableStats() != null) {
+                currentEffMaxFlux = p.getMutableStats()
+                        .getFluxCapacity().getModifiedValue();
+                currentEffFluxDissipation = p.getMutableStats()
+                        .getFluxDissipation().getModifiedValue();
+                if (p.getHullSpec() != null) {
+                    float baseArmor = p.getHullSpec().getArmorRating();
+                    currentEffArmorRating = p.getMutableStats()
+                            .getArmorBonus().computeEffective(baseArmor);
+                }
+            }
+        }
+        log.info("  setup_stats: flux=" + currentEffMaxFlux
+                + " diss=" + currentEffFluxDissipation
+                + " arm=" + currentEffArmorRating);
+
         spawnTime = engine.getTotalElapsedTime(false);
         matchupStartTime = 0f;
         contactMade = false;
@@ -177,7 +205,9 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             try {
                 results.put(ResultWriter.buildMatchupResult(
                         currentConfig, playerShips, enemyShips,
-                        currentTracker, winner, elapsed));
+                        currentTracker, winner, elapsed,
+                        currentEffMaxFlux, currentEffFluxDissipation,
+                        currentEffArmorRating));
                 ResultWriter.writeAllResults(results);
                 ResultWriter.writeDoneSignal();
                 log.info("Matchup " + currentConfig.matchupId

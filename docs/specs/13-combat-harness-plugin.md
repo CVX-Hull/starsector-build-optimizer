@@ -28,8 +28,18 @@ One matchup per mission. After `endCombat()`, Robot dismisses results, game retu
    - `variant.clear()` + `addWeapon()`/`addMod()` for each weapon/hullmod
    - `setNumFluxVents()`, `setNumFluxCapacitors()`, `autoGenerateWeaponGroups()`
    - `ship.setCurrentCR(spec.cr)`, `ship.setCRAtDeployment(spec.cr)`
-6. Record `spawnTime`. Set `contactMade = false`.
-7. Transition to FIGHTING
+6. **Engine-computed SETUP stats read (Phase 5D):** After loadout swap, read the player ship's effective post-hullmod stats via the game engine's authoritative `MutableShipStats` accessors and cache on plugin fields for emission in the result JSON:
+   - `currentEffMaxFlux = ship.getMutableStats().getFluxCapacity().getModifiedValue()`
+   - `currentEffFluxDissipation = ship.getMutableStats().getFluxDissipation().getModifiedValue()`
+   - `currentEffArmorRating = ship.getMutableStats().getArmorBonus().computeEffective(ship.getHullSpec().getArmorRating())`
+
+   Null-check `getMutableStats()` and `getHullSpec()` — any null path stores `Float.NaN` (always-emit policy; parser handles NaN as malformed).
+
+   **Why not read via `ArmorGridAPI`?** `ArmorGridAPI` cells reflect current damage state, not rated armor. `StatBonus.computeEffective(base)` is the canonical accessor because it applies flat + percent + mult bonuses to the base hull-spec rating.
+
+   **API verified 2026-04-18** (see `docs/reference/phase5d-covariate-adjustment.md` §5 implementation notes).
+7. Record `spawnTime`. Set `contactMade = false`.
+8. Transition to FIGHTING
 
 ### State: FIGHTING
 Per-frame:
@@ -41,7 +51,7 @@ Per-frame:
 4. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins. If both zero → TIMEOUT.
 5. **Timeout check:** If `contactMade` and `(now - matchupStartTime) > timeLimitSeconds` → TIMEOUT
 6. On end:
-   - Build result via `ResultWriter.buildMatchupResult()`
+   - Build result via `ResultWriter.buildMatchupResult(..., currentEffMaxFlux, currentEffFluxDissipation, currentEffArmorRating)` — three trailing float args are the engine-computed SETUP stats from step SETUP.6
    - Write results array + done signal via `ResultWriter.writeAllResults()` + `ResultWriter.writeDoneSignal()`
    - Unregister DamageTracker
    - **Launch Robot dismiss thread** (must happen before `endCombat()` — see note below)

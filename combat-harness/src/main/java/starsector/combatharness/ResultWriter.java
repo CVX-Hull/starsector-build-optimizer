@@ -26,7 +26,10 @@ public class ResultWriter {
                                                  List<ShipAPI> enemyShips,
                                                  DamageTracker tracker,
                                                  String winner,
-                                                 float duration) throws JSONException {
+                                                 float duration,
+                                                 float effMaxFlux,
+                                                 float effFluxDissipation,
+                                                 float effArmorRating) throws JSONException {
         JSONArray playerArr = new JSONArray();
         JSONArray enemyArr = new JSONArray();
 
@@ -61,7 +64,35 @@ public class ResultWriter {
         result.put("enemy_ships", enemyArr);
         result.put("aggregate", aggregateToJSON(playerTotalDealt, enemyTotalDealt,
                 playerDestroyed, enemyDestroyed, 0, 0));
+        // Phase 5D: emit player SETUP stats when all three reads succeeded.
+        // The game's bundled org.json rejects NaN in put(), so on a failed
+        // read (any value is NaN — should never happen in production after
+        // a successful loadout swap) we omit the key; Python parser treats
+        // absence as engine_stats=None, matching pre-5D log replay semantics.
+        if (!Float.isNaN(effMaxFlux)
+                && !Float.isNaN(effFluxDissipation)
+                && !Float.isNaN(effArmorRating)) {
+            result.put("setup_stats",
+                    buildSetupStatsJSON(effMaxFlux, effFluxDissipation, effArmorRating));
+        }
         return result;
+    }
+
+    /**
+     * Phase 5D — wrap post-SETUP engine-computed player stats for EB shrinkage.
+     * Matches the individual-primitive parameter style of damageToJSON / fluxStatsToJSON.
+     * Caller must ensure all three values are finite (org.json rejects NaN).
+     */
+    public static JSONObject buildSetupStatsJSON(float effMaxFlux,
+                                                  float effFluxDissipation,
+                                                  float effArmorRating) throws JSONException {
+        JSONObject player = new JSONObject();
+        player.put("eff_max_flux", effMaxFlux);
+        player.put("eff_flux_dissipation", effFluxDissipation);
+        player.put("eff_armor_rating", effArmorRating);
+        JSONObject wrapper = new JSONObject();
+        wrapper.put("player", player);
+        return wrapper;
     }
 
     /** Write batch results array to saves/common/. */

@@ -828,49 +828,6 @@ class TestStagedEvaluator:
                     f"expected raw PLAYER win score in [1.0, 1.5]"
                 )
 
-    def test_control_variate_activates(self, wolf_hull, game_data):
-        """After cv_min_samples evaluations, _cv_active should become True if correlated."""
-        from starsector_optimizer.optimizer import optimize_hull, StagedEvaluator
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import HullSize
-
-        pool = self._make_mock_pool()
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
-        # Need enough trials for CV to activate (cv_min_samples=30 default)
-        config = OptimizerConfig(
-            sim_budget=35, warm_start_n=3, warm_start_sample_n=20,
-            cv_min_samples=10,  # lower threshold to keep test fast
-        )
-
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # If the CV activated, the study should still have valid values
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE
-                     and t.value is not None]
-        # With uniform PLAYER wins and identical heuristic scores,
-        # correlation may be low. The key test is that the pipeline runs.
-        assert len(completed) > 0
-
-    def test_control_variate_inactive_low_correlation(self, wolf_hull, game_data):
-        """With uncorrelated heuristic/sim scores, CV should remain inactive."""
-        from starsector_optimizer.optimizer import optimize_hull
-        from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import HullSize
-
-        pool = self._make_mock_pool()
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
-        # Very high threshold ensures CV stays inactive
-        config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
-            cv_rho_threshold=0.99,
-        )
-
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
-        # Pipeline should complete normally even with CV inactive
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
-        assert len(completed) > 0
-
     def test_rank_shaping_spreads_cluster(self, wolf_hull, game_data):
         """Rank shaping spreads clustered sim values across (0, 1]."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -1365,3 +1322,190 @@ class TestWilcoxonPruner:
             orders.add(tuple(shuffled))
         # With 20 different seeds and 10 items, we should get many distinct orderings
         assert len(orders) >= 10
+
+
+class TestEBShrinkage:
+    """Phase 5D — EB shrinkage at A2′ replaces scalar control variate."""
+
+    def test_config_removes_cv_fields(self):
+        """OptimizerConfig has no cv_* attributes; it carries an eb: EBShrinkageConfig."""
+        from starsector_optimizer.models import EBShrinkageConfig
+
+        config = OptimizerConfig()
+        assert not hasattr(config, "cv_min_samples")
+        assert not hasattr(config, "cv_rho_threshold")
+        assert not hasattr(config, "cv_recalc_interval")
+        assert isinstance(config.eb, EBShrinkageConfig)
+        assert config.eb.tau2_floor_frac == 0.05
+        assert config.eb.triple_goal is True
+        assert config.eb.eb_min_builds == 8
+        assert config.eb.ols_ridge == 1e-4
+
+    def test_build_covariate_vector_order(self, wolf_hull, game_data):
+        """Covariate vector has the documented 7 elements in §2.7 order."""
+        from starsector_optimizer.optimizer import _build_covariate_vector, _EBRecord
+        from starsector_optimizer.models import EngineStats
+        from starsector_optimizer.scorer import heuristic_score
+        from starsector_optimizer.repair import repair_build
+        from starsector_optimizer.models import Build
+
+        # Create a real ScorerResult by running the scorer on a minimal build
+        build = repair_build(
+            Build(
+                hull_id="wolf", weapon_assignments={},
+                hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
+            ),
+            wolf_hull, game_data,
+        )
+        sr = heuristic_score(build, wolf_hull, game_data)
+        es = EngineStats(
+            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+        )
+        record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=es)
+
+        X = _build_covariate_vector(record)
+        assert X.shape == (7,)
+        # Order: engine trio (3), total_dps, engagement_range, kinetic_dps_fraction, composite_score
+        assert X[0] == pytest.approx(12000.0)
+        assert X[1] == pytest.approx(800.0)
+        assert X[2] == pytest.approx(1050.0)
+        assert X[3] == pytest.approx(sr.total_dps)
+        assert X[4] == pytest.approx(sr.engagement_range)
+        expected_kin_frac = sr.kinetic_dps / max(sr.total_dps, 1e-12)
+        assert X[5] == pytest.approx(expected_kin_frac)
+        assert X[6] == pytest.approx(sr.composite_score)
+
+    def test_build_covariate_vector_fallback_warns(self, wolf_hull, game_data):
+        """When engine_stats is None, fall back to effective_stats and warn."""
+        from starsector_optimizer.optimizer import _build_covariate_vector, _EBRecord
+        from starsector_optimizer.scorer import heuristic_score
+        from starsector_optimizer.repair import repair_build
+        from starsector_optimizer.models import Build
+
+        build = repair_build(
+            Build(
+                hull_id="wolf", weapon_assignments={},
+                hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
+            ),
+            wolf_hull, game_data,
+        )
+        sr = heuristic_score(build, wolf_hull, game_data)
+        record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=None)
+
+        with pytest.warns(UserWarning, match="engine_stats"):
+            X = _build_covariate_vector(record)
+
+        assert X.shape == (7,)
+        assert X[0] == pytest.approx(sr.effective_stats.flux_capacity)
+        assert X[1] == pytest.approx(sr.effective_stats.flux_dissipation)
+        assert X[2] == pytest.approx(sr.effective_stats.armor_rating)
+
+
+class TestStagedEvaluatorEBIntegration:
+    """Integration tests for EB shrinkage in StagedEvaluator."""
+
+    def _make_mock_pool(self, *, winner="PLAYER", num_instances=1, engine_stats=None):
+        """Mock InstancePool returning CombatResults with optional engine_stats."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import (
+            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+        )
+        from starsector_optimizer.instance_manager import InstancePool
+
+        mock_pool = MagicMock(spec=InstancePool)
+        mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_instances = num_instances
+        default_es = engine_stats or EngineStats(
+            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+        )
+
+        def mock_run_matchup(instance_id, matchup):
+            m = matchup
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=False, hull_fraction=0.7,
+                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=True, hull_fraction=0.0,
+                armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id, winner=winner,
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0, enemy_ships_destroyed=1,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=default_es,
+            )
+
+        mock_pool.run_matchup = mock_run_matchup
+        return mock_pool
+
+    def test_handle_result_captures_engine_stats(self, wolf_hull, game_data):
+        """First CombatResult with engine_stats populates _InFlightBuild.engine_stats."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize, EngineStats
+
+        custom_es = EngineStats(
+            eff_max_flux=9999.0, eff_flux_dissipation=555.0, eff_armor_rating=777.0,
+        )
+        pool = self._make_mock_pool(engine_stats=custom_es)
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=3, warm_start_n=2, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE]
+        assert len(completed) > 0
+
+    def test_finalize_uses_raw_alpha_when_few_builds(self, wolf_hull, game_data):
+        """With n_builds < eb_min_builds, shrinkage is skipped."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize, EBShrinkageConfig
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        # Budget of 3 < eb_min_builds=8 → shrinkage never engages
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            eb=EBShrinkageConfig(eb_min_builds=8),
+        )
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        # Pipeline runs cleanly without shrinkage
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE
+                     and t.value is not None]
+        assert len(completed) > 0
+
+    def test_eb_pipeline_runs_above_min_builds(self, wolf_hull, game_data):
+        """With n_builds >= eb_min_builds, shrinkage engages and study still completes."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize, EBShrinkageConfig
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        # Budget above eb_min_builds → shrinkage activates
+        config = OptimizerConfig(
+            sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
+            eb=EBShrinkageConfig(eb_min_builds=4),
+        )
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        completed = [t for t in study.trials
+                     if t.state == optuna.trial.TrialState.COMPLETE
+                     and t.value is not None]
+        assert len(completed) >= 4
