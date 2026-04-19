@@ -1,0 +1,15 @@
+commit 24aab0437f60271d35395e1f67819af8cbc391e8
+Author:     CVX-Hull <cvx_hull@proton.me>
+AuthorDate: Sun Apr 19 10:32:46 2026 -0400
+Commit:     CVX-Hull <cvx_hull@proton.me>
+CommitDate: Sun Apr 19 10:32:46 2026 -0400
+
+    Log H5 deferred — CampaignManager ledger-tick stub / budget unenforced
+    
+    Surfaced during Phase 7 prep launch review: campaign.py:594-596 is a
+    literal stub. ledger.jsonl never written; budget_usd cap is decorative.
+    Run bounded only by max_lifetime_hours AMI self-terminate + launch_campaign
+    EXIT trap. Pre-requisite for next cloud campaign; takes precedence over
+    H1-H4 in the triage queue.
+    
+    Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
