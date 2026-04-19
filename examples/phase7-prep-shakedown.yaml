@@ -58,11 +58,21 @@ tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
 # (study, worker, slot) multiplicity, not archetype diversity. Hammerhead
 # is chosen because 5D's LOOO Δρ=+0.036 validates it as a non-flat
 # landscape; the gate isn't flaky on signal-quality issues.
+#
+# `active_opponents: 1` makes each trial a single-matchup / single-rung
+# proposition so the ≥1-COMPLETE-per-study gate is achievable even with
+# the shakedown's aggressive visibility_timeout=60s (every matchup will
+# be requeued at least once since real matchups run ~100s). The
+# shakedown's job is to stress the concurrent-dispatch pipeline — 60
+# trials × 1 opponent × 4 studies = 240 matchups run across 64 slots
+# exercises the full Tier-3 goal (ledger tick, janitor requeue, Redis
+# key scoping, Fleet-provision contention) without also gating on
+# ASHA's statistical criteria. Prep restores the default 10.
 studies:
-  - {hull: hammerhead, regime: early, seeds: [0], budget_per_study: 60, workers_per_study: 8, sampler: tpe}
-  - {hull: hammerhead, regime: early, seeds: [1], budget_per_study: 60, workers_per_study: 8, sampler: tpe}
-  - {hull: hammerhead, regime: early, seeds: [2], budget_per_study: 60, workers_per_study: 8, sampler: tpe}
-  - {hull: hammerhead, regime: early, seeds: [3], budget_per_study: 60, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [0], budget_per_study: 60, workers_per_study: 8, sampler: tpe, active_opponents: 1}
+  - {hull: hammerhead, regime: early, seeds: [1], budget_per_study: 60, workers_per_study: 8, sampler: tpe, active_opponents: 1}
+  - {hull: hammerhead, regime: early, seeds: [2], budget_per_study: 60, workers_per_study: 8, sampler: tpe, active_opponents: 1}
+  - {hull: hammerhead, regime: early, seeds: [3], budget_per_study: 60, workers_per_study: 8, sampler: tpe, active_opponents: 1}
 
 max_lifetime_hours: 1.0
 fleet_provision_timeout_seconds: 600.0
