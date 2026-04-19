@@ -44,10 +44,11 @@ max_concurrent_workers: 32
 min_workers_to_start: 16
 partial_fleet_policy: proceed_half_speed
 
-# AMIs from the 2026-04-19 manifest-aware rebake. Update post-rebake.
+# AMIs from 2026-04-19 bake (post-mod_commit_sha wiring fix; manifest
+# carries git SHA c813561 end-to-end; AMI tags mirror manifest via Packer).
 ami_ids_by_region:
-  us-east-1: ami-013af3c3b247d43ef
-  us-east-2: ami-065272e3dfda4839c
+  us-east-1: ami-0a9cb6be884488352
+  us-east-2: ami-0e60f66b6e3799758
 
 ssh_key_name: starsector-probe
 

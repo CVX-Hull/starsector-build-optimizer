@@ -62,10 +62,11 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
    }
    ```
    In grants, the port moves out of `dst` into a separate `ip` array (each port/range is its own entry); `"action": "accept"` is removed (grants are accept-only). The editor has a **"Convert to grants"** button that rewrites any legacy `acls` block.
-6. **Ephemeral + pre-approved auth key exists** (from Tailscale admin panel → Keys), tagged `tag:starsector-worker`. Export before launch if the YAML uses `${TAILSCALE_AUTHKEY}` env-substitution:
+6. **Ephemeral + pre-approved auth key exists** (from Tailscale admin panel → Keys), tagged `tag:starsector-worker`. The canonical source is the repo-local `.env` file (mode 0600, gitignored). Load it before any cloud operation:
    ```bash
-   export TAILSCALE_AUTHKEY=tskey-auth-...
+   set -a && source .env && set +a   # exports every KEY=VALUE in .env
    ```
+   `.env` must contain at minimum `TAILSCALE_AUTHKEY=tskey-auth-...`. Campaign YAMLs using `${TAILSCALE_AUTHKEY}` substitution resolve from the shell env, so sourcing `.env` is sufficient. If `.env` is missing or empty, recreate it from the key at the Tailscale admin panel before proceeding.
 7. **AWS quota check** (for every `regions:` entry):
    ```bash
    for region in us-east-1 us-east-2; do
@@ -132,7 +133,7 @@ Smoke and prep share the same launch command. Only the YAML differs.
 
 ```bash
 # 0. (optional, if not using system tailscale / redis) Rootless dev env
-export TAILSCALE_AUTHKEY=tskey-auth-...
+set -a && source .env && set +a   # loads TAILSCALE_AUTHKEY from .env
 scripts/cloud/devenv-up.sh
 
 # 1. (once per AMI rebuild) Bake and copy the AMI

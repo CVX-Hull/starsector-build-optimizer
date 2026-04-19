@@ -62,7 +62,8 @@ variable "project_src" {
 # mirrors that value into the AMI tag; CampaignManager._check_manifest_and_ami_tags
 # compares the two. One file, one source of truth.
 locals {
-  manifest       = jsondecode(file("${path.root}/../../../game/starsector/manifest.json"))
+  manifest_path  = abspath("${path.root}/../../../game/starsector/manifest.json")
+  manifest       = jsondecode(file(local.manifest_path))
   game_version   = local.manifest.constants.game_version
   mod_commit_sha = local.manifest.constants.mod_commit_sha
 }

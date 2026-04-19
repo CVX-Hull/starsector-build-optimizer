@@ -43,9 +43,9 @@ max_concurrent_workers: 1
 min_workers_to_start: 1
 partial_fleet_policy: abort
 
-# AMI from 2026-04-18 bake; re-bake produces new IDs.
+# AMI from 2026-04-19 bake (post-mod_commit_sha wiring fix).
 ami_ids_by_region:
-  us-east-1: ami-013af3c3b247d43ef
+  us-east-1: ami-0a9cb6be884488352
 
 ssh_key_name: starsector-probe
 

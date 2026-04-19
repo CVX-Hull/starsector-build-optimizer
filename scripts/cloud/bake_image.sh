@@ -37,6 +37,17 @@ if [[ -z "$AMI_ID" ]]; then
 fi
 echo "[bake_image] $SOURCE_REGION AMI: $AMI_ID"
 
+# Pull the authoritative tags from the source AMI — the Packer template
+# sets GameVersion + ModCommitSha from the committed manifest, and preflight
+# (_check_manifest_and_ami_tags) dual-checks both tags. aws ec2 copy-image
+# does NOT propagate tags, so we mirror them onto each copy explicitly. A
+# missing ModCommitSha tag on a copied AMI would wedge every cross-region
+# campaign launch.
+src_tags_json=$(aws ec2 describe-images \
+  --owners self --region "$SOURCE_REGION" --image-ids "$AMI_ID" \
+  --query 'Images[0].Tags[?Key==`Project` || Key==`Role` || Key==`GameVersion` || Key==`ModCommitSha`]' \
+  --output json)
+
 for target in "${TARGET_REGIONS[@]}"; do
   echo "[bake_image] Copying to $target..."
   copied_ami=$(aws ec2 copy-image \
@@ -46,6 +57,10 @@ for target in "${TARGET_REGIONS[@]}"; do
     --name "starsector-worker-$(date -u +%Y%m%d%H%M%S)" \
     --query ImageId --output text)
   echo "[bake_image] $target AMI: $copied_ami"
+  echo "[bake_image] Propagating tags to $copied_ami..."
+  aws ec2 create-tags --region "$target" \
+    --resources "$copied_ami" \
+    --tags "$src_tags_json"
 done
 
 rm -f packer.log
