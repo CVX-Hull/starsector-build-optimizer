@@ -53,6 +53,7 @@ def run_cloud_study(
     hull_id: str,
     hull: Any,
     game_data: Any,
+    manifest: Any,
     opponent_pool: Any,
     optimizer_config: Any,
 ) -> Any:
@@ -60,6 +61,11 @@ def run_cloud_study(
 
     Returns the Optuna Study object. Raises whatever the inner study raises,
     with teardown guaranteed via `finally`.
+
+    `manifest` is the authoritative `GameManifest` (schema v2, Commit G) —
+    `optimize_hull` requires it for per-hull applicability + conditional
+    exclusion reads. `scripts/run_optimizer.py` loads it once from
+    `game/starsector/manifest.json` and forwards it through here.
     """
     tailnet_ip = _require_env("STARSECTOR_WORKSTATION_TAILNET_IP")
     bearer_token = _require_env("STARSECTOR_BEARER_TOKEN")
@@ -143,6 +149,7 @@ def run_cloud_study(
         with pool:
             return optimize_hull(
                 hull_id, game_data, pool, opponent_pool, optimizer_config,
+                manifest,
             )
     finally:
         # pool.__exit__ (above) shuts Flask + janitor BEFORE we terminate

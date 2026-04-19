@@ -11,6 +11,7 @@ sys.path.insert(0, "src")
 
 from pathlib import Path
 
+from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.models import REGIME_PRESETS
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
@@ -94,7 +95,12 @@ def main():
 
     print(f"Loading game data from {args.game_dir}...")
     game_data = load_game_data(args.game_dir)
-    print(f"Loaded {len(game_data.hulls)} hulls, {len(game_data.weapons)} weapons")
+    manifest = GameManifest.load()
+    print(
+        f"Loaded {len(game_data.hulls)} hulls, {len(game_data.weapons)} weapons; "
+        f"manifest schema_v{manifest.constants.manifest_schema_version} "
+        f"(mod_commit_sha={manifest.constants.mod_commit_sha[:8] or '<empty>'})"
+    )
 
     if args.hull not in game_data.hulls:
         print(f"Error: hull '{args.hull}' not found. Available: {sorted(game_data.hulls.keys())[:10]}...")
@@ -171,7 +177,7 @@ def main():
                     "--warm-start-from-regime requires --study-db (source "
                     "and target studies must share one SQLite backend)."
                 )
-            space = build_search_space(hull, game_data, config.regime)
+            space = build_search_space(hull, game_data, config.regime, manifest)
             _enqueue_warm_start_from_regime(
                 target_study=study,
                 source_storage=storage,
@@ -180,9 +186,10 @@ def main():
                 top_m=config.warm_start_n,
                 hull=hull,
                 game_data=game_data,
+                manifest=manifest,
                 target_space=space,
             )
-        warm_start(study, hull, game_data, config)
+        warm_start(study, hull, game_data, config, manifest)
         _print_results(study, args.hull, game_data)
         return
 
@@ -198,6 +205,7 @@ def main():
                 hull_id=args.hull,
                 hull=hull,
                 game_data=game_data,
+                manifest=manifest,
                 opponent_pool=opponent_pool,
                 optimizer_config=config,
             )
@@ -214,7 +222,7 @@ def main():
         try:
             with LocalInstancePool(instance_config) as pool:
                 study = optimize_hull(
-                    args.hull, game_data, pool, opponent_pool, config,
+                    args.hull, game_data, pool, opponent_pool, config, manifest,
                 )
         except KeyboardInterrupt:
             logging.getLogger(__name__).warning(

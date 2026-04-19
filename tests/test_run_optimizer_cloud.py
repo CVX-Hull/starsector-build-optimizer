@@ -143,7 +143,7 @@ class TestRunCloudStudyOrdering:
         optimizer_config = MagicMock()
         cloud_runner.run_cloud_study(
             campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=game_data,
+            hull_id="hammerhead", hull=hull, game_data=game_data, manifest=MagicMock(),
             opponent_pool=opponent_pool, optimizer_config=optimizer_config,
         )
         assert call_log.index("provision_fleet") < call_log.index("pool.__enter__")
@@ -161,7 +161,7 @@ class TestRunCloudStudyOrdering:
         with pytest.raises(RuntimeError, match="boom"):
             cloud_runner.run_cloud_study(
                 campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
                 opponent_pool=MagicMock(), optimizer_config=MagicMock(),
             )
         assert "terminate_fleet" in call_log
@@ -178,7 +178,7 @@ class TestRunCloudStudyOrdering:
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
             campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
         assert call_log.index("pool.__exit__") < call_log.index("terminate_fleet")
@@ -207,7 +207,7 @@ class TestRunCloudStudyOrdering:
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
             campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
         expected_study_id = "hammerhead__early__tpe__seed0"
@@ -237,7 +237,7 @@ class TestRunCloudStudyOrdering:
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
             campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
         # authkey comes from env (set by smoke_env fixture), not YAML
@@ -265,7 +265,7 @@ class TestRunCloudStudyEnvPreflight:
         with pytest.raises(ValueError, match="STARSECTOR_WORKSTATION_TAILNET_IP"):
             run_cloud_study(
                 campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
                 opponent_pool=MagicMock(), optimizer_config=MagicMock(),
             )
 
@@ -280,7 +280,7 @@ class TestRunCloudStudyEnvPreflight:
         with pytest.raises(ValueError, match="STARSECTOR_BEARER_TOKEN"):
             run_cloud_study(
                 campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
                 opponent_pool=MagicMock(), optimizer_config=MagicMock(),
             )
 
@@ -295,7 +295,7 @@ class TestRunCloudStudyEnvPreflight:
         with pytest.raises(ValueError, match="STARSECTOR_TAILSCALE_AUTHKEY"):
             run_cloud_study(
                 campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
                 opponent_pool=MagicMock(), optimizer_config=MagicMock(),
             )
 
@@ -310,7 +310,7 @@ class TestRunCloudStudyEnvPreflight:
         with pytest.raises(ValueError, match="STARSECTOR_PROJECT_TAG"):
             run_cloud_study(
                 campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
                 opponent_pool=MagicMock(), optimizer_config=MagicMock(),
             )
 
@@ -359,11 +359,61 @@ class TestPoolTotalMatchupSlots:
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
             campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
         assert pool_kwargs["total_matchup_slots"] == 3 * 2
         assert pool_kwargs["project_tag"] == smoke_env["STARSECTOR_PROJECT_TAG"]
+
+
+class TestManifestIsThreadedIntoOptimizeHull:
+    """Regression: a 2026-04-19 Tier-2 smoke crashed with `optimize_hull()
+    missing 1 required positional argument: 'manifest'` because
+    run_cloud_study did not forward the manifest. schema-v2 optimize_hull
+    (Commit G) requires a GameManifest. This test fails if cloud_runner
+    ever drops the plumbing again."""
+
+    def test_manifest_forwarded_to_optimize_hull(
+        self, monkeypatch, tmp_path, smoke_env,
+    ):
+        import starsector_optimizer.cloud_runner as cloud_runner
+        config, path = _make_smoke_config(tmp_path)
+
+        class Recorder:
+            def __init__(self, *, regions): pass
+            def provision_fleet(self, **kwargs): return ["i-0"]
+            def terminate_fleet(self, **kwargs): return 1
+
+        class FakePool:
+            def __init__(self, *a, **kw): pass
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        optimize_hull_mock = MagicMock()
+        monkeypatch.setattr(cloud_runner, "AWSProvider", Recorder)
+        monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
+        monkeypatch.setattr(cloud_runner, "optimize_hull", optimize_hull_mock)
+        monkeypatch.setattr(cloud_runner, "render_user_data",
+                            lambda *a, **kw: "#!/bin/bash\n")
+        import redis as redis_mod
+        monkeypatch.setattr(redis_mod, "Redis", MagicMock())
+
+        sentinel_manifest = MagicMock(name="sentinel_manifest")
+        hull = MagicMock()
+        hull.hull_size = MagicMock()
+        cloud_runner.run_cloud_study(
+            campaign_yaml_path=path, study_idx=0, seed_idx=0,
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            manifest=sentinel_manifest,
+            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+        )
+        optimize_hull_mock.assert_called_once()
+        # Signature is positional: (hull_id, game_data, pool, opponent_pool,
+        # config, manifest). Assert manifest is the 6th positional arg.
+        call_args = optimize_hull_mock.call_args
+        assert call_args.args[5] is sentinel_manifest, (
+            f"manifest not forwarded as positional arg[5]; got {call_args.args}"
+        )
 
 
 class TestSeedIndexResolvesCorrectSeed:
@@ -412,7 +462,7 @@ class TestSeedIndexResolvesCorrectSeed:
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
             campaign_yaml_path=path, study_idx=0, seed_idx=2,   # seeds[2] = 7
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
         assert captured["fleet_name"] == "hammerhead__early__tpe__seed7"
