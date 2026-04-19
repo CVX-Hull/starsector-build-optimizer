@@ -31,18 +31,20 @@ def _matchup(matchup_id: str = "m1") -> MatchupConfig:
 
 
 def _combat_result_json(matchup_id: str) -> dict:
+    """Matches `dataclasses.asdict(CombatResult(...))` — the schema the worker
+    actually posts (not the raw Java harness JSON). Flat aggregates + flat
+    overload_count per ship (no `aggregate` or `flux_stats` wrappers)."""
     return {
         "matchup_id": matchup_id,
         "winner": "player",
         "duration_seconds": 12.5,
         "player_ships": [],
         "enemy_ships": [],
-        "aggregate": {
-            "player_ships_destroyed": 0,
-            "enemy_ships_destroyed": 1,
-            "player_ships_retreated": 0,
-            "enemy_ships_retreated": 0,
-        },
+        "player_ships_destroyed": 0,
+        "enemy_ships_destroyed": 1,
+        "player_ships_retreated": 0,
+        "enemy_ships_retreated": 0,
+        "engine_stats": None,
     }
 
 
@@ -158,6 +160,61 @@ class TestAttackSurface:
         for route in ("/admin", "/config", "/patch", "/shutdown"):
             assert client.get(route).status_code == 404
             assert client.post(route).status_code == 404
+
+
+class TestDictToCombatResultRoundTrip:
+    """Regression — `dataclasses.asdict(result)` on the worker must round-trip
+    through `_dict_to_combat_result` on the orchestrator. The previous
+    implementation reused `result_parser.parse_combat_result` which expects
+    the raw Java harness JSON (nested `flux_stats` / `aggregate` blocks) and
+    would KeyError on the flat asdict schema."""
+
+    def test_roundtrip_full_combat_result(self):
+        import dataclasses
+        from starsector_optimizer.cloud_worker_pool import _dict_to_combat_result
+        from starsector_optimizer.models import (
+            CombatResult, DamageBreakdown, EngineStats, ShipCombatResult,
+        )
+
+        ship = ShipCombatResult(
+            fleet_member_id="fm1", variant_id="v1", hull_id="hammerhead",
+            destroyed=False, hull_fraction=0.83, armor_fraction=0.61,
+            cr_remaining=0.7, peak_time_remaining=120.0,
+            disabled_weapons=1, flameouts=0,
+            damage_dealt=DamageBreakdown(shield=100.0, armor=50.0, hull=25.0, emp=0.0),
+            damage_taken=DamageBreakdown(shield=40.0, armor=10.0, hull=5.0, emp=0.0),
+            overload_count=2,
+        )
+        original = CombatResult(
+            matchup_id="mid-123",
+            winner="PLAYER",
+            duration_seconds=45.6,
+            player_ships=(ship,),
+            enemy_ships=(),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=1,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
+            engine_stats=EngineStats(8000.0, 600.0, 1500.0),
+        )
+
+        as_dict = dataclasses.asdict(original)
+        reconstructed = _dict_to_combat_result(as_dict)
+        assert reconstructed == original
+
+    def test_roundtrip_accepts_none_engine_stats(self):
+        import dataclasses
+        from starsector_optimizer.cloud_worker_pool import _dict_to_combat_result
+        from starsector_optimizer.models import CombatResult
+        original = CombatResult(
+            matchup_id="m-no-engine", winner="TIMEOUT",
+            duration_seconds=0.0,
+            player_ships=(), enemy_ships=(),
+            player_ships_destroyed=0, enemy_ships_destroyed=0,
+            player_ships_retreated=0, enemy_ships_retreated=0,
+            engine_stats=None,
+        )
+        assert _dict_to_combat_result(dataclasses.asdict(original)) == original
 
 
 class TestPoolContract:

@@ -20,7 +20,9 @@ from werkzeug.serving import make_server
 
 from .campaign import run_janitor_pass
 from .evaluator_pool import EvaluatorPool
-from .models import CombatResult, MatchupConfig
+from .models import (
+    CombatResult, DamageBreakdown, EngineStats, MatchupConfig, ShipCombatResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +45,55 @@ def _matchup_to_dict(matchup: MatchupConfig) -> dict[str, Any]:
     return rp_serialize(matchup)
 
 
+def _dict_to_ship(data: dict[str, Any]) -> ShipCombatResult:
+    """Reconstruct ShipCombatResult from a `dataclasses.asdict` dict.
+
+    Deliberately separate from `result_parser._parse_ship`: that function
+    parses the Java harness JSON where `overload_count` is nested under
+    `flux_stats`, but the worker already parsed that into a flat
+    ShipCombatResult and sent `dataclasses.asdict(...)` — which has
+    `overload_count` at the top level (no `flux_stats` wrapper).
+    """
+    return ShipCombatResult(
+        fleet_member_id=data["fleet_member_id"],
+        variant_id=data["variant_id"],
+        hull_id=data["hull_id"],
+        destroyed=data["destroyed"],
+        hull_fraction=data["hull_fraction"],
+        armor_fraction=data["armor_fraction"],
+        cr_remaining=data["cr_remaining"],
+        peak_time_remaining=data["peak_time_remaining"],
+        disabled_weapons=data["disabled_weapons"],
+        flameouts=data["flameouts"],
+        damage_dealt=DamageBreakdown(**data["damage_dealt"]),
+        damage_taken=DamageBreakdown(**data["damage_taken"]),
+        overload_count=data["overload_count"],
+    )
+
+
 def _dict_to_combat_result(data: dict[str, Any]) -> CombatResult:
-    """Deserialize CombatResult from a POST body."""
-    from .result_parser import parse_combat_result
-    return parse_combat_result(data)
+    """Reconstruct CombatResult from a POST body.
+
+    The POST body carries `dataclasses.asdict(result)` from the worker —
+    i.e. the CombatResult schema, NOT the raw Java harness JSON. Inverse
+    of `asdict`; handles the nested `ShipCombatResult` + `DamageBreakdown`
+    + optional `EngineStats` dataclasses.
+    """
+    engine_stats_raw = data.get("engine_stats")
+    return CombatResult(
+        matchup_id=data["matchup_id"],
+        winner=data["winner"],
+        duration_seconds=data["duration_seconds"],
+        player_ships=tuple(_dict_to_ship(s) for s in data["player_ships"]),
+        enemy_ships=tuple(_dict_to_ship(s) for s in data["enemy_ships"]),
+        player_ships_destroyed=data["player_ships_destroyed"],
+        enemy_ships_destroyed=data["enemy_ships_destroyed"],
+        player_ships_retreated=data["player_ships_retreated"],
+        enemy_ships_retreated=data["enemy_ships_retreated"],
+        engine_stats=(
+            EngineStats(**engine_stats_raw) if engine_stats_raw is not None else None
+        ),
+    )
 
 
 class CloudWorkerPool(EvaluatorPool):
