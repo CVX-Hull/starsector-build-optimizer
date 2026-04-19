@@ -36,6 +36,44 @@ See the session-of-record findings (live-surfaced + fixed) inline in:
 - **Proposed fix:** scope `_seen` and `_results` per-dispatch-attempt by keying on `(matchup_id, dispatch_nonce)` where `dispatch_nonce` is freshly generated per `_dispatch_and_wait` call and included in the matchup payload → worker echoes it back in the POST. Alternative: TTL-expire `_seen` entries after `visibility_timeout_seconds + result_timeout_seconds` + janitor interval so late POSTs from abandoned dispatches can't block retries.
 - **Why deferred:** unreachable in the current call graph; any fix is premature until a retry path is introduced.
 
+### H5 — `CampaignManager.monitor_loop` ledger tick is stubbed
+
+- **Location:** `src/starsector_optimizer/campaign.py:589-596`. The supervisor's polling loop sleeps on `ledger_heartbeat_interval_seconds` but contains a literal stub comment (`"Ledger ticking happens here in the real impl. … Stub until live smoke."`) where `ledger.record_heartbeat()` should be invoked per-worker.
+- **Finding (surfaced 2026-04-19 during Phase 7 prep run launch review):** `~/starsector-campaigns/<name>/ledger.jsonl` stays empty for the entire run. Consequence: (a) no per-worker cost attribution captured, (b) `budget_usd` hard cap is **never enforced** because `BudgetExceeded` is only raised inside `CostLedger.record_heartbeat`, which is never called. Budget is decorative.
+- **Observed?** **Yes** — Phase 7 prep campaign launched 2026-04-19 at 10:26 UTC, ledger path created but file never written. First real-world manifestation.
+- **Bounded by:** `max_lifetime_hours` passed to worker VMs (workers self-terminate via systemd timer in the AMI), the `trap EXIT` in `launch_campaign.sh` (fires `teardown.sh` on script exit), and `atexit.register(self.teardown)` in CampaignManager. Absolute cost ceiling is (N_workers × spot_rate × max_lifetime_hours); for Phase 7 prep at 96×$0.15×6 = ~$86 (~1.2× budget).
+- **Proposed fix:**
+  ```python
+  # campaign.py::monitor_loop
+  while any(p.poll() is None for p in study_procs):
+      time.sleep(interval)
+      for study_idx, proc in enumerate(study_procs):
+          if proc.poll() is not None:
+              continue
+          study_id = self._study_ids[study_idx]
+          hb_keys = self._redis.keys(f"worker:{self._project_tag}:*:heartbeat")
+          for hb_key in hb_keys:
+              worker_id = hb_key.decode().split(":")[2]
+              # The worker-side publisher (worker_agent.py) already writes
+              # load_avg + cpu_count + timestamp per 30s; we just need to
+              # consume and translate to ledger rows.
+              hb = json.loads(self._redis.get(hb_key))
+              try:
+                  self._ledger.record_heartbeat(
+                      worker_id=worker_id,
+                      region=hb["region"],
+                      instance_type=hb["instance_type"],
+                      hours_elapsed=interval / 3600.0,
+                      rate_usd_per_hr=spot_rate_for(hb["region"], hb["instance_type"]),
+                  )
+              except BudgetExceeded:
+                  # Propagate — CampaignManager.run finally-teardown catches it.
+                  raise
+  ```
+  Requires `worker_agent.py` heartbeat payload to include `region` + `instance_type` (workers have this via IMDSv2 at boot; currently not published to Redis — small additive change). Requires `spot_rate_for(region, instance_type)` — can come from `AWSProvider.get_spot_price()` cached per-region.
+- **Why deferred at launch time:** caught after the Phase 7 prep run started; interrupting would cost sunk AWS spend + relaunch time. AMI self-terminate + EXIT trap bound the blast radius. This finding makes the fix a pre-requisite for any future prep campaign.
+- **Gating criterion to revisit:** BEFORE next cloud campaign launch. H5 takes precedence over H1-H4 for scheduling.
+
 ### H4 — `compute_effective_stats` ignores `hull.built_in_mods`
 
 - **Location:** `src/starsector_optimizer/hullmod_effects.py:131-204` (`compute_effective_stats`). Iterates `build.hullmods` only (lines 155, 165); `hull.built_in_mods` is never read.
@@ -136,6 +174,7 @@ Proposed as a new §12 in `docs/reference/phase6-cloud-worker-federation.md` at 
 | H2 POST-before-register race | No — no retry path | No — unreachable | A retry path is introduced |
 | H3 semaphore vs queue depth | No | No — not a bug | Queue depth > slots in prod |
 | H4 built-in hullmods absent from heuristic | Code review only | Defer to Phase 7 kernel work | GP needs effective-stat correctness |
+| **H5 ledger tick stub / budget unenforced** | **Yes — Phase 7 prep 2026-04-19** | **Pre-req for next campaign** | **Wire heartbeat before any cloud run** |
 | M1 janitor ping-pong | No | Defensible low-cost fix | "requeued stuck matchup" > 1× per id |
 | M2 test study_id literals | Cosmetic | Yes — low priority | Sampler plumbing is revisited |
 | L1 notebooks | Cosmetic | Yes — low priority | Someone opens the notebooks |
