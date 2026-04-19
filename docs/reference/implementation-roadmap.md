@@ -789,6 +789,55 @@ Full design, theoretical grounding (mixed-categorical BO, SAASBO, ICM, πBO, nav
 
 ---
 
+## Phase 7.5: Infrastructure & Reproducibility
+
+### Goal
+Make the Phase 6 cloud-worker substrate usable without tribal knowledge: one-command launch, declarative infra, structured pass/fail gates, fork-and-reproduce in under 30 minutes of operator time. Horizontal to the algorithmic phases; schedule after Phase 7 so the SAASBO execution-substrate work can land on the upgraded surface rather than the legacy one.
+
+### Dependencies
+- Phase 6 (cloud worker federation surface to replace / consolidate)
+- Phase 7 code-complete (so the substrate migration doesn't fork in-flight research)
+- External: Docker / ECR, Terraform, Flyte (or Prefect 2), Ray Tune, Nix (Tier D), `just`
+
+### Deliverables
+
+Four tiers by dependency + effort; adopt incrementally.
+
+**Tier A — smoother daily driver** (1–2 weeks, preserves current architecture)
+1. `just` CLI + recipes consolidating the 8+ shell scripts under `scripts/cloud/` into one self-documenting entrypoint.
+2. Worker Dockerfile + ECR push pipeline. Eliminates AMI rebakes triggered by Python-only changes (current ~8 min/iteration → 30 s image push).
+3. `starsector-repro check` preflight: machine-verifies every prerequisite (AWS creds + quota, game files, prefs.xml, Tailscale up + serve mapping, Redis, Java/uv/Packer versions) with actionable per-failure remediation.
+4. Terraform module `terraform/aws/` for static infra (VPC, subnet, IAM, SSH keypair, base SG rules). Outputs replace hardcoded IDs in `scripts/cloud/packer/aws.pkr.hcl`.
+
+**Tier B — declarative workflow** (2–4 weeks, touches orchestration)
+5. Flyte (or Prefect 2) flow replacing `launch_campaign.sh` + bash `trap EXIT` teardown chain. Campaign lifecycle is a Python DAG with retries, state persistence, artifact lineage, dashboard visibility.
+6. Tailscale Terraform provider module `terraform/tailscale/` for tagOwners + grants + ephemeral authkey. Tailnet setup becomes `terraform apply`.
+7. `smoke-gate.py` emits structured `gate.json` with per-criterion pass/fail (launch exit, final_audit clean, ledger heartbeats, Optuna TrialState.COMPLETE, per-worker load_avg in `[3, 8]`) + top-K Jaccard diff vs. reference run.
+
+**Tier C — execution substrate migration** (4–8 weeks; best pursued AS Phase 7's delivery vehicle)
+8. Ray Tune adoption. Replaces `StagedEvaluator` + `CloudWorkerPool` + `worker_agent.py` main loop + reliable-queue plumbing (≈ 2000 LOC deletion). Native `ASHAScheduler`, `OptunaSearch`, spot interruption handling, heartbeat/health tracking. The remaining bespoke code is fitness (combat sim → `CombatResult`), scorer, Phase 5 deconfounding — none of which Ray touches.
+
+**Tier D — canonical reproducibility** (1–2 weeks, capstone)
+9. Nix flake for worker image (`nix build .#worker-image`) for bit-identical builds across users, parallel to Docker path.
+10. Top-level `REPRODUCE.md` operator handbook + canonical reference run data (top-K elites + composite score distributions for a named hull × regime). Future runs diff against this for ecological-reproducibility validation.
+
+### Testing
+
+- Fork-and-go drill: clean Ubuntu VM → clone repo → place licensed Starsector files at `game/starsector/` → `just check` → `just infra-up` → `just smoke tier2` reaches passing gate in under 30 minutes of human attention.
+- Teardown guarantee: SIGKILL every layer (shell, Python orchestrator, Flyte executor) at three random points during a live run; verify `final_audit.sh` still exits 0 after recovery.
+- Ecological-reproducibility gate: three independent fresh runs of the canonical hull × regime show top-10 Jaccard ≥ 0.5 and mean composite score within 0.02 of the reference.
+
+### Rejected alternatives
+- Kubernetes + KubeRay: over-heavy for single-tenant hobby-scale spend; revisit at ≥$10k/mo.
+- Airflow / Dagster: DAG-of-different-tasks oriented; Flyte fits the "same task with different inputs" pattern better.
+- W&B Launch / SageMaker Pipelines: vendor lock-in contradicts the vendor-neutral (AWS + future Hetzner) target.
+- Snakemake / Nextflow: bioinformatics idioms don't match.
+- One big `run.sh`: papers over tribal knowledge without moving the reproducibility bar.
+
+See `docs/reference/phase7.5-infrastructure-reproducibility.md` for the full design doc + alternative ranking.
+
+---
+
 ## Phase 8: Quality-Diversity
 
 ### Goal

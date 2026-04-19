@@ -39,8 +39,9 @@ partial_fleet_policy: abort
 matchup_slots_per_worker: 2
 
 # AMI from 2026-04-18 bake; re-bake produces new IDs.
+# AMIs rebuilt 2026-04-18 for threaded worker_agent + project_tag-scoped Redis keys.
 ami_ids_by_region:
-  us-east-1: ami-0106d8575802f9941
+  us-east-1: ami-013af3c3b247d43ef
 
 ssh_key_name: starsector-probe
 
