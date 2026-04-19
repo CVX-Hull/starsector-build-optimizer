@@ -140,12 +140,28 @@ def main():
 
     # Per-study eval log directory. The row schema does not carry study_id /
     # sampler, so writing all studies to one file destroys per-study
-    # attribution under concurrent-subprocess dispatch (e.g. any campaign with
-    # multiple studies in parallel). One dir per (hull, regime, sampler,
-    # seed_idx) — uniform for local and cloud runs.
-    eval_log_dir = Path(
-        f"data/logs/{args.hull}__{args.regime}__{args.sampler}__seed_idx{args.seed_idx}"
-    )
+    # attribution under concurrent-subprocess dispatch (e.g. any campaign
+    # with multiple studies in parallel).
+    #
+    # For cloud runs, the dir name matches `cloud_runner.resolve_study_id`
+    # exactly so that shakedown-style configs (N studies × same
+    # hull+regime+sampler, distinct seed VALUES, all seed_idx=0) produce
+    # disjoint log paths. Using seed_idx instead of seed_value would
+    # silently collide all N into one directory.
+    if args.worker_pool == "cloud":
+        from starsector_optimizer.campaign import load_campaign_config
+        from starsector_optimizer.cloud_runner import resolve_study_id
+        _campaign = load_campaign_config(args.campaign_config)
+        eval_log_dirname = resolve_study_id(
+            _campaign, args.study_idx, args.seed_idx,
+        )
+    else:
+        # Local runs have no campaign YAML / seeds tuple; keep the seed_idx
+        # form for backwards-compat with existing single-hull dev workflow.
+        eval_log_dirname = (
+            f"{args.hull}__{args.regime}__{args.sampler}__seed_idx{args.seed_idx}"
+        )
+    eval_log_dir = Path(f"data/logs/{eval_log_dirname}")
     eval_log_dir.mkdir(parents=True, exist_ok=True)
     eval_log_path = eval_log_dir / "evaluation_log.jsonl"
 

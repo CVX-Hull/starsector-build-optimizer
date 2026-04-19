@@ -468,3 +468,41 @@ class TestSeedIndexResolvesCorrectSeed:
         assert captured["fleet_name"] == "hammerhead__early__tpe__seed7"
 
 
+class TestResolveStudyId:
+    """Shakedown-collision regression: 4 studies × same hull/regime/sampler,
+    distinct seed VALUES, all seed_idx=0 must produce 4 DISTINCT study_id
+    strings. The pre-fix code used seed_idx to disambiguate — which collided
+    them all onto the same identifier, corrupting per-study log attribution
+    and fleet naming."""
+
+    def test_shakedown_four_studies_disambiguate_by_seed_value(self, tmp_path):
+        from starsector_optimizer.cloud_runner import resolve_study_id
+        config, _ = _make_smoke_config(tmp_path, studies=[
+            {"hull": "hammerhead", "regime": "early", "seeds": [0],
+             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
+            {"hull": "hammerhead", "regime": "early", "seeds": [1],
+             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
+            {"hull": "hammerhead", "regime": "early", "seeds": [2],
+             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
+            {"hull": "hammerhead", "regime": "early", "seeds": [3],
+             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
+        ])
+        ids = {resolve_study_id(config, i, 0) for i in range(4)}
+        assert ids == {
+            "hammerhead__early__tpe__seed0",
+            "hammerhead__early__tpe__seed1",
+            "hammerhead__early__tpe__seed2",
+            "hammerhead__early__tpe__seed3",
+        }, f"collision detected: {sorted(ids)}"
+
+    def test_seed_value_not_seed_idx(self, tmp_path):
+        """A study with seeds=[7] at seed_idx=0 must resolve to seed7,
+        not seed_idx0 — the eval-log dir has to match the study_id."""
+        from starsector_optimizer.cloud_runner import resolve_study_id
+        config, _ = _make_smoke_config(tmp_path, studies=[
+            {"hull": "wolf", "regime": "early", "seeds": [7],
+             "budget_per_study": 1, "workers_per_study": 1, "sampler": "tpe"},
+        ])
+        assert resolve_study_id(config, 0, 0) == "wolf__early__tpe__seed7"
+
+
