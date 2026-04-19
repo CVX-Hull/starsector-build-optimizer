@@ -334,12 +334,12 @@ Hybrid (`random → CatCMAwM → TPE`) is **excluded** from this benchmark — a
 **Same code path as prep** — smoke and prep are both `launch_campaign.sh <yaml>`. No separate smoke driver ships.
 
 **Pre-launch ops (operator, not code)**:
-1. `tailscale up` on the workstation.
-2. Tailscale admin panel → ACL rule granting `tag:starsector-worker` → this workstation on `tcp:6379,9000-9099`.
-3. Tailscale admin panel → generate an ephemeral + pre-approved auth key tagged `tag:starsector-worker`. Export as `TAILSCALE_AUTHKEY`.
-4. Bind Redis to the tailnet interface: `sudo systemctl edit redis-server` and override `ExecStart=` to include `--bind 0.0.0.0` (or the tailnet IP). Restart Redis. Test: `redis-cli -h $(tailscale ip -4) ping` → `PONG`.
+1. Tailscale running on the workstation — either `tailscale up` system-wide or `scripts/cloud/devenv-up.sh` for rootless userspace mode (no sudo, no kernel TUN). The CampaignManager preflight accepts both paths.
+2. Tailscale tailnet policy file (`https://login.tailscale.com/admin/acls/file`) grants `tag:starsector-worker` → workstation on `tcp:6379` and `tcp:9000-9099`. Use grants syntax — Tailscale made grants GA as the preferred policy language; see `.claude/skills/cloud-worker-ops.md` preflight item 5 for the exact stanza. The editor has a **"Convert to grants"** button that rewrites legacy `acls` blocks.
+3. Tailscale admin panel → generate an ephemeral + pre-approved auth key tagged `tag:starsector-worker`. Export as `TAILSCALE_AUTHKEY` (or drop into `.env` and `set -a; source .env; set +a`).
+4. Redis reachable by workers over the tailnet. Kernel mode: `sudo systemctl edit redis-server`, override `ExecStart=` with `--bind 0.0.0.0` (or the tailnet IP explicitly). Userspace mode: `devenv-up.sh` sets up the `tailscale serve --tcp=6379 tcp://127.0.0.1:6379` proxy for you. Either path, the preflight confirms.
 
-**Launch**: `export TAILSCALE_AUTHKEY=tskey-auth-...; scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml` (see `examples/smoke-campaign.yaml`: 1 study × `hammerhead` × `early` × `seeds=[0]` × `budget_per_study=2` × `workers_per_study=1` × `budget_usd: 2.0`).
+**Launch**: `set -a; source .env; set +a; scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml` (see `examples/smoke-campaign.yaml`: 1 study × `hammerhead` × `early` × `seeds=[0]` × `budget_per_study=2` × `workers_per_study=1` × `budget_usd: 2.0`).
 
 **Gate criteria (ALL must hold)**:
 - `launch_campaign.sh examples/smoke-campaign.yaml` exits 0.

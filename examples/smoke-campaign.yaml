@@ -3,13 +3,18 @@
 # Flask POST /result → orchestrator.
 #
 # Ops prerequisites (see docs/reference/phase6-cloud-worker-federation.md §11):
-#   1. `tailscale up` on the workstation.
-#   2. Tailscale ACL grants tag:starsector-worker → workstation on tcp:6379,9000-9099.
-#   3. Ephemeral auth key generated and exported: `export TAILSCALE_AUTHKEY=tskey-auth-...`.
-#   4. Redis bound to the tailnet interface (systemd drop-in `--bind 0.0.0.0`).
+#   1. Tailscale running on the workstation (either `tailscale up` system-wide
+#      or `scripts/cloud/devenv-up.sh` for rootless userspace mode).
+#   2. Tailscale policy grants tag:starsector-worker → workstation on
+#      tcp:6379,9000-9099 (grants syntax; see cloud-worker-ops.md preflight 5).
+#   3. Ephemeral + pre-approved auth key tagged tag:starsector-worker,
+#      exported as TAILSCALE_AUTHKEY (loaded from .env works too).
+#   4. Redis reachable over the tailnet — either bound to the tailnet IP
+#      (kernel mode) or proxied via `tailscale serve` (userspace mode).
 #
 # Launch:
-#   export TAILSCALE_AUTHKEY=tskey-auth-...
+#   set -a; source .env; set +a            # loads TAILSCALE_AUTHKEY
+#   scripts/cloud/devenv-up.sh             # optional: rootless tailscale+redis
 #   scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
 #
 # Gate (all must hold):

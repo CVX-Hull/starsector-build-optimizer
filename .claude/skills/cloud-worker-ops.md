@@ -46,10 +46,22 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
 4. **Redis is reachable by cloud workers over the tailnet**. Two supported configurations:
    - **kernel-mode**: Redis bound to the tailnet interface. `redis-cli -h "$(tailscale ip -4)" ping` returns `PONG`. If it fails: `sudo systemctl edit redis-server` → `[Service]` / `ExecStart=` override with `--bind 0.0.0.0`. Then `sudo systemctl restart redis-server`.
    - **userspace-mode (rootless)**: Redis bound to 127.0.0.1, exposed to the tailnet via `tailscale serve --bg --tcp=6379 tcp://127.0.0.1:6379`. `devenv-up.sh` sets this up for you. Preflight verifies via `tailscale serve status`.
-5. **Tailscale ACL allows `tag:starsector-worker` → workstation on `tcp:6379,9000-9099`**. Verify from the Tailscale admin panel (`https://login.tailscale.com/admin/acls`). Sample ACL stanza:
+5. **Tailscale policy grants `tag:starsector-worker` → workstation on `tcp:6379,9000-9099`**. Verify at the tailnet policy editor (`https://login.tailscale.com/admin/acls/file`). Tailscale made grants GA as the preferred policy language; the file now accepts both `acls` (legacy) and `grants` (current). Minimal stanza:
    ```json
-   {"action": "accept", "src": ["tag:starsector-worker"], "dst": ["<workstation-hostname>:6379,9000-9099"]}
+   {
+     "tagOwners": {
+       "tag:starsector-worker": ["autogroup:admin"]
+     },
+     "grants": [
+       {
+         "src": ["tag:starsector-worker"],
+         "dst": ["*"],
+         "ip": ["tcp:6379", "tcp:9000-9099"]
+       }
+     ]
+   }
    ```
+   In grants, the port moves out of `dst` into a separate `ip` array (each port/range is its own entry); `"action": "accept"` is removed (grants are accept-only). The editor has a **"Convert to grants"** button that rewrites any legacy `acls` block.
 6. **Ephemeral + pre-approved auth key exists** (from Tailscale admin panel → Keys), tagged `tag:starsector-worker`. Export before launch if the YAML uses `${TAILSCALE_AUTHKEY}` env-substitution:
    ```bash
    export TAILSCALE_AUTHKEY=tskey-auth-...
@@ -202,19 +214,26 @@ tailscale --socket ~/.local/state/starsector-cloud/tailscale/tailscaled.sock \
 
 `CampaignManager._preflight` catches both cases at launch — if you see "Redis not reachable ..." or "Redis responds on 127.0.0.1:6379 but is not reachable over the tailnet", apply the matching fix and relaunch.
 
-### "Tailscale ACL denies tag:starsector-worker"
+### "Tailscale policy denies tag:starsector-worker"
 
-Workers boot, `tailscale up` succeeds, then their BRPOPLPUSH hangs and eventually times out. Root cause: ACL doesn't grant the worker → workstation reachability. Fix via admin panel (`https://login.tailscale.com/admin/acls`), add:
+Workers boot, `tailscale up` succeeds, then their BRPOPLPUSH hangs and eventually times out. Root cause: the tailnet policy doesn't grant the worker → workstation reachability. Fix at the tailnet policy editor (`https://login.tailscale.com/admin/acls/file`); add a grant:
 
 ```json
 {
-  "action": "accept",
-  "src": ["tag:starsector-worker"],
-  "dst": ["<workstation-hostname>:6379,9000-9099"]
+  "grants": [
+    {
+      "src": ["tag:starsector-worker"],
+      "dst": ["*"],
+      "ip": ["tcp:6379", "tcp:9000-9099"]
+    }
+  ],
+  "tagOwners": {
+    "tag:starsector-worker": ["autogroup:admin"]
+  }
 }
 ```
 
-Workstation hostname is the one shown by `tailscale status --self`.
+The `dst: ["*"]` targets the whole tailnet including the untagged workstation; if you want a tighter destination, use the workstation hostname from `tailscale status --self`. Grants are the current policy language — the editor's **"Convert to grants"** button rewrites any legacy `acls` block automatically.
 
 ### Workers crashing on startup with `ArrayIndexOutOfBoundsException: Index 0`
 

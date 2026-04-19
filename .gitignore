@@ -42,3 +42,8 @@ notebooks/.ipynb_checkpoints/
 # Cloud secrets (Starsector serial key, Tailscale authkey, bearer tokens)
 scripts/cloud/packer/prefs.xml
 scripts/cloud/secrets/
+
+# Local secrets — never commit
+.env
+.env.*
+!.env.example
