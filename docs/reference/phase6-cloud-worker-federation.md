@@ -1,6 +1,6 @@
 # Phase 6 — Cloud Worker Federation
 
-Status: **PARTIAL INFRASTRUCTURE SHIPPED** (2026-04-18). `AWSProvider` (LaunchTemplate + SecurityGroup + terminate-all-tagged cleanup), `cloud_userdata.render_user_data`, `CostLedger`, Packer AMI template, and Tier-1 `probe.sh` / `probe.py` are wired and test-green. **Not yet end-to-end**: `CampaignManager.provision_fleet` raises `NotImplementedError` — per-study UserData wiring (each study subprocess provisions its own fleet so workers carry the correct study-specific bearer token and Redis queue keys) lands in the smoke-test scope, because a campaign-wide fleet cannot carry study-specific secrets without leaking every study's config to every worker. Pipeline smoke, sampler benchmark, and prep campaign deferred to operational sessions against the probe-validated infrastructure. Renumbers the former Phase 6 (Structured Search-Space Representation) to Phase 7 — cloud federation is infrastructure that Phase 7's multi-week BoTorch build depends on for validation at scale.
+Status: **INFRASTRUCTURE SHIPPED** (2026-04-18; per-study fleet ownership added same day). `AWSProvider` ships with the per-fleet API (`provision_fleet` / `terminate_fleet` / `terminate_all_tagged` sweep backstop), two-tag scheme (`Project`+`Fleet`), `cloud_userdata.render_user_data` with IMDSv2 WORKER_ID override, `CostLedger`, Packer AMI template, Tier-1 `probe.sh` / `probe.py` (updated to new API), and Tier-2 wiring: `CampaignManager` is a pure supervisor (`_preflight` + `spawn_studies` + `monitor_loop` + campaign-wide-sweep teardown), and each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its own fleet lifecycle — provisioning AND teardown. Tier-2 pipeline smoke defined in §11 is **code-ready; pending live operational authorization**. Sampler benchmark and Phase 7 prep campaign deferred to operational sessions against the smoke-validated pipeline. Renumbers the former Phase 6 (Structured Search-Space Representation) to Phase 7 — cloud federation is infrastructure that Phase 7's multi-week BoTorch build depends on for validation at scale.
 
 ## Budget staging
 
@@ -11,7 +11,7 @@ Phase 6 ships against an **$85 combined Phase 6 shakedown + sampler benchmark + 
 | Line item | Cost |
 | --- | --- |
 | Validation probe (2 VMs × 2 regions × 15 min) | $0.15 |
-| Pipeline smoke (1 study × 8 workers × 2 hr) | $1.20 |
+| Pipeline smoke (Tier-2.0 single-matchup ~$0.30 + Tier-2.5 ~$0.80 multi-worker per §11) | $1.20 |
 | Sampler benchmark (2 hulls × 3 samplers × 1 hr) | $14.83 |
 | Prep campaign (8 hulls × `early` × 600 trials, incl 3% preemption) | $60.79 |
 | **Subtotal** | **$76.97** |
@@ -186,13 +186,15 @@ studies:
 
 **Execution model:**
 1. Campaign manager bakes (or pulls) a pre-baked provider image with game + deps.
-2. Launches `max_concurrent_workers` instances via `CloudProvider.create_fleet` (boto3 EC2 Fleet).
-3. Maintains per-study Redis queue (source + processing lists keyed by study_id) plus a per-study Flask listener on `base_flask_port + study_idx`.
-4. Each worker connects to orchestrator over Tailscale, BRPOPLPUSHes its assigned study's source → processing list, runs the matchup through its local `LocalInstancePool`, and POSTs the `CombatResult` to the study's Flask listener.
-5. Workers run `worker_agent.py` (NOT `run_optimizer.py` — the optimizer runs only on the orchestrator; workers never touch Optuna). `WorkerConfig` is injected via env vars at cloud-init.
-6. Redis processing-list janitor runs every `janitor_interval_seconds` on the orchestrator and re-queues items stuck longer than `visibility_timeout_seconds`. No study.db ever leaves the orchestrator.
-7. Orchestrator tracks cost in a ledger (summed active worker-hours × rate). Hard-caps at `budget_usd`; soft-warns at 50%/80%/95% (configurable via `ledger_warn_thresholds`).
-8. Per-study auto-terminate on absolute `budget_per_study` trial cap. Plateau detection (3 consecutive 50-trial buckets with slope < ε) is deferred to a follow-up commit — not load-bearing for "does the infra work."
+2. `CampaignManager._preflight` (workstation-side): `tailscale ip -4` non-empty, `redis.ping()` on tailnet IP, `aws sts get-caller-identity` alive, `tailscale_authkey_secret` starts with `tskey-auth-`. Failure → clear remediation + non-zero exit BEFORE any subprocess is spawned.
+3. CampaignManager spawns one subprocess per `(study_idx, seed_idx)` pair with `--worker-pool cloud`. Each subprocess gets per-study env: `STARSECTOR_BEARER_TOKEN` (fresh `secrets.token_urlsafe(32)`), `STARSECTOR_WORKSTATION_TAILNET_IP`, `STARSECTOR_TAILSCALE_AUTHKEY`, `STARSECTOR_PROJECT_TAG=starsector-<name>`. Env dicts are NEVER logged.
+4. **Study subprocess owns its fleet**: constructs `WorkerConfig` → renders UserData → `provider.provision_fleet(fleet_name=study_id, project_tag=project_tag, ...)` → `CloudWorkerPool.setup()` starts Flask listener + janitor → runs `optimize_hull`. On any exit path: `finally: provider.terminate_fleet(fleet_name=study_id, project_tag=project_tag)`.
+5. Each worker VM joins Tailscale via cloud-init (authkey on stdin, never argv), writes `/etc/starsector-worker.env` with every `WorkerConfig` field, overrides `worker_id` from IMDSv2 (EC2 instance ID, via `sed -i` + append so there's exactly one env line), then `systemctl start starsector-worker.service`.
+6. Each worker runs `worker_agent.py` (NOT `run_optimizer.py` — the optimizer runs only on the orchestrator). Reads `WorkerConfig` from env via `dataclasses.fields(WorkerConfig)` iteration + `typing.get_type_hints()` coercion. `BRPOPLPUSH`es its study's source → processing list, runs the matchup through local `LocalInstancePool(num_instances=config.num_instances_per_worker)`, POSTs the `CombatResult` to the study's Flask listener.
+7. Redis processing-list janitor runs on the study subprocess every `janitor_interval_seconds` and re-queues items stuck longer than `visibility_timeout_seconds`. No study.db ever leaves the workstation.
+8. CampaignManager `monitor_loop` tracks cost in a ledger (summed active worker-hours × rate). Hard-caps at `budget_usd`; soft-warns at 50%/80%/95% (configurable via `ledger_warn_thresholds`).
+9. Per-study auto-terminate on absolute `budget_per_study` trial cap. Plateau detection (3 consecutive 50-trial buckets with slope < ε) is deferred to a follow-up commit — not load-bearing for "does the infra work."
+10. **Teardown in four layers**: (i) study subprocess `finally: terminate_fleet` (targeted); (ii) `CampaignManager.run()` `finally: terminate_all_tagged(project_tag)` (campaign-wide sweep backstop); (iii) `atexit.register(self.teardown)` (crash paths bypassing `finally`); (iv) `launch_campaign.sh` `trap EXIT` runs `teardown.sh` + `final_audit.sh` (SIGKILL, host reboot).
 
 **State on orchestrator (single file tree):**
 ```
@@ -325,13 +327,37 @@ Hybrid (`random → CatCMAwM → TPE`) is **excluded** from this benchmark — a
 
 **Write the decision as a short REPORT.md** in `experiments/phase6-sampler-bench-2026-0X/` before launching the prep. Include: sampler × hull fitness table, 30-min + 60-min snapshots, the decision rule as applied, and the `sampler:` YAML value chosen for the prep.
 
+### §11 Tier-2 pipeline smoke gate
+
+**Purpose**: one real matchup makes the full round-trip workstation → Tailscale → Redis queue → cloud worker → `LocalInstancePool` (JVM) → Flask `POST /result` → orchestrator. Validates the intersection of every subsystem that Tier-1 probe skipped.
+
+**Same code path as prep** — smoke and prep are both `launch_campaign.sh <yaml>`. No separate smoke driver ships.
+
+**Pre-launch ops (operator, not code)**:
+1. `tailscale up` on the workstation.
+2. Tailscale admin panel → ACL rule granting `tag:starsector-worker` → this workstation on `tcp:6379,9000-9099`.
+3. Tailscale admin panel → generate an ephemeral + pre-approved auth key tagged `tag:starsector-worker`. Export as `TAILSCALE_AUTHKEY`.
+4. Bind Redis to the tailnet interface: `sudo systemctl edit redis-server` and override `ExecStart=` to include `--bind 0.0.0.0` (or the tailnet IP). Restart Redis. Test: `redis-cli -h $(tailscale ip -4) ping` → `PONG`.
+
+**Launch**: `export TAILSCALE_AUTHKEY=tskey-auth-...; scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml` (see `examples/smoke-campaign.yaml`: 1 study × `hammerhead` × `early` × `seeds=[0]` × `budget_per_study=2` × `workers_per_study=1` × `budget_usd: 2.0`).
+
+**Gate criteria (ALL must hold)**:
+- `launch_campaign.sh examples/smoke-campaign.yaml` exits 0.
+- `scripts/cloud/final_audit.sh smoke` exits 0 (zero leaked resources across all 4 US regions).
+- `~/starsector-campaigns/smoke/ledger.jsonl` contains ≥ 1 `worker_heartbeat` event.
+- The Optuna study's SQLite (at the subprocess's `--study-db` path) contains exactly 1 `TrialState.COMPLETE`.
+
+**Tier-2.5 multi-worker variant (post-Tier-2.0 pass)**: same code path. Edit `examples/smoke-campaign.yaml` to bump `workers_per_study: 3`, `budget_per_study: 20`, `max_concurrent_workers: 3`, `budget_usd: 5.0`. Validates janitor re-queue under concurrent dispatch, POST dedup under duplicate results, backpressure.
+
+**Expected cost**: Tier-2.0 ~$0.30; Tier-2.5 ~$0.80. Fits the $1.20 "Pipeline smoke" line item in §Budget staging.
+
 ## Day-1 ordered actions
 
 Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket blocker that previously sat at position 1; no external blockers now gate campaign code.
 
 1. **Build Packer AMI in us-east-1** (~30 min). Bake the combat harness, game files, `uv sync`, and the XRandR warmup fix into a private AMI. Tested via a post-build launch hook.
 2. **`aws ec2 copy-image` to us-east-2** (~3-5 min, one-time). AWS AMIs are region-scoped; replicate to the second target region. Re-run on every Packer rebuild.
-3. **Validation probe** (`scripts/cloud/probe.sh` + `scripts/cloud/probe.py`). Tier 1: exercises `AWSProvider.create_fleet` (LaunchTemplate + SecurityGroup creation + instance launch + tag propagation) + `terminate_all_tagged` + `final_audit.sh`. Scope is fleet lifecycle only — **does not** SSH in, join Tailscale, hit Redis, or run a matchup (those are the pipeline smoke's job, Tier 2). Instance count is whatever `max_concurrent_workers // len(regions)` comes out to in the probe YAML. Cost: ~$0.05 for two c7a.2xlarge spot instances × 3-5 min wall-clock. Run 24h before any paid campaign.
+3. **Validation probe** (`scripts/cloud/probe.sh` + `scripts/cloud/probe.py`). Tier 1: exercises `AWSProvider.provision_fleet` (LaunchTemplate + SecurityGroup creation + instance launch + two-tag propagation) + `terminate_fleet` + `final_audit.sh`. Scope is fleet lifecycle only — **does not** SSH in, join Tailscale, hit Redis, or run a matchup (those are the pipeline smoke's job, Tier 2). Instance count is whatever `max_concurrent_workers // len(regions)` comes out to in the probe YAML. Cost: ~$0.05 for two c7a.2xlarge spot instances × 3-5 min wall-clock. Run 24h before any paid campaign.
 4. **Campaign manager + orchestrator** (~500 LOC, the main Phase 6 implementation work). EC2 Fleet with `price-capacity-optimized` + CapacityRebalancing, Redis-backed study queues, graceful degradation. See Deliverables.
 5. **Pipeline smoke** (~2 hr, ~$1.20): 1 study × 8 workers × 1 region. Confirms the full pipeline (orchestrator ↔ worker Redis BRPOPLPUSH + Flask POST, janitor re-queue, cost ledger, three-layer teardown, preemption replay).
 6. **Sampler benchmark** (~1 hr, ~$14.83): 2 hulls × 3 samplers per §10. Writes REPORT.md with the chosen `sampler:` value.
@@ -354,14 +380,16 @@ Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket
 
 1. **`src/starsector_optimizer/campaign.py`** — campaign manager (~400 LOC):
    - `CampaignConfig` + `StudyConfig` + `WorkerConfig` + `CostLedgerEntry` + `GlobalAutoStopConfig` (frozen dataclasses in `models.py`; `__repr__` redacts secrets)
-   - `CampaignManager` (supervisor: provision fleet → spawn subprocess-per-study → monitor → three-layer teardown)
+   - `CampaignManager` (pure supervisor: `_preflight` → `spawn_studies` → `monitor_loop` → `terminate_all_tagged` sweep backstop). Does NOT own fleet lifecycle.
    - `CostLedger` (append-only JSONL + `fsync` per row + `BudgetExceeded` at hard cap)
    - Plateau detector deferred to follow-up commit
    - Entry point: `python -m starsector_optimizer.campaign <yaml>`
+   - Campaign YAML `tailscale_authkey_secret` supports `${VAR}` env-substitution (field-scoped)
 
 2. **`src/starsector_optimizer/cloud_provider.py`** — provider abstraction (boto3 direct, no Libcloud in MVP):
-   - `CloudProvider` (ABC): `create_fleet(config) → list[str]`, `terminate_all_tagged(name) → int`, `list_active(name) → list[dict]`, `get_spot_price(region, instance_type) → float`
-   - `AWSProvider` — boto3-direct EC2 Fleet with `price-capacity-optimized` + `CapacityRebalancing`
+   - `CloudProvider` (ABC): `provision_fleet(*, fleet_name, project_tag, regions, ami_ids_by_region, instance_types, ssh_key_name, spot_allocation_strategy, target_workers, user_data) → list[str]`, `terminate_fleet(*, fleet_name, project_tag) → int` (targeted), `terminate_all_tagged(project_tag) → int` (campaign-wide sweep), `list_active(project_tag) → list[dict]`, `get_spot_price(region, instance_type) → float`
+   - **Two-tag scheme**: every resource tagged `Project=<project_tag>` AND `Fleet=<fleet_name>`. LT/SG names are `f"{project_tag}__{fleet_name}"` (unique per study).
+   - `AWSProvider` — boto3-direct EC2 Fleet with `price-capacity-optimized`; SG deletion retries past ENI-detach race (`_SG_DELETE_DEADLINE_SECONDS`).
    - `HetznerProvider` — stub; every method raises `NotImplementedError` until $500+ campaigns
    - Tests use `moto` for AWS mocking; no `MockProvider` class ships
 

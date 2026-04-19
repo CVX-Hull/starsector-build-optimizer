@@ -1,0 +1,61 @@
+# Tier-2 pipeline smoke — one real matchup makes the full round-trip
+# workstation → Tailscale → Redis → cloud worker → LocalInstancePool (JVM) →
+# Flask POST /result → orchestrator.
+#
+# Ops prerequisites (see docs/reference/phase6-cloud-worker-federation.md §11):
+#   1. `tailscale up` on the workstation.
+#   2. Tailscale ACL grants tag:starsector-worker → workstation on tcp:6379,9000-9099.
+#   3. Ephemeral auth key generated and exported: `export TAILSCALE_AUTHKEY=tskey-auth-...`.
+#   4. Redis bound to the tailnet interface (systemd drop-in `--bind 0.0.0.0`).
+#
+# Launch:
+#   export TAILSCALE_AUTHKEY=tskey-auth-...
+#   scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
+#
+# Gate (all must hold):
+#   - launch_campaign.sh exits 0
+#   - final_audit.sh smoke exits 0
+#   - ledger.jsonl shows >= 1 worker_heartbeat event
+#   - Optuna study SQLite has exactly 1 TrialState.COMPLETE
+#
+# Expected cost: ~$0.30 (one c7a.2xlarge for ~10 min).
+# Budget cap at 2.0 USD = 7x safety margin.
+
+name: smoke
+budget_usd: 2.0
+provider: aws
+
+regions:
+  - us-east-1
+
+instance_types:
+  - c7a.2xlarge
+
+spot_allocation_strategy: price-capacity-optimized
+capacity_rebalancing: true
+
+max_concurrent_workers: 1
+min_workers_to_start: 1
+partial_fleet_policy: abort
+
+# AMI from 2026-04-18 bake; re-bake produces new IDs.
+ami_ids_by_region:
+  us-east-1: ami-0106d8575802f9941
+
+ssh_key_name: starsector-probe
+
+# Field-scoped env-substitution; load_campaign_config resolves ${TAILSCALE_AUTHKEY}.
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+
+studies:
+  - hull: hammerhead
+    regime: early
+    seeds: [0]
+    budget_per_study: 2           # 1 warm-start + 1 live matchup
+    workers_per_study: 1
+    sampler: tpe
+
+max_lifetime_hours: 0.5           # short leash; smoke should complete in < 10 min
+fleet_provision_timeout_seconds: 600.0
+result_timeout_seconds: 600.0     # deviates from spec default 900.0; documented smoke-only
+ledger_heartbeat_interval_seconds: 60.0

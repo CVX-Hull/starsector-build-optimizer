@@ -27,7 +27,7 @@ Use this skill when the user asks you to run or debug a cloud campaign — anyth
 
 ## Preflight checklist (before launching ANY cloud worker)
 
-Run all of these. Failure on any one = STOP.
+Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-runs checks 3 (Tailscale up), 4 (Redis on tailnet), 11 (AWS credentials), and 6 (authkey syntax) in-process before it spawns anything; this checklist is the operator-side verification — items 1/2/5/7/8/9/10/12/13/14/15/16 are operator-only.
 
 1. **Budget is set**: user has given a `budget_usd` figure AND it's written into the campaign YAML's `budget_usd` field.
 2. **Python modules import cleanly**:
@@ -35,9 +35,27 @@ Run all of these. Failure on any one = STOP.
    uv run python -c "from starsector_optimizer.campaign import CampaignManager, CostLedger"
    uv run python -c "from starsector_optimizer.cloud_provider import AWSProvider"
    uv run python -c "from starsector_optimizer.cloud_worker_pool import CloudWorkerPool"
-   uv run python -c "from starsector_optimizer.worker_agent import main"
+   uv run python -c "from starsector_optimizer.cloud_runner import run_cloud_study"
+   uv run python -c "from starsector_optimizer.worker_agent import load_worker_config_from_env"
    ```
-3. **AWS quota check** (for every `regions:` entry in the campaign YAML):
+3. **Tailscale is up on the workstation**:
+   ```bash
+   tailscale ip -4   # must return a 100.x.y.z address; empty = run `tailscale up`
+   ```
+4. **Redis is reachable on the tailnet interface** (workers can't reach localhost-bound Redis):
+   ```bash
+   redis-cli -h "$(tailscale ip -4)" ping   # must return PONG
+   ```
+   If it fails: `sudo systemctl edit redis-server` → `[Service]` section, override `ExecStart=` to include `--bind 0.0.0.0` (or the tailnet IP explicitly). Then `sudo systemctl restart redis-server`.
+5. **Tailscale ACL allows `tag:starsector-worker` → workstation on `tcp:6379,9000-9099`**. Verify from the Tailscale admin panel (`https://login.tailscale.com/admin/acls`). Sample ACL stanza:
+   ```json
+   {"action": "accept", "src": ["tag:starsector-worker"], "dst": ["<workstation-hostname>:6379,9000-9099"]}
+   ```
+6. **Ephemeral + pre-approved auth key exists** (from Tailscale admin panel → Keys), tagged `tag:starsector-worker`. Export before launch if the YAML uses `${TAILSCALE_AUTHKEY}` env-substitution:
+   ```bash
+   export TAILSCALE_AUTHKEY=tskey-auth-...
+   ```
+7. **AWS quota check** (for every `regions:` entry):
    ```bash
    for region in us-east-1 us-east-2; do
      aws service-quotas get-service-quota --service-code ec2 \
@@ -45,25 +63,34 @@ Run all of these. Failure on any one = STOP.
    done
    ```
    At 8 vCPU/VM, confirm `quota ≥ 8 × planned_workers_per_region`.
-4. **No orphaned resources** under your target tag. Replace `<campaign-name>` with the YAML `name:` value:
+8. **No orphaned resources** under your target tag:
    ```bash
    scripts/cloud/final_audit.sh <campaign-name>   # must exit 0 before launching
    ```
-5. **AMI exists in every `regions:` entry** — inspect `ami_ids_by_region:` in the campaign YAML and verify each AMI is available:
+9. **AMI exists in every `regions:` entry** — inspect `ami_ids_by_region:` in the campaign YAML and verify each AMI is available:
    ```bash
    aws ec2 describe-images --owners self --region <region> --image-ids <ami-id>
    ```
-6. **Validation probe passed within last 48 hours**:
-   ```bash
-   scripts/cloud/probe.sh <campaign.yaml>
-   ```
-7. **Provider credentials alive**: `aws sts get-caller-identity` returns `UserId`.
-8. **Game prefs file exists** at `~/.java/.userPrefs/com/fs/starfarer/prefs.xml`. Bake it into the AMI via Packer; the Packer template references the host-side path.
-9. **SSH key** at `~/.ssh/starsector-opt` (private) and `.pub`. Name must match `ssh_key_name:` in the YAML.
-10. **LWJGL XRandR fix in code**: `grep 'xrandr --query' src/starsector_optimizer/instance_manager.py` returns a match in `_start_xvfb`. Without it, workers crash with `ArrayIndexOutOfBoundsException: Index 0`.
-11. **`x11-xserver-utils` baked into the AMI**: check `scripts/cloud/packer/aws.pkr.hcl` contains `x11-xserver-utils` in the apt list. Without it, step 10's warmup has no `xrandr` to run.
+10. **Validation probe passed within last 48 hours**:
+    ```bash
+    scripts/cloud/probe.sh <campaign.yaml>
+    ```
+11. **Provider credentials alive**: `aws sts get-caller-identity` returns `UserId`.
+12. **Tier-2 pipeline smoke passed within last 30 days** (first real paid campaign gate):
+    ```bash
+    export TAILSCALE_AUTHKEY=tskey-auth-...
+    scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
+    scripts/cloud/final_audit.sh smoke   # must exit 0
+    ```
+    Expected gate: launch exits 0 + ledger.jsonl has ≥1 `worker_heartbeat` + Optuna study SQLite has 1 `TrialState.COMPLETE` (~$0.30, < 10 min wall-clock).
+13. **Game prefs file exists** at `~/.java/.userPrefs/com/fs/starfarer/prefs.xml`. Bake it into the AMI via Packer; the Packer template references the host-side path.
+14. **SSH key** present; name must match `ssh_key_name:` in the YAML.
+15. **LWJGL XRandR fix in code**: `grep 'xrandr --query' src/starsector_optimizer/instance_manager.py` returns a match in `_start_xvfb`. Without it, workers crash with `ArrayIndexOutOfBoundsException: Index 0`.
+16. **`x11-xserver-utils` baked into the AMI**: check `scripts/cloud/packer/aws.pkr.hcl` contains `x11-xserver-utils` in the apt list.
 
 ## Launching a campaign
+
+Smoke and prep share the same launch command. Only the YAML differs.
 
 ```bash
 # 1. (once per AMI rebuild) Bake and copy the AMI
@@ -71,25 +98,30 @@ scripts/cloud/bake_image.sh
 # → prints AMI IDs for us-east-1 and us-east-2; paste into campaign.yaml
 
 # 2. Dry-run validate the YAML + resolve config (free)
-uv run python -m starsector_optimizer.campaign --dry-run <campaign.yaml>
+TAILSCALE_AUTHKEY=tskey-auth-placeholder \
+  uv run python -m starsector_optimizer.campaign --dry-run <campaign.yaml>
 
-# 3. Validation probe ($0.15)
-scripts/cloud/probe.sh <campaign.yaml>
+# 3. Tier-1 validation probe ($0.05)
+scripts/cloud/probe.sh examples/probe-campaign.yaml
 
-# 4. Launch (prints teardown command as its first line)
+# 4. Tier-2 pipeline smoke (~$0.30) — SAME code path as prep, tiny study
+export TAILSCALE_AUTHKEY=tskey-auth-...
+scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
+
+# 5. Real launch (prints teardown command as first line)
 scripts/cloud/launch_campaign.sh <campaign.yaml>
 
-# 5. Monitor
+# 6. Monitor
 scripts/cloud/status.sh <campaign-name>
 
-# 6. On completion OR error — explicit teardown
+# 7. On completion OR error — explicit teardown
 scripts/cloud/teardown.sh <campaign-name>
 
-# 7. Final audit — MANDATORY (scripts/cloud/launch_campaign.sh EXIT trap also runs this)
+# 8. Final audit — MANDATORY (launch_campaign.sh EXIT trap also runs this)
 scripts/cloud/final_audit.sh <campaign-name>
 ```
 
-`launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that re-runs `final_audit.sh` on any exit path (success, SIGKILL, crash). In-process, `CampaignManager.run()` has a `try/finally` + `atexit.register(teardown)` belt-and-suspenders. Three layers.
+`launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that re-runs `teardown.sh` + `final_audit.sh` on any exit path (success, SIGKILL, crash). In-process, `CampaignManager.run()` has a `try/finally: terminate_all_tagged` sweep + `atexit.register(teardown)`. Each study subprocess also has its own `try/finally: terminate_fleet` for its own fleet. **Four layers of teardown belt-and-suspenders.**
 
 ### Study-per-(hull,regime,seed) sizing cheatsheet
 
@@ -113,6 +145,36 @@ Every 15-30 min while a campaign is live:
 4. **Stuck studies**: any study with no trial progress for >15 min = worker crash loop. Inspect worker logs; typically the XRandR or heartbeat issue.
 
 ## Failure recovery recipes
+
+### "Redis connection refused" on tailnet IP
+
+Workers boot and fail `BRPOPLPUSH` with `ConnectionRefusedError: [Errno 111]`. Root cause: workstation Redis is bound only to 127.0.0.1. Fix via systemd drop-in:
+
+```bash
+sudo systemctl edit redis-server
+# In the editor, add:
+#   [Service]
+#   ExecStart=
+#   ExecStart=/usr/bin/redis-server /etc/redis/redis.conf --bind 0.0.0.0
+sudo systemctl restart redis-server
+redis-cli -h "$(tailscale ip -4)" ping   # must now return PONG
+```
+
+`CampaignManager._preflight` catches this at launch — if you see "Redis not reachable at <tailnet_ip>:6379" in the launch output, apply the drop-in and relaunch.
+
+### "Tailscale ACL denies tag:starsector-worker"
+
+Workers boot, `tailscale up` succeeds, then their BRPOPLPUSH hangs and eventually times out. Root cause: ACL doesn't grant the worker → workstation reachability. Fix via admin panel (`https://login.tailscale.com/admin/acls`), add:
+
+```json
+{
+  "action": "accept",
+  "src": ["tag:starsector-worker"],
+  "dst": ["<workstation-hostname>:6379,9000-9099"]
+}
+```
+
+Workstation hostname is the one shown by `tailscale status --self`.
 
 ### Workers crashing on startup with `ArrayIndexOutOfBoundsException: Index 0`
 

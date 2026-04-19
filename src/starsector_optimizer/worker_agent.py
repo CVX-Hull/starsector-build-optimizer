@@ -17,6 +17,7 @@ import os
 import signal
 import sys
 import time
+import typing
 from pathlib import Path
 from typing import Any
 
@@ -49,24 +50,54 @@ def _install_signal_handlers() -> None:
 
 _ENV_PREFIX = "STARSECTOR_WORKER_"
 
+# Type-dispatched coercion for env var string values. Unknown types raise
+# TypeError so any future WorkerConfig field-type addition (bool, tuple, etc.)
+# fails loudly rather than silently parsing wrong.
+_COERCE: dict[type, Any] = {
+    str: str,
+    int: int,
+    float: float,
+}
+
+
+def _coerce(target_type: type, raw: str) -> Any:
+    try:
+        fn = _COERCE[target_type]
+    except KeyError:
+        raise TypeError(
+            f"load_worker_config_from_env: no coercion registered for "
+            f"{target_type!r}. Add to _COERCE in worker_agent.py."
+        ) from None
+    return fn(raw)
+
 
 def load_worker_config_from_env() -> WorkerConfig:
-    """Read WorkerConfig from env vars (STARSECTOR_WORKER_* namespace)."""
-    def env(name: str, default: str | None = None) -> str:
-        value = os.environ.get(_ENV_PREFIX + name, default)
-        if value is None:
-            raise ValueError(f"missing env var: {_ENV_PREFIX + name}")
-        return value
-    return WorkerConfig(
-        campaign_id=env("CAMPAIGN_ID"),
-        worker_id=env("WORKER_ID"),
-        study_id=env("STUDY_ID"),
-        redis_host=env("REDIS_HOST"),
-        redis_port=int(env("REDIS_PORT", "6379")),
-        http_endpoint=env("HTTP_ENDPOINT"),
-        bearer_token=env("BEARER_TOKEN"),
-        max_lifetime_hours=float(env("MAX_LIFETIME_HOURS", "6.0")),
-    )
+    """Read WorkerConfig from env vars (STARSECTOR_WORKER_* namespace).
+
+    Iterates `dataclasses.fields(WorkerConfig)` + `typing.get_type_hints`
+    (resolves PEP-563 string annotations). Missing required field →
+    `ValueError`; unknown field type → `TypeError`. Every field the
+    dataclass declares is read symmetrically with what `render_user_data`
+    emits — no drift between writer and reader.
+    """
+    hints = typing.get_type_hints(WorkerConfig)
+    kwargs: dict[str, Any] = {}
+    for f in dataclasses.fields(WorkerConfig):
+        env_key = f"{_ENV_PREFIX}{f.name.upper()}"
+        raw = os.environ.get(env_key)
+        if raw is None:
+            has_default = (
+                f.default is not dataclasses.MISSING
+                or f.default_factory is not dataclasses.MISSING
+            )
+            if not has_default:
+                raise ValueError(
+                    f"missing required env var: {env_key} "
+                    f"(no dataclass default for WorkerConfig.{f.name})"
+                )
+            continue
+        kwargs[f.name] = _coerce(hints[f.name], raw)
+    return WorkerConfig(**kwargs)
 
 
 # ---- Queue helpers -----------------------------------------------------------

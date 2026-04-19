@@ -1,6 +1,6 @@
 # Tier-1 validation probe — 2 × c7a.2xlarge spot for ~3-5 min wall-clock.
-# Exercises AWSProvider.create_fleet + LaunchTemplate/SecurityGroup machinery
-# + terminate_all_tagged. Does NOT exercise Tailscale, Redis, or the worker
+# Exercises AWSProvider.provision_fleet + LaunchTemplate/SecurityGroup machinery
+# + terminate_fleet. Does NOT exercise Tailscale, Redis, or the worker
 # agent (Tier-2 smoke covers those).
 #
 # Regenerate ami_ids_by_region after re-baking:

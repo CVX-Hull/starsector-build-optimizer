@@ -103,7 +103,7 @@ class TestFrozenDataclasses:
     def test_worker_config_frozen(self):
         from starsector_optimizer.models import WorkerConfig
         w = WorkerConfig(
-            campaign_id="c", worker_id="w", study_id="s",
+            campaign_id="c", study_id="s",
             redis_host="h", redis_port=6379,
             http_endpoint="http://h/result", bearer_token="t",
         )
@@ -140,7 +140,7 @@ class TestSecretRedaction:
     def test_worker_config_repr_redacts_bearer_token(self):
         from starsector_optimizer.models import WorkerConfig
         w = WorkerConfig(
-            campaign_id="c", worker_id="w", study_id="s",
+            campaign_id="c", study_id="s",
             redis_host="h", redis_port=6379,
             http_endpoint="http://h/result",
             bearer_token=BEARER_TOKEN_SENTINEL,
@@ -246,11 +246,42 @@ class TestCostLedger:
 
 
 class TestCampaignManager:
-    """CampaignManager: subprocess per study, signals, teardown, partial fleet."""
+    """CampaignManager: pure supervisor — preflight, spawn subprocess per (study, seed),
+    campaign-wide teardown sweep. No longer owns fleet provisioning (that moves to
+    run_optimizer.py --worker-pool cloud subprocess)."""
 
     def _config(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import load_campaign_config
         return load_campaign_config(_minimal_campaign_yaml(tmp_path, **overrides))
+
+    def test_provision_fleet_method_removed(self, tmp_path):
+        """Clean rewrite — provision_fleet no longer exists on CampaignManager."""
+        from starsector_optimizer.campaign import CampaignManager
+        config = self._config(tmp_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        ledger = MagicMock()
+        manager = CampaignManager(config, provider, ledger)
+        assert not hasattr(manager, "provision_fleet"), (
+            "provision_fleet must be gone — fleet ownership moved to the study subprocess."
+        )
+
+    def test_partial_fleet_methods_removed(self, tmp_path):
+        """partial_fleet_decide / log_partial_fleet_abort both removed with
+        provision_fleet. Per-study subprocess handles its own provisioning."""
+        from starsector_optimizer.campaign import CampaignManager
+        config = self._config(tmp_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        ledger = MagicMock()
+        manager = CampaignManager(config, provider, ledger)
+        assert not hasattr(manager, "partial_fleet_decide")
+        assert not hasattr(manager, "log_partial_fleet_abort")
+
+    def test_partial_fleet_abort_exception_removed(self):
+        """PartialFleetAbort exception class also removed (no remaining callers)."""
+        import starsector_optimizer.campaign as mod
+        assert not hasattr(mod, "PartialFleetAbort")
 
     def test_spawns_one_subprocess_per_study_seed(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager
@@ -260,50 +291,113 @@ class TestCampaignManager:
         ]
         config = self._config(tmp_path, studies=studies)
         provider = MagicMock()
-        provider.create_fleet.return_value = [f"i-{i:04d}" for i in range(48)]
         provider.list_active.return_value = []
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
+        # _preflight must have run (workstation-side side effects stored); bypass
+        # by calling spawn_studies directly with a prepared tailnet IP.
+        manager._tailnet_ip = "100.64.1.2"
 
         with patch.object(subprocess, "Popen") as mock_popen:
             mock_popen.return_value.poll.return_value = 0
-            procs = manager.spawn_studies([])
-        assert mock_popen.call_count == 3
+            manager.spawn_studies()
+        assert mock_popen.call_count == 3  # one per seed
+
+    def test_subprocess_gets_study_idx_and_seed_idx(self, tmp_path):
+        """Flat-idx bug fix: subprocess must receive BOTH indexes so
+        campaign.studies[study_idx].seeds[seed_idx] picks the correct seed."""
+        from starsector_optimizer.campaign import CampaignManager
+        studies = [
+            {"hull": "wolf", "regime": "early", "seeds": [0, 1],
+             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+            {"hull": "eagle", "regime": "early", "seeds": [0],
+             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+        ]
+        config = self._config(tmp_path, studies=studies)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        ledger = MagicMock()
+        manager = CampaignManager(config, provider, ledger)
+        manager._tailnet_ip = "100.64.1.2"
+
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        cmds = [call.args[0] for call in mock_popen.call_args_list]
+        # 3 total subprocesses: (wolf, seed0), (wolf, seed1), (eagle, seed0).
+        pairs = set()
+        for cmd in cmds:
+            study_idx = cmd[cmd.index("--study-idx") + 1]
+            seed_idx = cmd[cmd.index("--seed-idx") + 1]
+            pairs.add((int(study_idx), int(seed_idx)))
+        assert pairs == {(0, 0), (0, 1), (1, 0)}
 
     def test_subprocess_gets_yaml_path_not_pickle(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager
         config = self._config(tmp_path)
         provider = MagicMock()
+        provider.list_active.return_value = []
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
+        manager._tailnet_ip = "100.64.1.2"
 
         with patch.object(subprocess, "Popen") as mock_popen:
             mock_popen.return_value.poll.return_value = 0
-            manager.spawn_studies([])
-        args_list = mock_popen.call_args_list[0]
-        cmd = args_list[0][0]
+            manager.spawn_studies()
+        cmd = mock_popen.call_args_list[0].args[0]
         assert "--campaign-config" in cmd
         assert not any(b"pickle" in str(arg).encode() for arg in cmd)
 
-    def test_partial_fleet_proceed_at_floor(self, tmp_path):
+    def test_subprocess_env_contains_required_secrets_and_ip(self, tmp_path):
+        """Every subprocess gets STARSECTOR_WORKSTATION_TAILNET_IP,
+        STARSECTOR_BEARER_TOKEN, STARSECTOR_TAILSCALE_AUTHKEY,
+        STARSECTOR_PROJECT_TAG — the env plumbing contract."""
         from starsector_optimizer.campaign import CampaignManager
         config = self._config(tmp_path)
         provider = MagicMock()
+        provider.list_active.return_value = []
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
-        decision = manager.partial_fleet_decide(launched=48)
-        assert decision == "proceed"
+        manager._tailnet_ip = "100.64.9.9"
 
-    def test_partial_fleet_abort_below_floor(self, tmp_path):
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        env = mock_popen.call_args_list[0].kwargs.get("env", {})
+        assert env.get("STARSECTOR_WORKSTATION_TAILNET_IP") == "100.64.9.9"
+        assert env.get("STARSECTOR_TAILSCALE_AUTHKEY") == TAILSCALE_SECRET_SENTINEL
+        assert env.get("STARSECTOR_PROJECT_TAG") == "starsector-test-campaign"
+        # Per-study bearer token: present, non-empty, not the tailscale secret.
+        bearer = env.get("STARSECTOR_BEARER_TOKEN", "")
+        assert bearer and bearer != TAILSCALE_SECRET_SENTINEL
+
+    def test_each_study_gets_distinct_bearer_token(self, tmp_path):
+        """Per-study secret isolation: N subprocesses → N distinct bearer tokens."""
         from starsector_optimizer.campaign import CampaignManager
-        config = self._config(tmp_path)
+        studies = [
+            {"hull": "wolf", "regime": "early", "seeds": [0, 1, 2],
+             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+            {"hull": "eagle", "regime": "early", "seeds": [0],
+             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+        ]
+        config = self._config(tmp_path, studies=studies)
         provider = MagicMock()
+        provider.list_active.return_value = []
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
-        decision = manager.partial_fleet_decide(launched=30)
-        assert decision == "abort"
+        manager._tailnet_ip = "100.64.1.2"
 
-    def test_teardown_calls_provider_terminate(self, tmp_path):
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        tokens = {
+            call.kwargs["env"]["STARSECTOR_BEARER_TOKEN"]
+            for call in mock_popen.call_args_list
+        }
+        assert len(tokens) == 4  # 3 + 1
+
+    def test_teardown_calls_provider_terminate_with_project_tag(self, tmp_path):
+        """Campaign-wide sweep backstop reaps by Project tag only."""
         from starsector_optimizer.campaign import CampaignManager
         config = self._config(tmp_path)
         provider = MagicMock()
@@ -311,13 +405,12 @@ class TestCampaignManager:
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
         manager.teardown()
-        provider.terminate_all_tagged.assert_called_with("test-campaign")
+        provider.terminate_all_tagged.assert_called_with("starsector-test-campaign")
 
-    def test_teardown_asserts_list_active_empty(self, tmp_path):
+    def test_teardown_retries_then_succeeds(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager
         config = self._config(tmp_path)
         provider = MagicMock()
-        # first call: one left, retry call: empty
         provider.list_active.side_effect = [[{"id": "i-1"}], []]
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
@@ -357,33 +450,193 @@ class TestCampaignManager:
         assert signal.SIGTERM in installed
         assert signal.SIGHUP in installed
 
-    def test_budget_exceeded_triggers_teardown(self, tmp_path):
-        from starsector_optimizer.campaign import (
-            CampaignManager, BudgetExceeded,
-        )
-        config = self._config(tmp_path)
-        provider = MagicMock()
-        provider.list_active.return_value = []
-        ledger = MagicMock()
-        ledger.cumulative_usd.return_value = 0.0
-        manager = CampaignManager(config, provider, ledger)
-        with patch.object(manager, "teardown") as mock_td:
-            with patch.object(manager, "monitor_loop", side_effect=BudgetExceeded("cap")):
-                with patch.object(manager, "provision_fleet", return_value=["i-1"]):
-                    with patch.object(manager, "spawn_studies", return_value=[]):
-                        exit_code = manager.run()
-        assert mock_td.called
-        assert exit_code != 0
 
-    def test_structured_error_log_on_abort(self, tmp_path, caplog):
+class TestCampaignManagerPreflight:
+    """_preflight checks: tailnet IP, Redis reachable on tailnet, AWS creds alive,
+    authkey syntax. Failure → non-zero exit with clear remediation message."""
+
+    def _config(self, tmp_path, **overrides):
+        from starsector_optimizer.campaign import load_campaign_config
+        return load_campaign_config(_minimal_campaign_yaml(tmp_path, **overrides))
+
+    def _manager_with_mocks(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import CampaignManager
-        config = self._config(tmp_path)
+        config = self._config(tmp_path, **overrides)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        ledger = MagicMock()
+        return CampaignManager(config, provider, ledger)
+
+    def test_requires_nonempty_tailnet_ip(self, tmp_path, caplog):
+        manager = self._manager_with_mocks(tmp_path)
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit):
+                    manager._preflight()
+        assert any("tailscale" in r.getMessage().lower() for r in caplog.records)
+
+    def test_requires_redis_reachable_on_tailnet_ip(self, tmp_path, caplog):
+        manager = self._manager_with_mocks(tmp_path)
+        # tailscale ip -4 returns a value; redis.ping raises.
+        with patch("subprocess.run") as mock_run, \
+             patch("redis.Redis") as mock_redis_ctor, \
+             patch("boto3.client") as mock_boto:
+            mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            instance = MagicMock()
+            instance.ping.side_effect = Exception("connection refused")
+            mock_redis_ctor.return_value = instance
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit):
+                    manager._preflight()
+        assert any("redis" in r.getMessage().lower() for r in caplog.records)
+
+    def test_requires_aws_credentials(self, tmp_path, caplog):
+        manager = self._manager_with_mocks(tmp_path)
+        with patch("subprocess.run") as mock_run, \
+             patch("redis.Redis") as mock_redis_ctor, \
+             patch("boto3.client") as mock_boto:
+            mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            mock_redis_ctor.return_value.ping.return_value = True
+            mock_boto.return_value.get_caller_identity.side_effect = Exception("creds expired")
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit):
+                    manager._preflight()
+        assert any("aws" in r.getMessage().lower() or "creden" in r.getMessage().lower()
+                   for r in caplog.records)
+
+    def test_requires_authkey_syntax(self, tmp_path, caplog):
+        manager = self._manager_with_mocks(
+            tmp_path, tailscale_authkey_secret="not-a-valid-key",
+        )
+        with patch("subprocess.run") as mock_run, \
+             patch("redis.Redis") as mock_redis_ctor, \
+             patch("boto3.client") as mock_boto:
+            mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            mock_redis_ctor.return_value.ping.return_value = True
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit):
+                    manager._preflight()
+        assert any("tskey" in r.getMessage().lower() or "authkey" in r.getMessage().lower()
+                   for r in caplog.records)
+
+    def test_preflight_stores_tailnet_ip(self, tmp_path):
+        manager = self._manager_with_mocks(tmp_path)
+        with patch("subprocess.run") as mock_run, \
+             patch("redis.Redis") as mock_redis_ctor, \
+             patch("boto3.client") as mock_boto:
+            mock_run.return_value = MagicMock(returncode=0, stdout="100.64.7.7\n", stderr="")
+            mock_redis_ctor.return_value.ping.return_value = True
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            manager._preflight()
+        assert manager._tailnet_ip == "100.64.7.7"
+
+
+class TestCampaignNameValidation:
+    def test_name_regex_accepts_common_names(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        for i, name in enumerate(
+            ("smoke", "phase7-prep-2026-04", "test.campaign.1", "a_b_c")
+        ):
+            subdir = tmp_path / f"case_{i}"
+            subdir.mkdir()
+            path = _minimal_campaign_yaml(subdir, name=name)
+            load_campaign_config(path)  # must not raise
+
+    def test_name_regex_rejects_whitespace(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path, name="bad name")
+        with pytest.raises(ValueError, match=r"name"):
+            load_campaign_config(path)
+
+    def test_name_regex_rejects_shell_metachars(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path, name="bad/name")
+        with pytest.raises(ValueError, match=r"name"):
+            load_campaign_config(path)
+
+
+class TestYamlEnvSubstitution:
+    """load_campaign_config expands ${VAR} in tailscale_authkey_secret ONLY."""
+
+    def test_expands_env_var_in_authkey_field(self, tmp_path, monkeypatch):
+        from starsector_optimizer.campaign import load_campaign_config
+        monkeypatch.setenv("SMOKE_TEST_TAILSCALE", "tskey-auth-REAL-VALUE-z9z9")
+        path = _minimal_campaign_yaml(
+            tmp_path, tailscale_authkey_secret="${SMOKE_TEST_TAILSCALE}",
+        )
+        config = load_campaign_config(path)
+        assert config.tailscale_authkey_secret == "tskey-auth-REAL-VALUE-z9z9"
+
+    def test_missing_env_var_raises_clear_error(self, tmp_path, monkeypatch):
+        from starsector_optimizer.campaign import load_campaign_config
+        monkeypatch.delenv("SMOKE_TEST_TAILSCALE_MISSING", raising=False)
+        path = _minimal_campaign_yaml(
+            tmp_path, tailscale_authkey_secret="${SMOKE_TEST_TAILSCALE_MISSING}",
+        )
+        with pytest.raises(ValueError, match="SMOKE_TEST_TAILSCALE_MISSING"):
+            load_campaign_config(path)
+
+    def test_other_fields_are_not_expanded(self, tmp_path, monkeypatch):
+        """Only tailscale_authkey_secret gets substitution; other string
+        fields pass through untouched (no global os.path.expandvars)."""
+        from starsector_optimizer.campaign import load_campaign_config
+        monkeypatch.setenv("UNRELATED_VAR", "SHOULD_NOT_APPEAR")
+        path = _minimal_campaign_yaml(tmp_path, ssh_key_name="key_${UNRELATED_VAR}")
+        config = load_campaign_config(path)
+        # The literal must survive unchanged — no global expansion.
+        assert config.ssh_key_name == "key_${UNRELATED_VAR}"
+        assert "SHOULD_NOT_APPEAR" not in config.ssh_key_name
+
+
+class TestSmokeYamlLoadsAndValidates:
+    """The shipped examples/smoke-campaign.yaml must load without error and
+    reflect the spec-pinned smoke parameters."""
+
+    def test_loads_from_repo(self, monkeypatch):
+        from starsector_optimizer.campaign import load_campaign_config
+        monkeypatch.setenv("TAILSCALE_AUTHKEY", "tskey-auth-SMOKE-44e7f9b3")
+        repo_root = Path(__file__).parent.parent
+        smoke_path = repo_root / "examples" / "smoke-campaign.yaml"
+        if not smoke_path.exists():
+            pytest.skip(f"{smoke_path} not yet present")
+        config = load_campaign_config(smoke_path)
+        assert config.name == "smoke"
+        assert len(config.studies) == 1
+        assert config.studies[0].hull == "hammerhead"
+        assert config.studies[0].regime == "early"
+        assert config.studies[0].seeds == (0,)
+        assert config.studies[0].budget_per_study == 2
+        assert config.studies[0].workers_per_study == 1
+        assert config.tailscale_authkey_secret == "tskey-auth-SMOKE-44e7f9b3"
+        assert config.capacity_rebalancing is True  # spec-required
+
+
+class TestEnvDictNotLogged:
+    """Secrets in subprocess env must never hit logs."""
+
+    def test_spawn_studies_does_not_log_env_dict(self, tmp_path, caplog):
+        from starsector_optimizer.campaign import CampaignManager
+        import starsector_optimizer.campaign as mod
+        config = load_campaign_config = __import__(
+            "starsector_optimizer.campaign", fromlist=["load_campaign_config"],
+        ).load_campaign_config(_minimal_campaign_yaml(tmp_path))
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()
         manager = CampaignManager(config, provider, ledger)
-        with caplog.at_level(logging.ERROR):
-            manager.log_partial_fleet_abort(launched=30, elapsed_seconds=600.0)
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("launched" in m.lower() for m in messages)
-        assert any("30" in m for m in messages)
+        manager._tailnet_ip = "100.64.1.2"
+        with caplog.at_level(logging.DEBUG):
+            with patch.object(subprocess, "Popen") as mock_popen:
+                mock_popen.return_value.poll.return_value = 0
+                manager.spawn_studies()
+        for record in caplog.records:
+            assert TAILSCALE_SECRET_SENTINEL not in record.getMessage()
+            # Bearer tokens are generated on spawn; we can't name them, but
+            # they should not appear in any log record.
+            env = mock_popen.call_args_list[0].kwargs.get("env", {})
+            bearer = env.get("STARSECTOR_BEARER_TOKEN", "")
+            if bearer:
+                assert bearer not in record.getMessage()

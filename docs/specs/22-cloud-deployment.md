@@ -10,19 +10,24 @@ Workstation is the sole orchestrator. Every Optuna Study runs in a `run_optimize
 workstation (single machine)                         cloud VM (N of them)
 ┌──────────────────────────────────────┐             ┌────────────────────────────────┐
 │ CampaignManager (supervisor)         │             │ worker_agent.py main loop      │
-│   spawn/kill study subprocesses      │             │   BRPOPLPUSH <queue> <proc>    │
-│   provider.create_fleet              │◄───tailscale──┤   run LocalInstancePool (×2) │
-│   CostLedger (JSONL, fsync'd)        │    redis    │   POST /result (bearer+dedup)  │
-│   atexit teardown                    │             │   HSET worker:<id>:heartbeat   │
-│                                      │             │                                │
-│ study subprocess (×N per campaign):  │             │ LocalInstancePool              │
-│   Optuna Study (SQLite, local)       │             │   Xvfb :100, :101              │
-│   CloudWorkerPool                    │             │   Starsector JVM (×2)          │
-│     ThreadPoolExecutor(workers=24)   │             │   combat harness mod           │
-│     Flask POST /result listener      │             │   heartbeat + queue files      │
+│   _preflight (tailnet/redis/STS)     │             │   BRPOPLPUSH <queue> <proc>    │
+│   spawn/kill study subprocesses      │             │   run LocalInstancePool (×2)   │
+│   CostLedger (JSONL, fsync'd)        │             │   POST /result (bearer+dedup)  │
+│   terminate_all_tagged backstop      │             │   HSET worker:<id>:heartbeat   │
+│   atexit teardown                    │             │                                │
+│                                      │◄──tailscale─┤                                │
+│ study subprocess (×N per campaign):  │    redis    │ LocalInstancePool              │
+│   Optuna Study (SQLite, local)       │    flask    │   Xvfb :100, :101              │
+│   provider.provision_fleet  (owns)   │             │   Starsector JVM (×2)          │
+│   CloudWorkerPool                    │             │   combat harness mod           │
+│     ThreadPoolExecutor(workers=N)    │             │   heartbeat + queue files      │
+│     Flask POST /result listener      │             │                                │
 │     janitor thread (requeue stuck)   │             │                                │
+│   provider.terminate_fleet  (owns)   │             │                                │
 └──────────────────────────────────────┘             └────────────────────────────────┘
 ```
+
+**Fleet ownership**: the study subprocess owns its own fleet — provisioning AND teardown. `CampaignManager` is a pure supervisor (spawn + monitor + sweep-backstop via `terminate_all_tagged`). Per-study fleet ownership is load-bearing: each study's workers carry that study's bearer token + Redis queue keys + Flask endpoint in their UserData. A campaign-wide fleet would force every worker to carry every study's secrets.
 
 ## Config dataclasses
 
@@ -56,7 +61,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `name` | `str` | required | Campaign identifier; used as AWS resource tag `Project=starsector-<name>` |
+| `name` | `str` | required | Campaign identifier; validated by `load_campaign_config` against `^[a-zA-Z0-9._-]{1,64}$` so `f"starsector-{name}__{fleet_name}"` always satisfies AWS LT name rules. Used as AWS resource tag `Project=starsector-<name>` |
 | `budget_usd` | `float` | required | Hard cap; `CostLedger.record_heartbeat` raises `BudgetExceeded` at `cumulative_usd >= budget_usd` |
 | `provider` | `str` | required | `"aws"`; `"hetzner"` raises `NotImplementedError` |
 | `regions` | `tuple[str, ...]` | required | e.g. `("us-east-1", "us-east-2")` |
@@ -68,7 +73,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `partial_fleet_policy` | `str` | required | `"proceed_half_speed"` or `"abort"` |
 | `ami_ids_by_region` | `dict[str, str]` | required | Populated exactly once by `load_campaign_config`; grep invariant forbids post-load mutation |
 | `ssh_key_name` | `str` | required | Pre-registered AWS key pair name |
-| `tailscale_authkey_secret` | `str` | required | Injected into cloud-init; redacted from `__repr__` |
+| `tailscale_authkey_secret` | `str` | required | Injected into cloud-init; redacted from `__repr__`. Supports `${VAR}` env-substitution — if value starts with `${` and ends with `}`, `load_campaign_config` resolves via `os.environ`. Missing env var → `ValueError`. Substitution is SCOPED to this field only. |
 | `studies` | `tuple[StudyConfig, ...]` | required | |
 | `global_auto_stop` | `GlobalAutoStopConfig` | `GlobalAutoStopConfig()` | |
 | `max_lifetime_hours` | `float` | `6.0` | Worker self-terminates at this age; 6h covers prep's 4.1h run |
@@ -79,26 +84,32 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `result_timeout_seconds` | `float` | `900.0` | `CloudWorkerPool.run_matchup` blocks at most this long |
 | `ledger_heartbeat_interval_seconds` | `float` | `60.0` | How often `CampaignManager.monitor_loop` appends ledger rows |
 | `ledger_warn_thresholds` | `tuple[float, ...]` | `(0.5, 0.8, 0.95)` | Budget fractions at which a WARN log fires |
-| `base_flask_port` | `int` | `9000` | Study `i` listens on `base_flask_port + i` |
+| `base_flask_port` | `int` | `9000` | Study at `(study_idx, seed_idx)` listens on `base_flask_port + study_idx * len(seeds) + seed_idx` |
+| `redis_port` | `int` | `6379` | Workstation Redis port; shared by preflight ping and by `WorkerConfig.redis_port` in spawned children |
+| `redis_preflight_timeout_seconds` | `float` | `2.0` | `_preflight` Redis ping timeout — covers only the tailnet-binding-check, not campaign-wide connectivity |
+| `num_instances_per_worker` | `int` | `2` | Per-VM JVM count; forwarded to `WorkerConfig.num_instances_per_worker`. c7a.2xlarge (8 vCPU) fits 2 JVMs at ~2.5 cores each |
 
 ### `WorkerConfig`
 
-Injected by cloud-init as env vars at VM boot. Read once; worker treats as immutable.
+Injected by cloud-init as env vars at VM boot. Read once; worker treats as immutable. `load_worker_config_from_env` iterates `dataclasses.fields(WorkerConfig)` + `typing.get_type_hints(WorkerConfig)` to read + coerce every field from `STARSECTOR_WORKER_<FIELD_UPPER>`. Unknown coercion target → `TypeError` (loud-fail, forward-compat).
 
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `campaign_id` | `str` | required | Matches `CampaignConfig.name` |
-| `worker_id` | `str` | required | EC2 instance ID |
 | `study_id` | `str` | required | `f"{hull}__{regime}__seed{n}"` |
 | `redis_host` | `str` | required | Workstation's Tailscale address |
-| `redis_port` | `int` | required | Default 6379 |
+| `redis_port` | `int` | required | Matches `CampaignConfig.redis_port` (default 6379) |
 | `http_endpoint` | `str` | required | `f"http://{workstation}:{port}/result"` |
-| `bearer_token` | `str` | required | Redacted from `__repr__` |
+| `bearer_token` | `str` | required | Redacted from `__repr__`; per-study, generated by `CampaignManager._generate_study_env` |
 | `max_lifetime_hours` | `float` | `6.0` | |
 | `http_retry_count` | `int` | `3` | POST retry attempts |
 | `http_retry_base_seconds` | `float` | `1.0` | Exponential backoff start |
 | `http_retry_max_seconds` | `float` | `30.0` | Backoff cap |
+| `http_retry_backoff_multiplier` | `float` | `2.0` | Backoff multiplier |
+| `http_post_timeout_seconds` | `float` | `30.0` | `requests.post` timeout |
 | `worker_poll_margin_seconds` | `float` | `5.0` | BRPOPLPUSH timeout = `visibility_timeout_seconds - worker_poll_margin_seconds` |
+| `num_instances_per_worker` | `int` | `2` | Per-VM JVM count for the inner `LocalInstancePool` |
+| `worker_id` | `str` | `""` | EC2 instance ID. **Placeholder at render time** — cloud-init overwrites via IMDSv2 before `systemctl start`. Moved to end-of-dataclass so earlier required fields stay positional-required. |
 
 ### `CostLedgerEntry`
 
@@ -168,66 +179,150 @@ Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — onc
 
 ## Teardown discipline
 
-Three layers:
+Four layers from innermost to outermost:
 
-1. In-process `try/finally` — `CampaignManager.run()` body runs inside `try:`; `finally:` calls `provider.terminate_all_tagged(config.name)` and asserts `provider.list_active(config.name) == []` with one retry after `config.teardown_retry_delay_seconds` (default 10s).
-2. `atexit.register(self.teardown)` — registered in `CampaignManager.__init__`, runs on crash paths that bypass `finally`.
-3. Shell-level `trap EXIT` in `launch_campaign.sh` — re-runs `final_audit.sh` unconditionally and exits non-zero if any resource leaked.
+1. **Study subprocess `try/finally`** — `run_optimizer.py --worker-pool cloud` wraps its work in `try:` and `finally: provider.terminate_fleet(fleet_name=study_id, project_tag=project_tag)`. Pool `__exit__` runs first (Flask + janitor shutdown), then fleet teardown.
+2. **CampaignManager in-process `try/finally`** — `CampaignManager.run()` body in `try:`; `finally:` calls `provider.terminate_all_tagged(project_tag)` as a sweep backstop for any study subprocess that crashed before its own teardown ran. Asserts `provider.list_active(project_tag) == []` with one retry after `config.teardown_retry_delay_seconds`.
+3. **`atexit.register(self.teardown)`** — registered in `CampaignManager.__init__`, runs on crash paths that bypass `finally`.
+4. **Shell-level `trap EXIT`** in `launch_campaign.sh` — re-runs `teardown.sh` + `final_audit.sh` unconditionally and exits non-zero if any resource leaked.
 
-`final_audit.sh` checks all 4 US regions (not just `regions:`) for any instance tagged `Project=starsector-<campaign-name>` or security groups / volumes / key pairs tagged the same.
+`final_audit.sh` checks all 4 US regions (not just `regions:`) for any instance tagged `Project=starsector-<campaign-name>` or security groups / volumes / launch templates tagged the same.
 
 ## `CloudProvider` ABC
 
 ```python
 class CloudProvider(abc.ABC):
     @abc.abstractmethod
-    def create_fleet(self, config: CampaignConfig, *, user_data: str) -> list[str]: ...
-        # returns instance IDs; user_data is a cloud-init script injected at boot
+    def provision_fleet(
+        self, *,
+        fleet_name: str,                       # per-fleet unique; e.g. "probe" or "<study_id>"
+        project_tag: str,                      # e.g. "starsector-<campaign>"; used for campaign-wide sweep
+        regions: Sequence[str],
+        ami_ids_by_region: dict[str, str],
+        instance_types: Sequence[str],
+        ssh_key_name: str,
+        spot_allocation_strategy: str,         # "price-capacity-optimized"
+        target_workers: int,
+        user_data: str,                        # cloud-init script (caller-rendered)
+    ) -> list[str]: ...
+        # returns instance IDs
+
     @abc.abstractmethod
-    def terminate_all_tagged(self, campaign_name: str) -> int: ...
-        # terminates instances + deletes launch templates + deletes security groups
-        # returns instances-terminated count (LT/SG deletion is best-effort)
+    def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int: ...
+        # targeted teardown: reaps resources tagged BOTH project_tag AND fleet_name
+
     @abc.abstractmethod
-    def list_active(self, campaign_name: str) -> list[dict]: ...        # RUNNING+PENDING instances
+    def terminate_all_tagged(self, project_tag: str) -> int: ...
+        # sweep: reaps everything tagged project_tag regardless of fleet. Crash-recovery backstop.
+
+    @abc.abstractmethod
+    def list_active(self, project_tag: str) -> list[dict]: ...
+        # RUNNING+PENDING instances with tag Project=project_tag
+
     @abc.abstractmethod
     def get_spot_price(self, region: str, instance_type: str) -> float: ...
 ```
+
+No `CampaignConfig` parameter — the provider is cloud-mechanical, not campaign-aware. Callers (study subprocess, `probe.py`) compose the call from explicit fields.
+
+### Two-tag scheme
+
+Every resource (instance, LT, SG) carries BOTH tags:
+- `Project=<project_tag>` — e.g. `starsector-smoke`. Enables `terminate_all_tagged(project_tag)` sweep.
+- `Fleet=<fleet_name>` — e.g. `hammerhead__early__seed0`. Enables `terminate_fleet(fleet_name, project_tag)` targeted reap.
+
+LT/SG NAMES are `f"{project_tag}__{fleet_name}"`, e.g. `starsector-smoke__hammerhead__early__seed0`. Unique per fleet → multiple studies in the same region don't collide.
 
 ### `AWSProvider`
 
 boto3-direct. Credentials loaded from the standard AWS credential chain — never stored in Python.
 
-`create_fleet(config, *, user_data: str)`:
+`provision_fleet(...)`:
 
-1. **Per region**: ensure a security group `starsector-<campaign_name>` exists with all egress allowed, zero ingress (workers are outbound-only; Tailscale handles reachability; a blank-ingress SG closes the public-internet attack surface).
-2. **Per region**: ensure a launch template `starsector-<campaign_name>` exists with:
+1. **Per region**: ensure SG named `f"{project_tag}__{fleet_name}"` exists with all egress allowed, zero ingress (workers are outbound-only). Tag it with both `Project` and `Fleet`.
+2. **Per region**: ensure LT named `f"{project_tag}__{fleet_name}"` exists with:
    - `ImageId` = `ami_ids_by_region[region]`
-   - `KeyName` = `config.ssh_key_name`
-   - `SecurityGroupIds` = `[<sg created above>]`
+   - `KeyName` = `ssh_key_name`
+   - `SecurityGroupIds` = `[<sg from step 1>]`
    - `InstanceMarketOptions={MarketType: spot}`
-   - `UserData` = `base64(user_data)` (the caller-supplied cloud-init script; see §Cloud-init UserData)
-   - `TagSpecifications`: on both `instance` and `volume`, include `Project=starsector-<campaign_name>`
-   - If a launch template with the same name already exists, create a new version and set it as default (never edit in place — LT versions are immutable once referenced by a fleet).
-3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: "price-capacity-optimized", MaintenanceStrategies: CapacityRebalance}, Type="instant")` per region, diversified across `config.instance_types`.
+   - `UserData` = `base64(user_data)`
+   - `BlockDeviceMappings` = `[{DeviceName: "/dev/sda1", Ebs: {DeleteOnTermination: true}}]` (prevents volume audit leak)
+   - `TagSpecifications` on `instance` and `volume` include both `Project` and `Fleet`
+   - If an LT with the same name already exists, create a new version and `modify_launch_template(DefaultVersion=...)` — LT versions are immutable once referenced.
+3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: spot_allocation_strategy}, Type="instant")` per region, diversified across `instance_types`. `TagSpecifications` on the Fleet resource also include both tags.
 
-Tag `Project=starsector-<campaign_name>` propagates to the security group, the launch template, and every instance. `terminate_all_tagged` uses this single tag to reap everything together.
+`terminate_fleet(fleet_name, project_tag)`: per region, filter by BOTH tags → terminate instances → delete LT (by name) → delete SG (by name, with ENI-detach retry loop: `_SG_DELETE_DEADLINE_SECONDS=300.0`, `_SG_DELETE_POLL_INTERVAL_SECONDS=10.0`). Idempotent.
 
-`terminate_all_tagged(campaign_name)`: per region, terminate instances first (avoids EC2 deletion-ordering constraints), then delete the launch template, then delete the security group. Idempotent — missing resources are treated as already-cleaned.
+`terminate_all_tagged(project_tag)`: per region, filter by `Project` tag ONLY → terminate all tagged instances → delete every LT matching the tag (tag-filter `describe_launch_templates`) → delete every SG matching the tag. Idempotent.
 
-`list_active(campaign_name)`: per region, instances in `pending` or `running` state with tag `Project=starsector-<campaign_name>`. Does NOT include launch templates or security groups (they are stateless scaffolding; absence of instances is the teardown signal).
+`list_active(project_tag)`: per region, instances in `pending` or `running` state with tag `Project=project_tag`.
 
 ### Cloud-init UserData
 
 `src/starsector_optimizer/cloud_userdata.py::render_user_data(worker_config, tailscale_authkey) -> str` emits a bash payload that:
 
-1. `umask 077` so every file created by the script is owner-read-only.
+1. `set -euo pipefail` + `umask 077` so every file created by the script is owner-read-only and any command failure halts the script before `systemctl start`.
 2. `tailscale up --authkey-stdin --advertise-tags=tag:starsector-worker --accept-dns=false <<EOF`. The authkey is piped via stdin, **never** argv — `/proc/<pid>/cmdline` is world-readable on Linux by default, so any `--authkey=<value>` form would leak the secret to every local user during boot.
-3. Writes `/etc/starsector-worker.env` with every `WorkerConfig` field mapped to `STARSECTOR_WORKER_<FIELD>`. Owner is `root:root`; mode `0600` is inherited from `umask 077` at file-creation time (no 0644 window between creation and chmod).
-4. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
+3. Writes `/etc/starsector-worker.env` via a quoted heredoc with every `WorkerConfig` field mapped to `STARSECTOR_WORKER_<FIELD>` (every field in `dataclasses.fields(WorkerConfig)`, including the placeholder `worker_id=""`). Owner is `root:root`; mode `0600` is inherited from `umask 077`.
+4. `chown root:root /etc/starsector-worker.env`.
+5. **IMDSv2 WORKER_ID override block** (inserted between `chown` and `systemctl daemon-reload`; see §Worker ID resolution below). Fetches the live EC2 instance ID, overwrites the placeholder line in the env file. If IMDS is unreachable, `curl --fail` + `set -euo pipefail` halts the script BEFORE `systemctl start` — the worker never boots with `worker_id=""`.
+6. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
 
 The renderer is a pure function — takes a frozen `WorkerConfig` + a string authkey, returns a string. No I/O. Lives in its own module (not `cloud_provider.py`) so providers other than AWS can reuse it.
 
+### Worker ID resolution (IMDSv2)
+
+`WorkerConfig.worker_id` defaults to `""` at render time because the EC2 instance ID is unknown until after `provision_fleet` returns. The UserData script overrides the placeholder at boot:
+
+```bash
+IMDS_TOKEN=$(curl --silent --fail -X PUT \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: ${_IMDSV2_TOKEN_TTL_SECONDS}" \
+    http://169.254.169.254/latest/api/token)
+INSTANCE_ID=$(curl --silent --fail \
+    -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" \
+    http://169.254.169.254/latest/meta-data/instance-id)
+sed -i '/^STARSECTOR_WORKER_WORKER_ID=/d' /etc/starsector-worker.env
+echo "STARSECTOR_WORKER_WORKER_ID=$INSTANCE_ID" >> /etc/starsector-worker.env
+```
+
+`_IMDSV2_TOKEN_TTL_SECONDS = 300` is a module-level constant. IMDSv1 is NEVER used (SSRF risk). `sed -i` + append guarantees exactly one `STARSECTOR_WORKER_WORKER_ID=` line — no last-write-wins ambiguity. IMDS unreachable (dev VM, broken networking) → script halts at `curl --fail` → `systemctl start` never runs → worker never boots with empty ID.
+
 For probe scenarios where no real worker is needed, `render_probe_user_data(campaign_id) -> str` returns a minimal script: `echo probe-boot-ok > /var/log/starsector-probe.log`. The probe tests fleet lifecycle, not worker connectivity.
+
+## Per-study fleet lifecycle
+
+Each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its fleet end-to-end:
+
+1. `_require_env` reads `STARSECTOR_WORKSTATION_TAILNET_IP`, `STARSECTOR_BEARER_TOKEN`, `STARSECTOR_TAILSCALE_AUTHKEY`, `STARSECTOR_PROJECT_TAG` — raises `ValueError` with remediation pointer if any missing.
+2. Constructs `WorkerConfig` with per-study bearer token (already in env), tailnet-based `redis_host` + `http_endpoint`, `worker_id=""` placeholder.
+3. Renders UserData via `render_user_data(worker_cfg, tailscale_authkey=authkey)`.
+4. Calls `provider.provision_fleet(fleet_name=study_id, project_tag=project_tag, ...)`.
+5. Enters `with CloudWorkerPool(...) as pool:` — Flask listener + janitor threads start.
+6. Runs Optuna study (`optimize_hull` loop).
+7. On any exit path (normal, KeyboardInterrupt, exception): `finally: provider.terminate_fleet(fleet_name=study_id, project_tag=project_tag)`. Pool `__exit__` runs first (via `with`), then fleet teardown.
+
+`CampaignManager` is a pure supervisor: `_preflight` + `spawn_studies` + `monitor_loop` + `teardown` (which calls `terminate_all_tagged` as a campaign-wide sweep backstop for any fleet orphaned by a study crash). It NEVER calls `provision_fleet` or `terminate_fleet` directly.
+
+## Preflight gates
+
+`CampaignManager.run()` calls `_preflight()` immediately after installing signal handlers. Preflight executes BEFORE any subprocess is spawned and BEFORE any cloud resource is provisioned. Failure → non-zero exit + explicit remediation message.
+
+1. **Tailnet IP**: `subprocess.run(["tailscale", "ip", "-4"], capture_output=True, text=True, timeout=5)`. Empty output → fail with "Tailscale must be up on the workstation. Run: `tailscale up`". Stored on `self._tailnet_ip` for subprocess env plumbing.
+2. **Redis tailnet binding**: `redis.Redis(host=self._tailnet_ip, port=config.redis_port, socket_timeout=config.redis_preflight_timeout_seconds).ping()`. Failure → fail with "Redis not reachable at `<tailnet_ip>:<port>`. Edit `/etc/redis/redis.conf` or run `sudo systemctl edit redis-server` to set `bind 0.0.0.0` (or the tailnet IP explicitly), then `sudo systemctl restart redis-server`."
+3. **AWS credentials**: `boto3.client("sts").get_caller_identity()`. Failure → fail with "AWS credentials unavailable. Run `aws sso login` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY."
+4. **Authkey syntax**: `config.tailscale_authkey_secret.startswith("tskey-auth-")`. Violation → fail with "tailscale_authkey_secret must start with `tskey-auth-`. Generate a pre-approved ephemeral key from the Tailscale admin panel (tagged `tag:starsector-worker`)."
+
+Preflight subprocess env plumbing (`_generate_study_env(study_idx, seed_idx, study_cfg, *, token_factory=secrets.token_urlsafe)`):
+
+```
+STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet_ip>
+STARSECTOR_BEARER_TOKEN=<fresh per-study token via token_factory(32)>
+STARSECTOR_TAILSCALE_AUTHKEY=<config.tailscale_authkey_secret>
+STARSECTOR_PROJECT_TAG=starsector-<config.name>
+STARSECTOR_CAMPAIGN_YAML=<resolved yaml path>
+```
+
+None of these are ever logged (`grep -En "logger.*env\|print.*env" src/starsector_optimizer/campaign.py` must be empty).
 
 ### `HetznerProvider`
 

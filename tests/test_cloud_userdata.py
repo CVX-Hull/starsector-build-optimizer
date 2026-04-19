@@ -21,13 +21,13 @@ def _make_worker_config(**overrides):
     from starsector_optimizer.models import WorkerConfig
     defaults = dict(
         campaign_id="unit-test-campaign",
-        worker_id="i-0deadbeef",
         study_id="hammerhead__early__seed0",
         redis_host="100.64.0.1",
         redis_port=6379,
         http_endpoint="http://100.64.0.1:9000/result",
         bearer_token=BEARER_TOKEN_SENTINEL,
         max_lifetime_hours=6.0,
+        # worker_id left to default (""); cloud-init IMDSv2 overrides at boot.
     )
     defaults.update(overrides)
     return WorkerConfig(**defaults)
@@ -133,6 +133,90 @@ class TestRenderUserData:
         # A failure anywhere in provisioning must not silently continue to
         # systemctl start (which would spin a broken worker).
         assert "set -e" in out or "set -euo" in out or "set -euxo" in out
+
+
+class TestRenderUserDataImdsV2WorkerIdOverride:
+    """The render-time heredoc emits worker_id as a placeholder; IMDSv2 must
+    override it at VM boot BEFORE systemctl start. The override uses IMDSv2
+    (PUT /api/token then GET /meta-data/instance-id with the token header)
+    because IMDSv1 is SSRF-exploitable."""
+
+    def test_appends_worker_id_via_imdsv2(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        # IMDSv2 token fetch (PUT with TTL header).
+        assert "X-aws-ec2-metadata-token-ttl-seconds" in out
+        assert "http://169.254.169.254/latest/api/token" in out
+        # IMDSv2 GET with token header.
+        assert "X-aws-ec2-metadata-token:" in out
+        assert "/latest/meta-data/instance-id" in out
+        # Override writes WORKER_ID into the env file.
+        assert "STARSECTOR_WORKER_WORKER_ID=" in out
+        assert "/etc/starsector-worker.env" in out
+
+    def test_imdsv2_override_runs_before_systemctl_start(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        imds_pos = out.find("/latest/meta-data/instance-id")
+        svc_pos = out.find("systemctl start")
+        assert imds_pos != -1 and svc_pos != -1
+        assert imds_pos < svc_pos, (
+            "IMDSv2 WORKER_ID override must precede systemctl start — otherwise "
+            "the worker can boot with worker_id='' if IMDS is unreachable."
+        )
+
+    def test_uses_curl_fail_so_pipefail_traps_imds_failure(self):
+        """curl --fail returns non-zero on HTTP >=400; `set -euo pipefail` then
+        halts the script so systemctl start never runs with empty WORKER_ID."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        # Both IMDS curl calls must use --fail.
+        # Crude but effective: count the occurrences we expect.
+        assert out.count("--fail") >= 2
+
+    def test_does_not_use_imdsv1(self):
+        """Unauthenticated GET /latest/meta-data/instance-id (IMDSv1) is SSRF-
+        exploitable. Only the token-header form is permitted."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        # Every occurrence of the instance-id path must be accompanied by the
+        # v2 token header in the same curl invocation. Easiest check: the
+        # instance-id line must come AFTER an X-aws-ec2-metadata-token: line
+        # AND there must not be a curl to that path without a token.
+        for line in out.splitlines():
+            stripped = line.strip()
+            if (stripped.startswith("curl") or "curl " in stripped) and (
+                "/latest/meta-data/instance-id" in stripped
+            ):
+                assert "X-aws-ec2-metadata-token:" in stripped, (
+                    f"IMDSv1 curl detected (no token header): {line!r}"
+                )
+
+    def test_sed_then_append_prevents_duplicate_env_lines(self):
+        """sed -i deletes the render-time placeholder line before appending
+        the IMDS value — guarantees a single STARSECTOR_WORKER_WORKER_ID
+        line in the final env file, not two with systemd last-wins ambiguity."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        sed_pos = out.find("sed -i")
+        append_pos = out.find(">> /etc/starsector-worker.env")
+        assert sed_pos != -1, "sed -i should clear placeholder before IMDS append"
+        assert append_pos != -1, "IMDS value should be appended with >>"
+        assert sed_pos < append_pos, "sed must run BEFORE append"
+        # Verify the sed pattern matches STARSECTOR_WORKER_WORKER_ID= lines.
+        assert "STARSECTOR_WORKER_WORKER_ID" in out
+
+    def test_accepts_empty_worker_id_placeholder(self):
+        """WorkerConfig.worker_id='' is the render-time default; must not raise."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config(worker_id="")
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        assert isinstance(out, str) and len(out) > 0
 
 
 class TestRenderProbeUserData:

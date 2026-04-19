@@ -26,7 +26,7 @@ Phase 5D:  EB Shrinkage of A2 (fusion) ────── ✓ COMPLETE 2026-04-1
 Phase 5E:  A3 Shape Revision (Box-Cox) ────── ✓ COMPLETE 2026-04-18 — scipy.stats.boxcox replaces quantile rank at A3; refit per-call on the post-5D EB posterior-mean population, min-max-rescaled to [0, 1]; ShapeConfig.min_samples=8 floor with min-max passthrough. Post-5D re-validation (experiments/signal-quality-5d-2026-04-18/): ceiling 25% → 0.5%, top-5 overlap 0.02 → 0.44 (14×), invariant across 4 covariate-strength regimes
 Phase 5F:  Regime-Segmented Optimization ──── complete (2026-04-18) — user-selectable loadout regime (hullmods + weapons; NOT hulls and NOT opponents per open-world framing) masked at search_space.py; one Optuna study per (hull, regime); cross-regime warm-start via `--warm-start-from-regime`. Default `early` (most conservative component-availability baseline)
 Phase 5G:  Adversarial Curriculum ─────────── DEFERRED — main-exploiter loop / PSRO; revisit post-5E/5F
-Phase 6:   Cloud Worker Federation ─────────── PLANNED (NEXT) — study federation across many (hull, regime, seed) units; each study ≤24 workers to keep TPE in efficient zone; AWS c7a.2xlarge spot us-east-1+us-east-2 primary (existing quota ample at ~224 VMs), Hetzner CCX33 as post-$500 scale-up; campaign manager with hard cost cap; pre-baked Packer images; auto-terminate on plateau. $85 MVP: sampler bake-off (TPE vs CatCMAwM) BEFORE the prep, then 8 hulls × early × ~600 trials using the winning sampler
+Phase 6:   Cloud Worker Federation ─────────── INFRASTRUCTURE SHIPPED (2026-04-18) — AWSProvider with per-fleet API (provision_fleet / terminate_fleet / terminate_all_tagged sweep), two-tag scheme, IMDSv2 WORKER_ID override; Tier-1 probe live-validated; Tier-2 pipeline smoke code-ready (CampaignManager supervisor + per-study fleet ownership in run_optimizer.py cloud path). Tier-2 live run + sampler benchmark + $60 prep campaign deferred to operational sessions against the smoke-validated pipeline
 Phase 7:   Structured Search-Space Repr ───── PLANNED — custom BoTorch GP: SAAS(hullmods) × transformed-overlap+attribute-Matérn(weapons) × slot-Matérn × opponent-features(smalls only) × gated-sentinel(conditional) + ICM residuals; πBO archetype priors; BOCA warm-start; ~2-4× sample efficiency. Renumbered from 6 — depends on Phase 6 cloud federation for multi-hull validation
 Phase 8:   Quality-Diversity ───────────────── Build archetype mapping (pyribs). Renumbered from 7
 Phase 9:   Neural Surrogate ───────────────── ML prediction (TabPFN/CatBoost). Renumbered from 8
@@ -637,7 +637,7 @@ Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr sm
 
 **Packer pre-baked images — in scope from day 1, even at $85.** Marginal dollar savings are small (~$1); the load-bearing arguments are tail-latency collapse under burst provisioning, removal of bulk-apt / PyPI failure modes from the hot path, cheap mid-campaign worker replacement, and zero-cost amortization into future $500+ campaigns. AWS AMIs are region-scoped — build in us-east-1, `aws ec2 copy-image` to us-east-2 (~3-5 min, one-time; repeat on every Packer rebuild). Images include `x11-xserver-utils` (needed for the XRandR warmup fix — see spec 22).
 
-**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; `CostLedger.record_heartbeat` raises `BudgetExceeded` at 100%. Per-worker `max_lifetime_hours` (default **6**; 6 covers the prep's 4.1-hour wall-clock — 4 would self-kill mid-run). Deferred operational backstops: tag-based sweeper cron and CloudWatch billing alarm. Teardown discipline: three layers — in-process `try/finally`, `atexit.register`, and shell `trap EXIT` in `launch_campaign.sh`. SOP at `.claude/skills/cloud-worker-ops.md`.
+**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; `CostLedger.record_heartbeat` raises `BudgetExceeded` at 100%. Per-worker `max_lifetime_hours` (default **6**; 6 covers the prep's 4.1-hour wall-clock — 4 would self-kill mid-run). Deferred operational backstops: tag-based sweeper cron and CloudWatch billing alarm. Teardown discipline: **four layers** — (1) study subprocess `try/finally: provider.terminate_fleet` (targeted), (2) CampaignManager `try/finally: provider.terminate_all_tagged` (campaign-wide sweep backstop), (3) `atexit.register(self.teardown)`, (4) shell `trap EXIT` in `launch_campaign.sh` runs `teardown.sh + final_audit.sh`. SOP at `.claude/skills/cloud-worker-ops.md`.
 
 **Orchestrator topology**: workstation holds every Optuna Study (no distributed storage). Workers are pure `MatchupConfig → CombatResult` evaluators — they never touch Optuna. Study state is local SQLite per `(hull, regime, seed)` on the orchestrator subprocess that owns it; `study.db` never leaves the orchestrator. Workers run `worker_agent.py` which pulls from Redis via `BRPOPLPUSH source → processing` and POSTs results to a per-study Flask listener. No PostgreSQL / JournalStorage / GrpcStorageProxy complexity — explicitly rejected because JournalStorage + GrpcProxy is broken in Optuna 4.2-4.4 (issue #6084) and direct PostgreSQL adds ops burden.
 
@@ -645,13 +645,15 @@ Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr sm
 
 1. **`src/starsector_optimizer/campaign.py`** — campaign manager (~400 LOC):
    - `CampaignConfig` / `StudyConfig` / `WorkerConfig` / `CostLedgerEntry` / `GlobalAutoStopConfig` (frozen dataclasses in `models.py`; `__repr__` redacts secrets)
-   - `CampaignManager` (supervisor: provision EC2 Fleet → spawn subprocess-per-study → monitor → three-layer teardown)
+   - `CampaignManager` — **pure supervisor**: `_preflight` (tailnet / Redis / AWS STS / authkey syntax) → `spawn_studies` (one subprocess per `(study_idx, seed_idx)` pair with per-study `secrets.token_urlsafe(32)` bearer tokens) → `monitor_loop` → `terminate_all_tagged` sweep backstop. Does NOT own fleet lifecycle.
    - `CostLedger` (append-only JSONL + `fsync` per row + `BudgetExceeded` at cap)
    - Plateau detector deferred to a follow-up commit
 
-2. **`src/starsector_optimizer/cloud_provider.py`** — `CloudProvider` ABC + `AWSProvider` (boto3 direct) + `HetznerProvider` `NotImplementedError` stub (unlock at $500+). Tests use `moto` for AWS mocking; no `MockProvider` class ships.
+2. **`src/starsector_optimizer/cloud_provider.py`** — `CloudProvider` ABC with per-fleet API (`provision_fleet` / `terminate_fleet` targeted / `terminate_all_tagged` campaign-wide sweep); two-tag scheme (`Project` + `Fleet`); `AWSProvider` (boto3 direct) + `HetznerProvider` `NotImplementedError` stub (unlock at $500+). Tests use `moto` for AWS mocking; no `MockProvider` class ships.
 
-3. **`src/starsector_optimizer/cloud_worker_pool.py` + `worker_agent.py`** — orchestrator-side pool (Redis reliable-queue + Flask `POST /result` listener + janitor thread) and on-worker loop (env-loaded `WorkerConfig`, `BRPOPLPUSH` source→processing, drive local `LocalInstancePool`, POST result, self-terminate on `max_lifetime_hours`). Worker never imports `repair` — AST-enforced.
+3. **`src/starsector_optimizer/cloud_runner.py`** (NEW) — per-study fleet ownership: reads env-plumbed secrets via `_require_env`, renders UserData, calls `provider.provision_fleet`, runs Optuna inside `with CloudWorkerPool`, `finally: provider.terminate_fleet`. `scripts/run_optimizer.py --worker-pool cloud` delegates to `run_cloud_study`.
+
+4. **`src/starsector_optimizer/cloud_worker_pool.py` + `worker_agent.py`** — orchestrator-side pool (Redis reliable-queue + Flask `POST /result` listener + janitor thread) and on-worker loop (env-loaded `WorkerConfig` via `dataclasses.fields` iteration + `typing.get_type_hints`, `BRPOPLPUSH` source→processing, drive local `LocalInstancePool`, POST result, self-terminate on `max_lifetime_hours`). Worker never imports `repair` — AST-enforced.
 
 4. **`scripts/cloud/bake_image.sh`** — Packer wrapper for AWS. Builds AMI in us-east-1 then `aws ec2 copy-image` to us-east-2.
 
@@ -661,7 +663,7 @@ Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr sm
 
 7. **`.claude/skills/cloud-worker-ops.md`** — SOP for running campaigns. Invoked by future Claude sessions on any cloud-campaign ask.
 
-8. **`experiments/cloud-campaign-validation/`** — three validation runs: $10 smoke → $100 breadth → $200 real Phase 5F regime validation.
+8. **Staged validation against the $85 Phase 6 + Phase 7-prep budget**: Tier-1 probe (~$0.05; fleet lifecycle) → Tier-2 pipeline smoke (~$1.20; full round-trip per phase6 doc §11) → sampler benchmark (~$14.83; §10) → Phase 7 prep campaign (~$60.79; 8 hulls × `early` × 1 seed × ~600 trials). All staged in `experiments/phase6-planning/` + `experiments/phase7-prep-early-2026-0X/` when live.
 
 ### Testing
 - Unit: plateau detector on synthetic traces, cost ledger monotonicity, `CloudProvider` mock interface compliance.
@@ -985,7 +987,7 @@ Validate end-to-end with real combat:
 
 #### Stage 3: Full Optimization (local 8 instances, or cloud GPU)
 
-**Local is recommended** — GPU acceleration makes local execution fast and free. Cloud requires GPU instances (AWS g4dn); CPU-only VMs (Hetzner CCX) are too slow due to software OpenGL rendering (tested 2026-04-12).
+**Both local and cloud CPU spot work.** The 2026-04-12 "GPU required" finding was a misdiagnosis — the actual failure was the LWJGL `ArrayIndexOutOfBoundsException: Index 0` from an uninitialized XRandR extension, fixed by the `xrandr --query` warmup in `instance_manager.py::_start_xvfb` + `x11-xserver-utils` baked into the AMI. 2026-04-18 benchmarks: CPU cloud (c7a.2xlarge / Hetzner CCX33) is 2.2–2.4× local per-instance throughput. See spec 22 "LWJGL / XRandR root cause" and Phase 6 in this roadmap.
 
 **Local (8 instances on dev machine):**
 ```

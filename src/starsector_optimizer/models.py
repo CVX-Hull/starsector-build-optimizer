@@ -600,6 +600,13 @@ class CampaignConfig:
     base_flask_port: int = 9000
     teardown_retry_delay_seconds: float = 10.0
     teardown_thread_join_seconds: float = 5.0
+    redis_port: int = 6379
+    redis_preflight_timeout_seconds: float = 2.0
+    num_instances_per_worker: int = 2
+    # Flask port ceiling per study index. Matches the ACL range
+    # `tcp:9000-9099` documented in .claude/skills/cloud-worker-ops.md —
+    # single source of truth for the port budget per study.
+    flask_ports_per_study: int = 100
 
     def __repr__(self) -> str:
         fields = []
@@ -617,9 +624,14 @@ class WorkerConfig:
 
     Immutable; the worker reads once at startup and never re-reads. __repr__
     redacts bearer_token. Never serialized into the cost ledger or study DB.
+
+    `worker_id` is last because its default is a placeholder: render-time
+    emits worker_id="" into /etc/starsector-worker.env, and the cloud-init
+    script overwrites it via IMDSv2 before `systemctl start`. Keeping it at
+    the end preserves positional-required ordering for campaign_id / study_id
+    / redis_host / redis_port / http_endpoint / bearer_token.
     """
     campaign_id: str
-    worker_id: str
     study_id: str
     redis_host: str
     redis_port: int
@@ -633,6 +645,7 @@ class WorkerConfig:
     http_post_timeout_seconds: float = 30.0
     worker_poll_margin_seconds: float = 5.0
     num_instances_per_worker: int = 2
+    worker_id: str = ""   # placeholder; IMDSv2 override wins at VM boot
 
     def __repr__(self) -> str:
         fields = []

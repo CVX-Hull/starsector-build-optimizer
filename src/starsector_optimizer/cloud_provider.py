@@ -3,6 +3,11 @@
 See docs/specs/22-cloud-deployment.md. Uses boto3 directly (no Libcloud);
 the abstraction is a narrow ABC so a Libcloud wrapper can slot in later
 without refactoring callers.
+
+Two-tag scheme: every provisioned resource (instance / LT / SG) carries
+BOTH `Project=<project_tag>` AND `Fleet=<fleet_name>`. `terminate_fleet`
+targets a specific fleet via both tags; `terminate_all_tagged` sweeps via
+the Project tag only (crash-recovery backstop).
 """
 
 from __future__ import annotations
@@ -11,23 +16,20 @@ import abc
 import base64
 import logging
 import time
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import Any, Sequence
 
 logger = logging.getLogger(__name__)
 
 
-if TYPE_CHECKING:
-    from .models import CampaignConfig
-
-
-_TAG_KEY = "Project"
-_TAG_PREFIX = "starsector"
+_PROJECT_KEY = "Project"
+_FLEET_KEY = "Fleet"
 
 # SG deletion has to wait for ENI detachment from terminated instances; the
-# AWS-observed upper bound is ~3 min. Polling every 10s keeps the probe loop
-# tight without hammering the API.
+# AWS-observed upper bound is ~3 min. Polling every 10s keeps the loop tight
+# without hammering the API.
 _SG_DELETE_DEADLINE_SECONDS = 300.0
 _SG_DELETE_POLL_INTERVAL_SECONDS = 10.0
+
 _HETZNER_STUB_MESSAGE = (
     "HetznerProvider is stubbed; implement when campaign budget >= $500. "
     "Hetzner's ~13% per-matchup advantage amortizes only at larger scale. "
@@ -37,31 +39,48 @@ _HETZNER_STUB_MESSAGE = (
 
 class CloudProvider(abc.ABC):
     """Abstract cloud provider. Implementations: AWSProvider (boto3 direct),
-    HetznerProvider (stub until $500+ campaigns)."""
+    HetznerProvider (stub until $500+ campaigns).
+
+    The ABC is cloud-mechanical — no `CampaignConfig` dependency. Callers
+    (study subprocess, probe script) compose the call from explicit fields.
+    """
 
     @abc.abstractmethod
-    def create_fleet(
-        self, config: "CampaignConfig", *, user_data: str,
+    def provision_fleet(
+        self, *,
+        fleet_name: str,
+        project_tag: str,
+        regions: Sequence[str],
+        ami_ids_by_region: dict[str, str],
+        instance_types: Sequence[str],
+        ssh_key_name: str,
+        spot_allocation_strategy: str,
+        target_workers: int,
+        user_data: str,
     ) -> list[str]:
-        """Launch a diversified spot fleet. Return instance IDs that ARE UP.
+        """Launch a spot fleet. Return instance IDs that were launched.
 
-        user_data is a cloud-init script. The caller (probe script or
-        CampaignManager) renders it via cloud_userdata.render_user_data or
-        cloud_userdata.render_probe_user_data — the provider just base64-
-        encodes and plumbs it into the LaunchTemplate.
+        Every provisioned resource carries `Project=<project_tag>` AND
+        `Fleet=<fleet_name>`. LT/SG names use `f"{project_tag}__{fleet_name}"`
+        for per-fleet isolation (no collision when multiple studies share a
+        project tag).
         """
 
     @abc.abstractmethod
-    def terminate_all_tagged(self, campaign_name: str) -> int:
-        """Terminate every instance tagged Project=starsector-<campaign_name>,
-        then delete the launch template and security group. Idempotent.
+    def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int:
+        """Targeted teardown — reap resources tagged BOTH project_tag AND
+        fleet_name. Idempotent. Returns the number of instances terminated."""
+
+    @abc.abstractmethod
+    def terminate_all_tagged(self, project_tag: str) -> int:
+        """Campaign-wide sweep — reap everything tagged `Project=project_tag`
+        regardless of fleet name. Crash-recovery backstop. Idempotent.
         Returns the number of instances terminated."""
 
     @abc.abstractmethod
-    def list_active(self, campaign_name: str) -> list[dict]:
-        """Return RUNNING + PENDING instances tagged for this campaign.
-        Does NOT include launch templates or security groups — those are
-        stateless scaffolding."""
+    def list_active(self, project_tag: str) -> list[dict]:
+        """RUNNING + PENDING instances tagged `Project=project_tag`. Does NOT
+        include launch templates or security groups."""
 
     @abc.abstractmethod
     def get_spot_price(self, region: str, instance_type: str) -> float:
@@ -71,18 +90,19 @@ class CloudProvider(abc.ABC):
 # ---- AWS ---------------------------------------------------------------------
 
 
-def _project_tag(campaign_name: str) -> str:
-    return f"{_TAG_PREFIX}-{campaign_name}"
+def _resource_name(project_tag: str, fleet_name: str) -> str:
+    """LT/SG name. Unique per (campaign, fleet) so two studies in the same
+    region never collide. Matches AWS LT naming rules given a
+    `load_campaign_config`-validated campaign name."""
+    return f"{project_tag}__{fleet_name}"
 
 
 class AWSProvider(CloudProvider):
     """AWS EC2 spot provider using boto3 directly.
 
-    create_fleet ensures a campaign-scoped LaunchTemplate + SecurityGroup
-    per region, then fires EC2 Fleet diversified across config.instance_types
-    with price-capacity-optimized + CapacityRebalancing. All resources
-    share the tag Project=starsector-<campaign_name>, which
-    terminate_all_tagged uses to reap them together.
+    `provision_fleet` per region: ensure SG (outbound-only, no ingress) →
+    ensure LT (bound to the SG, with base64 UserData + both tags) → fire
+    an instant-type EC2 Fleet diversified across `instance_types`.
 
     Credentials come from the standard AWS credential chain.
     """
@@ -97,70 +117,84 @@ class AWSProvider(CloudProvider):
             self._clients[region] = boto3.client("ec2", region_name=region)
         return self._clients[region]
 
-    # ---- create_fleet --------------------------------------------------------
+    # ---- provision ------------------------------------------------------
 
-    def create_fleet(
-        self, config: "CampaignConfig", *, user_data: str,
+    def provision_fleet(
+        self, *,
+        fleet_name: str,
+        project_tag: str,
+        regions: Sequence[str],
+        ami_ids_by_region: dict[str, str],
+        instance_types: Sequence[str],
+        ssh_key_name: str,
+        spot_allocation_strategy: str,
+        target_workers: int,
+        user_data: str,
     ) -> list[str]:
-        """Per region: ensure SG + LT, then fire an instant-type Fleet."""
         instance_ids: list[str] = []
-        per_region_target = max(
-            1, config.max_concurrent_workers // max(1, len(self._regions))
-        )
-        tag = _project_tag(config.name)
-        for region in self._regions:
-            ami_id = config.ami_ids_by_region.get(region)
+        per_region_target = max(1, target_workers // max(1, len(regions)))
+        resource_name = _resource_name(project_tag, fleet_name)
+        for region in regions:
+            ami_id = ami_ids_by_region.get(region)
             if not ami_id:
-                logger.warning("create_fleet: no AMI id for region=%s; skipping", region)
+                logger.warning(
+                    "provision_fleet: no AMI id for region=%s; skipping", region,
+                )
                 continue
-            sg_id = self._ensure_security_group(region, tag)
+            sg_id = self._ensure_security_group(
+                region=region, resource_name=resource_name,
+                project_tag=project_tag, fleet_name=fleet_name,
+            )
             self._ensure_launch_template(
-                region=region, tag=tag, ami_id=ami_id,
-                key_name=config.ssh_key_name, sg_id=sg_id,
-                user_data=user_data,
+                region=region, resource_name=resource_name,
+                project_tag=project_tag, fleet_name=fleet_name,
+                ami_id=ami_id, key_name=ssh_key_name,
+                sg_id=sg_id, user_data=user_data,
             )
             instance_ids.extend(self._create_fleet_in_region(
-                region=region, tag=tag, config=config,
+                region=region, resource_name=resource_name,
+                project_tag=project_tag, fleet_name=fleet_name,
+                instance_types=instance_types,
+                spot_allocation_strategy=spot_allocation_strategy,
                 target=per_region_target,
             ))
         return instance_ids
 
-    def _ensure_security_group(self, region: str, tag: str) -> str:
-        """Create-or-find the egress-only SG. Returns the group id."""
+    def _ensure_security_group(
+        self, *,
+        region: str, resource_name: str,
+        project_tag: str, fleet_name: str,
+    ) -> str:
         client = self._client(region)
         existing = client.describe_security_groups(
-            Filters=[{"Name": "group-name", "Values": [tag]}],
+            Filters=[{"Name": "group-name", "Values": [resource_name]}],
         ).get("SecurityGroups", [])
         if existing:
             return existing[0]["GroupId"]
         response = client.create_security_group(
-            GroupName=tag,
-            Description=f"Starsector Phase 6 worker SG for {tag} (egress-only)",
+            GroupName=resource_name,
+            Description=f"Starsector Phase 6 worker SG for {resource_name} (egress-only)",
             TagSpecifications=[{
                 "ResourceType": "security-group",
-                "Tags": [{"Key": _TAG_KEY, "Value": tag}],
+                "Tags": [
+                    {"Key": _PROJECT_KEY, "Value": project_tag},
+                    {"Key": _FLEET_KEY, "Value": fleet_name},
+                ],
             }],
         )
-        sg_id = response["GroupId"]
-        # Default AWS SG has no ingress (correct) and allow-all egress
-        # (correct — workers need Tailscale + apt + boto outbound). No mods.
-        return sg_id
+        return response["GroupId"]
 
     def _ensure_launch_template(
         self, *,
         region: str,
-        tag: str,
+        resource_name: str,
+        project_tag: str,
+        fleet_name: str,
         ami_id: str,
         key_name: str,
         sg_id: str,
         user_data: str,
     ) -> None:
-        """Create the LT if missing, otherwise append a new version.
-
-        LaunchTemplate versions are immutable once referenced by a fleet; we
-        never edit in place. Subsequent campaigns reuse the template name
-        but get a fresh default version.
-        """
         client = self._client(region)
         user_data_b64 = base64.b64encode(user_data.encode("utf-8")).decode("ascii")
         launch_template_data = {
@@ -169,9 +203,6 @@ class AWSProvider(CloudProvider):
             "SecurityGroupIds": [sg_id],
             "UserData": user_data_b64,
             "InstanceMarketOptions": {"MarketType": "spot"},
-            # Default device name for Ubuntu AMIs. Without DeleteOnTermination:
-            # true the root volume persists as "available" for a few minutes
-            # after instance termination, triggering a transient audit leak.
             "BlockDeviceMappings": [{
                 "DeviceName": "/dev/sda1",
                 "Ebs": {"DeleteOnTermination": True},
@@ -179,62 +210,72 @@ class AWSProvider(CloudProvider):
             "TagSpecifications": [
                 {
                     "ResourceType": "instance",
-                    "Tags": [{"Key": _TAG_KEY, "Value": tag}],
+                    "Tags": [
+                        {"Key": _PROJECT_KEY, "Value": project_tag},
+                        {"Key": _FLEET_KEY, "Value": fleet_name},
+                    ],
                 },
                 {
                     "ResourceType": "volume",
-                    "Tags": [{"Key": _TAG_KEY, "Value": tag}],
+                    "Tags": [
+                        {"Key": _PROJECT_KEY, "Value": project_tag},
+                        {"Key": _FLEET_KEY, "Value": fleet_name},
+                    ],
                 },
             ],
         }
         existing = client.describe_launch_templates(
-            Filters=[{"Name": "launch-template-name", "Values": [tag]}],
+            Filters=[{"Name": "launch-template-name", "Values": [resource_name]}],
         ).get("LaunchTemplates", [])
         if existing:
             response = client.create_launch_template_version(
-                LaunchTemplateName=tag,
+                LaunchTemplateName=resource_name,
                 LaunchTemplateData=launch_template_data,
             )
             new_version = response["LaunchTemplateVersion"]["VersionNumber"]
             client.modify_launch_template(
-                LaunchTemplateName=tag,
+                LaunchTemplateName=resource_name,
                 DefaultVersion=str(new_version),
             )
         else:
             client.create_launch_template(
-                LaunchTemplateName=tag,
+                LaunchTemplateName=resource_name,
                 LaunchTemplateData=launch_template_data,
                 TagSpecifications=[{
                     "ResourceType": "launch-template",
-                    "Tags": [{"Key": _TAG_KEY, "Value": tag}],
+                    "Tags": [
+                        {"Key": _PROJECT_KEY, "Value": project_tag},
+                        {"Key": _FLEET_KEY, "Value": fleet_name},
+                    ],
                 }],
             )
 
     def _create_fleet_in_region(
         self, *,
         region: str,
-        tag: str,
-        config: "CampaignConfig",
+        resource_name: str,
+        project_tag: str,
+        fleet_name: str,
+        instance_types: Sequence[str],
+        spot_allocation_strategy: str,
         target: int,
     ) -> list[str]:
         client = self._client(region)
         launch_template_configs = [{
             "LaunchTemplateSpecification": {
-                "LaunchTemplateName": tag,
+                "LaunchTemplateName": resource_name,
                 "Version": "$Latest",
             },
             "Overrides": [
-                {"InstanceType": itype}
-                for itype in config.instance_types
+                {"InstanceType": itype} for itype in instance_types
             ],
         }]
-        # Fleet type is "instant" — ephemeral, no fleet resource left behind
-        # to clean up. `MaintenanceStrategies` (CapacityRebalance) is only
-        # valid on `Type="maintain"` fleets per EC2 API; we rely on the
-        # Redis janitor + matchup_id dedup to recover from spot interruption
-        # instead of pre-interruption capacity rebalancing.
+        # `Type="instant"` = ephemeral fleet; no fleet resource remains to
+        # clean up. `MaintenanceStrategies` (CapacityRebalance) is only valid
+        # on `Type="maintain"` fleets. Spot preemption is handled by the
+        # Redis janitor + matchup_id dedup instead.
         spot_options: dict[str, Any] = {
-            "AllocationStrategy": config.spot_allocation_strategy,
+            "AllocationStrategy": spot_allocation_strategy,
         }
         response = client.create_fleet(
             SpotOptions=spot_options,
@@ -246,13 +287,12 @@ class AWSProvider(CloudProvider):
             Type="instant",
             TagSpecifications=[{
                 "ResourceType": "instance",
-                "Tags": [{"Key": _TAG_KEY, "Value": tag}],
+                "Tags": [
+                    {"Key": _PROJECT_KEY, "Value": project_tag},
+                    {"Key": _FLEET_KEY, "Value": fleet_name},
+                ],
             }],
         )
-        # Surface fleet-level errors explicitly — without this, an unavailable
-        # AMI (still copying async) or missing IAM perm returns zero instances
-        # with no diagnostic, and the probe reports a misleading "create_fleet
-        # returned zero instance IDs". (Audit A finding, 2026-04-18.)
         errors = response.get("Errors", [])
         if errors:
             logger.error("create_fleet errors in %s: %s", region, errors)
@@ -266,94 +306,136 @@ class AWSProvider(CloudProvider):
             )
         return ids
 
-    # ---- teardown ------------------------------------------------------------
+    # ---- teardown -------------------------------------------------------
 
-    def terminate_all_tagged(self, campaign_name: str) -> int:
-        """Idempotent. Per region: terminate instances, delete LT, delete SG."""
-        tag = _project_tag(campaign_name)
+    def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int:
+        """Targeted reap: filter by BOTH tags."""
         total = 0
         for region in self._regions:
-            total += self._terminate_instances(region, tag)
-            self._delete_launch_template(region, tag)
-            self._delete_security_group(region, tag)
+            total += self._terminate_by_tags(
+                region,
+                {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
+            )
+            self._delete_launch_templates_by_tags(
+                region,
+                {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
+            )
+            self._delete_security_groups_by_tags(
+                region,
+                {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
+            )
         return total
 
-    def _terminate_instances(self, region: str, tag: str) -> int:
+    def terminate_all_tagged(self, project_tag: str) -> int:
+        """Sweep: filter by Project tag only. Crash-recovery backstop."""
+        total = 0
+        for region in self._regions:
+            total += self._terminate_by_tags(region, {_PROJECT_KEY: project_tag})
+            self._delete_launch_templates_by_tags(region, {_PROJECT_KEY: project_tag})
+            self._delete_security_groups_by_tags(region, {_PROJECT_KEY: project_tag})
+        return total
+
+    def _terminate_by_tags(self, region: str, tags: dict[str, str]) -> int:
         client = self._client(region)
-        ids = [inst["id"] for inst in self._describe_active(region, tag)]
+        filters = [
+            {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
+        ]
+        filters.append(
+            {"Name": "instance-state-name", "Values": ["pending", "running"]}
+        )
+        response = client.describe_instances(Filters=filters)
+        ids: list[str] = []
+        for reservation in response.get("Reservations", []):
+            for inst in reservation.get("Instances", []):
+                ids.append(inst["InstanceId"])
         if not ids:
             return 0
         client.terminate_instances(InstanceIds=ids)
-        logger.info("terminated %d instances in %s for tag=%s",
-                    len(ids), region, tag)
+        logger.info(
+            "terminated %d instances in %s for tags=%s",
+            len(ids), region, tags,
+        )
         return len(ids)
 
-    def _delete_launch_template(self, region: str, tag: str) -> None:
+    def _delete_launch_templates_by_tags(
+        self, region: str, tags: dict[str, str],
+    ) -> None:
         client = self._client(region)
+        filters = [
+            {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
+        ]
         try:
-            existing = client.describe_launch_templates(
-                Filters=[{"Name": "launch-template-name", "Values": [tag]}],
-            ).get("LaunchTemplates", [])
+            existing = client.describe_launch_templates(Filters=filters).get(
+                "LaunchTemplates", [],
+            )
         except Exception as e:
             logger.warning("describe_launch_templates failed in %s: %s", region, e)
             return
-        if not existing:
-            return
-        try:
-            client.delete_launch_template(LaunchTemplateName=tag)
-            logger.info("deleted launch template %s in %s", tag, region)
-        except Exception as e:
-            logger.warning("delete_launch_template failed in %s: %s", region, e)
+        for lt in existing:
+            name = lt["LaunchTemplateName"]
+            try:
+                client.delete_launch_template(LaunchTemplateName=name)
+                logger.info("deleted launch template %s in %s", name, region)
+            except Exception as e:
+                logger.warning(
+                    "delete_launch_template(%s) failed in %s: %s", name, region, e,
+                )
 
-    def _delete_security_group(self, region: str, tag: str) -> None:
-        """Delete the SG, retrying past AWS's ENI-detach delay.
+    def _delete_security_groups_by_tags(
+        self, region: str, tags: dict[str, str],
+    ) -> None:
+        """Delete SGs matching ALL tags, retrying past AWS's ENI-detach delay.
 
-        After `terminate_instances` returns, AWS keeps the instance's ENIs
-        attached to the SG for up to ~3 min while the network teardown runs.
-        Attempting delete during this window fails with DependencyViolation.
-        We poll-retry rather than leaving a leak for final_audit.sh to flag —
-        the retry is bounded so a genuinely stuck SG (e.g. still used by an
-        unexpected instance we missed) still surfaces.
+        After `terminate_instances` returns, AWS keeps ENIs attached to the
+        SG for up to ~3 min while the network teardown runs. `delete_security_group`
+        during this window fails with `DependencyViolation`. Poll-retry with
+        a bounded deadline; a genuinely stuck SG (e.g. still used by an
+        unexpected instance we missed) surfaces as a warning after the deadline.
         """
         client = self._client(region)
+        filters = [
+            {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
+        ]
         try:
-            existing = client.describe_security_groups(
-                Filters=[{"Name": "group-name", "Values": [tag]}],
-            ).get("SecurityGroups", [])
+            existing = client.describe_security_groups(Filters=filters).get(
+                "SecurityGroups", [],
+            )
         except Exception as e:
             logger.warning("describe_security_groups failed in %s: %s", region, e)
             return
-        if not existing:
-            return
-        group_id = existing[0]["GroupId"]
-        deadline = time.monotonic() + _SG_DELETE_DEADLINE_SECONDS
-        last_error: Exception | None = None
-        while time.monotonic() < deadline:
-            try:
-                client.delete_security_group(GroupId=group_id)
-                logger.info("deleted security group %s in %s", tag, region)
-                return
-            except Exception as e:
-                last_error = e
-                time.sleep(_SG_DELETE_POLL_INTERVAL_SECONDS)
-        logger.warning(
-            "delete_security_group gave up after %.0fs in %s: %s",
-            _SG_DELETE_DEADLINE_SECONDS, region, last_error,
-        )
+        for sg in existing:
+            group_id = sg["GroupId"]
+            deadline = time.monotonic() + _SG_DELETE_DEADLINE_SECONDS
+            last_error: Exception | None = None
+            while time.monotonic() < deadline:
+                try:
+                    client.delete_security_group(GroupId=group_id)
+                    logger.info(
+                        "deleted security group %s (id=%s) in %s",
+                        sg.get("GroupName", "?"), group_id, region,
+                    )
+                    break
+                except Exception as e:
+                    last_error = e
+                    time.sleep(_SG_DELETE_POLL_INTERVAL_SECONDS)
+            else:
+                logger.warning(
+                    "delete_security_group(id=%s) gave up after %.0fs in %s: %s",
+                    group_id, _SG_DELETE_DEADLINE_SECONDS, region, last_error,
+                )
 
-    # ---- introspection -------------------------------------------------------
+    # ---- introspection --------------------------------------------------
 
-    def list_active(self, campaign_name: str) -> list[dict]:
-        tag = _project_tag(campaign_name)
+    def list_active(self, project_tag: str) -> list[dict]:
         active: list[dict] = []
         for region in self._regions:
-            active.extend(self._describe_active(region, tag))
+            active.extend(self._describe_active(region, project_tag))
         return active
 
-    def _describe_active(self, region: str, tag: str) -> list[dict]:
+    def _describe_active(self, region: str, project_tag: str) -> list[dict]:
         client = self._client(region)
         response = client.describe_instances(Filters=[
-            {"Name": f"tag:{_TAG_KEY}", "Values": [tag]},
+            {"Name": f"tag:{_PROJECT_KEY}", "Values": [project_tag]},
             {"Name": "instance-state-name", "Values": ["pending", "running"]},
         ])
         out: list[dict] = []
@@ -388,13 +470,16 @@ class HetznerProvider(CloudProvider):
     advantage amortizes. Every method raises NotImplementedError.
     """
 
-    def create_fleet(self, config: "CampaignConfig", *, user_data: str) -> list[str]:
+    def provision_fleet(self, **kwargs) -> list[str]:
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
-    def terminate_all_tagged(self, campaign_name: str) -> int:
+    def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int:
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
-    def list_active(self, campaign_name: str) -> list[dict]:
+    def terminate_all_tagged(self, project_tag: str) -> int:
+        raise NotImplementedError(_HETZNER_STUB_MESSAGE)
+
+    def list_active(self, project_tag: str) -> list[dict]:
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
     def get_spot_price(self, region: str, instance_type: str) -> float:

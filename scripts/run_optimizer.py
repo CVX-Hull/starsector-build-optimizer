@@ -67,8 +67,12 @@ def main():
     parser.add_argument("--campaign-config", type=Path, default=None,
                         help="Campaign YAML path. Required when --worker-pool=cloud.")
     parser.add_argument("--study-idx", type=int, default=0,
-                        help="Study index within the campaign (used to compute "
-                             "Flask listener port). Required when --worker-pool=cloud.")
+                        help="Study index within the campaign (indexes "
+                             "campaign.studies[]). Required when --worker-pool=cloud.")
+    parser.add_argument("--seed-idx", type=int, default=0,
+                        help="Seed index within the selected study's seeds tuple. "
+                             "Required when --worker-pool=cloud; avoids the "
+                             "flat-idx bug when a study has >1 seed.")
     args = parser.parse_args()
 
     if (args.warm_start_from_regime is not None
@@ -173,33 +177,21 @@ def main():
     if args.worker_pool == "cloud":
         if args.campaign_config is None:
             parser.error("--worker-pool=cloud requires --campaign-config")
-        from starsector_optimizer.campaign import load_campaign_config
-        from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
-        import redis as redis_module
-        campaign = load_campaign_config(args.campaign_config)
-        redis_client = redis_module.Redis(
-            host="localhost", port=6379, decode_responses=True,
-        )
-        study_cfg = campaign.studies[args.study_idx]
-        study_id = f"{study_cfg.hull}__{study_cfg.regime}__seed{study_cfg.seeds[0]}"
-        pool = CloudWorkerPool(
-            study_id=study_id,
-            redis_client=redis_client,
-            flask_port=campaign.base_flask_port + args.study_idx,
-            bearer_token=os.environ.get("STARSECTOR_BEARER_TOKEN", ""),
-            workers_per_study=study_cfg.workers_per_study,
-            result_timeout_seconds=campaign.result_timeout_seconds,
-            visibility_timeout_seconds=campaign.visibility_timeout_seconds,
-            janitor_interval_seconds=campaign.janitor_interval_seconds,
-        )
+        from starsector_optimizer.cloud_runner import run_cloud_study
         try:
-            with pool:
-                study = optimize_hull(
-                    args.hull, game_data, pool, opponent_pool, config,
-                )
+            study = run_cloud_study(
+                campaign_yaml_path=args.campaign_config,
+                study_idx=args.study_idx,
+                seed_idx=args.seed_idx,
+                hull_id=args.hull,
+                hull=hull,
+                game_data=game_data,
+                opponent_pool=opponent_pool,
+                optimizer_config=config,
+            )
         except KeyboardInterrupt:
             logging.getLogger(__name__).warning(
-                "Interrupted — CloudWorkerPool.__exit__ ran teardown."
+                "Interrupted — CloudWorkerPool.__exit__ + terminate_fleet ran."
             )
             sys.exit(130)
     else:

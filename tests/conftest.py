@@ -61,3 +61,28 @@ def flask_test_client_factory():
         app.config["TESTING"] = True
         return app.test_client()
     return _factory
+
+
+@pytest.fixture
+def workstation_tailnet_ip():
+    """Canonical tailnet CGNAT RFC IP used in tests; avoids leaking a real one."""
+    return "100.64.1.2"
+
+
+@pytest.fixture
+def smoke_env(monkeypatch, workstation_tailnet_ip):
+    """Populate every env var the `run_optimizer.py --worker-pool cloud` path
+    requires, so tests that exercise it start from a known-complete environment.
+    Tests that want to trigger the `_require_env` failure path delete individual
+    vars via monkeypatch.delenv AFTER this fixture runs.
+    """
+    monkeypatch.setenv("STARSECTOR_WORKSTATION_TAILNET_IP", workstation_tailnet_ip)
+    monkeypatch.setenv("STARSECTOR_BEARER_TOKEN", "SMOKE_TEST_BEARER_e1a2")
+    monkeypatch.setenv("STARSECTOR_TAILSCALE_AUTHKEY", "tskey-auth-SMOKE-TEST-44e7f9b3")
+    monkeypatch.setenv("STARSECTOR_PROJECT_TAG", "starsector-smoke")
+    return {
+        "STARSECTOR_WORKSTATION_TAILNET_IP": workstation_tailnet_ip,
+        "STARSECTOR_BEARER_TOKEN": "SMOKE_TEST_BEARER_e1a2",
+        "STARSECTOR_TAILSCALE_AUTHKEY": "tskey-auth-SMOKE-TEST-44e7f9b3",
+        "STARSECTOR_PROJECT_TAG": "starsector-smoke",
+    }
