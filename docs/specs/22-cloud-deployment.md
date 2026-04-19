@@ -45,6 +45,7 @@ One row in the campaign YAML's `studies:` list. `seeds=(0, 1, 2)` fans out into 
 | `budget_per_study` | `int` | Absolute trial cap per study |
 | `workers_per_study` | `int` | TPE saturates above 24 |
 | `sampler` | `str` | `tpe` (only accepted value; see spec 24 for the CatCMAwM removal rationale) |
+| `active_opponents` | `int \| None` | Optional per-study override of `OptimizerConfig.active_opponents` (default 10). Smaller values shrink ASHA rungs per trial — `active_opponents: 1` makes each trial complete after one returned matchup (used by `examples/smoke-campaign.yaml` to guarantee ≥1 `TrialState.COMPLETE` within the smoke's 10-minute gate). `None` uses the optimizer default. Plumbed into the study subprocess via `--active-opponents` when non-None. |
 
 ### `GlobalAutoStopConfig`
 

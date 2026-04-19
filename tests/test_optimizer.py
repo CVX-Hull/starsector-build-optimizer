@@ -642,6 +642,35 @@ class TestStagedEvaluator:
         # (fewer if cache hits occur — same build proposed twice)
         assert call_count[0] <= config.sim_budget
 
+    def test_progress_log_survives_zero_completed_trials(
+        self, wolf_hull, game_data, manifest, caplog,
+    ):
+        """Regression (2026-04-19 Tier-2 smoke): the progress-log block at
+        `optimizer.py:run()` called `self._study.best_trial` inside a ternary
+        ternary — but Optuna's `best_trial` property RAISES ValueError when
+        zero trials have reached COMPLETE state, so the short-circuit never
+        ran. If the only returned matchup pruned early (all ENEMY wins with
+        wilcoxon_n_startup_steps=0), the evaluator crashed mid-progress.
+        The fix wraps `best_value` in try/except ValueError and falls back
+        to `-inf` (not `0.0` — that would look like a real tie-score)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+
+        pool = self._make_mock_pool(winner="ENEMY")
+        opp_pool = OpponentPool(pools={
+            HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
+        })
+        # Aggressive pruning + log_interval=1 so the progress log fires as
+        # soon as the first PRUNED trial lands — exercises the empty-COMPLETE
+        # branch exactly as the smoke did.
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=0, warm_start_sample_n=20,
+            wilcoxon_n_startup_steps=0, log_interval=1,
+        )
+        # Must not raise.
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+
     def test_pruned_builds_not_cached(self, wolf_hull, game_data, manifest):
         """Pruned builds should NOT be in the cache."""
         from starsector_optimizer.optimizer import optimize_hull, BuildCache

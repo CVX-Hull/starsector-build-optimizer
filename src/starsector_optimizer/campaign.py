@@ -130,6 +130,7 @@ def load_campaign_config(path: Path) -> CampaignConfig:
             budget_per_study=s["budget_per_study"],
             workers_per_study=s["workers_per_study"],
             sampler=s["sampler"],
+            active_opponents=s.get("active_opponents"),
         )
         for s in raw["studies"]
     )
@@ -680,6 +681,8 @@ class CampaignManager:
                     "--sim-budget", str(study.budget_per_study),
                     "--game-dir", self._config.game_dir,
                 ]
+                if study.active_opponents is not None:
+                    cmd += ["--active-opponents", str(study.active_opponents)]
                 env = self._generate_study_env(
                     study_idx=study_idx, seed_idx=seed_idx, study_cfg=study,
                 )

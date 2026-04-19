@@ -631,8 +631,20 @@ class StagedEvaluator:
 
                     if (self._trials_completed % self._config.log_interval == 0
                             or not pending):
-                        best = (self._study.best_value
-                                if self._study.best_trial else 0.0)
+                        # `best_trial` RAISES ValueError when zero trials have
+                        # reached COMPLETE (all pruned / errored / still
+                        # in-flight). The pre-fix `if self._study.best_trial
+                        # else 0.0` short-circuit didn't catch this — the
+                        # attribute access itself raises, so the ternary-
+                        # fallback never ran. -inf (not 0.0) is the correct
+                        # identity for "no best yet" under a maximize
+                        # objective: any real score strictly exceeds it and
+                        # it renders as `-inf` in logs, unambiguously
+                        # distinct from a real 0.0 tie-score.
+                        try:
+                            best = self._study.best_value
+                        except ValueError:
+                            best = float("-inf")
                         # `finalized` = trials with valid EB-fit data (the same
                         # set gating _apply_eb_shrinkage). Excludes pruned AND
                         # InstanceError-as-failure_score rows.

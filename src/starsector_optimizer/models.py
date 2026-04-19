@@ -511,6 +511,14 @@ class StudyConfig:
     A StudyConfig with seeds=(0, 1, 2) fans out into three Optuna studies
     (one subprocess each) sharing hull/regime/sampler/budget settings.
     See docs/specs/22-cloud-deployment.md.
+
+    `active_opponents` is optional: when set, overrides the
+    `OptimizerConfig.active_opponents` default (10). Smaller values shrink
+    the ASHA rung count per trial — useful for Tier-2 pipeline smokes
+    that need a trial to reach COMPLETE within a tight wall-clock budget
+    (e.g. `active_opponents: 1` → single-rung trial → COMPLETE after one
+    returned matchup). Leave unset for prep runs where statistical
+    quality matters.
     """
     hull: str
     regime: str
@@ -518,6 +526,7 @@ class StudyConfig:
     budget_per_study: int
     workers_per_study: int
     sampler: str
+    active_opponents: int | None = None
 
 
 @dataclass(frozen=True)

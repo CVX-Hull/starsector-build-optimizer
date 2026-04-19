@@ -91,6 +91,26 @@ class TestCampaignConfigLoading:
         with pytest.raises(ValueError, match="sampler"):
             load_campaign_config(path)
 
+    def test_active_opponents_defaults_to_none(self, tmp_path):
+        """Absent active_opponents in YAML → StudyConfig.active_opponents is
+        None so the subprocess inherits `OptimizerConfig.active_opponents`
+        default (10). Test pins the contract."""
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path)
+        config = load_campaign_config(path)
+        assert config.studies[0].active_opponents is None
+
+    def test_active_opponents_loads_from_yaml(self, tmp_path):
+        """YAML `active_opponents: 1` (smoke path) → StudyConfig carries 1."""
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "wolf", "regime": "early", "seeds": [0],
+             "budget_per_study": 1, "workers_per_study": 1,
+             "sampler": "tpe", "active_opponents": 1},
+        ])
+        config = load_campaign_config(path)
+        assert config.studies[0].active_opponents == 1
+
 
 class TestFrozenDataclasses:
     """Every Phase 6 dataclass is frozen."""
@@ -992,10 +1012,59 @@ class TestSmokeYamlLoadsAndValidates:
         assert config.studies[0].hull == "hammerhead"
         assert config.studies[0].regime == "early"
         assert config.studies[0].seeds == (0,)
-        assert config.studies[0].budget_per_study == 2
+        assert config.studies[0].budget_per_study == 1
         assert config.studies[0].workers_per_study == 1
+        # Smoke guarantees ≥1 TrialState.COMPLETE within the 10-min gate by
+        # running a single-rung trial (1 opponent, 1 rung, completes on
+        # first returned matchup). Prep runs default to 10.
+        assert config.studies[0].active_opponents == 1
         assert config.tailscale_authkey_secret == "tskey-auth-SMOKE-44e7f9b3"
         assert config.capacity_rebalancing is True  # spec-required
+
+
+class TestActiveOpponentsPassedToSubprocess:
+    """StudyConfig.active_opponents is threaded to `scripts/run_optimizer.py`
+    via `--active-opponents`. Without this, a smoke YAML's
+    `active_opponents: 1` setting (which guarantees a COMPLETE trial after
+    one returned matchup) would silently fall back to the default 10 →
+    10-rung trials → smoke gate ("≥1 TrialState.COMPLETE") fails."""
+
+    def test_active_opponents_not_passed_when_none(self, tmp_path):
+        from starsector_optimizer.campaign import (
+            CampaignManager, load_campaign_config,
+        )
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        manager = CampaignManager(config, provider, MagicMock())
+        manager._tailnet_ip = "100.64.1.2"
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        cmd = mock_popen.call_args_list[0].args[0]
+        assert "--active-opponents" not in cmd
+
+    def test_active_opponents_passed_when_set(self, tmp_path):
+        from starsector_optimizer.campaign import (
+            CampaignManager, load_campaign_config,
+        )
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "wolf", "regime": "early", "seeds": [0],
+             "budget_per_study": 1, "workers_per_study": 1,
+             "sampler": "tpe", "active_opponents": 1},
+        ])
+        config = load_campaign_config(path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        manager = CampaignManager(config, provider, MagicMock())
+        manager._tailnet_ip = "100.64.1.2"
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        cmd = mock_popen.call_args_list[0].args[0]
+        assert "--active-opponents" in cmd
+        idx = cmd.index("--active-opponents")
+        assert cmd[idx + 1] == "1"
 
 
 class TestEnvDictNotLogged:

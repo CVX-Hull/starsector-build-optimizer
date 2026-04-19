@@ -21,10 +21,12 @@
 #   - launch_campaign.sh exits 0
 #   - final_audit.sh smoke exits 0
 #   - ledger.jsonl shows >= 1 worker_heartbeat event
-#   - Optuna study SQLite has exactly 1 TrialState.COMPLETE
+#   - Optuna study has >= 1 TrialState.COMPLETE — guaranteed by
+#     active_opponents: 1 below (single-rung trial, completes after one
+#     returned matchup).
 #
-# Expected cost: ~$0.30 (one c7a.2xlarge for ~10 min).
-# Budget cap at 2.0 USD = 7x safety margin.
+# Expected cost: ~$0.30 (one c7a.2xlarge for ~12 min — VM boot + one
+# matchup + teardown). Budget cap at 2.0 USD = 7x safety margin.
 
 name: smoke
 budget_usd: 2.0
@@ -56,11 +58,19 @@ studies:
   - hull: hammerhead
     regime: early
     seeds: [0]
-    budget_per_study: 2           # 1 warm-start + 1 live matchup
+    budget_per_study: 1           # single sim trial
     workers_per_study: 1
     sampler: tpe
+    # Single-rung trial: 1 opponent → is_complete after first result → COMPLETE.
+    # Prep runs use the default (10) for ASHA-style early pruning.
+    active_opponents: 1
 
-max_lifetime_hours: 0.5           # short leash; smoke should complete in < 10 min
+max_lifetime_hours: 0.5           # short leash; single matchup completes in < 10 min
 fleet_provision_timeout_seconds: 600.0
 result_timeout_seconds: 600.0     # deviates from spec default 900.0; documented smoke-only
+# VM cold-boot + one matchup can exceed the default 120s visibility_timeout;
+# the janitor would spuriously requeue a still-processing item. 300s is
+# enough for c7a.2xlarge boot + Starsector load + 300s-in-game @ time_mult=3
+# (= 100s real) + POST round-trip.
+visibility_timeout_seconds: 300.0
 ledger_heartbeat_interval_seconds: 60.0
