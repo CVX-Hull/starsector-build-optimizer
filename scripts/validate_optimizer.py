@@ -14,6 +14,7 @@ from pathlib import Path
 
 import optuna
 
+from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.repair import repair_build
@@ -47,9 +48,10 @@ print("=" * 70, flush=True)
 # Load
 print("\n1. Loading game data...", flush=True)
 gd = load_game_data(GAME_DIR)
+manifest = GameManifest.load()
 hull = gd.hulls["eagle"]
 from starsector_optimizer.models import REGIME_ENDGAME
-space = build_search_space(hull, gd, REGIME_ENDGAME)
+space = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
 distributions = define_distributions(space)
 opponents = get_opponents(TEST_POOL, HullSize.CRUISER)
 print(f"   {len(distributions)}D space, {len(opponents)} opponents: {opponents}", flush=True)
@@ -74,7 +76,7 @@ try:
     )
     study = optuna.create_study(sampler=sampler, direction="maximize")
     opt_config = OptimizerConfig(warm_start_n=200, warm_start_sample_n=20000, warm_start_scale=0.1)
-    warm_start(study, hull, gd, opt_config)
+    warm_start(study, hull, gd, opt_config, manifest)
     print(f"   {len(study.trials)} warm-start trials", flush=True)
 
     # Batched optimization loop
@@ -94,7 +96,7 @@ try:
         for _ in range(BUILDS_PER_BATCH):
             trial = study.ask(distributions)
             raw = trial_params_to_build(trial.params, "eagle")
-            repaired = repair_build(raw, hull, gd)
+            repaired = repair_build(raw, hull, gd, manifest)
             trials.append(trial)
             builds.append(repaired)
 

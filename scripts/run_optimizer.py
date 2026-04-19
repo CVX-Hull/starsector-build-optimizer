@@ -190,7 +190,7 @@ def main():
                 target_space=space,
             )
         warm_start(study, hull, game_data, config, manifest)
-        _print_results(study, args.hull, game_data)
+        _print_results(study, args.hull, game_data, manifest)
         return
 
     if args.worker_pool == "cloud":
@@ -231,14 +231,17 @@ def main():
             )
             sys.exit(130)
 
-    _print_results(study, args.hull, game_data)
+    _print_results(study, args.hull, game_data, manifest)
 
 
-def _print_results(study, hull_id: str, game_data=None):
+def _print_results(study, hull_id: str, game_data=None, manifest=None):
     """Print top-10 builds from the study.
 
-    Shows repaired builds when game_data is provided (accurate domain values),
-    falls back to raw trial params otherwise (Baldwinian: pre-repair values).
+    Shows repaired builds when game_data AND manifest are provided (accurate
+    domain values); falls back to raw trial params otherwise (Baldwinian:
+    pre-repair values). The manifest is required because `repair_build`
+    reads per-hull applicability + conditional_exclusions from it
+    (schema v2).
     """
     from optuna.trial import TrialState
     from starsector_optimizer.optimizer import trial_params_to_build
@@ -253,10 +256,10 @@ def _print_results(study, hull_id: str, game_data=None):
           f"{len(pruned)} pruned, {len(all_trials)} total)")
     print(f"{'='*60}")
     for i, trial in enumerate(trials[:10]):
-        if game_data and hull_id in game_data.hulls:
+        if game_data and manifest and hull_id in game_data.hulls:
             hull = game_data.hulls[hull_id]
             raw = trial_params_to_build(trial.params, hull_id)
-            build = repair_build(raw, hull, game_data)
+            build = repair_build(raw, hull, game_data, manifest)
             weapons = {s: w for s, w in build.weapon_assignments.items() if w is not None}
             mods = sorted(build.hullmods)
             vents, caps = build.flux_vents, build.flux_capacitors

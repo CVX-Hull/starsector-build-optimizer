@@ -13,6 +13,7 @@ sys.path.insert(0, "src")
 
 from pathlib import Path
 
+from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.calibration import generate_diverse_builds
@@ -37,12 +38,13 @@ print("=" * 60)
 print("Phase 4 Integration Test: Eagle optimization (2 instances)")
 print("=" * 60)
 
-# Load game data
+# Load game data + manifest
 print("\n1. Loading game data...")
 game_data = load_game_data(GAME_DIR)
+manifest = GameManifest.load()
 hull = game_data.hulls["eagle"]
 from starsector_optimizer.models import REGIME_ENDGAME
-space = build_search_space(hull, game_data, REGIME_ENDGAME)
+space = build_search_space(hull, game_data, REGIME_ENDGAME, manifest)
 print(f"   Eagle: {len(space.weapon_options)} weapon slots, "
       f"{len(space.eligible_hullmods)} hullmods, "
       f"total dims={len(space.weapon_options) + len(space.eligible_hullmods) + 2}")
@@ -74,7 +76,7 @@ try:
 
     all_results = []
     for idx, (build, scorer_result) in enumerate(top3):
-        repaired = repair_build(build, hull, game_data)
+        repaired = repair_build(build, hull, game_data, manifest)
         variant_id = f"eagle_inttest_{idx:03d}"
         build_spec = build_to_build_spec(repaired, hull, game_data, variant_id)
 
