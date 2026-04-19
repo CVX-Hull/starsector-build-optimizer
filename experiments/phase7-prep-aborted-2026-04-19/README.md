@@ -150,26 +150,52 @@ is consistent with ~10 % OP waste being survivable.
 which Class-A hullmods actually matter. Frigates run out of budget
 before TPE can correct the heuristic's blind spot.
 
-### Fix options (ordered by leverage)
+### Fix options — bitter-lesson-aligned
 
-1. **Expand `HULLMOD_EFFECTS` to cover the ~20 Class-A hullmods**
-   (turretgyros, auxiliarythrusters, hardened_subsystems, armoredweapons,
-   dedicated_targeting_core, fluxdistributor, fluxcoil, extendedshieldemitter,
-   advancedshieldemitter, unstable_injector, …). Encode each hullmod's
-   game-truth effect values (% changes, conditional caps). Structural fix;
-   benefits every regime and every future phase. Grunt work but bounded.
-2. **Add `exclude_hullmods: frozenset[str]` field to `RegimeConfig`** for
-   Class-B no-ops (cargo / fuel / survey / crew / convert-hangar). Shrinks
-   search space by 6–8 options per hull. Simple, high-yield.
-3. **Lower the warm-start fraction** from 500/600 (~83 %) to e.g. 50/500
-   (~10 %). Give TPE room to correct the heuristic. Config-only change.
-4. **Add a local-sim regression gate**: a 50-trial heuristic-only pass
-   for wolf must beat a fixed stock pool at ≥30 % win rate. Catches
-   heuristic regressions before cloud launches. This is the missing test.
+Rejected (initial instinct, violates bitter-lesson + user's real-play constraint):
 
-Recommend all four. (1) is the correct structural fix. (2) is a 1-line
-config change. (3) is a parameter flip. (4) is the missing integration
-test that would have flagged this 48 h ago.
+- ❌ **Expand `HULLMOD_EFFECTS`**. Hand-encoding the combat effects of 20+
+  hullmods is a local knowledge-base fix that rots on every game update
+  / modded hull / expanded search space. General lesson (Sutton 2019):
+  methods that leverage computation + learning scale; methods that bake
+  in domain knowledge plateau.
+- ❌ **Exclude "Class-B" non-combat hullmods**. The optimizer's output
+  is meant to guide *real player builds*, where OP is allocated across
+  combat AND campaign logistics (fuel, cargo, crew recovery, survey).
+  A player cannot actually fly a no-fuel-tanks wolf across the map.
+  The combat simulator must answer "does this OP split win fights?"
+  against builds that include logistics realism — not pretend logistics
+  doesn't exist.
+
+The real issue is that the pipeline over-weights an incomplete heuristic
+prior and under-budgets the learning loop. The bitter-lesson-aligned
+fixes:
+
+1. **Collapse the warm-start fraction**. The current 500/600 (~83 %)
+   makes the heuristic — which we've now measured is blind to ~26/34
+   tier-1 hullmods — dominate the search. Drop to ~25/500 (5 %) or
+   zero. Let TPE / Phase-7 GP learn from simulation signal, which IS
+   the ground truth. Config-only change.
+2. **Increase total budget** to match the search dimensionality.
+   Frigates' search space (many small slots × many weapons × many
+   hullmods) genuinely needs more than 600 trials. Cost scales linearly
+   with budget; accuracy scales better.
+3. **Trust the Phase 5D EB prior to correct the remaining bias**.
+   `τ̂²` quantifies heuristic reliability per-study. If the heuristic
+   is systematically misleading, `w_i = τ̂²/(τ̂² + σ̂²_i)` shrinks the
+   prior's weight to near-zero — the mechanism is already in place.
+   Check whether it's actually firing on wolf/lasher (needs JSONL
+   `eb_diagnostics` inspection; that field was landed 2026-04-18).
+4. **Add a local-sim regression gate** — this one survives both
+   constraints. A 50-trial TPE run for wolf against a fixed stock pool
+   must reach ≥30 % win rate. Catches pipeline regressions (empty-slot
+   bugs, variant-swap failures, etc.) without hand-coding effects.
+   Missing integration test that would have flagged the 0%-win
+   configuration before $12 of cloud spend.
+
+Recommend **(1) + (2) + (4)** for next prep relaunch. **(3)** is
+investigation, not fix. Drop the initial instinct to expand the effects
+registry or blacklist hullmods.
 
 ### Specific low-fill anomalies (open for separate traces)
 - `gryphon WS 001` (LARGE missile hardpoint on a missile cruiser) filled
