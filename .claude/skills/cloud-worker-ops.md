@@ -185,8 +185,9 @@ Every 15-30 min while a campaign is live:
    ```
    Cross-reference cumulative against `budget_usd`.
 2. **Worker liveness**: `aws ec2 describe-instances --filters 'Name=tag:Project,Values=starsector-<campaign-name>' 'Name=instance-state-name,Values=pending,running'`. Dead workers should be auto-replaced; persistent gap = bug.
-3. **Redis queue depth per study**: `redis-cli LLEN queue:<study_id>:source`. If growing unbounded, workers can't keep up — scale up or reduce per-worker lifespan.
+3. **Redis queue depth per study**: `redis-cli LLEN queue:starsector-<campaign-name>:<study_id>:source`. Keys are namespaced by `project_tag` (= `starsector-<campaign-name>`) so multiple campaigns can coexist. If growing unbounded, workers can't keep up — scale up or reduce per-worker lifespan.
 4. **Stuck studies**: any study with no trial progress for >15 min = worker crash loop. Inspect worker logs; typically the XRandR or heartbeat issue.
+5. **Worker CPU utilization**: `redis-cli HGETALL worker:starsector-<campaign-name>:<worker_id>:heartbeat`. The hash has `load_avg_1min` / `load_avg_5min` / `load_avg_15min` / `cpu_count`. Healthy range for `c7a.2xlarge` with `matchup_slots_per_worker=2` is `load_avg_1min` in `[3, 8]` (8 vCPU, 2 JVMs @ ~2.5 cores each). Persistent `load_avg_1min > cpu_count` → over-subscription, reduce `matchup_slots_per_worker`. Persistent `load_avg_1min < 3` → under-utilization, either the orchestrator isn't dispatching fast enough or `matchup_slots_per_worker` is smaller than the box supports. `scripts/cloud/status.sh <campaign-name>` prints per-worker load.
 
 ## Failure recovery recipes
 

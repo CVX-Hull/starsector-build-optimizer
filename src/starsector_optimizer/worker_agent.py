@@ -16,6 +16,7 @@ import logging
 import os
 import signal
 import sys
+import threading
 import time
 import typing
 from pathlib import Path
@@ -182,10 +183,25 @@ def should_exit(config: WorkerConfig, started_at: float) -> bool:
     return elapsed_hours >= config.max_lifetime_hours
 
 
-def heartbeat(redis_client: Any, worker_id: str) -> None:
+def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
+    """Write worker liveness + CPU-load telemetry.
+
+    `load_avg_*` comes from `os.getloadavg()` so the orchestrator can verify
+    the configured `matchup_slots_per_worker` actually matches the box's
+    capacity: on c7a.2xlarge (8 vCPU, 2 JVMs @ ~2.5 cores each), healthy
+    load_1min should land around 5–7. A persistent load_1min > cpu_count
+    indicates over-subscription; < 3 indicates under-utilization.
+    """
+    load_1, load_5, load_15 = os.getloadavg()
     redis_client.hset(
-        f"worker:{worker_id}:heartbeat",
-        mapping={"timestamp": time.time()},
+        f"worker:{project_tag}:{worker_id}:heartbeat",
+        mapping={
+            "timestamp": time.time(),
+            "load_avg_1min": load_1,
+            "load_avg_5min": load_5,
+            "load_avg_15min": load_15,
+            "cpu_count": os.cpu_count() or 0,
+        },
     )
 
 
@@ -221,6 +237,74 @@ def _load_matchup(matchup_dict: dict[str, Any]) -> MatchupConfig:
     )
 
 
+def _consumer_loop(
+    *,
+    slot_idx: int,
+    config: WorkerConfig,
+    pool: LocalInstancePool,
+    redis_client: Any,
+    source: str,
+    processing: str,
+    started_at: float,
+    stop_event: threading.Event,
+    auth_failure_event: threading.Event,
+    poll_timeout: int,
+) -> None:
+    """One Redis consumer: BRPOPLPUSH → pool.run_matchup → POST → ack.
+
+    N of these run concurrently (one per matchup slot on this VM), sharing
+    a single LocalInstancePool. The pool's internal free-instance queue
+    serializes each run_matchup call onto a distinct JVM.
+    """
+    while not stop_event.is_set() and not auth_failure_event.is_set():
+        if should_exit(config, started_at):
+            return
+        raw = redis_client.brpoplpush(source, processing, timeout=poll_timeout)
+        if raw is None:
+            continue
+        try:
+            item = json.loads(raw)
+        except json.JSONDecodeError:
+            redis_client.lrem(processing, 1, raw)
+            continue
+        try:
+            matchup = _load_matchup(item["matchup"])
+            result = pool.run_matchup(matchup)
+            result_dict = dataclasses.asdict(result)
+            post_result(
+                config,
+                matchup_id=item["matchup_id"],
+                result=result_dict,
+            )
+            ack_matchup(redis_client, processing, raw)
+        except AuthError:
+            logger.error("slot %d: auth failure — signalling worker exit", slot_idx)
+            auth_failure_event.set()
+            return
+        except Exception as e:
+            logger.error("slot %d: matchup failed: %s", slot_idx, e)
+            # Leave in processing list; janitor will re-queue after visibility timeout.
+
+
+def _heartbeat_loop(
+    *,
+    config: WorkerConfig,
+    redis_client: Any,
+    interval_seconds: float,
+    stop_event: threading.Event,
+) -> None:
+    """Write worker heartbeat (with CPU load) every interval_seconds."""
+    while not stop_event.is_set():
+        heartbeat(redis_client, config.project_tag, config.worker_id)
+        stop_event.wait(timeout=interval_seconds)
+
+
+_HEARTBEAT_INTERVAL_SECONDS = 30.0
+_MAIN_LOOP_TICK_SECONDS = 1.0
+_CONSUMER_JOIN_GRACE_SECONDS = 5.0
+_HEARTBEAT_JOIN_TIMEOUT_SECONDS = 5.0
+
+
 def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
@@ -235,43 +319,70 @@ def main() -> int:
     redis_client = redis.Redis(
         host=config.redis_host, port=config.redis_port, decode_responses=True,
     )
-    source = f"queue:{config.study_id}:source"
-    processing = f"queue:{config.study_id}:processing"
+    source = f"queue:{config.project_tag}:{config.study_id}:source"
+    processing = f"queue:{config.project_tag}:{config.study_id}:processing"
 
     instance_config = InstanceConfig(
         game_dir=game_dir,
-        num_instances=config.num_instances_per_worker,
+        num_instances=config.matchup_slots_per_worker,
     )
     started_at = time.monotonic()
-    timeout = max(1, int(config.http_retry_max_seconds))  # poll timeout, not retry
+    poll_timeout = max(1, int(config.http_retry_max_seconds))
+
+    stop_event = threading.Event()
+    auth_failure_event = threading.Event()
 
     with LocalInstancePool(instance_config) as pool:
-        while not should_exit(config, started_at):
-            heartbeat(redis_client, config.worker_id)
-            raw = redis_client.brpoplpush(source, processing, timeout=timeout)
-            if raw is None:
-                continue
-            try:
-                item = json.loads(raw)
-            except json.JSONDecodeError:
-                redis_client.lrem(processing, 1, raw)
-                continue
-            try:
-                matchup = _load_matchup(item["matchup"])
-                result = pool.run_matchup(matchup)
-                result_dict = dataclasses.asdict(result)
-                post_result(
-                    config,
-                    matchup_id=item["matchup_id"],
-                    result=result_dict,
-                )
-                ack_matchup(redis_client, processing, raw)
-            except AuthError:
-                logger.error("auth failure — terminating worker")
-                return 1
-            except Exception as e:
-                logger.error("matchup failed: %s", e)
-                # Leave in processing list; janitor will re-queue after visibility timeout.
+        # Heartbeat thread writes CPU load so the orchestrator can verify
+        # matchup_slots_per_worker fits the VM shape.
+        hb_thread = threading.Thread(
+            target=_heartbeat_loop,
+            kwargs={
+                "config": config,
+                "redis_client": redis_client,
+                "interval_seconds": _HEARTBEAT_INTERVAL_SECONDS,
+                "stop_event": stop_event,
+            },
+            name="worker-heartbeat",
+            daemon=True,
+        )
+        hb_thread.start()
+
+        consumer_threads = [
+            threading.Thread(
+                target=_consumer_loop,
+                kwargs={
+                    "slot_idx": i,
+                    "config": config,
+                    "pool": pool,
+                    "redis_client": redis_client,
+                    "source": source,
+                    "processing": processing,
+                    "started_at": started_at,
+                    "stop_event": stop_event,
+                    "auth_failure_event": auth_failure_event,
+                    "poll_timeout": poll_timeout,
+                },
+                name=f"worker-consumer-{i}",
+                daemon=True,
+            )
+            for i in range(config.matchup_slots_per_worker)
+        ]
+        for t in consumer_threads:
+            t.start()
+
+        try:
+            while not should_exit(config, started_at):
+                if auth_failure_event.is_set():
+                    logger.error("auth failure detected; terminating worker")
+                    return 1
+                time.sleep(_MAIN_LOOP_TICK_SECONDS)
+        finally:
+            stop_event.set()
+            for t in consumer_threads:
+                t.join(timeout=poll_timeout + _CONSUMER_JOIN_GRACE_SECONDS)
+            hb_thread.join(timeout=_HEARTBEAT_JOIN_TIMEOUT_SECONDS)
+
     logger.info("worker lifetime elapsed; exiting")
     return 0
 

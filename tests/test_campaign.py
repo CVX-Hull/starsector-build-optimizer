@@ -103,7 +103,7 @@ class TestFrozenDataclasses:
     def test_worker_config_frozen(self):
         from starsector_optimizer.models import WorkerConfig
         w = WorkerConfig(
-            campaign_id="c", study_id="s",
+            campaign_id="c", study_id="s", project_tag="starsector-c",
             redis_host="h", redis_port=6379,
             http_endpoint="http://h/result", bearer_token="t",
         )
@@ -140,7 +140,7 @@ class TestSecretRedaction:
     def test_worker_config_repr_redacts_bearer_token(self):
         from starsector_optimizer.models import WorkerConfig
         w = WorkerConfig(
-            campaign_id="c", study_id="s",
+            campaign_id="c", study_id="s", project_tag="starsector-c",
             redis_host="h", redis_port=6379,
             http_endpoint="http://h/result",
             bearer_token=BEARER_TOKEN_SENTINEL,
@@ -676,6 +676,45 @@ class TestCampaignManagerPreflight:
         for c in tailscale_cmds:
             assert "--socket" in c
             assert custom_sock in c
+
+    def test_preflight_flushes_stale_redis_keys_for_project_tag(self, tmp_path):
+        """Re-launched campaigns with the same name would otherwise inherit
+        processing-list entries from the prior run; the janitor would then
+        re-dispatch stale matchups."""
+        manager = self._manager_with_mocks(tmp_path)
+
+        loopback_client = MagicMock()
+        loopback_client.ping.return_value = True
+        # Seed the loopback client with stale keys matching both patterns
+        # so scan_iter + delete can be verified.
+        project_tag = manager._project_tag
+        stale_keys = [
+            f"queue:{project_tag}:hammerhead__early__seed0:processing",
+            f"queue:{project_tag}:hammerhead__early__seed0:source",
+            f"worker:{project_tag}:i-abc:heartbeat",
+        ]
+
+        def scan_iter_stub(match, count):
+            return iter([k for k in stale_keys if k.startswith(match.rstrip("*"))])
+
+        loopback_client.scan_iter = MagicMock(side_effect=scan_iter_stub)
+        tailnet_client = MagicMock()
+        tailnet_client.ping.return_value = True
+
+        def redis_ctor(*, host, port, socket_timeout):
+            return loopback_client if host == "127.0.0.1" else tailnet_client
+
+        with patch("subprocess.run") as mock_run, \
+             patch("redis.Redis", side_effect=redis_ctor), \
+             patch("boto3.client") as mock_boto:
+            mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            manager._preflight()
+
+        # Every stale key should have been deleted.
+        assert loopback_client.delete.call_count == len(stale_keys)
+        deleted_args = {c.args[0] for c in loopback_client.delete.call_args_list}
+        assert deleted_args == set(stale_keys)
 
 
 class TestCampaignNameValidation:

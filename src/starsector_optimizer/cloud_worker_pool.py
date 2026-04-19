@@ -31,12 +31,12 @@ class WorkerTimeout(Exception):
     """A dispatched matchup did not receive a result within result_timeout_seconds."""
 
 
-def _source_key(study_id: str) -> str:
-    return f"queue:{study_id}:source"
+def _source_key(project_tag: str, study_id: str) -> str:
+    return f"queue:{project_tag}:{study_id}:source"
 
 
-def _processing_key(study_id: str) -> str:
-    return f"queue:{study_id}:processing"
+def _processing_key(project_tag: str, study_id: str) -> str:
+    return f"queue:{project_tag}:{study_id}:processing"
 
 
 def _matchup_to_dict(matchup: MatchupConfig) -> dict[str, Any]:
@@ -109,27 +109,29 @@ class CloudWorkerPool(EvaluatorPool):
         self,
         *,
         study_id: str,
+        project_tag: str,
         redis_client: Any,
         flask_port: int,
         bearer_token: str,
-        workers_per_study: int,
+        total_matchup_slots: int,
         result_timeout_seconds: float,
         visibility_timeout_seconds: float,
         janitor_interval_seconds: float,
         teardown_thread_join_seconds: float = 5.0,
     ) -> None:
         self._study_id = study_id
+        self._project_tag = project_tag
         self._redis = redis_client
         self._flask_port = flask_port
         self._bearer = bearer_token
-        self._workers_per_study = workers_per_study
+        self._total_matchup_slots = total_matchup_slots
         self._result_timeout_seconds = result_timeout_seconds
         self._visibility_timeout_seconds = visibility_timeout_seconds
         self._janitor_interval_seconds = janitor_interval_seconds
         self._teardown_thread_join_seconds = teardown_thread_join_seconds
 
-        self._source = _source_key(study_id)
-        self._processing = _processing_key(study_id)
+        self._source = _source_key(project_tag, study_id)
+        self._processing = _processing_key(project_tag, study_id)
 
         self._results: dict[str, CombatResult] = {}
         self._seen: set[str] = set()                     # matchup_ids that have been POSTed
@@ -143,12 +145,14 @@ class CloudWorkerPool(EvaluatorPool):
 
         self.app = self._build_app()
 
-        # Pool concurrency cap matches workers_per_study.
-        self._dispatch_semaphore = threading.BoundedSemaphore(workers_per_study)
+        # Pool concurrency cap == total JVM slots across the fleet
+        # (workers_per_study × matchup_slots_per_worker). StagedEvaluator's
+        # ThreadPoolExecutor reads `num_workers` to size its thread count.
+        self._dispatch_semaphore = threading.BoundedSemaphore(total_matchup_slots)
 
     @property
     def num_workers(self) -> int:
-        return self._workers_per_study
+        return self._total_matchup_slots
 
     # ---- Flask app ----
 

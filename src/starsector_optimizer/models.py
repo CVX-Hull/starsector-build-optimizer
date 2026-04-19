@@ -602,7 +602,7 @@ class CampaignConfig:
     teardown_thread_join_seconds: float = 5.0
     redis_port: int = 6379
     redis_preflight_timeout_seconds: float = 2.0
-    num_instances_per_worker: int = 2
+    matchup_slots_per_worker: int = 2
     # Flask port ceiling per study index. Matches the ACL range
     # `tcp:9000-9099` documented in .claude/skills/cloud-worker-ops.md —
     # single source of truth for the port budget per study.
@@ -632,12 +632,12 @@ class WorkerConfig:
 
     `worker_id` is last because its default is a placeholder: render-time
     emits worker_id="" into /etc/starsector-worker.env, and the cloud-init
-    script overwrites it via IMDSv2 before `systemctl start`. Keeping it at
-    the end preserves positional-required ordering for campaign_id / study_id
-    / redis_host / redis_port / http_endpoint / bearer_token.
+    script overwrites it via IMDSv2 before `systemctl start`. The required
+    fields come first so dataclass positional ordering holds.
     """
     campaign_id: str
     study_id: str
+    project_tag: str              # scopes Redis queue + heartbeat keys
     redis_host: str
     redis_port: int
     http_endpoint: str
@@ -649,8 +649,8 @@ class WorkerConfig:
     http_retry_backoff_multiplier: float = 2.0
     http_post_timeout_seconds: float = 30.0
     worker_poll_margin_seconds: float = 5.0
-    num_instances_per_worker: int = 2
-    worker_id: str = ""   # placeholder; IMDSv2 override wins at VM boot
+    matchup_slots_per_worker: int = 2
+    worker_id: str = ""           # placeholder; IMDSv2 override wins at VM boot
 
     def __repr__(self) -> str:
         fields = []

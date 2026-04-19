@@ -157,7 +157,7 @@ def load_campaign_config(path: Path) -> CampaignConfig:
         "fleet_provision_timeout_seconds", "result_timeout_seconds",
         "ledger_heartbeat_interval_seconds", "base_flask_port",
         "redis_port", "redis_preflight_timeout_seconds",
-        "num_instances_per_worker",
+        "matchup_slots_per_worker",
     ):
         if opt in raw:
             kwargs[opt] = raw[opt]
@@ -398,6 +398,32 @@ def _check_redis_reachable(
     )
 
 
+def _flush_stale_campaign_keys(
+    project_tag: str, port: int, timeout_seconds: float,
+) -> int:
+    """Delete any ``queue:{project_tag}:*`` + ``worker:{project_tag}:*`` keys.
+
+    Prevents a re-launched campaign with the same name from inheriting stale
+    processing-list items (which the janitor would otherwise re-dispatch as
+    phantom matchups) or stale worker-heartbeat hashes. SCAN is used instead
+    of KEYS so a crowded Redis doesn't block the preflight.
+    """
+    import redis as redis_mod
+
+    client = redis_mod.Redis(
+        host="127.0.0.1", port=port, socket_timeout=timeout_seconds,
+    )
+    deleted = 0
+    for pattern in (f"queue:{project_tag}:*", f"worker:{project_tag}:*"):
+        for key in client.scan_iter(match=pattern, count=1000):
+            client.delete(key)
+            deleted += 1
+    if deleted:
+        logger.info("preflight: flushed %d stale Redis keys for %s",
+                    deleted, project_tag)
+    return deleted
+
+
 def _check_aws_credentials() -> None:
     import boto3
     try:
@@ -479,6 +505,11 @@ class CampaignManager:
             self._tailnet_ip = _resolve_tailnet_ip()
             _check_redis_reachable(
                 tailnet_ip=self._tailnet_ip,
+                port=self._config.redis_port,
+                timeout_seconds=self._config.redis_preflight_timeout_seconds,
+            )
+            _flush_stale_campaign_keys(
+                project_tag=self._project_tag,
                 port=self._config.redis_port,
                 timeout_seconds=self._config.redis_preflight_timeout_seconds,
             )

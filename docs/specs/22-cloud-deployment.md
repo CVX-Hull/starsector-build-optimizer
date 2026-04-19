@@ -20,7 +20,7 @@ workstation (single machine)                         cloud VM (N of them)
 │   Optuna Study (SQLite, local)       │    flask    │   Xvfb :100, :101              │
 │   provider.provision_fleet  (owns)   │             │   Starsector JVM (×2)          │
 │   CloudWorkerPool                    │             │   combat harness mod           │
-│     ThreadPoolExecutor(workers=N)    │             │   heartbeat + queue files      │
+│     BoundedSemaphore(N_total_slots)  │             │   N Redis consumer threads     │
 │     Flask POST /result listener      │             │                                │
 │     janitor thread (requeue stuck)   │             │                                │
 │   provider.terminate_fleet  (owns)   │             │                                │
@@ -87,7 +87,11 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `base_flask_port` | `int` | `9000` | Study at `(study_idx, seed_idx)` listens on `base_flask_port + study_idx * len(seeds) + seed_idx` |
 | `redis_port` | `int` | `6379` | Workstation Redis port; shared by preflight ping and by `WorkerConfig.redis_port` in spawned children |
 | `redis_preflight_timeout_seconds` | `float` | `2.0` | `_preflight` Redis ping timeout — covers only the tailnet-binding-check, not campaign-wide connectivity |
-| `num_instances_per_worker` | `int` | `2` | Per-VM JVM count; forwarded to `WorkerConfig.num_instances_per_worker`. c7a.2xlarge (8 vCPU) fits 2 JVMs at ~2.5 cores each |
+| `matchup_slots_per_worker` | `int` | `2` | Concurrent matchup slots per VM. The worker spawns this many Redis consumer threads sharing one `LocalInstancePool` so every JVM stays busy. Total pool concurrency = `workers_per_study × matchup_slots_per_worker`. c7a.2xlarge (8 vCPU) fits 2 JVMs at ~2.5 cores each |
+| `flask_ports_per_study` | `int` | `100` | Ceiling on Flask result-listener ports allocated per `study_idx`. Matches the `tcp:9000-9099` range documented in `.claude/skills/cloud-worker-ops.md` preflight gate 2. Per-seed ports are `base_flask_port + study_idx * flask_ports_per_study + seed_idx` |
+| `game_dir` | `str` | `"game/starsector"` | Orchestrator-side path to the Starsector install. Study subprocesses load game data here for constraint-aware sampling + opponent-pool construction; workers run the JVM from their AMI-baked `/opt/starsector` |
+| `teardown_retry_delay_seconds` | `float` | `10.0` | Wait before retrying `terminate_all_tagged` in `CampaignManager.teardown` when `list_active` still shows workers |
+| `teardown_thread_join_seconds` | `float` | `5.0` | Bound on `CloudWorkerPool.teardown` waits on the Flask server thread + janitor thread |
 
 ### `WorkerConfig`
 
@@ -97,6 +101,7 @@ Injected by cloud-init as env vars at VM boot. Read once; worker treats as immut
 |---|---|---|---|
 | `campaign_id` | `str` | required | Matches `CampaignConfig.name` |
 | `study_id` | `str` | required | `f"{hull}__{regime}__seed{n}"` |
+| `project_tag` | `str` | required | `f"starsector-{campaign_name}"`. Scopes Redis queue keys (`queue:{project_tag}:{study_id}:source`) + worker heartbeat keys (`worker:{project_tag}:{worker_id}:heartbeat`). Stops stale state from one campaign leaking to the next even when study_ids repeat. |
 | `redis_host` | `str` | required | Workstation's Tailscale address |
 | `redis_port` | `int` | required | Matches `CampaignConfig.redis_port` (default 6379) |
 | `http_endpoint` | `str` | required | `f"http://{workstation}:{port}/result"` |
@@ -108,7 +113,7 @@ Injected by cloud-init as env vars at VM boot. Read once; worker treats as immut
 | `http_retry_backoff_multiplier` | `float` | `2.0` | Backoff multiplier |
 | `http_post_timeout_seconds` | `float` | `30.0` | `requests.post` timeout |
 | `worker_poll_margin_seconds` | `float` | `5.0` | BRPOPLPUSH timeout = `visibility_timeout_seconds - worker_poll_margin_seconds` |
-| `num_instances_per_worker` | `int` | `2` | Per-VM JVM count for the inner `LocalInstancePool` |
+| `matchup_slots_per_worker` | `int` | `2` | Number of concurrent Redis consumer threads spawned on the VM. Each shares one `LocalInstancePool` with `num_instances=matchup_slots_per_worker`, so each thread holds exactly one JVM. Without threading the VM would use only 1 JVM regardless of `num_instances`. |
 | `worker_id` | `str` | `""` | EC2 instance ID. **Placeholder at render time** — cloud-init overwrites via IMDSv2 before `systemctl start`. Moved to end-of-dataclass so earlier required fields stay positional-required. |
 
 ### `CostLedgerEntry`
@@ -129,8 +134,11 @@ One JSONL row in `~/starsector-campaigns/<name>/ledger.jsonl`. All fields primit
 ## Reliable-queue protocol
 
 Each study subprocess owns two Redis lists:
-- `queue:<study_id>:source` — matchups awaiting a worker
-- `queue:<study_id>:processing` — matchups claimed by a worker but not yet ack'd via `POST /result`
+- `queue:<project_tag>:<study_id>:source` — matchups awaiting a worker
+- `queue:<project_tag>:<study_id>:processing` — matchups claimed by a worker but not yet ack'd via `POST /result`
+- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU, 2 JVMs @ ~2.5 cores each), healthy `load_avg_1min` lands around 5–7. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization.
+
+Keys are namespaced by `project_tag` (= `starsector-<campaign_name>`) so a re-run of a campaign whose study_ids happen to match a prior run's never inherits stale processing-list items. `CampaignManager._preflight` additionally SCANs and DELs `queue:<project_tag>:*` + `worker:<project_tag>:*` at startup to defend against same-campaign re-launch.
 
 Worker main loop:
 
@@ -311,8 +319,9 @@ Each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its 
 2. **Redis reachable** (two-step check, supporting both kernel-mode and userspace-mode tailscale):
    - Step 2a — Redis alive: `redis.Redis(host="127.0.0.1", port=config.redis_port, socket_timeout=config.redis_preflight_timeout_seconds).ping()`. Failure → "Redis not reachable on 127.0.0.1:<port>. Start redis-server; see `scripts/cloud/devenv-up.sh` for a rootless recipe."
    - Step 2b — Tailnet exposure: attempt `redis.Redis(host=self._tailnet_ip, port=config.redis_port, …).ping()`. On success → pass (kernel-mode tailscale binds the tailnet IP to a local interface). On failure, fall back to `_tailscale_serve_exposes_port(port)`: if `tailscale serve status` lists `127.0.0.1:<port>` in its output, pass (userspace-mode tailscale proxies via `tailscale serve`). If neither succeeds → "Redis responds on 127.0.0.1 but is not reachable over the tailnet. Either (kernel-mode) bind redis-server to the tailnet IP or (userspace-mode) run `tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>`."
-3. **AWS credentials**: `boto3.client("sts").get_caller_identity()`. Failure → fail with "AWS credentials unavailable. Run `aws sso login` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY."
-4. **Authkey syntax**: `config.tailscale_authkey_secret.startswith("tskey-auth-")`. Violation → fail with "tailscale_authkey_secret must start with `tskey-auth-`. Generate a pre-approved ephemeral key from the Tailscale admin panel (tagged `tag:starsector-worker`)."
+3. **Flush stale Redis keys**: `_flush_stale_campaign_keys(project_tag, port, timeout)` SCANs `queue:<project_tag>:*` and `worker:<project_tag>:*` and DELs everything. Prevents a re-launched campaign with the same `name` from inheriting processing-list entries from the prior run (which the janitor would otherwise re-dispatch as phantom matchups) or stale worker-heartbeat hashes.
+4. **AWS credentials**: `boto3.client("sts").get_caller_identity()`. Failure → fail with "AWS credentials unavailable. Run `aws sso login` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY."
+5. **Authkey syntax**: `config.tailscale_authkey_secret.startswith("tskey-auth-")`. Violation → fail with "tailscale_authkey_secret must start with `tskey-auth-`. Generate a pre-approved ephemeral key from the Tailscale admin panel (tagged `tag:starsector-worker`)."
 
 Preflight subprocess env plumbing (`_generate_study_env(study_idx, seed_idx, study_cfg, *, token_factory=secrets.token_urlsafe)`):
 
@@ -333,7 +342,7 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 ## `EvaluatorPool` subclasses
 
 - `LocalInstancePool` (spec 18) — drives local JVM+Xvfb instances for `run_optimizer.py --worker-pool local`.
-- `CloudWorkerPool` — implements `EvaluatorPool.run_matchup(matchup)` by enqueueing to Redis and blocking on the Flask listener's dedup dict. `ThreadPoolExecutor(max_workers=workers_per_study)` serializes concurrent `run_matchup` calls; `StagedEvaluator` sees exactly the same blocking per-call semantics as `LocalInstancePool`.
+- `CloudWorkerPool` — implements `EvaluatorPool.run_matchup(matchup)` by enqueueing to Redis and blocking on the Flask listener's dedup dict. Constructor takes `total_matchup_slots: int` (= `workers_per_study × matchup_slots_per_worker`); internal `threading.BoundedSemaphore(total_matchup_slots)` caps in-flight dispatches to what the fleet can actually consume. `num_workers` returns `total_matchup_slots`, which is what `StagedEvaluator` reads to size its `ThreadPoolExecutor`. StagedEvaluator sees exactly the same blocking per-call semantics as `LocalInstancePool`.
 
 ## Packer AMI
 

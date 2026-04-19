@@ -22,6 +22,7 @@ def _make_worker_config(**overrides):
     defaults = dict(
         campaign_id="unit-test-campaign",
         study_id="hammerhead__early__seed0",
+        project_tag="starsector-unit-test-campaign",
         redis_host="100.64.0.1",
         redis_port=6379,
         http_endpoint="http://100.64.0.1:9000/result",

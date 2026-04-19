@@ -48,15 +48,19 @@ def _combat_result_json(matchup_id: str) -> dict:
     }
 
 
+PROJECT_TAG = "starsector-pool-test"
+
+
 @pytest.fixture
 def pool(fake_redis):
     from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
     p = CloudWorkerPool(
         study_id="wolf__early__seed0",
+        project_tag=PROJECT_TAG,
         redis_client=fake_redis,
         flask_port=0,
         bearer_token=BEARER,
-        workers_per_study=4,
+        total_matchup_slots=4,
         result_timeout_seconds=2.0,
         visibility_timeout_seconds=120.0,
         janitor_interval_seconds=0.1,
@@ -135,9 +139,10 @@ class TestTimeout:
         )
         p = CloudWorkerPool(
             study_id="wolf__early__seed0",
+            project_tag=PROJECT_TAG,
             redis_client=fake_redis,
             flask_port=0, bearer_token=BEARER,
-            workers_per_study=1,
+            total_matchup_slots=1,
             result_timeout_seconds=0.3,
             visibility_timeout_seconds=120.0,
             janitor_interval_seconds=60.0,
@@ -221,6 +226,21 @@ class TestPoolContract:
     def test_implements_evaluator_pool(self):
         from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
         assert issubclass(CloudWorkerPool, EvaluatorPool)
+
+    def test_num_workers_returns_total_matchup_slots(self, pool):
+        """num_workers is what StagedEvaluator uses to size its
+        ThreadPoolExecutor. It MUST be total slots, not VM count, otherwise
+        half the JVMs sit idle."""
+        assert pool.num_workers == 4
+
+    def test_redis_keys_are_scoped_by_project_tag(self, pool, fake_redis):
+        """Two campaigns with the same study_id must not collide in Redis."""
+        from starsector_optimizer.cloud_worker_pool import (
+            _source_key, _processing_key,
+        )
+        assert _source_key("starsector-A", "s") != _source_key("starsector-B", "s")
+        assert _processing_key("starsector-A", "s") != _processing_key("starsector-B", "s")
+        assert pool._source.startswith(f"queue:{PROJECT_TAG}:")
 
     def test_source_file_has_no_repair_import(self):
         """cloud_worker_pool.py must not import starsector_optimizer.repair."""

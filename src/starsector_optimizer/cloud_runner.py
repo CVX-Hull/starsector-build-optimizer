@@ -81,15 +81,22 @@ def run_cloud_study(
         + seed_idx
     )
 
+    # Pool concurrency == total JVM slots across the fleet. The pool doesn't
+    # distinguish VMs from JVMs — it only holds N free slots.
+    total_matchup_slots = (
+        study_cfg.workers_per_study * campaign.matchup_slots_per_worker
+    )
+
     worker_cfg = WorkerConfig(
         campaign_id=campaign.name,
         study_id=study_id,
+        project_tag=project_tag,
         redis_host=tailnet_ip,
         redis_port=campaign.redis_port,
         http_endpoint=f"http://{tailnet_ip}:{flask_port}/result",
         bearer_token=bearer_token,
         max_lifetime_hours=campaign.max_lifetime_hours,
-        num_instances_per_worker=campaign.num_instances_per_worker,
+        matchup_slots_per_worker=campaign.matchup_slots_per_worker,
         # worker_id intentionally defaulted (""); IMDSv2 overrides at VM boot.
     )
     user_data = render_user_data(
@@ -102,10 +109,11 @@ def run_cloud_study(
     )
     pool = CloudWorkerPool(
         study_id=study_id,
+        project_tag=project_tag,
         redis_client=redis_client,
         flask_port=flask_port,
         bearer_token=bearer_token,
-        workers_per_study=study_cfg.workers_per_study,
+        total_matchup_slots=total_matchup_slots,
         result_timeout_seconds=campaign.result_timeout_seconds,
         visibility_timeout_seconds=campaign.visibility_timeout_seconds,
         janitor_interval_seconds=campaign.janitor_interval_seconds,

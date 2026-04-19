@@ -315,6 +315,57 @@ class TestRunCloudStudyEnvPreflight:
             )
 
 
+class TestPoolTotalMatchupSlots:
+    """Pool concurrency cap == workers_per_study × matchup_slots_per_worker.
+    Anything less under-utilizes the fleet (half the JVMs idle);
+    anything more over-dispatches past Redis consumer capacity."""
+
+    def test_pool_receives_total_matchup_slots_equal_to_product(
+        self, monkeypatch, tmp_path, smoke_env,
+    ):
+        import starsector_optimizer.cloud_runner as cloud_runner
+        config, path = _make_smoke_config(
+            tmp_path,
+            matchup_slots_per_worker=2,
+            studies=[{
+                "hull": "hammerhead", "regime": "early",
+                "seeds": [0], "budget_per_study": 20,
+                "workers_per_study": 3, "sampler": "tpe",
+            }],
+        )
+
+        pool_kwargs = {}
+
+        class Recorder:
+            def __init__(self, *, regions): pass
+            def provision_fleet(self, **kwargs): return ["i-0", "i-1", "i-2"]
+            def terminate_fleet(self, **kwargs): return 3
+
+        class RecordingPool:
+            def __init__(self, **kwargs):
+                pool_kwargs.update(kwargs)
+            def __enter__(self): return self
+            def __exit__(self, *a): pass
+
+        monkeypatch.setattr(cloud_runner, "AWSProvider", Recorder)
+        monkeypatch.setattr(cloud_runner, "CloudWorkerPool", RecordingPool)
+        monkeypatch.setattr(cloud_runner, "optimize_hull", MagicMock())
+        monkeypatch.setattr(cloud_runner, "render_user_data",
+                            lambda *a, **kw: "#!/bin/bash\n")
+        import redis as redis_mod
+        monkeypatch.setattr(redis_mod, "Redis", MagicMock())
+
+        hull = MagicMock()
+        hull.hull_size = MagicMock()
+        cloud_runner.run_cloud_study(
+            campaign_yaml_path=path, study_idx=0, seed_idx=0,
+            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+        )
+        assert pool_kwargs["total_matchup_slots"] == 3 * 2
+        assert pool_kwargs["project_tag"] == smoke_env["STARSECTOR_PROJECT_TAG"]
+
+
 class TestSeedIndexResolvesCorrectSeed:
     """Flat-idx bug fix: run_cloud_study picks `study_cfg.seeds[seed_idx]`,
     not the first seed unconditionally."""
