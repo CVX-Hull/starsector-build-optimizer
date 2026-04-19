@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Manifest freshness guard. Blocks commits that modify the combat-harness
+# Java source or the Starsector game data without a corresponding
+# manifest refresh.
+#
+# Opt-in: `git config core.hooksPath .githooks` (see README).
+# Override: include `MANIFEST_REVIEWED: <reason>` on its own line in the
+# commit message for changes that genuinely don't affect rules (comments,
+# whitespace, test-only code).
+#
+# Rationale: spec 29 §Invariant — the manifest is the only authoritative
+# source of game rules. Java mod edits OR data file edits can shift the
+# content Python would read; shipping a stale manifest reintroduces the
+# 14-bug drift treadmill that the Phase-7-prep refactor eliminated.
+
+set -euo pipefail
+
+staged_files() {
+    git diff --cached --name-only --diff-filter=ACMR
+}
+
+needs_manifest_regen() {
+    staged_files | grep -qE '^(combat-harness/src/main/|game/starsector/data/)'
+}
+
+manifest_was_regen() {
+    staged_files | grep -qx 'game/starsector/manifest.json'
+}
+
+override_in_message() {
+    # Commit message may be in $1 (called by `git commit`) or
+    # reachable via `git log -1`. Guard both paths.
+    if [ $# -ge 1 ] && [ -f "$1" ]; then
+        grep -q '^MANIFEST_REVIEWED:' "$1"
+    else
+        git log -1 --pretty=%B 2>/dev/null | grep -q '^MANIFEST_REVIEWED:'
+    fi
+}
+
+if needs_manifest_regen && ! manifest_was_regen; then
+    if ! override_in_message "${1:-}"; then
+        cat >&2 <<EOF
+pre-commit: Java mod or game data changed without manifest regen.
+
+Touched files:
+$(staged_files | grep -E '^(combat-harness/src/main/|game/starsector/data/)' | sed 's/^/  /')
+
+Manifest untouched: game/starsector/manifest.json
+
+Fix one of:
+  - Run \`uv run python scripts/update_manifest.py\` and \`git add\` the regenerated manifest.
+  - Add \`MANIFEST_REVIEWED: <short reason>\` on its own line in the commit message
+    if the change genuinely doesn't shift game rules (docs/comments/test-only code).
+
+See docs/specs/29-game-manifest.md for the manifest-as-oracle invariant.
+EOF
+        exit 1
+    fi
+fi
+
+exit 0

@@ -92,6 +92,9 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `game_dir` | `str` | `"game/starsector"` | Orchestrator-side path to the Starsector install. Study subprocesses load game data here for constraint-aware sampling + opponent-pool construction; workers run the JVM from their AMI-baked `/opt/starsector` |
 | `teardown_retry_delay_seconds` | `float` | `10.0` | Wait before retrying `terminate_all_tagged` in `CampaignManager.teardown` when `list_active` still shows workers |
 | `teardown_thread_join_seconds` | `float` | `5.0` | Bound on `CloudWorkerPool.teardown` waits on the Flask server thread + janitor thread |
+| `spot_price_cache_ttl_seconds` | `float` | `300.0` | In-process `(region, instance_type) → rate` cache lifetime in `CampaignManager._tick_ledger`. Prevents one `DescribeSpotPriceHistory` call per tick per worker at steady-state. Cache miss or TTL expiry re-fetches. |
+| `max_requeues` | `int` | `5` | Janitor hard cap. A matchup whose `requeue_count` reaches this value on the next visibility-timeout breach is dropped (LREM from processing, NOT re-LPUSH to source) with an ERROR log. Catches permanently stuck matchups without pathological ping-pong. |
+| `heartbeat_stale_multiplier` | `int` | `3` | Heartbeats whose `timestamp > heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds` old are treated as dead and skipped by `_tick_ledger` — no cost accrues. Dead-key clean-up happens at teardown via `_flush_stale_campaign_keys`. |
 
 ### `WorkerConfig`
 
@@ -136,7 +139,7 @@ One JSONL row in `~/starsector-campaigns/<name>/ledger.jsonl`. All fields primit
 Each study subprocess owns two Redis lists:
 - `queue:<project_tag>:<study_id>:source` — matchups awaiting a worker
 - `queue:<project_tag>:<study_id>:processing` — matchups claimed by a worker but not yet ack'd via `POST /result`
-- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU, 2 JVMs @ ~2.5 cores each), healthy `load_avg_1min` lands around 5–7. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization.
+- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU, 2 JVMs @ ~2.5 cores each), healthy `load_avg_1min` lands around 5–7. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying).
 
 Keys are namespaced by `project_tag` (= `starsector-<campaign_name>`) so a re-run of a campaign whose study_ids happen to match a prior run's never inherits stale processing-list items. `CampaignManager._preflight` additionally SCANs and DELs `queue:<project_tag>:*` + `worker:<project_tag>:*` at startup to defend against same-campaign re-launch.
 
@@ -156,11 +159,31 @@ Study-subprocess janitor thread (runs every `janitor_interval_seconds`):
 
 ```
 for item in LRANGE processing 0 -1:
-    if item.enqueued_at older than visibility_timeout_seconds:
+    if (now - item.enqueued_at) > visibility_timeout_seconds:
         LREM processing 1 item
+        item.requeue_count = item.get("requeue_count", 0) + 1
+        if item.requeue_count > config.max_requeues:
+            logger.error("matchup %s exceeded max_requeues=%d; dropping",
+                         item.matchup_id, config.max_requeues)
+            # NOT re-LPUSHed — permanently broken matchups surface as
+            # an ERROR log and a missing trial, not a ping-pong loop.
+            continue
+        item.enqueued_at = now  # reset timer so the next visibility
+                                # breach is measured from re-queue, not
+                                # the original enqueue (guards against
+                                # ping-pong under steady-state slow
+                                # matchups — audit finding M1, 2026-04-19)
         LPUSH source item
-        logger.warning("requeued stuck matchup: study=%s matchup_id=%s", ...)
+        logger.warning("requeued stuck matchup: study=%s matchup_id=%s requeue_count=%d",
+                       ..., item.requeue_count)
 ```
+
+`max_requeues` and the `enqueued_at` reset landed 2026-04-19 as
+part of the Phase-7-prep refactor. Before the reset, a matchup that
+consistently took longer than `visibility_timeout_seconds` to evaluate
+would re-queue on every janitor pass forever; without `max_requeues`,
+a deterministically-broken matchup would block a trial's completion
+indefinitely.
 
 Idempotency key is `MatchupConfig.matchup_id`, which `CampaignManager` sets to `f"{study_id}__{trial_number}__{opponent_id}"` before enqueue. Globally unique across all studies.
 
@@ -184,6 +207,76 @@ No `GET`, no `PATCH`, no `PUT`, no admin route, no static files. Test `test_http
 Append-only JSONL at `~/starsector-campaigns/<name>/ledger.jsonl`. Every write is followed by `file.flush()` + `os.fsync(file.fileno())` to prevent torn lines on crash (~1ms overhead per row, negligible at 96 rows/min).
 
 Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown.
+
+### Ledger tick (2026-04-19)
+
+`CampaignManager._tick_ledger` is called from `monitor_loop` every
+`ledger_heartbeat_interval_seconds`. Per tick:
+
+1. SCAN `worker:<project_tag>:*:heartbeat` via the preflight-cached
+   Redis client (`self._redis`).
+2. For each key, HGETALL and read `timestamp`, `region`, `instance_type`.
+   Skip heartbeats older than
+   `heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds`
+   (dead worker).
+3. Compute `hours_elapsed = min(interval_seconds, now - last_tick_ts[worker_id]) / _SECONDS_PER_HOUR`
+   and update `self._last_tick_ts[worker_id] = now`. Per-worker last-
+   tick state is orchestrator-local (`self._last_tick_ts: dict[str, float]`);
+   on orchestrator restart we resume from `now`, losing at most one
+   interval of attribution — the warn-threshold set and hard cap
+   absorb that.
+4. Look up `rate_usd_per_hr` via
+   `self._get_spot_price_cached(region, instance_type)`. The cache
+   holds `(rate, fetched_at)` tuples; entries expire after
+   `spot_price_cache_ttl_seconds`, on which the next lookup calls
+   `self._provider.get_spot_price(region, instance_type)` and
+   refreshes.
+5. Call `self._ledger.record_heartbeat(...)`. `BudgetExceeded`
+   propagates out of `_tick_ledger` → out of `monitor_loop` →
+   caught by `run()`'s top-level `try/finally`, which triggers
+   teardown.
+
+Module-level constant `_SECONDS_PER_HOUR = 3600.0` guards against
+bare `3600.0` literals in function bodies (project invariant).
+
+### Manifest + AMI tag preflight (2026-04-19)
+
+`_check_manifest_and_ami_tags` runs alongside the other preflight
+checks. It:
+1. Loads `GameManifest.load()` from `game/starsector/manifest.json`.
+   Schema-version mismatch raises `ValueError` with remediation
+   pointing at `scripts/update_manifest.py`.
+2. For every `(region, ami_id)` in `config.ami_ids_by_region`, calls
+   `AWSProvider.describe_ami_tag(ami_id=..., region=..., tag_key="GameVersion")`
+   and asserts the tag value equals `manifest.constants.game_version`.
+   Mismatch raises `_PreflightFailure` with remediation: "re-bake
+   AMI after running `scripts/update_manifest.py`; see
+   `.claude/skills/cloud-worker-ops.md` for the Game-Version-Update
+   runbook."
+3. Caches the loaded manifest on `self._manifest` for subprocess
+   env plumbing (study subprocesses re-load from disk; the cache
+   is orchestrator-internal).
+
+The AWS AMI tag is set by the Packer template
+(`scripts/cloud/packer/aws.pkr.hcl` `tags { GameVersion = var.game_version }`);
+the `game_version` variable MUST be bumped in lockstep with the
+manifest regen. See spec 29 for the manifest-as-oracle contract.
+
+## Worker IMDSv2 metadata fetch
+
+`worker_agent._fetch_vm_metadata()` runs once at worker startup:
+1. IMDSv2 PUT `/latest/api/token` with
+   `X-aws-ec2-metadata-token-ttl-seconds: 300`.
+2. GET `/latest/meta-data/placement/region`.
+3. GET `/latest/meta-data/instance-type`.
+4. Cache result in `_WORKER_VM_METADATA` module dict.
+
+On any failure (IMDS unreachable, HTTP error, timeout) the helper
+logs ERROR (not WARN — this is a cloud-worker misconfiguration)
+and populates `{"region": "unknown", "instance_type": "unknown"}`.
+`AWSProvider.get_spot_price("unknown", "unknown")` returns 0.0 from
+its miss-path, yielding a self-identifying zero-rate ledger row
+instead of silently under-attributing cost.
 
 ## Teardown discipline
 

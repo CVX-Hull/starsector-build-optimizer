@@ -33,7 +33,7 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | Spec | Module | Contents |
 |---|---|---|
 | [01-data-models](./specs/01-data-models.md) | `models.py` | Dataclasses, enums, type definitions |
-| [02-hullmod-effects](./specs/02-hullmod-effects.md) | `hullmod_effects.py` | Game constants, hullmod effect registry |
+| [29-game-manifest](./specs/29-game-manifest.md) | `game_manifest.py` | Authoritative game-rule manifest (replaces deleted spec 02) |
 | [03-game-data-parser](./specs/03-game-data-parser.md) | `parser.py` | CSV + JSON parsing |
 | [04-search-space](./specs/04-search-space.md) | `search_space.py` | Per-hull weapon/hullmod compatibility |
 | [05-repair-operator](./specs/05-repair-operator.md) | `repair.py` | Constraint enforcement |

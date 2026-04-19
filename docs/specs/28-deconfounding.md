@@ -3,7 +3,21 @@
 Two-stage build quality estimation:
 
 1. **A1 — Two-Way Fixed Effects (TWFE) decomposition** of the sparse build × opponent score matrix into additive build-quality and opponent-difficulty components.
-2. **A2′ — Empirical-Bayes (EB) shrinkage** of the TWFE estimate α̂_i toward a regression prior on pre-matchup covariates, followed by Lin-Louis-Shen triple-goal rank correction. Replaces the scalar control variate shipped in Phase 5A.
+2. **A2′ — Empirical-Bayes (EB) shrinkage** of the TWFE estimate α̂_i toward a regression prior on **10 pre-matchup covariates** (6 engine-truth + 4 Python-raw, post-2026-04-19 Phase-7-prep refactor). Followed by Lin-Louis-Shen triple-goal rank correction. Replaces the scalar control variate shipped in Phase 5A.
+
+**Covariate set (10 dims, pinned order in spec 24 §A2′)**: every
+entry is §2.5-admissible (see the admissibility table below —
+Cinelli-Forney-Pearl 2022). The 3 new engine-truth covariates
+(`eff_hull_hp_pct`, `ballistic_range_bonus`,
+`shield_damage_taken_mult`) and 1 new Python-raw covariate
+(`op_used_fraction`) replace the dropped `composite_score` +
+add capacity for the 10-dim fit. §2.5 explicitly REJECTS the
+Phase-7-prep-checklist's proposed 5 post-matchup covariates
+(`mean_damage_dealt_fraction`, `mean_seconds_survived`,
+`mean_cr_remaining`, `mean_flameout_count`, `mean_overload_count`)
+as mechanical consequences of Y_ij (colliders on α). The new
+4 covariates are all pre-matchup and structurally orthogonal to
+the estimand.
 
 All pure-math functions and the `ScoreMatrix` accumulator live in `src/starsector_optimizer/deconfounding.py`. Config dataclasses (`TWFEConfig`, `EBShrinkageConfig`) live in `src/starsector_optimizer/models.py`.
 
@@ -221,7 +235,14 @@ _apply_eb_shrinkage(trial_number, twfe_fitness) -> (float, _EBDiagnostics | None
     indices = list(_completed_records)
     alphas = array([_score_matrix.build_alpha(i, config.twfe) for i in indices])
     sigma_sqs = array([_score_matrix.build_sigma_sq(i) for i in indices])
-    X = vstack([_build_covariate_vector(_completed_records[i]) for i in indices])
+    # 10-dim covariate vector per spec 24 §A2′ — requires build + hull
+    # + manifest to compute op_used_fraction. _EBRecord carries a `build`
+    # field; hull and manifest are plumbed via the enclosing StagedEvaluator.
+    X = vstack([
+        _build_covariate_vector(rec, rec.build, hull, manifest)
+        for i in indices
+        for rec in [_completed_records[i]]
+    ])
     alpha_eb, gamma, tau2, kept = eb_shrinkage(alphas, sigma_sqs, X, config.eb)
     if config.eb.triple_goal:
         alpha_eb = triple_goal_rank(alpha_eb, alphas)

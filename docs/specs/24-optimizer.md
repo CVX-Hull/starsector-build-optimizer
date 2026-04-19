@@ -21,7 +21,7 @@ Frozen dataclass configuring the optimization run.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `sim_budget` | `int` | `200` | Build evaluations (not total sims) |
-| `warm_start_n` | `int` | `500` | Heuristic builds to seed the study |
+| `warm_start_n` | `int` | `0` | Heuristic builds to seed the study. Default dropped from 500 to 0 2026-04-19 — the heuristic prior was dominated by `composite_score`, which was itself drift-prone (11–22% of |γ̂| via the deleted `hullmod_effects.py` registry). Stock builds still seed via `load_stock_builds` (Phase 1 of `warm_start`); `warm_start_n` only controls the heuristic-scored portion. |
 | `warm_start_sample_n` | `int` | `50_000` | Random builds to generate for screening |
 | `warm_start_scale` | `float` | `0.1` | Scale factor for heuristic scores |
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
@@ -68,13 +68,13 @@ Mutable dataclass tracking a build progressing through staged opponent evaluatio
 | `build_spec` | `BuildSpec` | required | Serializable build spec |
 | `variant_id` | `str` | required | Unique variant ID (`{hull_id}_opt_{trial.number:06d}`) |
 | `opponents` | `tuple[str, ...]` | required | Active opponent subset (anchors first, then shuffled; incumbent overlap forced after burn-in) |
-| `scorer_result` | `ScorerResult` | required | Full heuristic scorer output — provides `composite_score` + the covariate fields `total_dps`, `kinetic_dps`, `engagement_range`, `effective_stats` used by A2′ EB shrinkage |
+| `scorer_result` | `ScorerResult` | required | Full heuristic scorer output — provides `total_dps`, `kinetic_dps`, `engagement_range` used by the 3 Python-raw columns of the 10-dim covariate vector. `composite_score` retained for warm-start; dropped from the covariate vector 2026-04-19. `effective_stats` field removed (see spec 01 + spec 29) — engine-truth stats flow through `EngineStats` instead. |
 | `engine_stats` | `EngineStats \| None` | `None` | Post-SETUP Java-engine-computed effective flux capacity / dissipation / armor rating for this build. Populated on arrival of the first matchup result with a non-null `result.engine_stats`; subsequent results are idempotent (same player ship each matchup). `None` until first result arrives, or when Java did not emit `setup_stats` (replay / old logs). |
 | `completed_results` | `list[CombatResult]` | `[]` | Results accumulated so far |
 | `raw_scores` | `list[float]` | `[]` | Per-opponent raw `combat_fitness()` values (parallel to `completed_results`) |
 | `next_opponent_index` | `int` | `0` | Which opponent to evaluate next |
 
-`_InFlightBuild` is a mutable controller record, not a domain model. Design Principle 2's immutability applies to frozen domain classes (`Build`, `EffectiveStats`, `ScorerResult`) — in-flight evaluation state is allowed to mutate.
+`_InFlightBuild` is a mutable controller record, not a domain model. Design Principle 2's immutability applies to frozen domain classes (`Build`, `EngineStats`, `ScorerResult`) — in-flight evaluation state is allowed to mutate. (`EffectiveStats` was removed 2026-04-19; `EngineStats` carries the 6 engine-truth fields the immutability invariant now applies to.)
 
 ### `_EBRecord`
 
@@ -238,18 +238,57 @@ raw combat_fitness score
 
 **A1 — TWFE Deconfounding (spec 28):** Raw `combat_fitness()` scores are recorded into a `ScoreMatrix` instance via `record(trial_number, opp_id, raw)`. At build finalization, `build_alpha(trial_number, config.twfe)` decomposes the accumulated score matrix into build quality (α_i) and opponent difficulty (β_j), then applies trimmed mean (dropping `trim_worst` worst residuals per build). The α_i estimate is schedule-adjusted — comparable across builds that faced different opponent subsets. All observations (including from pruned builds) contribute to β estimates, improving α for subsequent builds.
 
-**A2′ — Empirical-Bayes Shrinkage (spec 28):** At every finalize, construct the full α̂-vector, σ̂_i²-vector, and 7-column covariate matrix X for all finalized builds in `_completed_records`. Call `eb_shrinkage(alpha, sigma_sq, X, config.eb)` to produce posterior means `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂² / (τ̂² + σ̂_i²)`. When `config.eb.triple_goal` is True, pass through `triple_goal_rank()` to preserve the EB rank ordering while restoring the empirical α̂ histogram. When `len(_completed_records) < config.eb.eb_min_builds`, skip shrinkage entirely and return raw α̂ (stability guard for the first few trials). **The guard specifically uses `len(_completed_records)` rather than `score_matrix.n_builds`**: under concurrent dispatch (`total_matchup_slots = workers_per_study × matchup_slots_per_worker` in cloud mode, or parallel `LocalInstancePool` slots locally) `score_matrix.n_builds` counts trials with at least one scored matchup (populated by `_handle_result` per matchup) while `_completed_records` holds only finalized trials (populated by `_finalize_build` after ALL matchups land). Prior to 2026-04-19 the guard read `score_matrix.n_builds`, which under 32+ concurrent slots passed the `< eb_min_builds` check before even 3 trials had fully completed — `eb_shrinkage` then raised `ValueError: n >= 3 builds, got 1`. Sequential tests and the 2-slot smoke never triggered this.
+**A2′ — Empirical-Bayes Shrinkage (spec 28):** At every finalize, construct the full α̂-vector, σ̂_i²-vector, and 10-column covariate matrix X for all finalized builds in `_completed_records`. Call `eb_shrinkage(alpha, sigma_sq, X, config.eb)` to produce posterior means `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂² / (τ̂² + σ̂_i²)`. When `config.eb.triple_goal` is True, pass through `triple_goal_rank()` to preserve the EB rank ordering while restoring the empirical α̂ histogram. When `len(_completed_records) < config.eb.eb_min_builds`, skip shrinkage entirely and return raw α̂ (stability guard for the first few trials). **The guard specifically uses `len(_completed_records)` rather than `score_matrix.n_builds`**: under concurrent dispatch (`total_matchup_slots = workers_per_study × matchup_slots_per_worker` in cloud mode, or parallel `LocalInstancePool` slots locally) `score_matrix.n_builds` counts trials with at least one scored matchup (populated by `_handle_result` per matchup) while `_completed_records` holds only finalized trials (populated by `_finalize_build` after ALL matchups land). Prior to 2026-04-19 the guard read `score_matrix.n_builds`, which under 32+ concurrent slots passed the `< eb_min_builds` check before even 3 trials had fully completed — `eb_shrinkage` then raised `ValueError: n >= 3 builds, got 1`. Sequential tests and the 2-slot smoke never triggered this.
 
-Covariate vector `X_i` assembled by `_build_covariate_vector(record)`, 7 components in order:
-1. `eff_max_flux` from `record.engine_stats`
-2. `eff_flux_dissipation` from `record.engine_stats`
-3. `eff_armor_rating` from `record.engine_stats`
-4. `total_weapon_dps` from `record.scorer_result.total_dps`
-5. `engagement_range` from `record.scorer_result.engagement_range`
-6. `kinetic_dps_fraction` = `record.scorer_result.kinetic_dps / max(total_dps, ε)`
-7. `composite_score` from `record.scorer_result.composite_score`
+**Covariate vector (10 components, 2026-04-19)**: assembled by
+`_build_covariate_vector(record, build, hull, manifest)`. Order is
+**pinned** — downstream code reads `kept_cov_columns` positionally
+and anything re-indexing the vector must update all call sites
+atomically.
 
-When `record.engine_stats is None` (replay on pre-5D logs, or test fixtures), features 1-3 fall back to `record.scorer_result.effective_stats.{flux_capacity, flux_dissipation, armor_rating}` with a `warnings.warn` for operator visibility. In production runs with the deployed Java mod, this fallback never triggers.
+| idx | feature | source | rationale |
+|---|---|---|---|
+| 0 | `eff_max_flux` | `record.engine_stats.eff_max_flux` | engine-truth post-hullmod flux capacity |
+| 1 | `eff_flux_dissipation` | `record.engine_stats.eff_flux_dissipation` | engine-truth post-hullmod flux dissipation |
+| 2 | `eff_armor_rating` | `record.engine_stats.eff_armor_rating` | engine-truth post-hullmod armor |
+| 3 | `eff_hull_hp_pct` | `record.engine_stats.eff_hull_hp_pct` | **NEW** ratio form of hullmod hull-HP bonus; drivers: Reinforced Bulkheads, Blast Doors |
+| 4 | `ballistic_range_bonus` | `record.engine_stats.ballistic_range_bonus` | **NEW** multiplicative range bonus; drivers: ITU (+10/20/40/60% by hull size), DTC (0/0/15/25%), Unstable Injector |
+| 5 | `shield_damage_taken_mult` | `record.engine_stats.shield_damage_taken_mult` | **NEW** driven by Hardened Shields (-20/25%) + S-mod Front Shield Emitter |
+| 6 | `total_weapon_dps` | `record.scorer_result.total_dps` | Python-raw weapon arithmetic |
+| 7 | `engagement_range` | `record.scorer_result.engagement_range` | Python-raw DPS-weighted range mean |
+| 8 | `kinetic_dps_fraction` | `scorer.kinetic_dps / max(total_dps, ε)` | Python-raw type ratio |
+| 9 | `op_used_fraction` | `_op_used_fraction(build, hull, manifest)` | **NEW** Python-raw structural: OP-budget tightness, manifest-driven so built-in-mod OP discounts (Dominator/Onslaught) are captured correctly |
+
+Engine-truth block (indices 0–5) groups first, then the Python-raw
+block (6–9). The 3 new engine-truth fields (indices 3–5) are
+populated by the Phase-7-prep `MutableShipStats` additions to the
+Java SETUP hook (spec 13 §SETUP.6).
+
+**Dropped 2026-04-19**: `composite_score` (previously index 6).
+11–22% of |γ̂| was flowing through `ScorerResult.composite_score`,
+which depended on the drift-prone `compute_effective_stats` call
+from the deleted `hullmod_effects.py`. Without the manifest as
+authoritative source of game rules, Python's re-derivation produced
+structurally biased feature values — the covariate was a proxy for
+"did the hand-coded registry happen to capture this build's
+hullmods" rather than for build quality. The manifest refactor made
+it cheaper to drop the covariate than to migrate it.
+
+**`engine_stats=None` is now a hard AssertionError** (no Python
+fallback). The pre-refactor fallback re-derived the 3 engine-truth
+fields from `EffectiveStats` (Python `compute_effective_stats`),
+which mixed engine-sourced rows with Python-re-derived rows in the
+same OLS fit — exactly the "1 authoritative reading replaced by 1
+wrong re-derivation" pattern the manifest-as-oracle refactor
+eliminates. The Java mod always emits `engine_stats`; a `None` at
+this point is an invariant violation, not a legitimate replay path.
+
+**p/N budget**: p=10 at N=600 (Phase 7 prep) gives p/N=0.017, well
+below the phase5d 0.08 overfit threshold and inside the p≈8
+diminishing-returns knee from
+`experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`
+with modest headroom. The 4 additions are high-variance,
+high-coverage features.
 
 **A3 — Box-Cox Output Warping:** Final fitness passed through `scipy.stats.boxcox` fit on the population of completed EB posterior means (`_completed_fitness_values`). The transform is monotone (preserves Spearman ρ) and restores α̂-proportional gradient at the tails — the pre-5E quantile rank was also monotone but discarded magnitude information, compressing the top quartile into an evenly-spaced grid that TPE's `l(x)` could not exploit. The current trial's `eb_fitness` is transformed under the same λ via the `boxcox(scalar, lmbda=λ)` overload, then min-max rescaled against the transformed population to produce a `[0, 1]` output for JSONL schema stability. λ is refit on every `_finalize_build` call (≈1ms at n=300; batched refit saves nothing vs matchup latency and would create a (λ, shift, min, max) cache-coherence burden against the rolling rescale window).
 
@@ -330,14 +369,14 @@ One line per build evaluation, appended to `data/logs/{hull}__{regime}__{sampler
   "raw_fitness": 0.21,
   "eb_fitness": 0.21,
   "twfe_fitness": 0.18,
-  "engine_stats": {"eff_max_flux": 12000.0, "eff_flux_dissipation": 800.0, "eff_armor_rating": 1050.0},
-  "covariate_vector": [12000.0, 800.0, 1050.0, 4200.0, 1100.0, 0.55, 0.71],
+  "engine_stats": {"eff_max_flux": 12000.0, "eff_flux_dissipation": 800.0, "eff_armor_rating": 1050.0, "eff_hull_hp_pct": 1.40, "ballistic_range_bonus": 1.20, "shield_damage_taken_mult": 0.80},
+  "covariate_vector": [12000.0, 800.0, 1050.0, 1.40, 1.20, 0.80, 4200.0, 1100.0, 0.55, 0.83],
   "eb_diagnostics": {
     "sigma_sq_twfe": 0.0042,
     "sigma_sq_eb": 0.0018,
     "tau2": 0.031,
-    "gamma": [0.17, 0.04, -0.02, 0.01, 0.06, 0.03, -0.01, 0.12],
-    "kept_cov_columns": [0, 1, 2, 3, 4, 5, 6]
+    "gamma": [0.17, 0.04, -0.02, 0.05, 0.11, -0.07, 0.01, 0.06, 0.03, 0.04, 0.08],
+    "kept_cov_columns": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   },
   "shape_lambda": 0.73,
   "shape_passthrough_reason": null,
@@ -352,14 +391,14 @@ Schema:
 - `raw_fitness`: the post-A2′ scalar fed into A3 Box-Cox shaping. Semantically stable across 5A → 5E: its *content* changed from CV-corrected (5A) to EB-shrunk (5D), and the A3 transform downstream of it changed from quantile rank (pre-5E) to Box-Cox (5E), but its role ("final scalar immediately before the A3 transform") is unchanged.
 - `eb_fitness`: explicit EB posterior (post-triple-goal if enabled). Added in 5D for auditability. For completed builds under 5D this equals `raw_fitness`; the redundant write makes it unambiguous that EB was applied. Unset for pruned builds (TWFE α̂ is unstable with few observations; no shrinkage is applied at prune time).
 - `twfe_fitness`: pre-shrinkage α̂ from the TWFE decomposition. Completed builds only. Paired with `eb_fitness` the JSONL reconstructs the full twfe→eb→shaped pipeline; without it, downstream analysis cannot distinguish raw TWFE from EB posterior.
-- `engine_stats`: Java SETUP-phase engine readings (flux capacity, dissipation, armor rating). Completed builds only. Absent when Java did not emit `setup_stats` (pre-5D replay logs).
-- `covariate_vector`: the 7-dim X_i in §2.7 order (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `composite_score`) used by EB shrinkage for this build. Completed builds only.
+- `engine_stats`: 6-field Java SETUP-phase engine readings (flux capacity, dissipation, armor rating, hull-HP-pct, ballistic range bonus, shield damage-taken mult). Completed builds only. Absent when Java did not emit `setup_stats` (pre-5D replay logs). **Post-2026-04-19**, `engine_stats is None` at covariate-vector build time raises `AssertionError` — no Python fallback (see §A2′ covariate-vector block).
+- `covariate_vector`: the 10-dim X_i in the pinned order above (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `eff_hull_hp_pct`, `ballistic_range_bonus`, `shield_damage_taken_mult`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `op_used_fraction`) used by EB shrinkage for this build. Completed builds only. **Pre-2026-04-19 logs carry a 7-dim vector in the old order** (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `composite_score`); they are not replayed under the new schema per the no-back-compat directive. Historical notebooks reading pre-2026-04-19 logs read positionally against the old order.
 - `eb_diagnostics`: per-trial uncertainty block so posterior credible intervals can be reconstructed at analysis time. Completed builds only, AND only when shrinkage actually ran (n ≥ `eb_min_builds` AND Var(α̂) > 0); omitted when `_apply_eb_shrinkage` returned raw α̂ unchanged. Fields:
   - `sigma_sq_twfe`: σ̂_i² from the TWFE decomposition for this build.
   - `sigma_sq_eb`: posterior variance w_i·σ̂_i² = τ̂²·σ̂_i² / (τ̂² + σ̂_i²). Always ≤ `sigma_sq_twfe`.
   - `tau2`: τ̂² between-trial prior variance (method-of-moments, floored at `tau2_floor_frac · Var(α̂)`).
   - `gamma`: regression coefficients γ̂ from the EB fit. First element is the intercept; remaining elements align with `kept_cov_columns`.
-  - `kept_cov_columns`: indexes into `covariate_vector` for columns that survived the zero-std filter (`eb_shrinkage` drops zero-variance columns so the OLS normal equations remain conditioned). Normally `[0, 1, 2, 3, 4, 5, 6]` with all 7 covariates retained.
+  - `kept_cov_columns`: indexes into `covariate_vector` for columns that survived the zero-std filter (`eb_shrinkage` drops zero-variance columns so the OLS normal equations remain conditioned). Normally `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]` with all 10 covariates retained.
 - `shape_lambda`: fitted Box-Cox λ for this trial's A3 transform, or `null` during A3 passthrough (first 7 trials or constant-population edge cases). Added in 5E for diagnostic visibility into how the transform is evolving as the completed-values distribution grows.
 - `shape_passthrough_reason`: one of `"n<1"`, `"n<min_samples"`, `"constant"` when A3 fell back to min-max scaling, or `null` when Box-Cox ran. Added in 5E.
 - `regime`: string, always present on both completed and pruned rows. The name of the loadout regime under which this build was evaluated — one of `"early"` / `"mid"` / `"late"` / `"endgame"`. Logged per trial so post-hoc analysis can filter cross-regime studies without joining against config state. Added in 5F.

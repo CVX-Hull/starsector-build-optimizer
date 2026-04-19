@@ -98,7 +98,7 @@ Positive = player winning the attrition war. Negative = losing. Zero = even exch
 Standalone utility for simple aggregation of `combat_fitness` scores. The optimizer does NOT call this. The optimizer runs the A1→A2′→A3 signal-quality pipeline in `optimizer.py`:
 
 1. **A1 TWFE decomposition** (spec 28) via `ScoreMatrix`
-2. **A2′ EB shrinkage** (spec 28) — fuses the TWFE estimate with a 7-covariate regression prior assembled by `optimizer.py::_build_covariate_vector` from `ScorerResult` (this module's sibling `scorer.py`) and `EngineStats` (Java SETUP read). The covariate assembly lives in the optimizer, not in `combat_fitness.py`, because it crosses optimizer-owned state — scorer output plus SETUP engine reads. `combat_fitness` remains a pure scalar function of one `CombatResult`.
+2. **A2′ EB shrinkage** (spec 28) — fuses the TWFE estimate with a 10-covariate regression prior assembled by `optimizer.py::_build_covariate_vector` from `ScorerResult` (this module's sibling `scorer.py`), `EngineStats` (6-field Java SETUP read), and `_op_used_fraction(build, hull, manifest)` (Python-raw, manifest-driven). The covariate assembly lives in the optimizer, not in `combat_fitness.py`, because it crosses optimizer-owned state — scorer output plus SETUP engine reads plus manifest OP costs. `combat_fitness` remains a pure scalar function of one `CombatResult`. See spec 24 §A2′ for the pinned 10-component order; `ScorerResult.effective_stats` was removed 2026-04-19 (see spec 01 + spec 29).
 3. **A3 rank shaping**
 
 | Parameter | Type | Default | Description |

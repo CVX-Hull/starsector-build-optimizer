@@ -1,0 +1,47 @@
+name: manifest-check
+
+on:
+  pull_request:
+    paths:
+      - 'game/starsector/manifest.json'
+      - 'src/starsector_optimizer/game_manifest.py'
+      - 'tests/test_game_manifest.py'
+      - 'combat-harness/src/main/**'
+
+jobs:
+  schema-and-content:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Sync project deps (frozen)
+        run: |
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          $HOME/.local/bin/uv sync --frozen
+
+      - name: Manifest schema + content gate
+        run: |
+          # Schema-version equality, vanilla minimum counts, enum parse
+          # paths, and the incompatibility-symmetry invariant are all
+          # enforced in tests/test_game_manifest.py. Failure here means
+          # either the committed manifest is stale vs the Python loader
+          # or a Java-side probe bug slipped in.
+          $HOME/.local/bin/uv run pytest tests/test_game_manifest.py -v
+
+      - name: Flag stale manifest on Java mod change
+        # If this PR modified combat-harness/src/main/ but not the
+        # manifest.json itself, warn loudly — the pre-commit hook
+        # catches this locally but CI is the backstop for contributors
+        # who didn't opt in.
+        run: |
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          java_changed=$(git diff --name-only "$base" "$head" | grep -c '^combat-harness/src/main/' || true)
+          manifest_changed=$(git diff --name-only "$base" "$head" | grep -c '^game/starsector/manifest.json$' || true)
+          if [ "$java_changed" != "0" ] && [ "$manifest_changed" = "0" ]; then
+            echo "::warning::Java mod changed but game/starsector/manifest.json was not regenerated."
+            echo "::warning::Run scripts/update_manifest.py and commit the result, or add MANIFEST_REVIEWED to the commit message."
+          fi
