@@ -1,0 +1,64 @@
+# Phase 7 prep campaign — 8 hulls × `early` × 1 seed × 600 trials.
+# Produces the cross-hull, early-regime dataset Phase 7's BoTorch
+# composed-kernel work warm-starts from.
+#
+# Budget rationale (from experiments/phase6-planning/cost_model.py):
+#   600 trials × 8 hulls × ~12 matchups/trial ≈ 57,600 matchups
+#   96 c7a.2xlarge VMs × 122 matchups/hr/VM → ~4.9 hr wall-clock
+#   96 × 4.2 hr × $0.15/hr spot ≈ $60.79 incl 3% preemption
+#   budget_usd=70.0 = ~15% safety margin.
+#
+# Sampler: TPE is the only accepted value — CatCMAwM was removed 2026-04-19
+# because the Starsector search space is fully categorical (incompatible
+# with `cmaes.CatCMAwM`'s `x_space` non-empty requirement), and without a
+# Bayesian alternative the originally-planned sampler benchmark was skipped
+# (TPE vs random is a foregone conclusion). See docs/specs/24-optimizer.md.
+#
+# Launch:
+#   set -a; source .env; set +a
+#   scripts/cloud/devenv-up.sh                       # if not already up
+#   scripts/cloud/launch_campaign.sh examples/phase7-prep.yaml
+
+name: phase7-prep-early
+budget_usd: 70.0
+provider: aws
+
+regions:
+  - us-east-1
+  - us-east-2
+
+instance_types:
+  - c7a.2xlarge
+
+spot_allocation_strategy: price-capacity-optimized
+capacity_rebalancing: true
+
+# 8 studies × 12 workers/study = 96 VMs at peak (48 per region).
+max_concurrent_workers: 96
+min_workers_to_start: 48
+partial_fleet_policy: proceed_half_speed
+
+# AMI from 2026-04-18 rebake (threaded worker + project_tag-scoped Redis keys).
+ami_ids_by_region:
+  us-east-1: ami-013af3c3b247d43ef
+  us-east-2: ami-065272e3dfda4839c
+
+ssh_key_name: starsector-probe
+
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+
+studies:
+  # 8 hulls spanning F → D → C → CAP, all early regime, 1 seed each.
+  - {hull: wolf,          regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: lasher,        regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: hammerhead,    regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: sunder,        regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: eagle,         regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: dominator,     regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: falcon,        regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: onslaught_mk1, regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+
+max_lifetime_hours: 6.0
+fleet_provision_timeout_seconds: 600.0
+result_timeout_seconds: 900.0
+ledger_heartbeat_interval_seconds: 60.0

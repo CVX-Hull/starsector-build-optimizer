@@ -37,8 +37,9 @@ def main():
     parser.add_argument("--num-instances", type=int, default=2, help="Parallel game instances")
     parser.add_argument("--sim-budget", type=int, default=50, help="Number of build evaluations")
     parser.add_argument("--study-db", type=str, default=None, help="SQLite path for study persistence")
-    parser.add_argument("--sampler", choices=["tpe", "catcma"], default="tpe",
-                        help="Optimization sampler: tpe (default) or catcma")
+    parser.add_argument("--sampler", choices=["tpe"], default="tpe",
+                        help="Optimization sampler: tpe (only option on this "
+                             "codebase; see optimizer.py docstring)")
     parser.add_argument("--heuristic-only", action="store_true",
                         help="Use heuristic score instead of simulation (for testing)")
     parser.add_argument("--analyze-importance", action="store_true",
@@ -131,13 +132,24 @@ def main():
         print(print_importance_report(result))
         return
 
+    # Per-study eval log directory. The row schema does not carry study_id /
+    # sampler, so writing all studies to one file destroys per-study
+    # attribution under concurrent-subprocess dispatch (e.g. any campaign with
+    # multiple studies in parallel). One dir per (hull, regime, sampler,
+    # seed_idx) — uniform for local and cloud runs.
+    eval_log_dir = Path(
+        f"data/logs/{args.hull}__{args.regime}__{args.sampler}__seed_idx{args.seed_idx}"
+    )
+    eval_log_dir.mkdir(parents=True, exist_ok=True)
+    eval_log_path = eval_log_dir / "evaluation_log.jsonl"
+
     config = OptimizerConfig(
         sim_budget=args.sim_budget,
         sampler=args.sampler,
         active_opponents=args.active_opponents,
         fixed_params=fixed_params,
         study_storage=storage,
-        eval_log_path=Path("data/evaluation_log.jsonl"),
+        eval_log_path=eval_log_path,
         regime=REGIME_PRESETS[args.regime],
         warm_start_from_regime=args.warm_start_from_regime,
     )

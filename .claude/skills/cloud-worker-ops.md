@@ -236,6 +236,26 @@ Workers boot, `tailscale up` succeeds, then their BRPOPLPUSH hangs and eventuall
 
 The `dst: ["*"]` targets the whole tailnet including the untagged workstation; if you want a tighter destination, use the workstation hostname from `tailscale status --self`. Grants are the current policy language — the editor's **"Convert to grants"** button rewrites any legacy `acls` block automatically.
 
+### `create_fleet` returns `InvalidGroup.NotFound` for a just-created SG
+
+Symptoms: campaign subprocess logs `RuntimeError: create_fleet produced zero instances in <region>` with per-AZ errors like `"The security group 'sg-XXXX' does not exist in VPC 'vpc-YYYY'"`. Happens under concurrent provisioning (multiple studies racing their `provision_fleet` calls) and surfaced when an aborted sampler benchmark ran 6 studies in parallel.
+
+Root cause: AWS EC2 Fleet service has a replication lag after `create_security_group` beyond what the `describe_security_groups` visibility waiter covers. Fleet's internal registry needs a few extra seconds to see the SG.
+
+Fix already in `cloud_provider.py` (no operator action unless the fix doesn't hold): `_ensure_security_group` blocks on `client.get_waiter("security_group_exists").wait(...)` after create, and `_create_fleet_in_region` retries up to `_FLEET_PROVISION_MAX_RETRIES=4` times at `_FLEET_PROVISION_RETRY_DELAY_SECONDS=3.0` intervals when the response contains ANY `InvalidGroup.NotFound` / `InvalidSecurityGroupID.NotFound` error. The predicate is `any(transient)` not `all(transient)` — permanent per-AZ rejections like `us-east-1e` not stocking `c7a.2xlarge` routinely co-occur with transient SG errors on other AZs, and we want to retry through so the non-1e AZs succeed. Test coverage: `tests/test_cloud_provider.py::TestFleetProvisionSGPropagation`.
+
+If this keeps firing even past the retry budget, the AWS region may be genuinely backed up — try a different region or wait a few minutes. Don't increase the retry cap without checking Fleet service health first.
+
+### Other known concurrency hazards (not yet observed in prod)
+
+See `docs/reference/phase6-deferred-audit-findings-2026-04-19.md` for the deferred list from the 2026-04-19 audit — H1 TimeoutTuner dormant + would-corrupt-shared-file if wired, H2 POST-before-register race (unreachable while orchestrator never retries on `WorkerTimeout`), M1 janitor `enqueued_at` ping-pong under steady-state slow matchups. Each entry has reproduction + proposed fix + gating criterion for when to revisit. Also includes the proposed **Tier-3 concurrency shakedown** stage (4 studies × 16 slots ≈ $1) between Tier-2.5 smoke and Phase 7 prep.
+
+### `_apply_eb_shrinkage` raises `ValueError: eb_shrinkage needs n >= 3 builds, got 1`
+
+Symptom: orchestrator subprocess crashes on a small number of completed trials despite `eb_min_builds=8` supposedly guarding. Surfaced at 32 concurrent matchup slots (sampler-benchmark attempt) but NOT at smoke/Tier-2 scale.
+
+Root cause (pre-2026-04-19 bug, now fixed): the guard read `score_matrix.n_builds` (counts trials with ≥1 matchup result) whereas `eb_shrinkage`'s OLS fit consumes `_completed_records` (fully-finalized trials). Under high concurrency `score_matrix.n_builds` crosses 8 while `len(_completed_records)` is still 1. Fix: guard now uses `len(_completed_records)`. No operator action — verify `optimizer.py:_apply_eb_shrinkage` reads `self._completed_records` not `self._score_matrix.n_builds` if you ever see this stack again.
+
 ### Workers crashing on startup with `ArrayIndexOutOfBoundsException: Index 0`
 
 LWJGL XRandR bug. Check:

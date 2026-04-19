@@ -58,6 +58,7 @@ class TeardownError(Exception):
 
 _ALLOWED_PROVIDERS = {"aws"}
 _ALLOWED_PARTIAL_POLICIES = {"proceed_half_speed", "abort"}
+_ALLOWED_SAMPLERS = {"tpe"}
 # AWS LT names accept [a-zA-Z0-9().-/_]{3,128}. We constrain campaign names
 # tighter to leave room for the `starsector-<name>__<fleet_name>` composition
 # and avoid shell-metacharacters that would leak into subprocess arguments.
@@ -111,6 +112,12 @@ def load_campaign_config(path: Path) -> CampaignConfig:
             f"max_concurrent_workers={raw['max_concurrent_workers']}"
         )
 
+    for s in raw["studies"]:
+        if s["sampler"] not in _ALLOWED_SAMPLERS:
+            raise ValueError(
+                f"study sampler={s['sampler']!r} invalid; "
+                f"allowed: {sorted(_ALLOWED_SAMPLERS)}"
+            )
     studies = tuple(
         StudyConfig(
             hull=s["hull"], regime=s["regime"],
@@ -568,9 +575,9 @@ class CampaignManager:
                 # invariant in docs/specs/22-cloud-deployment.md enforces
                 # `grep -En "logger.*env" campaign.py` returns empty.
                 logger.info(
-                    "spawn study (%d,%d): %s__%s__seed%d",
+                    "spawn study (%d,%d): %s__%s__%s__seed%d",
                     study_idx, seed_idx, study.hull, study.regime,
-                    study.seeds[seed_idx],
+                    study.sampler, study.seeds[seed_idx],
                 )
                 proc = subprocess.Popen(cmd, env=env)
                 procs.append(proc)

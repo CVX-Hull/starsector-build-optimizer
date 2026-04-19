@@ -1,10 +1,10 @@
 # Phase 6 — Structured Search-Space Representation
 
-> **Status**: PLANNED. Research complete (2026-04-17). Targets the combinatorial-explosion vs expensive-evaluation bottleneck by replacing the Optuna TPE/CatCMAwM surrogate with a custom BoTorch-based Gaussian Process whose kernel composes sparse-axis-aligned priors on hullmod booleans, transformed-overlap categoricals and attribute-Matérn on weapons, Matérn on slot coordinates, opponent-context features on small-slot posteriors, gated-sentinel for conditional slots, and ICM-style per-item and per-slot residuals. Warmed by a BOCA-style 30-trial random-forest importance pilot and biased (but not locked) by πBO decay-weighted priors over nine community-stable role archetypes. No shipped code yet.
+> **Status**: PLANNED. Research complete (2026-04-17). Targets the combinatorial-explosion vs expensive-evaluation bottleneck by replacing the Optuna TPE surrogate (CatCMAwM removed 2026-04-19; see spec 24) with a custom BoTorch-based Gaussian Process whose kernel composes sparse-axis-aligned priors on hullmod booleans, transformed-overlap categoricals and attribute-Matérn on weapons, Matérn on slot coordinates, opponent-context features on small-slot posteriors, gated-sentinel for conditional slots, and ICM-style per-item and per-slot residuals. Warmed by a BOCA-style 30-trial random-forest importance pilot and biased (but not locked) by πBO decay-weighted priors over nine community-stable role archetypes. No shipped code yet.
 
 Design and research log for how the optimizer **represents and searches** the ship-build space. Phase 5 improves the *scoring* of builds (signal quality); Phase 6 improves the *surrogate model* that decides which builds to test next, by injecting stable structural priors (slot geometry, weapon attributes, archetype density, hullmod sparsity) that survive game updates.
 
-Reading this doc cold: Phase 4 shipped the initial Optuna TPE/CatCMAwM optimizer over one-hot encoded weapons and hullmod booleans. Phase 6 replaces that surrogate with a mixed-space GP whose kernel structure matches the known geometry of the ship-build problem — weapons have physics-driven attributes, slots have 2D coordinates, hullmods have sparse activity, and archetypes are stable across game patches. See `docs/reference/implementation-roadmap.md` for the full phase status.
+Reading this doc cold: Phase 4 shipped the initial Optuna TPE optimizer over one-hot encoded weapons and hullmod booleans (CatCMAwM was in `_create_sampler` as a nominally-selectable alternative until 2026-04-19, when it was removed for being incompatible with our all-categorical search space). Phase 6 replaces that surrogate with a mixed-space GP whose kernel structure matches the known geometry of the ship-build problem — weapons have physics-driven attributes, slots have 2D coordinates, hullmods have sparse activity, and archetypes are stable across game patches. See `docs/reference/implementation-roadmap.md` for the full phase status.
 
 This design is the synthesis of a 10-agent, 2026-04-17 literature sweep plus a follow-up compiler-autotuning deep-dive:
 
@@ -354,7 +354,7 @@ Phase 6 is **orthogonal to Phase 5**. It changes the optimizer's surrogate, not 
 
 | Phase | What it does | Phase 6 impact |
 |---|---|---|
-| 4 | Optuna TPE/CatCMAwM over one-hot | Replaced by custom BoTorch sampler |
+| 4 | Optuna TPE over one-hot (CatCMAwM removed 2026-04-19) | Replaced by custom BoTorch sampler |
 | 5A (TWFE) | α_i + β_j decomposition | Unchanged; TWFE output feeds GP like any fitness |
 | 5B (WilcoxonPruner + ASHA) | Multi-fidelity pruning | Unchanged; pruning is upstream of the GP |
 | 5C (anchor-first + incumbent overlap) | Opponent schedule | Provides the opponent features (§3.9) to the GP |

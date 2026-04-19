@@ -74,12 +74,11 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 
 ## Key Design Decisions
 
-1. **Optuna TPE** as primary optimizer — clean ask-tell API, batch parallelism via constant_liar, swappable samplers via OptunaHub
-2. **CatCMAwM** as QD emitter for Phase 7 — joint Gaussian + categorical distribution via cmaes library
-3. **Heuristic warm-start** — 50K random builds scored with heuristic, top-500 seed the Optuna study
-4. **Repair operators** for constraint handling — literature consensus over penalty or constrained generation
-5. **CMA-MAE + CatCMA** for quality-diversity — discovers diverse build archetypes, not just one optimum
-6. **TabPFN v2 + CatBoost** for neural surrogate — TabPFN for cold-start (N<300), CatBoost for scale (N>300)
+1. **Optuna TPE** as primary optimizer — clean ask-tell API, batch parallelism via constant_liar. CatCMAwM was removed 2026-04-19 (incompatible with the all-categorical search space; see `docs/specs/24-optimizer.md` §`_create_sampler`). Phase 7 replaces the sampler surface entirely with a custom BoTorch composed-kernel GP.
+2. **Heuristic warm-start** — 50K random builds scored with heuristic, top-500 seed the Optuna study
+3. **Repair operators** for constraint handling — literature consensus over penalty or constrained generation
+4. **Quality-diversity (aspirational Phase 8+)** — historically planned with CMA-MAE + CatCMA emitters; that library is gone, so any QD revisit must pick a mixed-variable emitter compatible with a discrete-only space (candidates: line-of-sight CMA over one-hots, Gaussian-on-embedding, or pure evolutionary with discrete operators).
+5. **TabPFN v2 + CatBoost** for neural surrogate — TabPFN for cold-start (N<300), CatBoost for scale (N>300)
 
 ## Technology Stack
 

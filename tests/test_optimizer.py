@@ -270,13 +270,6 @@ class TestSamplerFactory:
         sampler = _create_sampler(config)
         assert isinstance(sampler, optuna.samplers.TPESampler)
 
-    def test_catcma_sampler_creation(self):
-        """sampler='catcma' creates a CatCMAwM sampler."""
-        config = OptimizerConfig(sampler="catcma")
-        sampler = _create_sampler(config)
-        # CatCMAwMSampler is loaded dynamically, just check it's a BaseSampler
-        assert isinstance(sampler, optuna.samplers.BaseSampler)
-
     def test_invalid_sampler_raises(self):
         """Unknown sampler value raises ValueError."""
         config = OptimizerConfig(sampler="invalid")

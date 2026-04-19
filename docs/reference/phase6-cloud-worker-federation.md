@@ -12,14 +12,14 @@ Phase 6 ships against an **$85 combined Phase 6 shakedown + sampler benchmark + 
 | --- | --- |
 | Validation probe (2 VMs × 2 regions × 15 min) | $0.15 |
 | Pipeline smoke (Tier-2.0 single-matchup ~$0.30 + Tier-2.5 ~$0.80 multi-worker per §11) | $1.20 |
-| Sampler benchmark (2 hulls × 3 samplers × 1 hr) | $14.83 |
+| ~~Sampler benchmark (2 hulls × 3 samplers × 1 hr)~~ — SKIPPED (see §10) | ~~$14.83~~ → $0 |
 | Prep campaign (8 hulls × `early` × 600 trials, incl 3% preemption) | $60.79 |
 | **Subtotal** | **$76.97** |
 | Slack (reruns, retries, headroom) | $5.00 |
 | **Recommended budget** | **$85.00** |
 
 - **AWS primary** (c7a.2xlarge spot, us-east-1 + us-east-2) rather than Hetzner, because existing AWS account vCPU quota is already ample (1,280 spot vCPU across us-east-1 + us-east-2 = room for ~160 eight-vCPU instances, vs Hetzner default 10-VM project cap that requires a 1-2 day quota-upgrade ticket). AWS's ~$0.0012/matchup vs Hetzner's ~$0.0011 (13% premium) is covered by the budget. Hetzner stays documented as a post-Phase-7 scale-up path where its price advantage matters against $500+/$1000 spend.
-- **Sampler benchmark runs BEFORE the prep campaign.** The winning sampler drives the `sampler:` field of the prep campaign YAML. Decision criteria are pinned in §10 before the benchmark launches (no hindsight rules).
+- **Sampler benchmark was SKIPPED 2026-04-19** (see §10). CatCMAwM is structurally incompatible with this codebase's all-categorical search space, and without a Bayesian alternative the benchmark has no meaningful decision to make. Prep uses TPE directly.
 - **Packer pre-bake is in scope even at $85** (reversal from an early scoping sketch that deferred it). Rationale in §5. AWS AMIs are region-scoped, so the build is done in us-east-1 and `aws ec2 copy-image`'d to us-east-2 (~5 min, one-time).
 - **Two-region spread** across us-east-1 + us-east-2 for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` allocation + `CapacityRebalancing` drops preemption rate to ~3% (validated in the 2026-04-18 benchmark).
 - **Prep campaign target**: 8 hulls × `early` × 1 seed × 600 trials ≈ 48,000 matchups ≈ **$60.79**. Produces the cross-hull early-regime data Phase 7's attribute/mode kernels need to validate transfer claims.
@@ -70,18 +70,11 @@ The Optuna TPE sampler (with `constant_liar=True, multivariate=True`) is efficie
 
 ### §2 Sampler strategy per study
 
-TPE is the default for ≤24 workers per study. Above that (if a single study needs faster turnaround), use `CatCMAwM` (already supported via `--sampler=catcma` since Phase 4). CMA-ES is natively parallel — it generates a batch of λ candidates per generation, evaluates them concurrently, updates the distribution. No `constant_liar` imputation needed.
+TPE is the sole supported sampler per study. Constant-liar imputation (`constant_liar=True`) extends its usable parallelism to the ~24-worker regime; above that, per-study scaling plateaus and the federation strategy absorbs the rest (more studies, not more workers per study).
 
-**Hybrid schedule** (`--sampler=hybrid`, new in this phase):
-```
-Stage 0: warm-start (7 stock + 500 heuristic from 50k candidates)   ← already free
-Stage 1: random exploration     (100 trials,  any parallelism)      ← fills search space
-Stage 2: CatCMAwM refinement    (400 trials,  up to 50 workers)     ← native batch
-Stage 3: TPE exploitation       (200 trials,  ≤24 workers)          ← precision
-```
-Early stages need breadth (parallel-friendly), late stages need precision (TPE's KDE beats CMA's Gaussian around the optimum). `study.sampler = newsampler` between stages; `n_ei_candidates=100` on TPE to extend its usable worker range modestly.
+**CatCMAwM was removed 2026-04-19** (see §10 and `docs/specs/24-optimizer.md` §`_create_sampler`). The `cmaes.CatCMAwM` library requires ≥1 continuous variable; our search space is fully categorical + integer, so CatCMAwM fails `x_space must be shape (n, 2), got (0,)` at every study start. Hybrid schedules (random → CatCMAwM → TPE) depended on the CatCMAwM stage and are therefore also removed. Phase 7 replaces the Optuna sampler surface entirely (BoTorch composed-kernel GP); any cross-stage scheme belongs to that redesign, not to Phase 6.
 
-Rejected alternatives:
+Rejected alternatives (still applicable for any future sampler work):
 - **Facebook Ax** — native batch BO, but ~3 days of port + loses existing `WilcoxonPruner` / warm-start infrastructure. Not worth it when Phase 7 (BoTorch GP) supersedes this anyway.
 - **GPSampler with `constant_liar`** — Optuna 4.2 added `constant_liar` to GPSampler, but NUTS posterior inference is ~1-2 hr per 200-trial run; too slow for short studies.
 - **Raising `n_ei_candidates` alone** — extends TPE's usable range from ~30 to maybe 50 workers per study, not 100+. Cheap band-aid, not a structural fix.
@@ -300,32 +293,22 @@ Calibration from existing `experiments/hammerhead-twfe-2026-04-13/evaluation_log
 
 **Rejected**: fixed per-study budget. Wastes spend on studies that converged at 500 trials and burns ceiling on studies that are still improving at 1500.
 
-### §10 Sampler benchmark — runs BEFORE the prep campaign
+### §10 Sampler benchmark — SKIPPED 2026-04-19
 
-The prep campaign's `sampler:` field is determined by an empirical bake-off, not by assumption. Ordered this way so the Phase 7 prep data uses the best sampler we can identify within the budget.
+**Outcome**: skipped before launch. Prep uses TPE directly.
 
-**Scope** (2 hulls × 3 samplers × 1 hr each, matched parallelism + one scaling test):
+The originally-planned TPE-24 vs CatCMAwM-24 vs CatCMAwM-48 bake-off was abandoned after a first attempt (32 VMs × 3 samplers × 2 seeds on hammerhead) surfaced a structural incompatibility: `cmaes.CatCMAwM._init_gaussian` requires a non-empty `x_space` of shape `(n, 2)`, but the Starsector search space — `CategoricalDistribution` for weapon slots and hullmod booleans, `IntDistribution` for `flux_vents` and `flux_capacitors` — produces zero continuous variables on every hull / regime. CatCMAwM raises `ValueError: x_space must be a two-dimensional array with shape (n, 2), but got shape (0,)` during its first `sample_relative` call. See `src/starsector_optimizer/optimizer.py` docstring and `docs/specs/24-optimizer.md` §`_create_sampler`.
 
-| Sampler | Workers | VMs | Trials (1 hr) | Cost / hull | Cost (2 hulls) |
-| --- | --- | --- | --- | --- | --- |
-| TPE-24 (status quo) | 24 | 12 | ~146 | $1.85 | $3.71 |
-| CatCMAwM-24 (matched) | 24 | 12 | ~146 | $1.85 | $3.71 |
-| CatCMAwM-48 (scaling test) | 48 | 24 | ~293 | $3.71 | $7.42 |
-| **Total** | | | | | **$14.83** |
+CatCMAwM was removed (`_create_sampler` no longer accepts it; `_ALLOWED_SAMPLERS = {"tpe"}`). A `random` baseline was considered and also dropped — with no Bayesian alternative to race against, TPE-vs-random is a foregone conclusion at 200+ trials. Phase 7 replaces the Optuna sampler surface entirely (BoTorch composed-kernel GP per `docs/reference/phase7-search-space-compression.md`), so any interim Optuna tuning has a short shelf life.
 
-Hybrid (`random → CatCMAwM → TPE`) is **excluded** from this benchmark — at a 1-hour budget the TPE-exploit stage doesn't get ≥200 trials to be meaningful. Revisit hybrid only once a long-budget run justifies its stage pacing.
+The aborted benchmark attempt surfaced three concurrent-dispatch correctness bugs that were all fixed with regression tests before moving on:
+- **`InvalidGroup.NotFound` race in `create_fleet`**. Under N studies provisioning simultaneously, Fleet's internal service replication lagged `describe_security_groups` visibility. Fix: boto3 `security_group_exists` waiter after `create_security_group` + retry on transient `InvalidGroup.NotFound` errors in `_create_fleet_in_region` (predicate is `any(transient)` not `all(transient)` — permanent per-AZ rejections like `us-east-1e` not stocking `c7a.2xlarge` commonly co-occur with transient SG errors on other AZs, and we want to retry so the non-1e AZs succeed). Regression: `tests/test_cloud_provider.py::TestFleetProvisionSGPropagation` (4 cases).
+- **EB shrinkage guard race in `_apply_eb_shrinkage`**. Guard read `score_matrix.n_builds` (trials with ≥1 matchup result) whereas the OLS fit consumes `_completed_records` (fully-finalized trials). Under 32 concurrent slots the guard passes while `len(_completed_records) == 1`, and `eb_shrinkage` raises `ValueError: n >= 3 builds, got 1`. Fix: guard on `len(_completed_records)`. Regression: the existing 2-slot smoke never triggered this; Phase 7 prep at 24 slots/study would have.
+- **study_id / eval_log_path collision**. `study_id = f"{hull}__{regime}__seed{seed}"` collided across sampler variants with the same (hull, regime, seed), and the shared `data/evaluation_log.jsonl` had no `sampler` field so per-sampler attribution was impossible. Fix: study_id now includes sampler (`f"{hull}__{regime}__{sampler}__seed{seed}"`) and `scripts/run_optimizer.py` writes per-study directories (`data/logs/<study_id>/evaluation_log.jsonl`) uniformly for local and cloud runs. Regression: `tests/test_run_optimizer_cloud.py`.
 
-**Hull selection**: 1 destroyer + 1 cruiser from the prep campaign's 8-hull list (e.g. `hammerhead` + `eagle`). Benefits:
-- Cross-references directly against the prep campaign's TPE data at the same hulls.
-- Two different fitness landscapes guard against a single-hull artifact (e.g. Hammerhead's quick-kill regime vs Eagle's attrition regime).
+Budget: the aborted benchmark consumed < $0.40 of live spend across two partial provisioning attempts (instances ran for < 10 min before teardown). The $14.83 sampler-benchmark line item returns to the Phase 6 slack pool.
 
-**Decision criteria (pinned before launch — no hindsight rules)**:
-1. **Primary metric**: best Box-Cox-warped fitness at 1 hour per hull.
-2. **Tiebreaker**: convergence rate — best fitness at T=30 min. Signals which sampler reaches "good" fastest, which matters most for the 8-hull prep where per-study budget could run short.
-3. **Default to TPE-24** if a challenger doesn't clearly win on ≥1 hull AND stays within 5% on the other — status quo bias is appropriate since TPE is the better-validated path in this codebase.
-4. **CatCMAwM-48 tiebreak**: if it wins wall-clock *and* matches TPE-24 on fitness within 3%, switch the prep campaign to 24 VMs/study × 8 studies = 192 VMs (within AWS quota of 224 after the us-west-1/2 dip). Halves prep wall-clock ~4.1 hr → ~2.1 hr at the same VM-hours / cost.
-
-**Write the decision as a short REPORT.md** in `experiments/phase6-sampler-bench-2026-0X/` before launching the prep. Include: sampler × hull fitness table, 30-min + 60-min snapshots, the decision rule as applied, and the `sampler:` YAML value chosen for the prep.
+Additional concurrency hazards identified during the audit pass but deferred (unreachable in current code path, or not observed in practice) are captured in `docs/reference/phase6-deferred-audit-findings-2026-04-19.md`. That doc also proposes a **Tier-3 concurrency shakedown** (4 studies × 16 slots/study ≈ $1) as a gate between Tier-2.5 smoke and Phase 7 prep — the session's four fixes would all have been caught by such a stage without the prep-scale cost exposure. Revisit when Phase 7 prep is scheduled.
 
 ### §11 Tier-2 pipeline smoke gate
 
@@ -417,7 +400,7 @@ Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket
 
 10. **`experiments/cloud-campaign-validation/`** — validation runs staged to the $85 budget (script-verified):
    - **Pipeline smoke** (~$1.20; 1 study × 8 workers × 2 hr): validates orchestrator ↔ worker Redis pipeline, cost ledger, teardown, spot-preemption replay. Gate before the benchmark.
-   - **Sampler benchmark** (~$14.83; 2 hulls × 3 samplers × 1 hr): runs TPE-24 / CatCMAwM-24 / CatCMAwM-48 bake-off per §10. Selects the `sampler:` value for the prep. Archived to `experiments/phase6-sampler-bench-2026-0X/` with a REPORT.md documenting the decision.
+   - ~~**Sampler benchmark** (~$14.83; 2 hulls × 3 samplers × 1 hr)~~ — SKIPPED 2026-04-19. See §10. Prep uses TPE directly.
    - **Phase 7 prep campaign** (~$60.79; 8 hulls × `early` × 1 seed × ~600 trials, ~4.1 hr at 96 VMs across us-east-1 + us-east-2): produces the cross-hull early-regime data Phase 7's attribute/mode kernels need. Archived to `experiments/phase7-prep-early-2026-0X/` with a REPORT.md summarizing per-hull convergence + mode clustering signal.
    - (Future, $500+ budget) regime sweep on Hetzner where the ~13% cost advantage offsets the quota-ticket overhead.
 

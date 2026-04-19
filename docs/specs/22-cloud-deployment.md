@@ -44,7 +44,7 @@ One row in the campaign YAML's `studies:` list. `seeds=(0, 1, 2)` fans out into 
 | `seeds` | `tuple[int, ...]` | One Optuna study per seed |
 | `budget_per_study` | `int` | Absolute trial cap per study |
 | `workers_per_study` | `int` | TPE saturates above 24 |
-| `sampler` | `str` | `tpe` or `catcma` |
+| `sampler` | `str` | `tpe` (only accepted value; see spec 24 for the CatCMAwM removal rationale) |
 
 ### `GlobalAutoStopConfig`
 
@@ -100,7 +100,7 @@ Injected by cloud-init as env vars at VM boot. Read once; worker treats as immut
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `campaign_id` | `str` | required | Matches `CampaignConfig.name` |
-| `study_id` | `str` | required | `f"{hull}__{regime}__seed{n}"` |
+| `study_id` | `str` | required | `f"{hull}__{regime}__{sampler}__seed{n}"` — composed in `cloud_runner.run_cloud_study`. Sampler segment present defensively so two studies differing only in sampler never collide on fleet/LT/SG/Redis-key names (forward-compat; with TPE the sole allowed sampler per spec 24, collisions can't arise in practice). |
 | `project_tag` | `str` | required | `f"starsector-{campaign_name}"`. Scopes Redis queue keys (`queue:{project_tag}:{study_id}:source`) + worker heartbeat keys (`worker:{project_tag}:{worker_id}:heartbeat`). Stops stale state from one campaign leaking to the next even when study_ids repeat. |
 | `redis_host` | `str` | required | Workstation's Tailscale address |
 | `redis_port` | `int` | required | Matches `CampaignConfig.redis_port` (default 6379) |
@@ -247,7 +247,7 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
 
 `provision_fleet(...)`:
 
-1. **Per region**: ensure SG named `f"{project_tag}__{fleet_name}"` exists with all egress allowed, zero ingress (workers are outbound-only). Tag it with both `Project` and `Fleet`.
+1. **Per region**: ensure SG named `f"{project_tag}__{fleet_name}"` exists with all egress allowed, zero ingress (workers are outbound-only). Tag it with both `Project` and `Fleet`. After `create_security_group` returns, **block on the `security_group_exists` boto3 waiter** (`Delay=2s`, `MaxAttempts=10`) so the SG is present in `describe_security_groups` before any dependent call references it. Under concurrent provisioning (N studies racing to `provision_fleet` simultaneously) the waiter alone is insufficient — Fleet's internal replication lags describe-visibility — so `_create_fleet_in_region` also retries on transient errors; see step 3.
 2. **Per region**: ensure LT named `f"{project_tag}__{fleet_name}"` exists with:
    - `ImageId` = `ami_ids_by_region[region]`
    - `KeyName` = `ssh_key_name`
@@ -257,7 +257,7 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
    - `BlockDeviceMappings` = `[{DeviceName: "/dev/sda1", Ebs: {DeleteOnTermination: true}}]` (prevents volume audit leak)
    - `TagSpecifications` on `instance` and `volume` include both `Project` and `Fleet`
    - If an LT with the same name already exists, create a new version and `modify_launch_template(DefaultVersion=...)` — LT versions are immutable once referenced.
-3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: spot_allocation_strategy}, Type="instant")` per region, diversified across `instance_types`. `TagSpecifications` on the Fleet resource also include both tags.
+3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: spot_allocation_strategy}, Type="instant")` per region, diversified across `instance_types`. `TagSpecifications` on the Fleet resource also include both tags. **Retry up to `_FLEET_PROVISION_MAX_RETRIES=4` times, separated by `_FLEET_PROVISION_RETRY_DELAY_SECONDS=3.0`, when the response contains ANY `InvalidGroup.NotFound` / `InvalidSecurityGroupID.NotFound` error** (the `any(...)` predicate — not `all(...)` — because permanent per-AZ errors like `InvalidFleetConfiguration` when `c7a.2xlarge` is unsupported in `us-east-1e` commonly co-occur with transient SG-visibility errors on the other AZs, and we want to retry so the non-1e AZs succeed). Emit zero-instances failure only if the retry budget is exhausted or no error is transient.
 
 `terminate_fleet(fleet_name, project_tag)`: per region, filter by BOTH tags → terminate instances → delete LT (by name) → delete SG (by name, with ENI-detach retry loop: `_SG_DELETE_DEADLINE_SECONDS=300.0`, `_SG_DELETE_POLL_INTERVAL_SECONDS=10.0`). Idempotent.
 

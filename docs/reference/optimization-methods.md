@@ -4,6 +4,8 @@ This document covers each optimization method in depth: how it works, when to us
 
 **Updated based on Phase 4 research findings.** Key change: Optuna TPE replaces Bounce/SMAC3 as primary optimizer. See `phase4-research-findings.md` for full rationale.
 
+> **Update 2026-04-19:** The CatCMAwM section below is preserved as historical context, but CatCMAwM has been **REMOVED** from the production codebase. `cmaes.CatCMAwM` requires ≥1 continuous variable in its `x_space`, and the Starsector search space is fully categorical + integer (no `FloatDistribution` on any hull/regime), so CatCMAwM raises `x_space must be shape (n, 2), got (0,)` at initialization. `_create_sampler` accepts only `"tpe"`, and `_ALLOWED_SAMPLERS = {"tpe"}` in `campaign.py`. Phase 7 replaces the Optuna sampler surface entirely with a BoTorch composed-kernel GP (see `docs/reference/phase7-search-space-compression.md`). Treat the CatCMAwM / hybrid-sampler guidance in §3 and the decision tree in §1 as dead advice pending either a QD reboot with a discrete-compatible emitter or Phase 7 shipping.
+
 ---
 
 ## Table of Contents

@@ -69,7 +69,15 @@ def run_cloud_study(
     campaign = load_campaign_config(campaign_yaml_path)
     study_cfg = campaign.studies[study_idx]
     seed = study_cfg.seeds[seed_idx]
-    study_id = f"{study_cfg.hull}__{study_cfg.regime}__seed{seed}"
+    # Include sampler in study_id so two studies that differ only in sampler
+    # don't collide on fleet_name / LT / SG / Redis-key names. Defensive
+    # hygiene — with TPE as the only allowed sampler (post-2026-04-19)
+    # collisions can't occur in practice, but the invariant is cheap to
+    # preserve and future-proofs the naming if new samplers are added.
+    study_id = (
+        f"{study_cfg.hull}__{study_cfg.regime}"
+        f"__{study_cfg.sampler}__seed{seed}"
+    )
     fleet_name = study_id
 
     # Flask port: one per (study_idx, seed_idx) pair. Ceiling per study is

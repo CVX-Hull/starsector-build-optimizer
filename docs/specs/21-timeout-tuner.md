@@ -1,5 +1,7 @@
 # Timeout Tuner Specification
 
+**Status (2026-04-19): DORMANT.** `TimeoutTuner` is defined and unit-tested but is **not instantiated by any production code path** — no call site in `src/starsector_optimizer/optimizer.py`, `scripts/run_optimizer.py`, `cloud_runner.py`, or the Java harness. `LocalInstancePool` uses the fixed `InstanceConfig.matchup_timeout_seconds` default. This spec documents the intended design; wiring remains a future task (candidate for deletion per the no-dead-code invariant if not adopted before Phase 7 ships). The per-study eval-log path change (spec 24 §JSONL) means any future wire-in must point `TimeoutTuner._data_dir` at a per-study directory and either (a) glob every `data/logs/*/evaluation_log.jsonl` recursively or (b) fit one model per study — not the single `data/evaluation_log.jsonl` this spec originally assumed.
+
 Self-tuning combat timeout prediction using survival analysis on right-censored duration data. Sets per-matchup timeout ceilings that preserve optimizer signal quality while avoiding premature cutoffs. Defined in `src/starsector_optimizer/timeout_tuner.py`.
 
 ## Why Timeouts Matter for Optimizer Quality

@@ -10,7 +10,7 @@ Improving the signal-to-noise ratio of combat fitness evaluations. This document
 
 The optimizer discovers effective ship builds for Starsector via Bayesian optimization:
 
-1. **Propose** a build (weapon loadout, hullmods, flux allocation) via Optuna TPE/CatCMAwM
+1. **Propose** a build (weapon loadout, hullmods, flux allocation) via Optuna TPE (CatCMAwM removed 2026-04-19 — see `docs/specs/24-optimizer.md` §`_create_sampler`)
 2. **Repair** to feasibility (OP budget, hullmod compatibility)
 3. **Evaluate** by running AI-vs-AI combat simulation against 5 diverse opponents
 4. **Score** using a hierarchical composite fitness: wins [1.0, 1.5], timeouts [-0.49, +0.49], losses [-1.0, -0.5]

@@ -385,6 +385,170 @@ class TestDeletionTagFiltering:
         assert "legacy-orphan-lt" not in names
 
 
+class TestFleetProvisionSGPropagation:
+    """Concurrent provisioning trips InvalidGroup.NotFound in create_fleet
+    because the Fleet service has a replication lag after SG creation. The
+    provider (a) blocks on `security_group_exists` waiter post-create, and
+    (b) retries create_fleet on InvalidGroup.NotFound for a few seconds."""
+
+    def _mock_client(self, *, fleet_responses):
+        """Build a MagicMock boto3 EC2 client that returns the supplied
+        sequence of create_fleet responses and otherwise behaves as a stub
+        for the calls _ensure_security_group + _ensure_launch_template make."""
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.describe_security_groups.return_value = {"SecurityGroups": []}
+        client.create_security_group.return_value = {"GroupId": "sg-AAAA"}
+        # The waiter must be called; track invocations.
+        waiter = MagicMock()
+        client.get_waiter.return_value = waiter
+        client.describe_launch_templates.return_value = {"LaunchTemplates": []}
+        client.create_launch_template.return_value = {}
+        client.create_fleet.side_effect = fleet_responses
+        return client, waiter
+
+    def test_sg_visibility_waiter_invoked_after_create(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        client, waiter = self._mock_client(fleet_responses=[{
+            "Instances": [{"InstanceIds": ["i-0000000000000000"]}],
+            "Errors": [],
+        }])
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        _provision(provider, fleet_name="f", project_tag="starsector-p")
+        client.get_waiter.assert_called_once_with("security_group_exists")
+        waiter.wait.assert_called_once()
+        # Waiter kwargs include the freshly-minted SG id.
+        assert waiter.wait.call_args.kwargs["GroupIds"] == ["sg-AAAA"]
+
+    def test_create_fleet_retries_on_invalid_group_not_found(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        # First attempt: transient SG NotFound. Second: success.
+        transient = {
+            "Instances": [],
+            "Errors": [{"ErrorCode": "InvalidGroup.NotFound",
+                        "ErrorMessage": "propagation lag"}],
+        }
+        success = {
+            "Instances": [{"InstanceIds": ["i-1111111111111111"]}],
+            "Errors": [],
+        }
+        client, _ = self._mock_client(fleet_responses=[transient, success])
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: None,  # collapse the retry delay in tests
+        )
+        ids = _provision(provider, fleet_name="f", project_tag="starsector-p")
+        assert ids == ["i-1111111111111111"]
+        assert client.create_fleet.call_count == 2
+
+    def test_create_fleet_retries_when_transient_co_occurs_with_permanent(self, monkeypatch):
+        """Production scenario: us-east-1e rejects c7a.2xlarge (permanent
+        InvalidFleetConfiguration) at the same time other AZs emit transient
+        InvalidGroup.NotFound for SG-propagation lag. Retry must fire on the
+        transient ones; the 1e rejection is OK to accept as a partial-error."""
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        mixed_transient = {
+            "Instances": [],
+            "Errors": [
+                {"ErrorCode": "InvalidFleetConfiguration",
+                 "ErrorMessage": "c7a.2xlarge not in us-east-1e"},
+                {"ErrorCode": "InvalidGroup.NotFound",
+                 "ErrorMessage": "propagation lag"},
+            ],
+        }
+        # Second attempt succeeds on the non-1e AZs; 1e still throws but we
+        # got one instance so we return happily.
+        mixed_recovered = {
+            "Instances": [{"InstanceIds": ["i-2222222222222222"]}],
+            "Errors": [
+                {"ErrorCode": "InvalidFleetConfiguration",
+                 "ErrorMessage": "c7a.2xlarge not in us-east-1e"},
+            ],
+        }
+        client, _ = self._mock_client(fleet_responses=[mixed_transient, mixed_recovered])
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: None,
+        )
+        ids = _provision(provider, fleet_name="f", project_tag="starsector-p")
+        assert ids == ["i-2222222222222222"]
+        assert client.create_fleet.call_count == 2
+
+    def test_create_fleet_retries_on_invalid_launch_template_not_found(self, monkeypatch):
+        """Same replication-lag pattern as SG but for LT. Under concurrent
+        provisioning, create_fleet can see `InvalidLaunchTemplateName.
+        NotFoundException` for an LT we just created. Must retry."""
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        transient_lt = {
+            "Instances": [],
+            "Errors": [{"ErrorCode": "InvalidLaunchTemplateName.NotFoundException",
+                        "ErrorMessage": "LT replication lag"}],
+        }
+        success = {
+            "Instances": [{"InstanceIds": ["i-3333333333333333"]}],
+            "Errors": [],
+        }
+        client, _ = self._mock_client(fleet_responses=[transient_lt, success])
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: None,
+        )
+        ids = _provision(provider, fleet_name="f", project_tag="starsector-p")
+        assert ids == ["i-3333333333333333"]
+        assert client.create_fleet.call_count == 2
+
+    def test_create_fleet_does_not_retry_on_unrelated_errors(self, monkeypatch):
+        """us-east-1e: c7a.2xlarge unsupported — that's permanent, not transient.
+        If ALL errors are permanent we do NOT retry."""
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        permanent = {
+            "Instances": [],
+            "Errors": [{"ErrorCode": "InvalidFleetConfiguration",
+                        "ErrorMessage": "instance-type not in AZ"}],
+        }
+        client, _ = self._mock_client(fleet_responses=[permanent])
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: None,
+        )
+        with pytest.raises(RuntimeError, match="zero instances"):
+            _provision(provider, fleet_name="f", project_tag="starsector-p")
+        assert client.create_fleet.call_count == 1
+
+    def test_create_fleet_retry_capped(self, monkeypatch):
+        """If SG propagation never resolves, we stop after the retry budget."""
+        from starsector_optimizer.cloud_provider import (
+            AWSProvider, _FLEET_PROVISION_MAX_RETRIES,
+        )
+        provider = AWSProvider(regions=("us-east-1",))
+        transient = {
+            "Instances": [],
+            "Errors": [{"ErrorCode": "InvalidGroup.NotFound",
+                        "ErrorMessage": "lag"}],
+        }
+        # Feed the same transient response forever.
+        client, _ = self._mock_client(
+            fleet_responses=[transient] * (_FLEET_PROVISION_MAX_RETRIES + 2),
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: None,
+        )
+        with pytest.raises(RuntimeError, match="zero instances"):
+            _provision(provider, fleet_name="f", project_tag="starsector-p")
+        assert client.create_fleet.call_count == _FLEET_PROVISION_MAX_RETRIES
+
+
 class TestHetznerProvider:
     """HetznerProvider is a stub; every method raises NotImplementedError."""
 

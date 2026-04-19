@@ -4,7 +4,7 @@ Identifies which search space parameters most influence fitness, enabling dimens
 
 ## Motivation
 
-The optimizer's search space is 50-70 dimensions (13+ weapon slots, 62 hullmod flags, 2 flux params). Many parameters have negligible impact on fitness — e.g., small PD weapon slots or rarely-relevant hullmods. Identifying and fixing low-impact parameters reduces effective dimensionality, improving sample efficiency for all samplers (TPE, CatCMAwM).
+The optimizer's search space is 50-70 dimensions (13+ weapon slots, 62 hullmod flags, 2 flux params). Many parameters have negligible impact on fitness — e.g., small PD weapon slots or rarely-relevant hullmods. Identifying and fixing low-impact parameters reduces effective dimensionality, improving sample efficiency for TPE (the sole supported sampler; CatCMAwM was removed 2026-04-19 — see spec 24).
 
 ## Classes
 

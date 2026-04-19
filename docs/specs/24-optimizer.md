@@ -32,7 +32,7 @@ Frozen dataclass configuring the optimization run.
 | `shape` | `ShapeConfig` | `ShapeConfig()` | A3 Box-Cox output-warping parameters. `ShapeConfig(min_samples: int = 8, positivise_epsilon: float = 1e-6)`. Below `min_samples`, A3 falls through to min-max scaling (Box-Cox MLE is unstable under ~8 samples; floor chosen by analogy to `eb_min_builds`). `positivise_epsilon` guards the `shift = min - eps` positivise step and the constant-population `ptp < eps` fallback. |
 | `regime` | `RegimeConfig` | `REGIME_EARLY` | Phase 5F loadout regime — hard-masks the hullmod + weapon catalogues at `search_space.py` construction time by CSV `tier` / tag columns. Four presets in `models.py`: `REGIME_EARLY` (default; `tier <= 1`, excludes `no_drop`/`no_drop_salvage`/`codex_unlockable` hullmods and `rare_bp`/`codex_unlockable` weapons), `REGIME_MID` (excludes `no_drop`/`no_drop_salvage` + `rare_bp`), `REGIME_LATE` (excludes `no_drop` only), `REGIME_ENDGAME` (no mask — pre-5F behaviour). Regime is a component-availability filter on the build being optimized; it does NOT filter opponents or hull choice. See `docs/reference/phase5f-regime-segmented-optimization.md`. |
 | `warm_start_from_regime` | `str \| None` | `None` | If set, enqueue the top-M completed trials from the named prior-regime study in the same `study_storage` as warm-start seeds. Valid values: `"early"` / `"mid"` / `"late"` / `"endgame"`. Trials that are infeasible under the target regime's mask are skipped with a warning. Self-seeding (same regime as `regime.name`) is rejected at CLI parse time. |
-| `sampler` | `str` | `"tpe"` | Sampler algorithm: `"tpe"` or `"catcma"`. |
+| `sampler` | `str` | `"tpe"` | Sampler algorithm; `"tpe"` is the only accepted value on this codebase (see §_create_sampler). |
 | `fixed_params` | `dict[str, bool \| int \| str] \| None` | `None` | Param name → fixed value. Fixed params are excluded from distributions, reducing effective dimensionality. |
 | `study_storage` | `str \| None` | `None` | SQLite path or None for in-memory |
 | `wilcoxon_p_threshold` | `float` | `0.1` | WilcoxonPruner p-value threshold for signed-rank test |
@@ -203,18 +203,19 @@ Warm-start trials use scaled-down heuristic scores (0.1x default) so they provid
 
 ## Sampler Selection
 
-The optimizer supports multiple Optuna samplers via a factory function.
+TPE is the sole supported sampler on this codebase.
 
 ### `_create_sampler(config) -> optuna.samplers.BaseSampler`
 
 | Sampler | When to Use | Library | Config |
 |---------|------------|---------|--------|
-| `"tpe"` | Default. Good for high-D exploration with warm-start. | `optuna.samplers.TPESampler` | `multivariate=True`, `constant_liar=True`, `n_ei_candidates`, `n_startup_trials` from config |
-| `"catcma"` | Refinement after TPE, or when cross-variable correlations matter. Better for reduced search spaces (after fixing params). | `optunahub` + `cmaes` | `CatCmawmSampler` loaded via `optunahub.load_module("samplers/catcmawm")` |
+| `"tpe"` | Default and only option. Good for high-D exploration with warm-start. | `optuna.samplers.TPESampler` | `multivariate=True`, `constant_liar=True`, `n_ei_candidates`, `n_startup_trials` from config |
 
 Unknown `sampler` value raises `ValueError`.
 
-CatCMAwM uses population-based parallelism rather than constant_liar — it naturally handles batch evaluation.
+**CatCMAwM was removed 2026-04-19.** The `cmaes.CatCMAwM` implementation requires `x_space` (the continuous-variable space) to be a non-empty `(n, 2)` array and raises `ValueError: x_space must be a two-dimensional array with shape (n, 2), but got shape (0,)` at `_init_gaussian` otherwise. The Starsector search space is fully categorical + integer (see `define_distributions`): `CategoricalDistribution` for `weapon_<slot_id>` and `hullmod_<mod_id>`, `IntDistribution(0, max_vents)` and `IntDistribution(0, max_capacitors)`. No hull / regime combination produces a `FloatDistribution`, so CatCMAwM cannot initialize on this codebase regardless of which study runs it. Keeping a `"catcma"` branch in `_create_sampler` that always crashes at runtime would be dead code. Phase 7 replaces Optuna's sampler surface entirely with a BoTorch composed-kernel GP (see `docs/reference/phase7-search-space-compression.md`), so the sampler-pluggability plumbing is short-lived regardless.
+
+`"random"` was also considered as a benchmark baseline but removed together — without CatCMAwM there's no meaningful Bayesian alternative to compare TPE against, and TPE vs random is a foregone conclusion (any non-trivial Bayesian method trivially beats random on 200+ trials). The `_ALLOWED_SAMPLERS` whitelist in `campaign.py` correspondingly contains only `"tpe"`.
 
 ### Pruner
 
@@ -237,7 +238,7 @@ raw combat_fitness score
 
 **A1 — TWFE Deconfounding (spec 28):** Raw `combat_fitness()` scores are recorded into a `ScoreMatrix` instance via `record(trial_number, opp_id, raw)`. At build finalization, `build_alpha(trial_number, config.twfe)` decomposes the accumulated score matrix into build quality (α_i) and opponent difficulty (β_j), then applies trimmed mean (dropping `trim_worst` worst residuals per build). The α_i estimate is schedule-adjusted — comparable across builds that faced different opponent subsets. All observations (including from pruned builds) contribute to β estimates, improving α for subsequent builds.
 
-**A2′ — Empirical-Bayes Shrinkage (spec 28):** At every finalize, construct the full α̂-vector, σ̂_i²-vector, and 7-column covariate matrix X for all finalized builds in `_completed_records`. Call `eb_shrinkage(alpha, sigma_sq, X, config.eb)` to produce posterior means `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂² / (τ̂² + σ̂_i²)`. When `config.eb.triple_goal` is True, pass through `triple_goal_rank()` to preserve the EB rank ordering while restoring the empirical α̂ histogram. When `score_matrix.n_builds < config.eb.eb_min_builds`, skip shrinkage entirely and return raw α̂ (stability guard for the first few trials).
+**A2′ — Empirical-Bayes Shrinkage (spec 28):** At every finalize, construct the full α̂-vector, σ̂_i²-vector, and 7-column covariate matrix X for all finalized builds in `_completed_records`. Call `eb_shrinkage(alpha, sigma_sq, X, config.eb)` to produce posterior means `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂² / (τ̂² + σ̂_i²)`. When `config.eb.triple_goal` is True, pass through `triple_goal_rank()` to preserve the EB rank ordering while restoring the empirical α̂ histogram. When `len(_completed_records) < config.eb.eb_min_builds`, skip shrinkage entirely and return raw α̂ (stability guard for the first few trials). **The guard specifically uses `len(_completed_records)` rather than `score_matrix.n_builds`**: under concurrent dispatch (`total_matchup_slots = workers_per_study × matchup_slots_per_worker` in cloud mode, or parallel `LocalInstancePool` slots locally) `score_matrix.n_builds` counts trials with at least one scored matchup (populated by `_handle_result` per matchup) while `_completed_records` holds only finalized trials (populated by `_finalize_build` after ALL matchups land). Prior to 2026-04-19 the guard read `score_matrix.n_builds`, which under 32+ concurrent slots passed the `< eb_min_builds` check before even 3 trials had fully completed — `eb_shrinkage` then raised `ValueError: n >= 3 builds, got 1`. Sequential tests and the 2-slot smoke never triggered this.
 
 Covariate vector `X_i` assembled by `_build_covariate_vector(record)`, 7 components in order:
 1. `eff_max_flux` from `record.engine_stats`
@@ -293,7 +294,7 @@ Main entry point.
 3. `space = build_search_space(hull, game_data, config.regime)` — regime mask applied at catalogue-construction boundary
 4. `distributions = define_distributions(space, fixed_params=config.fixed_params)`
 5. `optuna.logging.set_verbosity(optuna.logging.WARNING)` — suppress verbose Optuna output
-6. `sampler = _create_sampler(config)` — creates TPE or CatCMAwM based on `config.sampler`
+6. `sampler = _create_sampler(config)` — creates TPE (the only supported value; CatCMAwM was removed 2026-04-19, see §`_create_sampler`)
 7. `pruner = _create_pruner(config)` — WilcoxonPruner with configured p-threshold and startup steps.
 8. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=f"{hull_id}__{config.regime.name}", load_if_exists=True)` — one study per `(hull, regime)`
 8a. If `config.warm_start_from_regime is not None`: load the prior-regime study from the same storage, filter its top-M trials through the current regime's mask + `repair_build` + `is_feasible()`, `study.enqueue_trial()` the feasible ones.
@@ -305,7 +306,7 @@ Main entry point.
 
 ## JSONL Evaluation Log
 
-One line per build evaluation, appended to `data/evaluation_log.jsonl`:
+One line per build evaluation, appended to `data/logs/{hull}__{regime}__{sampler}__seed_idx{N}/evaluation_log.jsonl` (per-subprocess directory). The row schema does not carry `study_id` or `sampler`, so N concurrent study subprocesses sharing a single file would destroy per-sampler attribution — `scripts/run_optimizer.py` emits a per-study directory unconditionally (local and cloud both) to preserve it. Legacy `data/evaluation_log.jsonl` snapshots under `experiments/*/` remain readable in the same schema.
 
 ```json
 {

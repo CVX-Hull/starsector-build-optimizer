@@ -210,7 +210,7 @@ class TestRunCloudStudyOrdering:
             hull_id="hammerhead", hull=hull, game_data=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
-        expected_study_id = "hammerhead__early__seed0"
+        expected_study_id = "hammerhead__early__tpe__seed0"
         assert captured["provision"]["fleet_name"] == expected_study_id
         # project_tag comes from STARSECTOR_PROJECT_TAG env (smoke_env fixture
         # sets it to "starsector-smoke"), not from the YAML — that's the contract:
@@ -415,4 +415,6 @@ class TestSeedIndexResolvesCorrectSeed:
             hull_id="hammerhead", hull=hull, game_data=MagicMock(),
             opponent_pool=MagicMock(), optimizer_config=MagicMock(),
         )
-        assert captured["fleet_name"] == "hammerhead__early__seed7"
+        assert captured["fleet_name"] == "hammerhead__early__tpe__seed7"
+
+

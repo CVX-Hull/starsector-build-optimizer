@@ -30,6 +30,29 @@ _FLEET_KEY = "Fleet"
 _SG_DELETE_DEADLINE_SECONDS = 300.0
 _SG_DELETE_POLL_INTERVAL_SECONDS = 10.0
 
+# After `create_security_group`, the Fleet service can take several seconds to
+# observe the new SG. A just-describe waiter (see `security_group_exists`) only
+# confirms the SG appears in describe_security_groups; create_fleet's internal
+# service replicates on a separate, slower path. Empirically a short extra retry
+# loop on InvalidGroup.NotFound covers both the describe-visibility lag and the
+# Fleet-service replication lag. See docs/specs/22-cloud-deployment.md § Fleet
+# provisioning race.
+_FLEET_PROVISION_MAX_RETRIES = 4
+_FLEET_PROVISION_RETRY_DELAY_SECONDS = 3.0
+_SG_VISIBILITY_WAITER_DELAY_SECONDS = 2
+_SG_VISIBILITY_WAITER_MAX_ATTEMPTS = 10
+# Error codes that indicate a just-created resource hasn't propagated to
+# Fleet's internal service yet. All are transient (retry succeeds once the
+# propagation completes); permanent errors like `InvalidFleetConfiguration`
+# (AZ missing the requested instance type) are NOT in this set and short-
+# circuit the retry loop.
+_FLEET_TRANSIENT_ERROR_CODES = frozenset({
+    "InvalidGroup.NotFound",
+    "InvalidSecurityGroupID.NotFound",
+    "InvalidLaunchTemplateName.NotFoundException",
+    "InvalidLaunchTemplateId.VersionNotFound",
+})
+
 _HETZNER_STUB_MESSAGE = (
     "HetznerProvider is stubbed; implement when campaign budget >= $500. "
     "Hetzner's ~13% per-matchup advantage amortizes only at larger scale. "
@@ -182,7 +205,20 @@ class AWSProvider(CloudProvider):
                 ],
             }],
         )
-        return response["GroupId"]
+        sg_id = response["GroupId"]
+        # Block until describe_security_groups returns the new SG. Under
+        # concurrent provisioning (N studies creating SGs in parallel), the
+        # create-then-fleet sequence without this waiter trips InvalidGroup.
+        # NotFound in create_fleet. Fleet's own internal service replication
+        # is handled by _create_fleet_in_region's retry loop.
+        client.get_waiter("security_group_exists").wait(
+            GroupIds=[sg_id],
+            WaiterConfig={
+                "Delay": _SG_VISIBILITY_WAITER_DELAY_SECONDS,
+                "MaxAttempts": _SG_VISIBILITY_WAITER_MAX_ATTEMPTS,
+            },
+        )
+        return sg_id
 
     def _ensure_launch_template(
         self, *,
@@ -277,36 +313,67 @@ class AWSProvider(CloudProvider):
         spot_options: dict[str, Any] = {
             "AllocationStrategy": spot_allocation_strategy,
         }
-        response = client.create_fleet(
-            SpotOptions=spot_options,
-            TargetCapacitySpecification={
-                "TotalTargetCapacity": target,
-                "DefaultTargetCapacityType": "spot",
-            },
-            LaunchTemplateConfigs=launch_template_configs,
-            Type="instant",
-            TagSpecifications=[{
-                "ResourceType": "instance",
-                "Tags": [
-                    {"Key": _PROJECT_KEY, "Value": project_tag},
-                    {"Key": _FLEET_KEY, "Value": fleet_name},
-                ],
-            }],
-        )
-        errors = response.get("Errors", [])
+        # Retry on transient "just-created resource not yet visible to Fleet"
+        # errors. Fleet has a replication lag beyond what individual boto3
+        # describe-waiters cover, and a few-second retry loop is sufficient.
+        # Covers both security groups (`InvalidGroup.NotFound`) and launch
+        # templates (`InvalidLaunchTemplateName.NotFoundException`, version
+        # variant) under concurrent `provision_fleet` pressure.
+        last_errors: list[dict] = []
         ids: list[str] = []
-        for instance in response.get("Instances", []):
-            ids.extend(instance.get("InstanceIds", []))
-        if errors:
+        for attempt in range(_FLEET_PROVISION_MAX_RETRIES):
+            response = client.create_fleet(
+                SpotOptions=spot_options,
+                TargetCapacitySpecification={
+                    "TotalTargetCapacity": target,
+                    "DefaultTargetCapacityType": "spot",
+                },
+                LaunchTemplateConfigs=launch_template_configs,
+                Type="instant",
+                TagSpecifications=[{
+                    "ResourceType": "instance",
+                    "Tags": [
+                        {"Key": _PROJECT_KEY, "Value": project_tag},
+                        {"Key": _FLEET_KEY, "Value": fleet_name},
+                    ],
+                }],
+            )
+            last_errors = response.get("Errors", [])
+            ids = []
+            for instance in response.get("Instances", []):
+                ids.extend(instance.get("InstanceIds", []))
+            if ids:
+                break
+            # Retry if ANY error is a transient "just-created resource not yet
+            # visible" error. Mixed permanent errors (e.g. `us-east-1e`
+            # rejecting c7a.2xlarge with `InvalidFleetConfiguration`) co-occur
+            # with transient SG/LT errors on the other AZs — retrying still
+            # succeeds on the non-1e AZs once the resource propagates.
+            any_transient = any(
+                e.get("ErrorCode") in _FLEET_TRANSIENT_ERROR_CODES
+                for e in last_errors
+            )
+            if not any_transient or attempt == _FLEET_PROVISION_MAX_RETRIES - 1:
+                break
+            logger.warning(
+                "create_fleet in %s transient visibility errors "
+                "(attempt %d/%d): %s; retrying after %.1fs",
+                region, attempt + 1, _FLEET_PROVISION_MAX_RETRIES,
+                sorted({e.get("ErrorCode") for e in last_errors}
+                       & _FLEET_TRANSIENT_ERROR_CODES),
+                _FLEET_PROVISION_RETRY_DELAY_SECONDS,
+            )
+            time.sleep(_FLEET_PROVISION_RETRY_DELAY_SECONDS)
+        if last_errors:
             if not ids:
-                logger.error("create_fleet errors in %s: %s", region, errors)
+                logger.error("create_fleet errors in %s: %s", region, last_errors)
                 raise RuntimeError(
                     f"create_fleet produced zero instances in {region}; "
-                    f"errors: {errors}"
+                    f"errors: {last_errors}"
                 )
             logger.warning(
                 "create_fleet partial errors in %s (fleet provisioned %d "
-                "instance(s) despite these): %s", region, len(ids), errors,
+                "instance(s) despite these): %s", region, len(ids), last_errors,
             )
         return ids
 

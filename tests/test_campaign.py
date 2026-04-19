@@ -81,6 +81,16 @@ class TestCampaignConfigLoading:
         with pytest.raises(ValueError, match="provider"):
             load_campaign_config(path)
 
+    def test_unknown_sampler_rejected(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "wolf", "regime": "early", "seeds": [0],
+             "budget_per_study": 200, "workers_per_study": 12,
+             "sampler": "bogus"},
+        ])
+        with pytest.raises(ValueError, match="sampler"):
+            load_campaign_config(path)
+
 
 class TestFrozenDataclasses:
     """Every Phase 6 dataclass is frozen."""

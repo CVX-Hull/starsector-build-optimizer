@@ -435,6 +435,10 @@ archive = CVTArchive(
 )
 
 # Custom CatCMA emitter (wraps cmaes.CatCMAwM)
+# NOTE 2026-04-19: CatCMAwM was removed from the production codebase because
+# cmaes.CatCMAwM requires ≥1 continuous variable (fails with "x_space must
+# be shape (n, 2), got (0,)") and our search space is fully categorical +
+# integer. Any QD reboot must pick a discrete-compatible emitter.
 emitter = CatCMAEmitter(archive, ...)
 
 scheduler = Scheduler(archive, [emitter])

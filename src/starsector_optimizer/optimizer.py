@@ -1,7 +1,15 @@
 """Optimizer — Optuna-based build optimization with heuristic warm-start.
 
-Ask-tell loop with TPE/CatCMAwM sampler, Baldwinian repair recording,
-and hash-based deduplication.
+Ask-tell loop with TPE sampler, Baldwinian repair recording, and hash-based
+deduplication. CatCMAwM was removed 2026-04-19 — the library requires a
+non-empty continuous-variable space, and the Starsector search space is
+fully categorical (weapon slot choices + hullmod booleans + two
+IntDistribution counts for vents/caps). Any hull/regime trips
+`x_space must be a two-dimensional array with shape (n, 2), but got (0,)`.
+With CatCMAwM gone there's no benchmark comparison to make, so `random`
+was removed too — TPE is the sole supported sampler on this codebase.
+Phase 7 replaces the Optuna sampler entirely with a BoTorch composed
+GP — see docs/reference/phase7-search-space-compression.md.
 
 See spec 24 for design rationale.
 """
@@ -196,11 +204,6 @@ def _create_sampler(config: OptimizerConfig) -> optuna.samplers.BaseSampler:
             n_ei_candidates=config.n_ei_candidates,
             n_startup_trials=config.n_startup_trials,
         )
-    if config.sampler == "catcma":
-        import optunahub
-
-        mod = optunahub.load_module("samplers/catcmawm")
-        return mod.CatCmawmSampler()
     raise ValueError(f"Unknown sampler: {config.sampler!r}")
 
 
@@ -517,6 +520,14 @@ class StagedEvaluator:
         self._shape_first_activation_logged: bool = False
         self._run_start_time: float = 0.0
         self._trials_pruned: int = 0
+        # _trials_completed counts every study.tell() call (success, pruned,
+        # OR failure_score from InstanceError). _trials_errored separates the
+        # failure_score rows: those trials never produced a valid combat
+        # result and therefore never land in _completed_records, so the EB
+        # fit population (gated on len(_completed_records)) is smaller than
+        # _trials_completed - _trials_pruned by exactly _trials_errored.
+        # Logged separately so operators don't conflate "told" with "usable."
+        self._trials_errored: int = 0
 
     def run(self) -> None:
         """Execute staged evaluation with parallel instance dispatch.
@@ -560,6 +571,7 @@ class StagedEvaluator:
                         )
                         self._study.tell(ifb.trial, self._config.failure_score)
                         self._trials_completed += 1
+                        self._trials_errored += 1
                         if ifb in self._queue:
                             self._queue.remove(ifb)
                         continue
@@ -570,11 +582,14 @@ class StagedEvaluator:
                             or not pending):
                         best = (self._study.best_value
                                 if self._study.best_trial else 0.0)
-                        finalized = self._trials_completed - self._trials_pruned
+                        # `finalized` = trials with valid EB-fit data (the same
+                        # set gating _apply_eb_shrinkage). Excludes pruned AND
+                        # InstanceError-as-failure_score rows.
+                        finalized = len(self._completed_records)
                         logger.info(
-                            "Progress: %d finalized + %d pruned / %d budget, "
-                            "in-flight=%d, best=%.3f",
-                            finalized, self._trials_pruned,
+                            "Progress: %d finalized + %d pruned + %d errored "
+                            "/ %d budget, in-flight=%d, best=%.3f",
+                            finalized, self._trials_pruned, self._trials_errored,
                             self._config.sim_budget, len(self._queue), best,
                         )
 
@@ -589,7 +604,6 @@ class StagedEvaluator:
 
         elapsed = time.time() - self._run_start_time
         finalized = len(self._completed_records)
-        completed = self._trials_completed - self._trials_pruned
         rate = (finalized / elapsed * 3600) if elapsed > 0 else 0.0
         eb_rate = (self._eb_activated_count / finalized) if finalized else 0.0
         mean_abs = (
@@ -597,9 +611,10 @@ class StagedEvaluator:
             if self._eb_shrinkage_magnitudes else 0.0
         )
         logger.info(
-            "Run summary: %d completed + %d pruned in %.1fs (%.1f trials/hr); "
-            "EB activated on %d/%d finalized (%.0f%%); mean |Δ|=%.4f",
-            completed, self._trials_pruned, elapsed, rate,
+            "Run summary: %d finalized + %d pruned + %d errored in %.1fs "
+            "(%.1f finalized/hr); EB activated on %d/%d finalized (%.0f%%); "
+            "mean |Δ|=%.4f",
+            finalized, self._trials_pruned, self._trials_errored, elapsed, rate,
             self._eb_activated_count, finalized, eb_rate * 100.0, mean_abs,
         )
         lam_hist = self._shape_lambda_history
@@ -811,15 +826,18 @@ class StagedEvaluator:
     ) -> tuple[float, _EBDiagnostics | None]:
         """A2′ — EB shrinkage of TWFE α̂ toward γ̂ᵀX regression prior.
 
-        Returns ``(raw α̂, None)`` when ``score_matrix.n_builds < eb_min_builds``
-        (stability guard: OLS fit on too few builds is unstable) or when
-        ``var(alpha) ≈ 0`` (eb_shrinkage returns alpha unchanged with
-        ``tau2=0``). Otherwise returns ``(posterior mean, EBDiagnostics)``
+        Returns ``(raw α̂, None)`` when ``len(_completed_records) <
+        eb_min_builds`` (stability guard: OLS fit on too few FULLY-FINALIZED
+        builds is unstable — ``score_matrix.n_builds`` counts any build with
+        at least one scored matchup, which over-counts during concurrent-
+        pool dispatch when partial results land before a trial finalizes)
+        or when ``var(alpha) ≈ 0`` (eb_shrinkage returns alpha unchanged
+        with ``tau2=0``). Otherwise returns ``(posterior mean, EBDiagnostics)``
         with the per-trial σ²_TWFE / σ²_EB / τ̂² / γ̂ needed to reconstruct
         credible intervals at analysis time.
         """
         eb_cfg = self._config.eb
-        if self._score_matrix.n_builds < eb_cfg.eb_min_builds:
+        if len(self._completed_records) < eb_cfg.eb_min_builds:
             return twfe_fitness, None
 
         indices: list[int] = list(self._completed_records.keys())

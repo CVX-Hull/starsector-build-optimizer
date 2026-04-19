@@ -64,7 +64,7 @@ Complete. 300+ tests passing across 15 test files. All modules implemented with 
    - Given a hull, generate the set of compatible weapons per slot
    - Generate eligible hullmods (filtering incompatibilities)
    - Define Optuna parameter space (suggest_categorical per slot, suggest_int for vents/caps)
-   - Compatible with any Optuna sampler (TPE, CatCMAwM, etc.)
+   - Compatible with Optuna TPE (the sole supported sampler; CatCMAwM removed 2026-04-19 — incompatible with this codebase's all-categorical search space, see spec 24)
 
 3. **Repair operator**
    - Greedy OP budget repair (drop lowest value-per-OP item)
@@ -209,7 +209,7 @@ Complete. 437 tests passing across all test files. Previously tested with a 203-
 ### Dependencies
 - Phase 1 (data layer, search space, repair operator, variant generator)
 - Phase 2 + 3 (combat harness + instance manager) for simulation evaluation
-- Python libraries: optuna, cmaes (for CatCMAwM sampler via OptunaHub), optunahub, scikit-learn (for fANOVA)
+- Python libraries: optuna, scikit-learn (for fANOVA) (cmaes / optunahub no longer needed post-CatCMAwM removal)
 
 ### Key Design Decisions (from Phase 4 Research)
 
@@ -249,7 +249,7 @@ Complete. 437 tests passing across all test files. Previously tested with a 203-
 
 3. **Optuna integration with sampler selection**
    - Default: `TPESampler(multivariate=True, constant_liar=True, n_ei_candidates=256, n_startup_trials=100)`
-   - Alternative: `CatCmawmSampler` via OptunaHub (`--sampler catcma`) for cross-variable correlation modeling
+   - Phase 7 replaces the sampler surface entirely with BoTorch composed-kernel GP; no Optuna-side alternatives planned.
    - Ask-tell loop: `study.ask()` → repair → evaluate against opponent pool → `study.add_trial()` with repaired params (Lamarckian)
    - Report OP budget violation via `constraints_func` (biases TPE away from infeasible regions)
 
@@ -611,12 +611,14 @@ Spend $N of compute and get $N of useful data — linear $→data scaling from $
 | Line | Cost |
 | --- | --- |
 | Validation probe + pipeline smoke | $1.35 |
-| **Sampler benchmark (runs BEFORE prep)** — 2 hulls × [TPE-24, CatCMAwM-24, CatCMAwM-48] × 1 hr | $14.83 |
+| ~~Sampler benchmark — 2 hulls × [TPE-24, CatCMAwM-24, CatCMAwM-48] × 1 hr~~ — SKIPPED 2026-04-19 | ~~$14.83~~ → $0 |
 | Prep campaign — 8 hulls × `early` × 1 seed × 600 trials (incl 3% preemption) | $60.79 |
-| Slack | $5.00 |
-| **Total** | **$82 (rounded to $85)** |
+| Slack (includes reclaimed sampler-benchmark budget) | $22.86 |
+| **Total** | **$85** |
 
-Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1-2 calendar days.
+Wall-clock: ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1 calendar day.
+
+**Sampler benchmark was skipped 2026-04-19** — CatCMAwM is structurally incompatible with this codebase's fully-categorical search space (`cmaes.CatCMAwM` requires ≥1 continuous variable, raises `x_space must be shape (n, 2), got (0,)`). With no Bayesian alternative to race TPE against, the benchmark has no meaningful decision to make. `_create_sampler` now accepts only `"tpe"`; prep uses TPE directly. Rationale in `docs/reference/phase6-cloud-worker-federation.md` §10 and `docs/specs/24-optimizer.md`.
 
 ### Dependencies
 - Phase 3 (`LocalInstancePool` — worker-local parallelism unchanged; renamed from `InstancePool` to become one backend of the `EvaluatorPool` ABC)
@@ -633,7 +635,7 @@ Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr sm
 
 **Two-region spread** (us-east-1 + us-east-2, 48 VMs each) for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` + `CapacityRebalancing` + diversified instance-type list (c7a.2xlarge, c7i.2xlarge, c7a.4xlarge, c7i.4xlarge) drops preemption rate to ~3%. A $1 **pre-flight validation probe** runs 24h before the campaign (2 spot VMs per target region from production AMI, boot test, record signal, tear down). **Graceful degradation**: if only 48-60 of 96 target VMs provision (spot-pool depletion), the campaign runs at half-speed rather than aborting — partial fleet is a latency problem, not a correctness problem. Below `min_workers_to_start` (default 48) it waits or aborts.
 
-**Sampler per study**: TPE default at ≤24 workers. CatCMAwM (already supported via `--sampler=catcma`) above 24. Hybrid schedule (random → CatCMAwM → TPE) for studies needing both breadth and precision.
+**Sampler per study**: TPE is the only allowed value post-2026-04-19 (spec 24). Phase 7 replaces the sampler surface entirely; any high-worker or hybrid-schedule scheme belongs to the BoTorch redesign.
 
 **Packer pre-baked images — in scope from day 1, even at $85.** Marginal dollar savings are small (~$1); the load-bearing arguments are tail-latency collapse under burst provisioning, removal of bulk-apt / PyPI failure modes from the hot path, cheap mid-campaign worker replacement, and zero-cost amortization into future $500+ campaigns. AWS AMIs are region-scoped — build in us-east-1, `aws ec2 copy-image` to us-east-2 (~3-5 min, one-time; repeat on every Packer rebuild). Images include `x11-xserver-utils` (needed for the XRandR warmup fix — see spec 22).
 
@@ -697,7 +699,7 @@ Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies) + 2 hr sm
 ## Phase 7: Structured Search-Space Representation
 
 ### Goal
-Replace the Phase 4 Optuna TPE/CatCMAwM surrogate with a custom BoTorch Gaussian Process whose kernel composes subspace-specific priors. Target 2–4× sample efficiency at the 200–500 trial regime by exploiting known structure (weapon attributes, slot geometry, hullmod sparsity, role archetypes) that is invariant to game updates.
+Replace the Phase 4 Optuna TPE surrogate with a custom BoTorch Gaussian Process whose kernel composes subspace-specific priors. Target 2–4× sample efficiency at the 200–500 trial regime by exploiting known structure (weapon attributes, slot geometry, hullmod sparsity, role archetypes) that is invariant to game updates.
 
 ### Dependencies
 - Phase 1 (data layer — `WeaponAttributes`, `ShipHull`, `.ship` JSON parser)
@@ -963,14 +965,14 @@ Train ML models that predict combat outcomes from build parameters, reducing sim
 | Language (game mod) | Java 17 | — |
 | Game data parsing | pandas, json | — |
 | Search space definition | Optuna suggest_categorical/suggest_int | — |
-| Primary optimizer | Optuna TPESampler | CatCMAwM (OptunaHub), BoTorch qNEI |
+| Primary optimizer | Optuna TPESampler | BoTorch composed-kernel GP (Phase 7 target) |
 | Constraint handling | repair_build() + constraints_func (c-TPE) | — |
 | Quality-diversity | pyribs + cmaes (CatCMAwM emitter) | QDax (GPU) |
 | Multi-fidelity | Heuristic warm-start + full sim | BoTorch prior-mean GP (if R² improves) |
 | Neural surrogate | TabPFN v2 (N<300), CatBoost (N>300) | RF ensemble |
 | Instance management | Python subprocess + Xvfb | Docker (heavier) |
 | Visualization | matplotlib, plotly | — |
-| Data storage | JSONL (evaluation_log.jsonl), SQLite (Optuna) | — |
+| Data storage | JSONL (`data/logs/<study_id>/evaluation_log.jsonl`, per-study), SQLite (Optuna) | — |
 
 ---
 

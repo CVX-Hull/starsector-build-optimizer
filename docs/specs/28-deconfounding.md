@@ -208,7 +208,15 @@ _finalize_build():
     # JSONL under `eb_diagnostics`; see spec 24 §JSONL Evaluation Log.
 
 _apply_eb_shrinkage(trial_number, twfe_fitness) -> (float, _EBDiagnostics | None):
-    if score_matrix.n_builds < config.eb.eb_min_builds:
+    # Guard on len(_completed_records) — NOT score_matrix.n_builds.
+    # Under concurrent dispatch (cloud_worker_pool BoundedSemaphore at
+    # total_matchup_slots or parallel LocalInstancePool), score_matrix
+    # counts trials with ≥1 matchup result (per-matchup write path)
+    # while _completed_records holds only finalized trials (per-trial
+    # write path). Only the latter feeds eb_shrinkage's OLS fit; guarding
+    # on the former lets the guard pass while the fit sees n=1 and raises
+    # ValueError. See CLAUDE.md Phase 6 concurrent-dispatch fix (c).
+    if len(_completed_records) < config.eb.eb_min_builds:
         return twfe_fitness, None
     indices = list(_completed_records)
     alphas = array([_score_matrix.build_alpha(i, config.twfe) for i in indices])
