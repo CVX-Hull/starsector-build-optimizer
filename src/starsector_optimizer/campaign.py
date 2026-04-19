@@ -275,46 +275,127 @@ def run_janitor_pass(
 # ---- Preflight helpers -------------------------------------------------------
 
 
+# devenv-up.sh (rootless) writes its userspace-mode tailscaled socket here.
+# Preflight auto-detects it so CLI calls target the right daemon without
+# the user having to export anything.
+_DEFAULT_USERSPACE_TS_SOCKET = (
+    Path.home() / ".local/state/starsector-cloud/tailscale/tailscaled.sock"
+)
+_TS_CLI_TIMEOUT_SECONDS = 5.0
+
+
 class _PreflightFailure(Exception):
     """Internal signal from _preflight; translated to sys.exit in run()."""
 
 
-def _resolve_tailnet_ip(timeout_seconds: float = 5.0) -> str:
+def _tailscale_socket_args() -> list[str]:
+    """Resolve which tailscaled socket `tailscale` CLI calls should target.
+
+    Detection order:
+      1. ``STARSECTOR_TAILSCALE_SOCKET`` env var (explicit override).
+      2. Default rootless path written by ``scripts/cloud/devenv-up.sh``.
+
+    When neither applies, returns ``[]`` and CLI calls go to the system socket
+    (kernel-mode tailscaled installed via distro package).
+    """
+    env_sock = os.environ.get("STARSECTOR_TAILSCALE_SOCKET")
+    if env_sock:
+        return ["--socket", env_sock]
+    if _DEFAULT_USERSPACE_TS_SOCKET.is_socket():
+        return ["--socket", str(_DEFAULT_USERSPACE_TS_SOCKET)]
+    return []
+
+
+def _resolve_tailnet_ip(timeout_seconds: float = _TS_CLI_TIMEOUT_SECONDS) -> str:
     """Shell out to `tailscale ip -4`. Empty stdout → _PreflightFailure."""
+    cmd = ["tailscale"] + _tailscale_socket_args() + ["ip", "-4"]
     try:
         result = subprocess.run(
-            ["tailscale", "ip", "-4"],
-            capture_output=True, text=True, timeout=timeout_seconds,
+            cmd, capture_output=True, text=True, timeout=timeout_seconds,
         )
     except FileNotFoundError as e:
         raise _PreflightFailure(
-            "`tailscale` not found on PATH. Install Tailscale on the workstation "
-            "and run `tailscale up` before launching a campaign."
+            "`tailscale` not found on PATH. Install Tailscale and run "
+            "`scripts/cloud/devenv-up.sh` (rootless) or `tailscale up` "
+            "(kernel-mode) before launching a campaign."
         ) from e
     except subprocess.TimeoutExpired as e:
         raise _PreflightFailure(f"`tailscale ip -4` timed out: {e}") from e
     ip = (result.stdout or "").strip().split("\n")[0].strip()
     if not ip:
         raise _PreflightFailure(
-            "`tailscale ip -4` returned no address. Run `tailscale up` on the "
-            "workstation to join the tailnet before launching a campaign."
+            "`tailscale ip -4` returned no address. Run "
+            "`scripts/cloud/devenv-up.sh` (rootless) or `tailscale up` "
+            "(kernel-mode) to join the tailnet before launching a campaign."
         )
     return ip
 
 
-def _check_redis_on_tailnet(host: str, port: int, timeout_seconds: float) -> None:
-    import redis as redis_mod
+def _tailscale_serve_exposes_port(port: int) -> bool:
+    """True iff `tailscale serve status` forwards ``port`` → ``127.0.0.1:port``.
+
+    Userspace-mode tailscaled cannot bind the tailnet IP to a kernel
+    interface, so workers reach workstation services through `tailscale
+    serve` TCP proxies. This check verifies the proxy mapping is in place.
+    """
+    cmd = ["tailscale"] + _tailscale_socket_args() + ["serve", "status"]
     try:
-        client = redis_mod.Redis(host=host, port=port, socket_timeout=timeout_seconds)
-        client.ping()
+        result = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=_TS_CLI_TIMEOUT_SECONDS,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    haystack = (result.stdout or "") + (result.stderr or "")
+    return f"127.0.0.1:{port}" in haystack
+
+
+def _check_redis_reachable(
+    tailnet_ip: str, port: int, timeout_seconds: float,
+) -> None:
+    """Verify Redis is running AND reachable by workers over the tailnet.
+
+    Two supported configurations:
+      * kernel-mode Tailscale — Redis bound to the tailnet IP locally.
+      * userspace-mode Tailscale — Redis bound to 127.0.0.1 and exposed via
+        ``tailscale serve --tcp=<port> tcp://127.0.0.1:<port>``.
+
+    Step 1 (universal) confirms redis-server is up: ping ``127.0.0.1:<port>``.
+    Step 2 confirms tailnet exposure: either a tailnet-IP self-loopback ping
+    succeeds (kernel mode) OR ``tailscale serve status`` lists the proxy
+    mapping (userspace mode).
+    """
+    import redis as redis_mod
+
+    try:
+        redis_mod.Redis(
+            host="127.0.0.1", port=port, socket_timeout=timeout_seconds,
+        ).ping()
     except Exception as e:
         raise _PreflightFailure(
-            f"Redis not reachable at {host}:{port}: {e}. "
-            f"Bind redis-server to the tailnet interface: "
-            f"`sudo systemctl edit redis-server` and override ExecStart= to include "
-            f"`--bind 0.0.0.0` (or the tailnet IP {host!r} explicitly), then "
-            f"`sudo systemctl restart redis-server`."
+            f"Redis not reachable on 127.0.0.1:{port}: {e}. "
+            f"Start redis-server; see scripts/cloud/devenv-up.sh for a "
+            f"rootless recipe."
         ) from e
+
+    try:
+        redis_mod.Redis(
+            host=tailnet_ip, port=port, socket_timeout=timeout_seconds,
+        ).ping()
+        return
+    except Exception:
+        pass
+
+    if _tailscale_serve_exposes_port(port):
+        return
+
+    raise _PreflightFailure(
+        f"Redis responds on 127.0.0.1:{port} but is not reachable over the "
+        f"tailnet. Either (kernel-mode) bind redis-server to {tailnet_ip!r} "
+        f"or (userspace-mode) run "
+        f"`tailscale serve --bg --tcp={port} tcp://127.0.0.1:{port}`. "
+        f"`scripts/cloud/devenv-up.sh` handles both rootlessly."
+    )
 
 
 def _check_aws_credentials() -> None:
@@ -396,8 +477,8 @@ class CampaignManager:
         """Four checks. Failure → logger.error(remediation) + sys.exit(2)."""
         try:
             self._tailnet_ip = _resolve_tailnet_ip()
-            _check_redis_on_tailnet(
-                host=self._tailnet_ip,
+            _check_redis_reachable(
+                tailnet_ip=self._tailnet_ip,
                 port=self._config.redis_port,
                 timeout_seconds=self._config.redis_preflight_timeout_seconds,
             )

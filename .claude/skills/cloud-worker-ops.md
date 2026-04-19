@@ -42,11 +42,10 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
    ```bash
    tailscale ip -4   # must return a 100.x.y.z address; empty = run `tailscale up`
    ```
-4. **Redis is reachable on the tailnet interface** (workers can't reach localhost-bound Redis):
-   ```bash
-   redis-cli -h "$(tailscale ip -4)" ping   # must return PONG
-   ```
-   If it fails: `sudo systemctl edit redis-server` → `[Service]` section, override `ExecStart=` to include `--bind 0.0.0.0` (or the tailnet IP explicitly). Then `sudo systemctl restart redis-server`.
+   Rootless alternative (no sudo, no kernel TUN): `scripts/cloud/devenv-up.sh` brings up userspace-mode tailscaled on a per-user socket. See "Dev environment (rootless)" below. The preflight auto-detects the rootless daemon at `~/.local/state/starsector-cloud/tailscale/tailscaled.sock` (or whatever `STARSECTOR_TAILSCALE_SOCKET` points at).
+4. **Redis is reachable by cloud workers over the tailnet**. Two supported configurations:
+   - **kernel-mode**: Redis bound to the tailnet interface. `redis-cli -h "$(tailscale ip -4)" ping` returns `PONG`. If it fails: `sudo systemctl edit redis-server` → `[Service]` / `ExecStart=` override with `--bind 0.0.0.0`. Then `sudo systemctl restart redis-server`.
+   - **userspace-mode (rootless)**: Redis bound to 127.0.0.1, exposed to the tailnet via `tailscale serve --bg --tcp=6379 tcp://127.0.0.1:6379`. `devenv-up.sh` sets this up for you. Preflight verifies via `tailscale serve status`.
 5. **Tailscale ACL allows `tag:starsector-worker` → workstation on `tcp:6379,9000-9099`**. Verify from the Tailscale admin panel (`https://login.tailscale.com/admin/acls`). Sample ACL stanza:
    ```json
    {"action": "accept", "src": ["tag:starsector-worker"], "dst": ["<workstation-hostname>:6379,9000-9099"]}
@@ -88,11 +87,42 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
 15. **LWJGL XRandR fix in code**: `grep 'xrandr --query' src/starsector_optimizer/instance_manager.py` returns a match in `_start_xvfb`. Without it, workers crash with `ArrayIndexOutOfBoundsException: Index 0`.
 16. **`x11-xserver-utils` baked into the AMI**: check `scripts/cloud/packer/aws.pkr.hcl` contains `x11-xserver-utils` in the apt list.
 
+## Dev environment (rootless)
+
+Tailscale and Redis on the workstation normally need root (systemd services binding kernel TUN / low-numbered ports). For an easy-to-launch, easy-to-tear-down setup that leaves zero system-wide state behind, use the rootless helper:
+
+```bash
+# Bring up per-user tailscaled + redis-server + tailscale serve proxies.
+# Idempotent — safe to re-run.
+export TAILSCALE_AUTHKEY=tskey-auth-...
+scripts/cloud/devenv-up.sh
+
+# Tear everything down (logs out of tailnet, stops both daemons).
+scripts/cloud/devenv-down.sh
+```
+
+What `devenv-up.sh` does:
+- Starts `redis-server` bound to `127.0.0.1:6379` (data in `~/.local/state/starsector-cloud/redis`).
+- Starts `tailscaled --tun=userspace-networking` on a per-user socket (no kernel TUN, no sudo).
+- Runs `tailscale up` with the exported authkey.
+- Calls `tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>` for Redis (6379) and the Flask result-port range (default 9000-9099). This is what exposes the workstation services to remote workers over the tailnet in userspace mode — without `tailscale serve`, the tailnet IP isn't bound to any local interface and workers can't reach you.
+
+What `CampaignManager._preflight` does differently under this setup:
+- Detects the userspace socket and passes `--socket <path>` on every `tailscale` CLI call.
+- Pings Redis first on `127.0.0.1` to confirm redis-server is up.
+- Then tries the tailnet IP (kernel mode works this way); on failure, falls back to checking `tailscale serve status` for the TCP proxy mapping (userspace mode).
+
+Use kernel-mode tailscale when you already have it installed system-wide — the preflight accepts both. Use `devenv-up.sh` when you want zero-sudo setup/teardown cycles for experimentation.
+
 ## Launching a campaign
 
 Smoke and prep share the same launch command. Only the YAML differs.
 
 ```bash
+# 0. (optional, if not using system tailscale / redis) Rootless dev env
+export TAILSCALE_AUTHKEY=tskey-auth-...
+scripts/cloud/devenv-up.sh
+
 # 1. (once per AMI rebuild) Bake and copy the AMI
 scripts/cloud/bake_image.sh
 # → prints AMI IDs for us-east-1 and us-east-2; paste into campaign.yaml
@@ -105,7 +135,6 @@ TAILSCALE_AUTHKEY=tskey-auth-placeholder \
 scripts/cloud/probe.sh examples/probe-campaign.yaml
 
 # 4. Tier-2 pipeline smoke (~$0.30) — SAME code path as prep, tiny study
-export TAILSCALE_AUTHKEY=tskey-auth-...
 scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
 
 # 5. Real launch (prints teardown command as first line)
@@ -119,6 +148,9 @@ scripts/cloud/teardown.sh <campaign-name>
 
 # 8. Final audit — MANDATORY (launch_campaign.sh EXIT trap also runs this)
 scripts/cloud/final_audit.sh <campaign-name>
+
+# 9. (optional, end of session) Stop the rootless dev env
+scripts/cloud/devenv-down.sh
 ```
 
 `launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that re-runs `teardown.sh` + `final_audit.sh` on any exit path (success, SIGKILL, crash). In-process, `CampaignManager.run()` has a `try/finally: terminate_all_tagged` sweep + `atexit.register(teardown)`. Each study subprocess also has its own `try/finally: terminate_fleet` for its own fleet. **Four layers of teardown belt-and-suspenders.**
@@ -148,8 +180,9 @@ Every 15-30 min while a campaign is live:
 
 ### "Redis connection refused" on tailnet IP
 
-Workers boot and fail `BRPOPLPUSH` with `ConnectionRefusedError: [Errno 111]`. Root cause: workstation Redis is bound only to 127.0.0.1. Fix via systemd drop-in:
+Workers boot and fail `BRPOPLPUSH` with `ConnectionRefusedError: [Errno 111]`. Root cause: workstation Redis isn't reachable to workers over the tailnet. Pick the path matching your setup:
 
+**Kernel-mode tailscale (system install, sudo available)** — bind Redis to all interfaces via systemd drop-in:
 ```bash
 sudo systemctl edit redis-server
 # In the editor, add:
@@ -160,7 +193,14 @@ sudo systemctl restart redis-server
 redis-cli -h "$(tailscale ip -4)" ping   # must now return PONG
 ```
 
-`CampaignManager._preflight` catches this at launch — if you see "Redis not reachable at <tailnet_ip>:6379" in the launch output, apply the drop-in and relaunch.
+**Userspace-mode tailscale (rootless `devenv-up.sh`)** — verify the TCP proxy is in place:
+```bash
+tailscale --socket ~/.local/state/starsector-cloud/tailscale/tailscaled.sock \
+    serve status   # must list :6379 → tcp://127.0.0.1:6379
+# If missing, re-run scripts/cloud/devenv-up.sh.
+```
+
+`CampaignManager._preflight` catches both cases at launch — if you see "Redis not reachable ..." or "Redis responds on 127.0.0.1:6379 but is not reachable over the tailnet", apply the matching fix and relaunch.
 
 ### "Tailscale ACL denies tag:starsector-worker"
 
@@ -244,5 +284,5 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 - **Cloud deployment spec**: `docs/specs/22-cloud-deployment.md`
 - **Empirical validation**: `experiments/cloud-benchmark-2026-04-18/`
 - **Cost model (source of truth for dollar figures)**: `experiments/phase6-planning/cost_model.py`
-- **Scripts**: `scripts/cloud/{launch_campaign,status,teardown,final_audit,probe,bake_image}.sh` + `scripts/cloud/packer/aws.pkr.hcl`
+- **Scripts**: `scripts/cloud/{devenv-up,devenv-down,launch_campaign,status,teardown,final_audit,probe,bake_image}.sh` + `scripts/cloud/packer/aws.pkr.hcl`
 - **LWJGL XRandR fix**: `src/starsector_optimizer/instance_manager.py::_start_xvfb`

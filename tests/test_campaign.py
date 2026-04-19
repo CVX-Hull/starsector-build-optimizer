@@ -533,6 +533,150 @@ class TestCampaignManagerPreflight:
             manager._preflight()
         assert manager._tailnet_ip == "100.64.7.7"
 
+    def test_redis_reachable_via_tailscale_serve_when_tailnet_ip_ping_fails(
+        self, tmp_path,
+    ):
+        """Rootless/userspace-mode path: Redis binds to 127.0.0.1 only, and
+        `tailscale serve` TCP-proxies it to the tailnet. The preflight must
+        accept this configuration (self-loopback via tailnet IP FAILS but
+        `tailscale serve status` shows the proxy mapping).
+        """
+        manager = self._manager_with_mocks(tmp_path)
+
+        loopback_client = MagicMock()
+        loopback_client.ping.return_value = True
+        tailnet_client = MagicMock()
+        tailnet_client.ping.side_effect = Exception(
+            "userspace tailscale: tailnet IP not bound to a local interface"
+        )
+
+        def redis_ctor(*, host, port, socket_timeout):
+            return loopback_client if host == "127.0.0.1" else tailnet_client
+
+        def subprocess_stub(cmd, *args, **kwargs):
+            # strip optional ["--socket", <path>] between "tailscale" and verb
+            bare = [a for a in cmd if a != "tailscale" and not a.startswith("--socket")]
+            # skip explicit socket-path positional (follows --socket)
+            cleaned: list[str] = []
+            skip_next = False
+            for a in cmd[1:]:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if a == "--socket":
+                    skip_next = True
+                    continue
+                cleaned.append(a)
+            if cleaned[:2] == ["ip", "-4"]:
+                return MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            if cleaned[:2] == ["serve", "status"]:
+                return MagicMock(
+                    returncode=0,
+                    stdout=(
+                        "TCP State:\n"
+                        "  127.0.0.1:6379  tcp://127.0.0.1:6379  (bg)\n"
+                    ),
+                    stderr="",
+                )
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=subprocess_stub), \
+             patch("redis.Redis", side_effect=redis_ctor), \
+             patch("boto3.client") as mock_boto:
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            manager._preflight()  # must not raise
+
+        assert manager._tailnet_ip == "100.64.1.2"
+
+    def test_redis_down_on_loopback_fails_fast(self, tmp_path, caplog):
+        """If redis-server isn't running at all, fail at step 1 with a
+        message that points at devenv-up.sh."""
+        manager = self._manager_with_mocks(tmp_path)
+        with patch("subprocess.run") as mock_run, \
+             patch("redis.Redis") as mock_redis_ctor, \
+             patch("boto3.client") as mock_boto:
+            mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            instance = MagicMock()
+            instance.ping.side_effect = Exception("connection refused")
+            mock_redis_ctor.return_value = instance
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit):
+                    manager._preflight()
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "127.0.0.1" in combined
+        assert "devenv-up" in combined
+
+    def test_redis_reachable_fails_when_no_tailnet_exposure(self, tmp_path, caplog):
+        """Redis responds on loopback but nothing exposes it to the tailnet:
+        preflight must refuse (workers would be unable to reach Redis)."""
+        manager = self._manager_with_mocks(tmp_path)
+
+        loopback_client = MagicMock()
+        loopback_client.ping.return_value = True
+        tailnet_client = MagicMock()
+        tailnet_client.ping.side_effect = Exception("no route")
+
+        def redis_ctor(*, host, port, socket_timeout):
+            return loopback_client if host == "127.0.0.1" else tailnet_client
+
+        def subprocess_stub(cmd, *args, **kwargs):
+            if "ip" in cmd and "-4" in cmd:
+                return MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            # serve status returns empty → no mapping
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("subprocess.run", side_effect=subprocess_stub), \
+             patch("redis.Redis", side_effect=redis_ctor), \
+             patch("boto3.client") as mock_boto:
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            with caplog.at_level(logging.ERROR):
+                with pytest.raises(SystemExit):
+                    manager._preflight()
+        combined = " ".join(r.getMessage() for r in caplog.records)
+        assert "tailnet" in combined.lower()
+        assert "tailscale serve" in combined
+
+    def test_tailscale_socket_env_var_passed_to_cli(self, tmp_path, monkeypatch):
+        """When STARSECTOR_TAILSCALE_SOCKET is set, every `tailscale` CLI call
+        must include `--socket <path>` so it targets the userspace daemon."""
+        manager = self._manager_with_mocks(tmp_path)
+        custom_sock = str(tmp_path / "custom-tailscaled.sock")
+        monkeypatch.setenv("STARSECTOR_TAILSCALE_SOCKET", custom_sock)
+
+        captured_cmds: list[list[str]] = []
+
+        def subprocess_stub(cmd, *args, **kwargs):
+            captured_cmds.append(list(cmd))
+            if "ip" in cmd and "-4" in cmd:
+                return MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+            # serve status (exposes 6379)
+            return MagicMock(
+                returncode=0,
+                stdout="TCP 127.0.0.1:6379 → tcp://127.0.0.1:6379\n",
+                stderr="",
+            )
+
+        loopback_client = MagicMock()
+        loopback_client.ping.return_value = True
+        tailnet_client = MagicMock()
+        tailnet_client.ping.side_effect = Exception("userspace mode")
+
+        def redis_ctor(*, host, port, socket_timeout):
+            return loopback_client if host == "127.0.0.1" else tailnet_client
+
+        with patch("subprocess.run", side_effect=subprocess_stub), \
+             patch("redis.Redis", side_effect=redis_ctor), \
+             patch("boto3.client") as mock_boto:
+            mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+            manager._preflight()
+
+        tailscale_cmds = [c for c in captured_cmds if c and c[0] == "tailscale"]
+        assert tailscale_cmds, "expected at least one tailscale CLI call"
+        for c in tailscale_cmds:
+            assert "--socket" in c
+            assert custom_sock in c
+
 
 class TestCampaignNameValidation:
     def test_name_regex_accepts_common_names(self, tmp_path):
