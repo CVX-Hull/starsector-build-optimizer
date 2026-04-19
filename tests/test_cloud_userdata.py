@@ -53,13 +53,21 @@ class TestRenderUserData:
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert "tailscale up" in out
         assert TAILSCALE_SECRET_SENTINEL in out
-        # Must feed authkey via stdin (--authkey-stdin), NOT --authkey <arg>.
-        # /proc/<pid>/cmdline is world-readable; argv leaks the secret.
-        assert "--authkey-stdin" in out
-        # Sanity: the literal `--authkey=<value>` or `--authkey <value>` arg
-        # form must NOT appear (would leak through /proc).
-        assert f"--authkey {TAILSCALE_SECRET_SENTINEL}" not in out
+        # Modern Tailscale: authkey passes via `--auth-key=file:<path>`; the
+        # raw key is written to a tmpfile (0600 via umask) and shredded
+        # after `tailscale up`. This keeps the key off /proc/<pid>/cmdline
+        # without relying on the deprecated --authkey-stdin flag.
+        assert "--auth-key=file:" in out
+        assert "shred -u" in out
+        # Sanity: the raw key must NEVER appear inline on a `tailscale up`
+        # invocation (would leak through /proc). Accept it only inside a
+        # heredoc body that targets the tmpfile.
+        assert f"--auth-key={TAILSCALE_SECRET_SENTINEL}" not in out
+        assert f"--auth-key {TAILSCALE_SECRET_SENTINEL}" not in out
         assert f"--authkey={TAILSCALE_SECRET_SENTINEL}" not in out
+        assert f"--authkey {TAILSCALE_SECRET_SENTINEL}" not in out
+        # And the deprecated flag must not regress in either form.
+        assert "--authkey-stdin" not in out
 
     def test_writes_env_file(self):
         from starsector_optimizer.cloud_userdata import render_user_data

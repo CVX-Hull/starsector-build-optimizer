@@ -528,6 +528,7 @@ class CampaignManager:
                     "--regime", study.regime,
                     "--sampler", study.sampler,
                     "--sim-budget", str(study.budget_per_study),
+                    "--game-dir", self._config.game_dir,
                 ]
                 env = self._generate_study_env(
                     study_idx=study_idx, seed_idx=seed_idx, study_cfg=study,

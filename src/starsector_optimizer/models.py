@@ -607,6 +607,11 @@ class CampaignConfig:
     # `tcp:9000-9099` documented in .claude/skills/cloud-worker-ops.md —
     # single source of truth for the port budget per study.
     flask_ports_per_study: int = 100
+    # Orchestrator-side path to the Starsector install. Study subprocesses
+    # load game data here for constraint-aware sampling + opponent-pool
+    # construction (they never run the JVM; workers do). Default matches
+    # the workstation convention `game/starsector` used by local runs.
+    game_dir: str = "game/starsector"
 
     def __repr__(self) -> str:
         fields = []

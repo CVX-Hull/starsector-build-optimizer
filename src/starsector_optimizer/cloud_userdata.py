@@ -5,8 +5,13 @@ Cloud-init runs it on first boot as root. The script:
 
   1. `set -euo pipefail` + `umask 077` so any failure halts the script
      before `systemctl start` and every file is owner-read-only.
-  2. `tailscale up --authkey-stdin` so workstation-side Redis + Flask become
-     reachable via the tailnet. Authkey is piped via stdin, NEVER argv.
+  2. `tailscale up --auth-key=file:<tmpfile>` so workstation-side Redis +
+     Flask become reachable via the tailnet. The authkey is written to a
+     0600 tmpfs file and passed by path — it NEVER enters argv (Linux
+     `/proc/<pid>/cmdline` is world-readable by default). The tmpfile is
+     `shred -u`ed immediately after. (Modern Tailscale CLI no longer
+     supports `--authkey-stdin`; `--auth-key=file:` is the equivalent
+     argv-free mechanism.)
   3. Writes /etc/starsector-worker.env (0600 root:root) with every
      WorkerConfig field exposed as a STARSECTOR_WORKER_* env var.
   4. **Overrides WORKER_ID via IMDSv2** — the live EC2 instance ID is
@@ -57,12 +62,18 @@ def render_user_data(
 set -euo pipefail
 umask 077
 
-# --- Tailscale join (authkey on stdin, not argv) ---
-tailscale up --authkey-stdin \\
-    --advertise-tags=tag:starsector-worker \\
-    --accept-dns=false <<'TS_AUTHKEY_EOF'
+# --- Tailscale join (authkey via file:, NOT argv) ---
+# Write authkey to a 0600 tmpfile (via the umask 077 above), pass by path,
+# then shred. `--auth-key=file:<path>` keeps the raw key off argv — the
+# only thing in /proc/<pid>/cmdline is the path.
+TS_AUTHKEY_FILE=$(mktemp)
+cat >"$TS_AUTHKEY_FILE" <<'TS_AUTHKEY_EOF'
 {tailscale_authkey}
 TS_AUTHKEY_EOF
+tailscale up --auth-key=file:"$TS_AUTHKEY_FILE" \\
+    --advertise-tags=tag:starsector-worker \\
+    --accept-dns=false
+shred -u "$TS_AUTHKEY_FILE"
 
 # --- Environment file for the worker service (0600 via umask) ---
 cat >{_ENV_FILE} <<'STARSECTOR_WORKER_ENV_EOF'
