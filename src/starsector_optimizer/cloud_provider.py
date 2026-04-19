@@ -294,15 +294,19 @@ class AWSProvider(CloudProvider):
             }],
         )
         errors = response.get("Errors", [])
-        if errors:
-            logger.error("create_fleet errors in %s: %s", region, errors)
         ids: list[str] = []
         for instance in response.get("Instances", []):
             ids.extend(instance.get("InstanceIds", []))
-        if not ids and errors:
-            raise RuntimeError(
-                f"create_fleet produced zero instances in {region}; "
-                f"errors: {errors}"
+        if errors:
+            if not ids:
+                logger.error("create_fleet errors in %s: %s", region, errors)
+                raise RuntimeError(
+                    f"create_fleet produced zero instances in {region}; "
+                    f"errors: {errors}"
+                )
+            logger.warning(
+                "create_fleet partial errors in %s (fleet provisioned %d "
+                "instance(s) despite these): %s", region, len(ids), errors,
             )
         return ids
 
