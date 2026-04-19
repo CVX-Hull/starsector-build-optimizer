@@ -4,6 +4,31 @@ Retrospective capture of audit items identified during the post-sampler-benchmar
 
 A future Phase 6 hardening pass (or the Phase 7.5 reliability work) should triage these before any campaign that scales past the current production envelope (~96 workers × 2 matchup_slots_per_worker = 192 concurrent matchup slots). If a campaign starts hitting one of these, the entry below has enough context to pick up.
 
+---
+
+## 🚦 Triage for the next Phase-7-prep relaunch (2026-04-19 retrospective, post-postmortem)
+
+After the aborted 2026-04-19 run + `experiments/phase7-prep-aborted-2026-04-19/` postmortem, we re-evaluated each entry against (a) the new optimizer plan (drop `composite_score` from covariates, `warm_start_n=0`, engine-signal covariates replacing Python aggregates, hetGP + TurBO in Phase 7 kernel), and (b) the fixed-$85 no-local constraint.
+
+### MUST-INCLUDE before next cloud launch
+- **H5 — ledger-tick stub**. Observed live in the aborted run (ledger.jsonl empty, budget cap decorative). Budget enforcement must work before real spend.
+- **M1 — janitor `enqueued_at` ping-pong**. Newly *observed* in the aborted run: 3 requeues on `onslaught_opt_000590`, 2 on `onslaught_opt_000579`. 3-line fix.
+- **Meta — Tier-3 concurrency shakedown** (4 studies × 8 workers × 2 slots ≈ $1). Would have caught all four of this session's concurrency bugs. Spend $1 of $85 as insurance.
+
+### INCLUDE IF CHEAP
+- **H1 — DELETE `TimeoutTuner`**. Dormant production code. Bitter-lesson argument now makes this deletion load-bearing: a hand-crafted Weibull AFT survival model for one timeout parameter is exactly the kind of baked-in domain knowledge we're removing elsewhere in Phase 7 (see postmortem synthesis). Retain `matchup_timeout_seconds` as a fixed config; rely on learned features + GP uncertainty estimates for future adaptive behaviour.
+- **M2 — cosmetic test-fixture literals**. 5-min sed.
+
+### NOW OBSOLETE (recommend removing from this doc or marking closed)
+- **H3 — semaphore vs queue depth**. Was a mental-model clarification. Fine as-is. Remove from list.
+- **H4 — `compute_effective_stats` ignores `built_in_mods`**. Becomes *irrelevant* under the new optimizer plan: `composite_score` leaves the covariate vector, and the 3 Python-aggregate features that also route through `compute_effective_stats` (total_weapon_dps, engagement_range, kinetic_dps_fraction) are being replaced by engine-truth signals (`damage_dealt_fraction`, `seconds_survived`, `cr_remaining`, `flameout_count`, `overload_count`). The Python scorer is no longer load-bearing on optimization; H4 survives only as an analysis/reporting concern.
+- **L3 — cloud_worker_pool teardown race**. Nil-safe; not a bug. Close.
+- **L2 — historical CatCMAwM references**. Fine as-is; historical docs should stay historical.
+
+### LEAVE DEFERRED
+- **H2 — POST-before-register race**. Still unreachable (no retry path).
+- **L1 — notebook aggregation gap**. The new `notebooks/phase7_prep_postmortem.ipynb` uses the correct per-study glob; lazy-update the older notebooks when someone next opens them.
+
 See the session-of-record findings (live-surfaced + fixed) inline in:
 - `src/starsector_optimizer/cloud_provider.py` (SG + LT visibility waiters, transient-error retry)
 - `src/starsector_optimizer/optimizer.py::_apply_eb_shrinkage` (EB guard on `_completed_records`)
@@ -105,7 +130,7 @@ See the session-of-record findings (live-surfaced + fixed) inline in:
 
 - **Location:** `src/starsector_optimizer/campaign.py:254-279` (`run_janitor_pass`). Specifically line 273 `redis_client.lpush(source_list, raw)` re-LPUSHes the original payload verbatim.
 - **Finding (audit D):** `enqueued_at` stored in the payload at `cloud_worker_pool.py:239` is the FIRST-dispatch wall clock. When the janitor re-LPUSHes a stuck item, the payload carries the original `enqueued_at`. Next janitor pass computes `now - enqueued_at` against the SAME first-dispatch timestamp, so if the new worker is still slow the item appears stuck again → requeued again. Pathological case: a matchup that genuinely takes `2 × visibility_timeout_seconds` gets requeued every janitor interval indefinitely.
-- **Observed?** **No** — `visibility_timeout_seconds=120` is 4× a typical matchup's 20-30 s runtime. Ping-pong requires matchups slower than the visibility timeout, which would already be failing the optimizer-side `result_timeout_seconds`.
+- **Observed?** **Yes — observed in the 2026-04-19 aborted Phase-7-prep run.** `onslaught_opt_000590` was requeued 3 times (ages 254 s → 194 s → 134 s), `onslaught_opt_000579` 2 times. Capital vs capital matchups routinely exceed the 120 s visibility timeout; ping-pong fires for ~5 % of capital trials.
 - **Proposed fix:**
   ```python
   # In run_janitor_pass, right before lpush:
@@ -166,18 +191,18 @@ Proposed as a new §12 in `docs/reference/phase6-cloud-worker-federation.md` at 
 
 ---
 
-## Triage decisions (at time of writing, 2026-04-19)
+## Triage decisions (updated 2026-04-19 post-postmortem)
 
-| Item | Observed? | Actionable now? | Gating criterion to revisit |
-|---|---|---|---|
-| H1 TimeoutTuner dormant | N/A (never wired) | No — scope decision | User decides delete vs wire-in |
-| H2 POST-before-register race | No — no retry path | No — unreachable | A retry path is introduced |
-| H3 semaphore vs queue depth | No | No — not a bug | Queue depth > slots in prod |
-| H4 built-in hullmods absent from heuristic | Code review only | Defer to Phase 7 kernel work | GP needs effective-stat correctness |
-| **H5 ledger tick stub / budget unenforced** | **Yes — Phase 7 prep 2026-04-19** | **Pre-req for next campaign** | **Wire heartbeat before any cloud run** |
-| M1 janitor ping-pong | No | Defensible low-cost fix | "requeued stuck matchup" > 1× per id |
-| M2 test study_id literals | Cosmetic | Yes — low priority | Sampler plumbing is revisited |
-| L1 notebooks | Cosmetic | Yes — low priority | Someone opens the notebooks |
-| L2 doc staleness (QD / lit-review) | N/A (historical) | Only if QD is revisited | Phase 8 QD kick-off |
-| L3 teardown race | No — nil-safe | No — not a bug | — |
-| Testing-gap (concurrency shakedown) | Yes — root cause | Yes — spec-only | Phase 7 prep scheduling |
+| Item | Observed? | Pre-P7-prep action | Rationale |
+|------|-----------|--------------------|-----------|
+| **H5 ledger tick stub / budget unenforced** | Yes (aborted run) | **MUST-INCLUDE** | Real $ on next run; budget cap currently decorative |
+| **M1 janitor enqueued_at ping-pong** | **Yes (observed — onslaught capital trials)** | **MUST-INCLUDE** | 3-line fix; already manifesting |
+| **Meta: Tier-3 concurrency shakedown** | Yes (root cause of 4 bugs) | **MUST-INCLUDE** | $1 insurance against $70 wasted spend |
+| H1 TimeoutTuner dormant | N/A (never wired) | **INCLUDE — DELETE** | Bitter-lesson alignment; hand-crafted AFT out of scope |
+| M2 test study_id literals | Cosmetic | Include if cheap | 5-min sed |
+| H3 semaphore vs queue depth | No | **CLOSE** | Not a bug; mental-model clarification only |
+| H4 built-in hullmods absent from heuristic | Code review only | **OBSOLETE** | composite_score leaving the covariate vector + engine-signal covariates replace Python aggregates; Python scorer no longer load-bearing |
+| L3 teardown race | No — nil-safe | **CLOSE** | Not a bug |
+| L2 doc staleness (QD / lit-review) | N/A (historical) | Leave | Historical docs should stay historical |
+| H2 POST-before-register race | No — no retry path | Defer | Unreachable without retry path |
+| L1 notebooks | Cosmetic | Defer | New postmortem notebook uses correct glob; legacy ones can lazy-update |
