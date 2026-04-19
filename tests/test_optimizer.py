@@ -1617,6 +1617,147 @@ class TestEvalLogAuditFields:
             assert len(rec["covariate_vector"]) == 7
             assert all(isinstance(x, float) for x in rec["covariate_vector"])
 
+    def test_eb_diagnostics_omitted_before_shrinkage_kicks_in(
+        self, wolf_hull, game_data, tmp_path,
+    ):
+        """Pre-shrinkage trials (n < eb_min_builds, or var(α) ≈ 0) omit
+        eb_diagnostics — signalling to downstream analysis that eb_fitness
+        for these rows is raw α̂ with no shrinkage applied.
+        """
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        import json
+
+        pool = self._make_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        log_path = tmp_path / "eval.jsonl"
+        # Budget 3 → never reaches eb_min_builds (default 8); every row
+        # should come back without eb_diagnostics.
+        config = OptimizerConfig(
+            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        recs = [json.loads(l) for l in log_path.read_text().splitlines()]
+        completed = [r for r in recs if not r["pruned"]]
+        assert len(completed) > 0
+        for rec in completed:
+            assert "eb_diagnostics" not in rec, (
+                "pre-shrinkage rows must not carry eb_diagnostics"
+            )
+
+    def _make_varying_mock_pool(self):
+        """Like ``_make_mock_pool`` but yields varying scores across trials
+        so that Var(α̂) > 0 and EB shrinkage actually fits a prior."""
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import (
+            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+        )
+        from starsector_optimizer.instance_manager import LocalInstancePool
+
+        mock_pool = MagicMock(spec=LocalInstancePool)
+        mock_pool.game_dir = Path("game/starsector")
+        mock_pool.num_workers = 1
+        default_es = EngineStats(
+            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+        )
+
+        def mock_run_matchup(matchup):
+            m = matchup
+            # Deterministic, build-dependent hp_differential via variant_id hash
+            # so α̂ varies across builds; keeps var(α) strictly positive and
+            # makes the EB fit non-degenerate.
+            h = (abs(hash(m.player_builds[0].variant_id)) % 1000) / 1000.0
+            player_hf = 0.05 + 0.9 * h
+            player_ship = ShipCombatResult(
+                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf", destroyed=False, hull_fraction=player_hf,
+                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                overload_count=0,
+            )
+            enemy_ship = ShipCombatResult(
+                fleet_member_id="e0", variant_id=m.enemy_variants[0],
+                hull_id="enemy", destroyed=False, hull_fraction=1.0 - player_hf,
+                armor_fraction=0.5, cr_remaining=0.5, peak_time_remaining=0.0,
+                disabled_weapons=0, flameouts=0,
+                damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
+                damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
+                overload_count=0,
+            )
+            return CombatResult(
+                matchup_id=m.matchup_id,
+                winner="PLAYER" if player_hf > 0.5 else "ENEMY",
+                duration_seconds=60.0,
+                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0 if player_hf > 0.5 else 1,
+                enemy_ships_destroyed=1 if player_hf > 0.5 else 0,
+                player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=default_es,
+            )
+
+        mock_pool.run_matchup = mock_run_matchup
+        return mock_pool
+
+    def test_eb_diagnostics_populated_after_shrinkage_activates(
+        self, wolf_hull, game_data, tmp_path,
+    ):
+        """Once score_matrix.n_builds >= eb_min_builds AND var(α) is non-
+        trivial, completed rows carry eb_diagnostics with all five fields:
+        σ²_TWFE, σ²_EB, τ², γ̂, kept_cov_columns.
+        """
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize, EBShrinkageConfig
+        import json
+
+        pool = self._make_varying_mock_pool()
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: (
+            "wolf_Assault", "lasher_Assault", "hound_Standard",
+        )})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=12,
+            warm_start_n=2,
+            warm_start_sample_n=20,
+            eval_log_path=log_path,
+            eb=EBShrinkageConfig(eb_min_builds=3),
+        )
+        optimize_hull("wolf", game_data, pool, opp_pool, config)
+
+        recs = [json.loads(l) for l in log_path.read_text().splitlines()]
+        with_diag = [
+            r for r in recs if not r["pruned"] and "eb_diagnostics" in r
+        ]
+        assert with_diag, (
+            "expected at least one completed trial to carry eb_diagnostics "
+            "once eb_min_builds is reached"
+        )
+        for rec in with_diag:
+            diag = rec["eb_diagnostics"]
+            # Every field present + well-typed.
+            assert set(diag.keys()) == {
+                "sigma_sq_twfe", "sigma_sq_eb", "tau2",
+                "gamma", "kept_cov_columns",
+            }
+            assert isinstance(diag["sigma_sq_twfe"], float)
+            assert isinstance(diag["sigma_sq_eb"], float)
+            assert isinstance(diag["tau2"], float)
+            assert isinstance(diag["gamma"], list)
+            assert all(isinstance(g, float) for g in diag["gamma"])
+            assert isinstance(diag["kept_cov_columns"], list)
+            assert all(isinstance(c, int) for c in diag["kept_cov_columns"])
+            # Bounds: posterior variance is always in [0, σ²_TWFE] because
+            # σ²_EB = τ² · σ²_TWFE / (τ² + σ²_TWFE) ≤ σ²_TWFE.
+            assert 0.0 <= diag["sigma_sq_eb"] <= diag["sigma_sq_twfe"] + 1e-9
+            assert diag["tau2"] > 0.0  # tau2 == 0 → diagnostics omitted
+            # Intercept + one column per kept covariate.
+            assert len(diag["gamma"]) == 1 + len(diag["kept_cov_columns"])
+
 
 class TestShapeFitness:
     """Phase 5E — Box-Cox A3 replaces quantile rank. Tests cover the pure

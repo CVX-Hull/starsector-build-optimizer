@@ -393,6 +393,25 @@ class _EBRecord:
     engine_stats: EngineStats | None
 
 
+@dataclass(frozen=True)
+class _EBDiagnostics:
+    """Per-trial EB-shrinkage uncertainty for post-hoc CI reconstruction.
+
+    Logging these alongside `eb_fitness` lets analysis code compute the
+    exact posterior CI `eb_fitness ± 1.96 · sqrt(sigma_sq_eb)` and audit
+    the shrinkage weight `tau2 / (tau2 + sigma_sq_twfe)` per trial.
+
+    For fallback paths (`n < eb_min_builds` or `var(alpha) ≈ 0`) the
+    optimizer returns `None` for these diagnostics — meaning the run
+    used raw α̂ with no shrinkage.
+    """
+    sigma_sq_twfe: float           # σ̂_i² from the TWFE decomposition
+    sigma_sq_eb: float             # w_i · σ̂_i² = (τ̂² · σ̂_i²) / (τ̂² + σ̂_i²)
+    tau2: float                    # τ̂² (between-trial prior variance)
+    gamma: tuple[float, ...]       # regression coefficients (intercept first)
+    kept_cov_columns: tuple[int, ...]  # X columns surviving zero-std filter
+
+
 def _build_covariate_vector(record: _EBRecord) -> np.ndarray:
     """Assemble the 7-dim covariate vector for EB shrinkage (§2.7 order).
 
@@ -747,7 +766,9 @@ class StagedEvaluator:
             engine_stats=ifb.engine_stats,
         )
         # A2′: EB shrinkage + optional triple-goal rank correction
-        eb_fitness = self._apply_eb_shrinkage(ifb.trial.number, twfe_fitness)
+        eb_fitness, eb_diag = self._apply_eb_shrinkage(
+            ifb.trial.number, twfe_fitness,
+        )
         # A3: Box-Cox output warping (falls through to min-max scaling below
         # shape.min_samples or on constant-population edge cases).
         self._completed_fitness_values.append(eb_fitness)
@@ -781,20 +802,25 @@ class StagedEvaluator:
                 regime=self._config.regime.name,
                 pruned=False, opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
+                eb_diagnostics=eb_diag,
             )
             self._track_eb_summary(twfe_fitness, eb_fitness)
 
     def _apply_eb_shrinkage(
         self, trial_number: int, twfe_fitness: float,
-    ) -> float:
+    ) -> tuple[float, _EBDiagnostics | None]:
         """A2′ — EB shrinkage of TWFE α̂ toward γ̂ᵀX regression prior.
 
-        Returns raw α̂ unchanged when `score_matrix.n_builds < eb_min_builds`
-        (stability guard: OLS fit on too few builds is unstable).
+        Returns ``(raw α̂, None)`` when ``score_matrix.n_builds < eb_min_builds``
+        (stability guard: OLS fit on too few builds is unstable) or when
+        ``var(alpha) ≈ 0`` (eb_shrinkage returns alpha unchanged with
+        ``tau2=0``). Otherwise returns ``(posterior mean, EBDiagnostics)``
+        with the per-trial σ²_TWFE / σ²_EB / τ̂² / γ̂ needed to reconstruct
+        credible intervals at analysis time.
         """
         eb_cfg = self._config.eb
         if self._score_matrix.n_builds < eb_cfg.eb_min_builds:
-            return twfe_fitness
+            return twfe_fitness, None
 
         indices: list[int] = list(self._completed_records.keys())
         alphas = np.array([
@@ -806,12 +832,31 @@ class StagedEvaluator:
         X = np.vstack([
             _build_covariate_vector(self._completed_records[i]) for i in indices
         ])
-        alpha_eb, _, _, _ = eb_shrinkage(alphas, sigma_sqs, X, eb_cfg)
+        alpha_eb, gamma, tau2, kept = eb_shrinkage(alphas, sigma_sqs, X, eb_cfg)
         if eb_cfg.triple_goal:
             alpha_out = triple_goal_rank(alpha_eb, alphas)
         else:
             alpha_out = alpha_eb
-        return float(alpha_out[indices.index(trial_number)])
+        idx = indices.index(trial_number)
+        sigma_sq_twfe = float(sigma_sqs[idx])
+        # Posterior variance for a two-level Gaussian with weight
+        # w = τ² / (τ² + σ²_i): σ²_post = w · σ²_i = (1 − w) · τ².
+        if tau2 + sigma_sq_twfe > 0.0:
+            sigma_sq_eb = float(tau2 * sigma_sq_twfe / (tau2 + sigma_sq_twfe))
+        else:
+            sigma_sq_eb = 0.0
+        # tau2 == 0 signals the var(alpha)≈0 fallback in eb_shrinkage —
+        # alpha was returned unchanged, so "no shrinkage applied."
+        if tau2 == 0.0:
+            return float(alpha_out[idx]), None
+        diag = _EBDiagnostics(
+            sigma_sq_twfe=sigma_sq_twfe,
+            sigma_sq_eb=sigma_sq_eb,
+            tau2=float(tau2),
+            gamma=tuple(float(g) for g in gamma),
+            kept_cov_columns=tuple(int(c) for c in kept),
+        )
+        return float(alpha_out[idx]), diag
 
     def _prune_build(self, ifb: _InFlightBuild) -> None:
         """Tell Optuna PRUNED, log partial results."""
@@ -1186,6 +1231,7 @@ def _append_eval_log(
     pruned: bool = False,
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
+    eb_diagnostics: "_EBDiagnostics | None" = None,
 ) -> None:
     """Append one JSONL record to the evaluation log.
 
@@ -1196,7 +1242,9 @@ def _append_eval_log(
       - shape_lambda / shape_passthrough_reason: A3 diagnostic — λ when
         Box-Cox ran, reason string when A3 fell through to min-max scaling
     plus `engine_stats` + `covariate_vector` so the EB computation is reproducible
-    from the log alone. Pruned builds omit these EB/A3-specific fields.
+    from the log alone, and `eb_diagnostics` (σ²_TWFE, σ²_EB, τ̂², γ̂, kept
+    covariate columns) so posterior credible intervals can be reconstructed
+    at analysis time. Pruned builds omit these EB/A3-specific fields.
     """
     record = {
         "hull_id": hull_id,
@@ -1240,6 +1288,14 @@ def _append_eval_log(
         }
     if covariate_vector is not None:
         record["covariate_vector"] = [float(x) for x in covariate_vector]
+    if eb_diagnostics is not None:
+        record["eb_diagnostics"] = {
+            "sigma_sq_twfe": eb_diagnostics.sigma_sq_twfe,
+            "sigma_sq_eb": eb_diagnostics.sigma_sq_eb,
+            "tau2": eb_diagnostics.tau2,
+            "gamma": list(eb_diagnostics.gamma),
+            "kept_cov_columns": list(eb_diagnostics.kept_cov_columns),
+        }
     if not pruned:
         record["shape_lambda"] = (
             float(shape_lambda) if shape_lambda is not None else None

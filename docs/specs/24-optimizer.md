@@ -331,6 +331,13 @@ One line per build evaluation, appended to `data/evaluation_log.jsonl`:
   "twfe_fitness": 0.18,
   "engine_stats": {"eff_max_flux": 12000.0, "eff_flux_dissipation": 800.0, "eff_armor_rating": 1050.0},
   "covariate_vector": [12000.0, 800.0, 1050.0, 4200.0, 1100.0, 0.55, 0.71],
+  "eb_diagnostics": {
+    "sigma_sq_twfe": 0.0042,
+    "sigma_sq_eb": 0.0018,
+    "tau2": 0.031,
+    "gamma": [0.17, 0.04, -0.02, 0.01, 0.06, 0.03, -0.01, 0.12],
+    "kept_cov_columns": [0, 1, 2, 3, 4, 5, 6]
+  },
   "shape_lambda": 0.73,
   "shape_passthrough_reason": null,
   "fitness": 0.23,
@@ -346,10 +353,16 @@ Schema:
 - `twfe_fitness`: pre-shrinkage α̂ from the TWFE decomposition. Completed builds only. Paired with `eb_fitness` the JSONL reconstructs the full twfe→eb→shaped pipeline; without it, downstream analysis cannot distinguish raw TWFE from EB posterior.
 - `engine_stats`: Java SETUP-phase engine readings (flux capacity, dissipation, armor rating). Completed builds only. Absent when Java did not emit `setup_stats` (pre-5D replay logs).
 - `covariate_vector`: the 7-dim X_i in §2.7 order (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction`, `composite_score`) used by EB shrinkage for this build. Completed builds only.
+- `eb_diagnostics`: per-trial uncertainty block so posterior credible intervals can be reconstructed at analysis time. Completed builds only, AND only when shrinkage actually ran (n ≥ `eb_min_builds` AND Var(α̂) > 0); omitted when `_apply_eb_shrinkage` returned raw α̂ unchanged. Fields:
+  - `sigma_sq_twfe`: σ̂_i² from the TWFE decomposition for this build.
+  - `sigma_sq_eb`: posterior variance w_i·σ̂_i² = τ̂²·σ̂_i² / (τ̂² + σ̂_i²). Always ≤ `sigma_sq_twfe`.
+  - `tau2`: τ̂² between-trial prior variance (method-of-moments, floored at `tau2_floor_frac · Var(α̂)`).
+  - `gamma`: regression coefficients γ̂ from the EB fit. First element is the intercept; remaining elements align with `kept_cov_columns`.
+  - `kept_cov_columns`: indexes into `covariate_vector` for columns that survived the zero-std filter (`eb_shrinkage` drops zero-variance columns so the OLS normal equations remain conditioned). Normally `[0, 1, 2, 3, 4, 5, 6]` with all 7 covariates retained.
 - `shape_lambda`: fitted Box-Cox λ for this trial's A3 transform, or `null` during A3 passthrough (first 7 trials or constant-population edge cases). Added in 5E for diagnostic visibility into how the transform is evolving as the completed-values distribution grows.
 - `shape_passthrough_reason`: one of `"n<1"`, `"n<min_samples"`, `"constant"` when A3 fell back to min-max scaling, or `null` when Box-Cox ran. Added in 5E.
 - `regime`: string, always present on both completed and pruned rows. The name of the loadout regime under which this build was evaluated — one of `"early"` / `"mid"` / `"late"` / `"endgame"`. Logged per trial so post-hoc analysis can filter cross-regime studies without joining against config state. Added in 5F.
-- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector`, `shape_lambda`, `shape_passthrough_reason` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
+- For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector`, `eb_diagnostics`, `shape_lambda`, `shape_passthrough_reason` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
 
 ## Study Naming
 

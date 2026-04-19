@@ -201,24 +201,32 @@ _handle_result():
 _finalize_build():
     twfe_fitness = _score_matrix.build_alpha(trial_number, config.twfe)  # A1
     _completed_records[trial_number] = _EBRecord(...)
-    eb_fitness = _apply_eb_shrinkage(trial_number, twfe_fitness)          # A2′
+    eb_fitness, eb_diag = _apply_eb_shrinkage(trial_number, twfe_fitness) # A2′
     shaped_fitness, shape_diag = _shape_fitness(eb_fitness)               # A3 (Box-Cox)
     study.tell(trial, shaped_fitness)
+    # eb_diag (None when shrinkage fell back to raw α̂) is persisted to the
+    # JSONL under `eb_diagnostics`; see spec 24 §JSONL Evaluation Log.
 
-_apply_eb_shrinkage(trial_number, twfe_fitness):
+_apply_eb_shrinkage(trial_number, twfe_fitness) -> (float, _EBDiagnostics | None):
     if score_matrix.n_builds < config.eb.eb_min_builds:
-        return twfe_fitness
+        return twfe_fitness, None
     indices = list(_completed_records)
     alphas = array([_score_matrix.build_alpha(i, config.twfe) for i in indices])
     sigma_sqs = array([_score_matrix.build_sigma_sq(i) for i in indices])
     X = vstack([_build_covariate_vector(_completed_records[i]) for i in indices])
-    alpha_eb, _, _, _ = eb_shrinkage(alphas, sigma_sqs, X, config.eb)
+    alpha_eb, gamma, tau2, kept = eb_shrinkage(alphas, sigma_sqs, X, config.eb)
     if config.eb.triple_goal:
         alpha_eb = triple_goal_rank(alpha_eb, alphas)
-    return float(alpha_eb[indices.index(trial_number)])
+    idx = indices.index(trial_number)
+    if tau2 == 0.0:                                 # var(α̂)≈0 short-circuit
+        return float(alpha_eb[idx]), None
+    sigma_sq_twfe = float(sigma_sqs[idx])
+    sigma_sq_eb = tau2 * sigma_sq_twfe / (tau2 + sigma_sq_twfe)  # posterior var
+    diag = _EBDiagnostics(sigma_sq_twfe, sigma_sq_eb, tau2, gamma, kept)
+    return float(alpha_eb[idx]), diag
 ```
 
-See spec 24 for the full signal quality pipeline including A3 Box-Cox shaping and JSONL evaluation log schema.
+The returned `_EBDiagnostics` (or `None` on either fallback path) is written to the JSONL under `eb_diagnostics` so analysis code can reconstruct per-trial posterior credible intervals via `eb_fitness ± 1.96·√sigma_sq_eb` and audit per-trial shrinkage weights via `τ̂² / (τ̂² + σ̂_i²)`. See spec 24 for the full signal quality pipeline including A3 Box-Cox shaping and JSONL evaluation log schema.
 
 ## Design Rationale
 
