@@ -130,100 +130,173 @@ With `setDoNotEndCombat(true)`, `engine.isCombatOver()` stays false. We detect m
 - Signal file deletion failure → log warning, continue (best effort)
 - Always null-check engine in `advance()`
 
-## Probe mode — ManifestDumper (2026-04-19)
+## Simulation fidelity floors
+
+Three in-scope simplifications the harness makes deliberately —
+documented so downstream analysis does not mistake them for bugs and
+Phase 7's self-correcting mixture can absorb the resulting evidence.
+
+1. **Weapon groups are engine-generated.** After `variant.clear()` +
+   `addWeapon()`/`addMod()` in SETUP.5, the harness calls
+   `variant.autoGenerateWeaponGroups()` (`VariantBuilder.java:48`;
+   same call in `CombatHarnessPlugin` during loadout swap).
+   `BuildSpec` carries no group metadata, so the Python side cannot
+   specify `autofire` (off for ammo-limited missiles),
+   `mode = ALTERNATING` (expensive ballistics), or cross-weapon
+   grouping (flux-balanced firing patterns). Stock `.variant` files
+   carry hand-tuned `weaponGroups` that the auto-generator does not
+   reproduce. AI flux-vs-benefit evaluation is per-group, so
+   misgrouping materially changes combat behaviour.
+2. **No fighter wings.** `BuildSpec` has no wing field;
+   `VariantBuilder` never calls `variant.setWing(...)` /
+   `addWing(...)`; `ManifestDumper` does not enumerate
+   `FighterWingSpecAPI` / `wing_data.csv`. Carrier hulls deploy with
+   empty bays. See spec 04 and spec 29.
+3. **No officer skills.** Combat-harness ships deploy without
+   `PersonAPI` / `OfficerDataAPI` population — default personality,
+   zero skills, no Target Analysis / Shield Modulation /
+   Helmsmanship bonuses. Already accounted for in
+   `docs/reference/phase7-search-space-compression.md` §2.10 as
+   "default-personality, un-officered"; the self-correcting mixture
+   downweights skill-dependent archetypes (SO brawler, kinetic
+   brawler wanting Target Analysis) whose predicted fitness
+   overshoots the simulation.
+
+## Probe mode — ManifestDumper (schema v2, Commit G)
 
 In addition to combat simulation, the harness supports a **manifest
 probe mode** triggered by a sentinel file
 `combat_harness_manifest_request` in `saves/common/`. The probe runs
 inside the `optimizer_arena` mission (not a separate mission) because
 `HullModEffect.isApplicableToShip(ship)` requires a live `ShipAPI`,
-which only exists post-combat-init.
+which only exists post-combat-init. A minimal stub (wolf + lasher)
+is deployed so the engine passes the single-sided refusal gate; the
+plugin then drives hull spawning itself.
 
 **State machine extension:**
 ```
-INIT → (sentinel detected) → PROBE_WAIT → PROBE_RUN → System.exit(0)
+INIT → (sentinel detected) → PROBE_WAIT → PROBE_ITERATE (BASE → CONDITIONAL)
+     → finishAndExit → System.exit(0)
 INIT → (no sentinel)         → SETUP → FIGHTING → DONE → WAITING (combat path)
 ```
 
 ### State: PROBE_WAIT
 1. `advance()` bypasses the normal pause check for PROBE_WAIT /
-   PROBE_RUN states — the engine otherwise keeps combat paused on
-   the deployment screen.
+   PROBE_ITERATE states — the engine otherwise keeps combat paused
+   on the deployment screen.
 2. On frame 1, call `engine.setPaused(false)` to force-unpause.
-3. Call `forceDeployProbeReserves()` — the AI won't deploy 4 probe
-   ships against a 1-ship enemy, so the plugin walks
-   `fm.getReservesCopy()` and calls `spawnFleetMember` on each
-   reserve to force every probe ship onto the field.
-4. After all probe ships have spawned, transition to PROBE_RUN.
+3. Wait up to `PROBE_WAIT_MAX_FRAMES` (300) for both the player
+   stub and the enemy stub to finish deploying past the engine's
+   single-sided refusal. On success, seed a deterministic iterator
+   over `Global.getSettings().getAllShipHullSpecs()` sorted by id
+   and transition to PROBE_ITERATE, phase=BASE.
 
-### State: PROBE_RUN
-1. Collect spawned player-side ships by `HullSize` (FRIGATE,
-   DESTROYER, CRUISER, CAPITAL_SHIP).
-2. Call `ManifestDumper.dumpToCommon(sampleShipsBySize, constants)`.
-3. `System.exit(0)` — exits the JVM cleanly so the orchestrator's
-   headless launcher can detect the done sentinel and move on.
+### State: PROBE_ITERATE
+
+Two phases share the same state:
+
+**Phase BASE (per-hull standalone applicability + determinism canary).**
+Per frame, pull up to `HULLS_PER_FRAME_BASE = 10` hulls from the
+iterator. Skip-filter drops `HullSize.FIGHTER`, `HullSize.DEFAULT`,
+and hulls with `ShipTypeHints` in `{STATION, MODULE,
+SHIP_WITH_MODULES, HIDE_IN_CODEX}`. For each accepted hull:
+1. `createEmptyVariant(hullId + "_probe_base_" + idx, hullSpec)` —
+   empty variant inherits the hull's built-in mods via `hasHullMod`
+   / `getHullMods` dispatch (per `ShipVariantAPI.java:30-33`).
+2. `createFleetMember` → `spawnFleetMember` off-map at
+   `(PROBE_OFFMAP_X = -50000f, y = idx * PROBE_Y_SPACING)`.
+3. For every `HullModSpecAPI m`, call `m.getEffect()
+   .isApplicableToShip(ship)` **twice**. Add `m.getId()` to
+   `applicableByHull[hullId]` if the first call returns true.
+   Record `m.getId()` in `statefulMods` if the two calls diverge
+   (non-deterministic probe). `statefulMods` is emitted into
+   `manifest.constants.stateful_hullmods`; non-empty fails
+   `tests/test_game_manifest.py::test_no_stateful_hullmods`.
+4. `engine.removeEntity(ship)` + `fm.removeDeployed(ship, false)`
+   (per `CombatEngineAPI.java:63`; this is the documented despawn
+   API — `setHitpoints(0f)` leaves the ship in a death-animation
+   state and retains the collision-grid entry).
+
+When the iterator is drained, phase transitions to CONDITIONAL.
+
+**Phase CONDITIONAL (pairwise conflict graph per hull).**
+Iterate every hull recorded in `applicableByHull` in sorted order.
+Per frame, pull `HULLS_PER_FRAME_CONDITIONAL = 1` hull (pairwise
+probing is ~100² calls per hull vs ~129 for the BASE probe — one
+hull per frame keeps advance() responsive). For each hull:
+1. Spawn a **fresh** probe ship (separate variant, separate spawn
+   call — no cross-talk with BASE's determinism probe ships).
+2. For each mod `A ∈ applicableByHull[hullId]`:
+   - `variant.addMod(A)`.
+   - For each mod `B ∈ applicableByHull[hullId] \ {A}`:
+     - If `B.getEffect().isApplicableToShip(ship) == false`, record
+       `B` in `condExclByHull[hullId][A]`.
+   - `variant.removeMod(A)` between iterations.
+3. Despawn the probe ship.
+
+Records the directional exclusion graph
+`hulls[H].conditional_exclusions[A] = {B that drop when A is
+installed}`. Python collapses to undirected edges at repair time
+(`search_space.py::_collect_incompatible_pairs`).
+
+When the iterator is drained, call `finishAndExit`.
+
+### finishAndExit
+
+1. Read the git SHA from the classpath resource
+   `combat-harness-build-info.properties` (populated by gradle's
+   `generateBuildInfo` task — fails loudly if missing).
+2. Call `ManifestDumper.dumpToCommon(gameVersion, modCommitSha,
+   applicableByHull, condExclByHull, statefulMods)` which writes:
+   - `combat_harness_manifest_constants.json.data`
+   - `combat_harness_manifest_weapons.json.data`
+   - `combat_harness_manifest_hullmods.json.data`
+   - `combat_harness_manifest_hulls_NNN.json.data` (multi-part —
+     the hulls blob exceeds the ~1 MiB `writeTextFileToCommon` cap
+     under schema v2 because `applicable_hullmods` +
+     `conditional_exclusions` add ~4 KB/hull).
+   - `combat_harness_manifest_done.data` (written LAST — Python
+     polls for this and is guaranteed all parts are present).
+3. Delete the `combat_harness_manifest_request` sentinel.
+4. `engine.endCombat(...)` + `System.exit(0)`.
 
 ### MissionDefinition branching
 
 The `optimizer_arena` mission's `defineMission` checks for the
 sentinel file:
-- If present: use `addProbeShipEmptyVariant(hull_id, size)` for each
-  of wolf/hammerhead/eagle/onslaught — `createEmptyVariant` +
-  `createFleetMember` + `addFleetMember`. Sets `CR = 0.7` via
-  `setCurrentCR` + `setCRAtDeployment`. Sets `useDefaultAI = false`
-  so the AI doesn't interfere with force-deployment.
+- If present: add a minimal stub — player-side `wolf`, enemy-side
+  `lasher` — via `addFleetMember`. Pre-Commit-G stubs included more
+  hulls to seed the old 4-representative probe; schema v2 renders
+  that obsolete because the plugin drives per-hull spawning.
 - If absent: normal combat branch (stock variants + AI).
-
-**Why empty variants?** Stock variants carry pre-installed hullmods.
-`onslaught_Standard` ships with `dedicated_targeting_core`, which
-would block ITU probing (DTC and ITU are mutually exclusive).
-Empty variants isolate the single mod under test. Using
-`createEmptyVariant` also avoids polluting `data/variants/` with
-harness-generated variants.
 
 ### ManifestDumper API
 
 `starsector.combatharness.ManifestDumper` is a static utility class:
 
 ```java
-public static final int SCHEMA_VERSION = 1;
+public static final int SCHEMA_VERSION = 2;  // per-hull applicability
 public static final int MAX_VENTS_PER_SHIP = 30;
 public static final int MAX_CAPACITORS_PER_SHIP = 30;
-public static final int MAX_LOGISTICS_HULLMODS = 2;
 public static final float DEFAULT_CR = 0.7f;
-// Damage multipliers by type — hardcoded vs 0.98a-RC8; bumped on
-// engine change. settings.json reads can't cover this because
-// the multipliers live in engine code, not a settings file.
+// Damage multipliers (shield / armor / hull) per DamageType are
+// sourced from `DamageType.getShieldMult() / getArmorMult() /
+// getHullMult()` at dump time — not hardcoded. Mods that retune
+// DamageType at load time surface automatically.
 
 public static void dumpToCommon(
-    Map<HullSize, ShipAPI> sampleShips,
-    Path commonDir
-);
+    String gameVersion,
+    String modCommitSha,
+    Map<String, Set<String>> applicableByHull,
+    Map<String, Map<String, Set<String>>> condExclByHull,
+    Set<String> statefulMods
+) throws JSONException, IOException;
 ```
 
-Emits to `saves/common/combat_harness_manifest.<section>.json.data`
-in 4 files (constants, weapons, hullmods, hulls) plus a done
-sentinel. `scripts/update_manifest.py` reads all 4 and merges into
-`game/starsector/manifest.json`.
-
-**Probe algorithm:**
-1. Enumerate `Global.getSettings().getAllWeaponSpecs() /
-   getAllHullModSpecs() / getAllShipHullSpecs()`.
-2. For each hullmod `m`, for each `HullSize s` with a sample ship:
-   call `m.getEffect().isApplicableToShip(sampleShips.get(s))`.
-   Add `s` to `applicable_hull_sizes[m]` iff true.
-   **Never use `getUnapplicableReason`** — its official contract
-   (https://fractalsoftworks.com/starfarer.api) is that it's only
-   valid after `isApplicableToShip` returns false; invoking it
-   unconditionally returns stale fallback strings.
-3. For each pair of applicable hullmods `(a, b)` on each hull size:
-   clone the sample variant, `variant.addMod(b)`, call
-   `a.getEffect().isApplicableToShip(clonedShip)`, and if false
-   record `(a, b)` in `incompatible_with[a]`. `variant.removeMod(b)`
-   between iterations. Dedup and emit symmetrically.
-4. Ship skins (`.skin` files in `data/hulls/skins/`) are enumerated
-   as distinct hull IDs with overrides resolved — the engine's
-   `ShipHullSpecAPI.isRestoreToBase()` filtering exposes them.
+Ship skins (`.skin` files in `data/hulls/skins/`) are enumerated as
+distinct hull IDs by the engine's
+`Global.getSettings().getAllShipHullSpecs()`; their slot / built-in
+overrides resolve transparently through `createEmptyVariant`.
 
 ### Schema bumping contract
 
@@ -231,7 +304,7 @@ If any of these change, bump `SCHEMA_VERSION` in the Java constants
 AND `EXPECTED_SCHEMA_VERSION` in `game_manifest.py`:
 - A field is added, removed, or renamed in `WeaponSpec`,
   `HullmodSpec`, `HullManifestEntry`, or `GameConstants`.
-- The probe algorithm changes (e.g. new incompatibility detection
+- The probe algorithm changes (e.g. new determinism / conditional
   logic).
 - The enum vocabulary gains a member that affects existing parse
   paths (new enum members alone are forward-compat — see spec 29).

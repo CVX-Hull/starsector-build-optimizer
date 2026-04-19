@@ -616,20 +616,19 @@ class CampaignManager:
                     f"Re-bake AMI after running scripts/update_manifest.py; "
                     f"see .claude/skills/cloud-worker-ops.md."
                 )
-            # ModCommitSha dual-check (Commit G R6). Empty string AMI tag
-            # is the pre-Commit-G bake signature — reject it; empty manifest
-            # sha is the "mod wasn't built from git" signature (local dev
-            # build) — warn, don't block (operator shortcut path).
+            # ModCommitSha dual-check (Commit G R6). Gradle's `generateBuildInfo`
+            # task stamps the git SHA into the jar; ManifestDumper embeds it
+            # into manifest.constants.mod_commit_sha; Packer reads that value
+            # back out for the AMI tag. Either value being empty/unknown means
+            # the chain broke upstream — refuse to launch.
             mfst_sha = manifest.constants.mod_commit_sha
-            if not mfst_sha:
-                logger.warning(
-                    "manifest.constants.mod_commit_sha is empty — cannot "
-                    "cross-check against AMI ModCommitSha=%r. Local dev "
-                    "regen will produce this; rerun with a real git SHA "
-                    "via `-Dstarsector.combatharness.modCommitSha=...`.",
-                    ami_sha,
+            if not mfst_sha or mfst_sha == "unknown":
+                raise _PreflightFailure(
+                    f"manifest.constants.mod_commit_sha={mfst_sha!r} — the "
+                    "combat-harness jar was built without git-SHA wiring. "
+                    "Run `cd combat-harness && ./gradlew clean deploy` from "
+                    "a git checkout, then `scripts/update_manifest.py`."
                 )
-                continue
             if ami_sha != mfst_sha:
                 raise _PreflightFailure(
                     f"AMI {ami_id} in {region} tagged ModCommitSha={ami_sha!r} "

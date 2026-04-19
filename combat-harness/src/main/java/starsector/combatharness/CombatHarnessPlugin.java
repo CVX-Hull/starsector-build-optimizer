@@ -29,9 +29,13 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+
+import java.io.IOException;
+import java.io.InputStream;
 
 /**
  * Single-matchup-per-mission combat harness.
@@ -427,13 +431,40 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         return yes;
     }
 
+    /** Read the git SHA baked into this jar at build time. Gradle's
+     *  `generateBuildInfo` task writes this resource; if it's missing
+     *  the jar was built outside the supported workflow and the
+     *  manifest it produces would fail the preflight dual-check. Fail
+     *  loudly rather than silently embed a bogus SHA. */
+    private static String readModCommitSha() {
+        String resource = "/combat-harness-build-info.properties";
+        try (InputStream in = CombatHarnessPlugin.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                throw new IllegalStateException(
+                        resource + " missing from jar. Rebuild via "
+                        + "`./gradlew clean jar` so generateBuildInfo runs.");
+            }
+            Properties p = new Properties();
+            p.load(in);
+            String sha = p.getProperty("gitSha");
+            if (sha == null || sha.isEmpty()) {
+                throw new IllegalStateException(
+                        resource + " has empty gitSha. Rebuild from a "
+                        + "clean git checkout.");
+            }
+            return sha;
+        } catch (IOException e) {
+            throw new IllegalStateException(
+                    "Failed to read " + resource, e);
+        }
+    }
+
     /** Dump the manifest + exit. Always exits the JVM — never leaves
      *  the game hung regardless of success or failure. */
     private void finishAndExit() {
         try {
             String gv = Global.getSettings().getVersionString();
-            String sha = System.getProperty(
-                    "starsector.combatharness.modCommitSha", "unknown");
+            String sha = readModCommitSha();
             ManifestDumper.dumpToCommon(gv, sha,
                     applicableByHull, condExclByHull, statefulMods);
             try {

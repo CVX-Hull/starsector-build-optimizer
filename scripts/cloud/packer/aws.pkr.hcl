@@ -56,28 +56,15 @@ variable "project_src" {
   description = "Local path to Python project src/ (host side)."
 }
 
-variable "game_version" {
-  type        = string
-  default     = "Starsector 0.98a-RC8"
-  description = <<-EOT
-    Starsector engine version baked into this AMI. MUST match
-    manifest.constants.game_version; CampaignManager._check_manifest_and_ami_tags
-    preflights the AMI GameVersion tag against the committed manifest and
-    aborts if they disagree. Update this variable whenever the engine
-    version bumps (and regenerate the manifest via scripts/update_manifest.py).
-  EOT
-}
-
-variable "mod_commit_sha" {
-  type        = string
-  default     = ""
-  description = <<-EOT
-    Commit G R6: git SHA of the combat-harness mod baked into this AMI.
-    MUST match manifest.constants.mod_commit_sha; preflight
-    cross-checks so a stale-mod AMI is rejected even when the engine
-    version is unchanged (the drift case that GameVersion alone can't
-    catch). Populate via `packer build -var "mod_commit_sha=$(git rev-parse HEAD)"`.
-  EOT
+# GameVersion + ModCommitSha are read directly from the committed manifest
+# so they cannot desync from what the orchestrator preflights against. The
+# jar's generateBuildInfo task stamps the git SHA into the manifest; Packer
+# mirrors that value into the AMI tag; CampaignManager._check_manifest_and_ami_tags
+# compares the two. One file, one source of truth.
+locals {
+  manifest       = jsondecode(file("${path.root}/../../../game/starsector/manifest.json"))
+  game_version   = local.manifest.constants.game_version
+  mod_commit_sha = local.manifest.constants.mod_commit_sha
 }
 
 source "amazon-ebs" "worker" {
@@ -102,8 +89,8 @@ source "amazon-ebs" "worker" {
   tags = {
     Project      = "starsector"
     Role         = "worker-image"
-    GameVersion  = var.game_version
-    ModCommitSha = var.mod_commit_sha
+    GameVersion  = local.game_version
+    ModCommitSha = local.mod_commit_sha
   }
 }
 

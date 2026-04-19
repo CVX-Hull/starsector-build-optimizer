@@ -11,7 +11,7 @@
     "dissipation_per_vent": 10,
     "flux_per_capacitor": 200,
     "game_version": "Starsector 0.98a-RC8",
-    "generated_at": "2026-04-19T22:21:48.505459841Z",
+    "generated_at": "2026-04-19T23:00:43.650726434Z",
     "hull_damage_mult_by_type": {
       "ENERGY": 1,
       "FRAGMENTATION": 1,
@@ -23,7 +23,7 @@
     "max_capacitors_per_ship": 30,
     "max_logistics_hullmods": 2,
     "max_vents_per_ship": 30,
-    "mod_commit_sha": "unknown",
+    "mod_commit_sha": "c813561ee5c9dda7484632d8f7d8b25bcb4f7e18",
     "shield_damage_mult_by_type": {
       "ENERGY": 1,
       "FRAGMENTATION": 0.25,

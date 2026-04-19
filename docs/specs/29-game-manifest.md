@@ -177,6 +177,19 @@ this system (their loadouts are designated in the LPC) and are
 skipped both by the probe and by any hull-size lookup that
 encounters them.
 
+## Out-of-scope: fighter wings / LPCs
+
+The manifest does not enumerate `FighterWingSpecAPI` or
+`wing_data.csv`. `HullManifestEntry.slots` exposes `LAUNCH_BAY`
+entries but carries no assignable wing content, and the optimizer
+pipeline filters `LAUNCH_BAY` out of `SearchSpace.weapon_options`
+(spec 04). Consequently: carrier hulls appear in the manifest with
+correct non-bay slot geometry, `is_carrier` / bay-count hull
+attributes are faithful, and carrier builds can be optimized for
+their non-bay slots — but the bays themselves stay empty at combat
+time. Documented as a fidelity floor in spec 13 and
+`docs/reference/phase7-search-space-compression.md` §2.10.
+
 ## Probe contract (ManifestDumper, spec 13)
 
 The Java mod runs a **two-phase per-hull probe** at dump time:
