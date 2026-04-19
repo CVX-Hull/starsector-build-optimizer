@@ -116,16 +116,28 @@ class TestGetCompatibleWeapons:
 
 class TestGetEligibleHullmods:
     def test_excludes_hidden(self, manifest):
+        """Schema v2: hidden filter runs on top of manifest applicable set."""
+        from tests.conftest import attach_synthetic_hull
         mods = {"m1": _hullmod("m1", is_hidden=False), "m2": _hullmod("m2", is_hidden=True)}
         hull = _hull()
-        result = get_eligible_hullmods(hull, mods, manifest)
-        assert {m.id for m in result} == {"m1"}
+        # Synthetic hull claims both mods are applicable; the is_hidden
+        # filter in get_eligible_hullmods excludes m2.
+        m = attach_synthetic_hull(manifest, hull.id, ["m1", "m2"])
+        result = get_eligible_hullmods(hull, mods, m)
+        assert {mod.id for mod in result} == {"m1"}
 
-    def test_excludes_builtin(self, manifest):
+    def test_only_manifest_applicable_returned(self, manifest):
+        """Schema v2: built-in exclusion is an engine-probe concern. The
+        manifest's applicable_hullmods set is authoritative; what isn't
+        in that set doesn't come out of get_eligible_hullmods."""
+        from tests.conftest import attach_synthetic_hull
         mods = {"m1": _hullmod("m1"), "m2": _hullmod("m2")}
         hull = _hull(built_in_mods=["m2"])
-        result = get_eligible_hullmods(hull, mods, manifest)
-        assert {m.id for m in result} == {"m1"}
+        # Probe output: m1 applicable, m2 NOT (because engine found it
+        # already installed via built-in → isApplicableToShip returns false).
+        m = attach_synthetic_hull(manifest, hull.id, ["m1"])
+        result = get_eligible_hullmods(hull, mods, m)
+        assert {mod.id for mod in result} == {"m1"}
 
 
 # --- build_search_space tests ---
@@ -235,40 +247,51 @@ def _fixture_game_data_with_tagged_components():
     return hull, GameData(hulls={"testhull": hull}, weapons=weapons, hullmods=hullmods)
 
 
+def _fixture_with_manifest(manifest):
+    """Returns (hull, game_data, manifest-with-testhull-entry). Schema v2:
+    the synthetic `testhull` must have an applicable_hullmods entry in
+    the manifest, or get_eligible_hullmods KeyErrors."""
+    from tests.conftest import attach_synthetic_hull
+    hull, gd = _fixture_game_data_with_tagged_components()
+    # All 5 synthetic mods applicable to testhull — regime filters apply on
+    # top via tags/tier, not via applicability.
+    m = attach_synthetic_hull(manifest, "testhull",
+                              ["mt0", "mt1", "mt3", "mt_nds", "mt_rare"])
+    return hull, gd, m
+
+
 class TestRegimeMask:
     def test_endgame_regime_admits_everything(self, manifest):
-        hull, gd = _fixture_game_data_with_tagged_components()
-        space = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
+        hull, gd, m = _fixture_with_manifest(manifest)
+        space = build_search_space(hull, gd, REGIME_ENDGAME, m)
         assert set(space.eligible_hullmods) == {"mt0", "mt1", "mt3", "mt_nds", "mt_rare"}
         # Weapon options include "empty" + all three weapons
         assert set(space.weapon_options["WS001"]) == {"empty", "w_clean", "w_rare", "w_codex"}
 
     def test_mid_regime_excludes_no_drop_tagged_hullmods(self, manifest):
-        hull, gd = _fixture_game_data_with_tagged_components()
-        mid = build_search_space(hull, gd, REGIME_MID, manifest)
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
+        hull, gd, m = _fixture_with_manifest(manifest)
+        mid = build_search_space(hull, gd, REGIME_MID, m)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, m)
         assert "mt_nds" in endgame.eligible_hullmods
         assert "mt_nds" not in mid.eligible_hullmods
 
     def test_early_regime_enforces_tier_ceiling(self, manifest):
-        hull, gd = _fixture_game_data_with_tagged_components()
-        early = build_search_space(hull, gd, REGIME_EARLY, manifest)
-        late = build_search_space(hull, gd, REGIME_LATE, manifest)
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
-        # mt3 (tier 3) must be absent from early (max_hullmod_tier=1) but present elsewhere
+        hull, gd, m = _fixture_with_manifest(manifest)
+        early = build_search_space(hull, gd, REGIME_EARLY, m)
+        late = build_search_space(hull, gd, REGIME_LATE, m)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, m)
         assert "mt3" not in early.eligible_hullmods
         assert "mt3" in late.eligible_hullmods
         assert "mt3" in endgame.eligible_hullmods
-        # mt0 (tier 0) and mt1 (tier 1) survive the tier ceiling in early
         assert "mt0" in early.eligible_hullmods
         assert "mt1" in early.eligible_hullmods
 
     def test_regime_excludes_rare_bp_weapons(self, manifest):
-        hull, gd = _fixture_game_data_with_tagged_components()
-        early = build_search_space(hull, gd, REGIME_EARLY, manifest)
-        mid = build_search_space(hull, gd, REGIME_MID, manifest)
-        late = build_search_space(hull, gd, REGIME_LATE, manifest)
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
+        hull, gd, m = _fixture_with_manifest(manifest)
+        early = build_search_space(hull, gd, REGIME_EARLY, m)
+        mid = build_search_space(hull, gd, REGIME_MID, m)
+        late = build_search_space(hull, gd, REGIME_LATE, m)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, m)
         assert "w_rare" not in early.weapon_options["WS001"]
         assert "w_rare" not in mid.weapon_options["WS001"]
         assert "w_rare" in late.weapon_options["WS001"]
@@ -276,9 +299,9 @@ class TestRegimeMask:
 
     def test_regime_mask_preserves_ordering(self, manifest):
         """Surviving items keep their original relative order (determinism)."""
-        hull, gd = _fixture_game_data_with_tagged_components()
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
-        mid = build_search_space(hull, gd, REGIME_MID, manifest)
+        hull, gd, m = _fixture_with_manifest(manifest)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, m)
+        mid = build_search_space(hull, gd, REGIME_MID, m)
         # Build the expected sub-sequence: the endgame order filtered to mid's admitted set.
         admitted = set(mid.eligible_hullmods)
         expected_sub = [h for h in endgame.eligible_hullmods if h in admitted]

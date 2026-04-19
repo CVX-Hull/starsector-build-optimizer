@@ -93,46 +93,49 @@ class WeaponSpec:
 
 @dataclass(frozen=True)
 class HullmodSpec:
+    """Schema v2 (Commit G): applicability + incompatibility moved to
+    HullManifestEntry (per-hull, engine-probed). Registrant carries only
+    mod-level metadata that doesn't vary by hull."""
     id: str
-    name: str
     tier: int
-    tags: frozenset[str]
-    ui_tags: frozenset[str]
     hidden: bool
     hidden_everywhere: bool
+    tags: frozenset[str]
+    ui_tags: frozenset[str]
     op_cost_by_size: dict[HullSize, int]
-    applicable_hull_sizes: frozenset[HullSize]   # probed at dump time
-    incompatible_with: frozenset[str]            # symmetric; probed at dump time
-    requires_shields: bool
 
 @dataclass(frozen=True)
 class HullSlot:
     id: str
     type: SlotType
     size: SlotSize
-    mount: SlotMountType
-    angle: float
-    arc: float
+    mount_type: SlotMountType
+    is_built_in: bool
+    is_decorative: bool
 
 @dataclass(frozen=True)
 class HullManifestEntry:
+    """Schema v2: `applicable_hullmods` and `conditional_exclusions` carry
+    the authoritative per-hull applicability answer from the engine probe.
+    Shield-type, carrier, phase, civilian, and built-in-induced conflicts
+    all surface here automatically — Python never re-derives."""
     id: str
-    name: str
     size: HullSize
-    designation: str
-    tech_manufacturer: str
     ordnance_points: int
-    hull_hitpoints: float
+    hitpoints: float
     armor_rating: float
+    flux_capacity: float
+    flux_dissipation: float
     shield_type: ShieldType
-    shield_upkeep: float
-    shield_arc: float
-    system_id: str
+    ship_system_id: str
     built_in_mods: tuple[str, ...]
     built_in_weapons: dict[str, str]     # slot_id → weapon_id
     slots: tuple[HullSlot, ...]
-    max_speed: float
-    mass: float
+    is_d_hull: bool
+    is_carrier: bool
+    base_hull_id: str | None
+    applicable_hullmods: frozenset[str]              # engine-probed per-hull yes-set
+    conditional_exclusions: dict[str, frozenset[str]]   # A installed → set of B that drop
 
 @dataclass(frozen=True)
 class GameManifest:
@@ -176,54 +179,79 @@ encounters them.
 
 ## Probe contract (ManifestDumper, spec 13)
 
-The Java mod computes two hullmod-relationship fields at dump time:
+The Java mod runs a **two-phase per-hull probe** at dump time:
 
-- `applicable_hull_sizes`: for each hullmod × hull-size, instantiate
-  a sample empty variant of that size and call
-  `HullModEffect.isApplicableToShip(ship)`. If `true`, add that
-  hull size. **`getUnapplicableReason` must NOT be used** — its
-  contract per https://fractalsoftworks.com/starfarer.api is "only
-  valid after `isApplicableToShip` has returned false"; invoking
-  it outside that scope returns stale fallback strings.
-- `incompatible_with`: for each pair `(a, b)` of hullmods and each
-  hull size `s` where both are applicable, install `b`, then call
-  `a.getEffect().isApplicableToShip(ship)`. If `false`, add `(a, b)`
-  to `a.incompatible_with`. The final set is symmetrized:
-  `b ∈ incompatible_with[a] ⇔ a ∈ incompatible_with[b]`.
+**Phase 1 (BASE)**: iterate `Global.getSettings().getAllShipHullSpecs()`
+in sorted order, apply the skip-filter (FIGHTER + DEFAULT hull sizes,
+STATION + MODULE + SHIP_WITH_MODULES + HIDE_IN_CODEX hints), spawn each
+remaining hull off-map in batches of 10 per frame. For each spawned
+ship, iterate every `HullModSpecAPI` and call `isApplicableToShip(ship)`;
+record the yes-set as `hulls[H].applicable_hullmods`. Each ship is
+probed twice on the same frame for determinism; any mod whose two
+probes diverge is recorded in `constants.stateful_hullmods` (hard-fails
+the test suite).
 
-**Empty variants only**: the probe uses `createEmptyVariant` +
-`addFleetMember`, NOT stock variants. Stock variants carry
-pre-installed hullmods (e.g. `onslaught_Standard` ships with
-`dedicated_targeting_core`, which would block ITU probing); empty
-variants isolate the single mod under test.
+**Phase 2 (CONDITIONAL)**: for each probed hull, spawn a FRESH probe
+ship. For each mod A in that hull's applicable set, install A via
+`variant.addMod(A)`, then re-probe every other applicable B. Any B
+that drops out of applicability with A installed is recorded as
+`hulls[H].conditional_exclusions[A] ⊇ {B}`. Fresh variants per hull
+prevent cross-talk with Phase 1's determinism check.
 
-The probe runs inside the `optimizer_arena` mission's probe-mode
-branch, detected via the `combat_harness_manifest_request` sentinel.
-`CombatHarnessPlugin` force-unpauses the engine and force-deploys
-reserves via `spawnFleetMember` because (1) the engine keeps combat
-paused on the deployment screen and (2) AI won't deploy 4 probe
-ships vs a 1-ship enemy. See spec 13 §Probe mode.
+**Built-in inheritance**: `createEmptyVariant(hullId, hullSpec)` carries
+the hull's built-in mods through to `variant.getHullMods()` /
+`hasHullMod()` / effect dispatch (per `ShipVariantAPI.java:30-33`
+contract). So on e.g. Paragon, `advancedcore` is already installed when
+the probe runs, and `targetingunit.isApplicableToShip(paragon_probe)`
+returns `false` — built-in-induced exclusions surface automatically,
+with zero Python reasoning.
+
+**Despawn**: `engine.removeEntity(ship)` + `fm.removeDeployed(ship, false)`
+(per `CombatEngineAPI.java:63`). Not `setHitpoints(0f)` — that leaves
+the ship in a death-animation state, retains the collision grid entry,
+and is undocumented as a despawn API.
+
+**Emit ONLY probed hulls**: skipped hulls (fighters, stations, modules,
+hidden) are excluded from the output entirely. Python's floor invariant
+`len(applicable_hullmods) >= 1` then applies uniformly; a hull in the
+manifest is by construction a probed, optimizer-usable hull.
 
 ## Invariants (enforced by tests in `tests/test_game_manifest.py`)
 
-1. `manifest.constants.manifest_schema_version == EXPECTED_SCHEMA_VERSION`.
+1. `manifest.constants.manifest_schema_version == EXPECTED_SCHEMA_VERSION == 2`.
 2. `len(manifest.weapons) >= MIN_VANILLA_WEAPON_COUNT`,
    `len(manifest.hullmods) >= MIN_VANILLA_HULLMOD_COUNT`,
    `len(manifest.hulls) >= MIN_VANILLA_HULL_COUNT`.
 3. Every Phase-7-prep hull ID (`wolf`, `lasher`, `hammerhead`,
    `sunder`, `eagle`, `dominator`, `gryphon`, `onslaught`) is
    present with the correct `HullSize`.
-4. `manifest.hullmods[X].incompatible_with` is symmetric for all
-   `X`.
-5. Every hullmod ID in `manifest.hulls[H].built_in_mods` exists in
+4. Every hull in the manifest has
+   `len(applicable_hullmods) >= MIN_APPLICABLE_HULLMODS_PER_HULL`
+   (floor invariant — empty sets signal a probe crash).
+5. Every mod ID in `hull.applicable_hullmods` /
+   `hull.conditional_exclusions` resolves in `manifest.hullmods`
+   (dangling refs are dropped with WARN at load — `Principle #5`).
+6. Every hullmod ID in `manifest.hulls[H].built_in_mods` exists in
    `manifest.hullmods`.
-6. Every weapon ID in `manifest.hulls[H].built_in_weapons.values()`
+7. Every weapon ID in `manifest.hulls[H].built_in_weapons.values()`
    exists in `manifest.weapons`.
-7. Every hullmod / weapon ID referenced in `src/` or `tests/` exists
-   in the manifest (guards against typos that silently drop from
-   search space).
-8. Enum fields parse into the Python enums in
+8. `manifest.constants.stateful_hullmods` is EMPTY in vanilla (any
+   non-empty set fails pytest; signals a mod with non-deterministic
+   `isApplicableToShip` that the probe can't characterize reliably).
+9. Enum fields parse into the Python enums in
    `game_manifest.py` / `models.py`.
+10. **Canary hulls** (per-hull applicability behavior):
+    - `paragon.applicable_hullmods` excludes `targetingunit` +
+      `dedicated_targeting_core` (built-in `advancedcore` blocks them).
+    - `afflictor.applicable_hullmods` excludes `hardenedshieldemitter`,
+      `stabilizedshieldemitter`, `extendedshieldemitter` (phase, no
+      shield); includes `phase_anchor`.
+    - `medusa.applicable_hullmods` includes `frontemitter`
+      (OMNI-shield → FRONT-shield conversion).
+    - `heron.applicable_hullmods` includes `expanded_deck_crew`
+      (carrier-specific mod).
+    - `buffalo.applicable_hullmods` includes `militarized_subsystems`
+      (civilian-specific mod; built-in `civgrade` confirms civilian).
 
 ## Lifecycle
 

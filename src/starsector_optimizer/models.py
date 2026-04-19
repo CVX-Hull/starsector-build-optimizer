@@ -88,6 +88,11 @@ class DamageType(_ParseableEnum):
     HIGH_EXPLOSIVE = "HIGH_EXPLOSIVE"
     ENERGY = "ENERGY"
     FRAGMENTATION = "FRAGMENTATION"
+    # Engine-internal damage type — exposed via `DamageType.values()` in
+    # the manifest constants block (shield/armor/hull multipliers all 1.0).
+    # Vanilla weapons/projectiles don't declare OTHER as their damage_type,
+    # so its multipliers are informational only.
+    OTHER = "OTHER"
 
 
 class WeaponType(_ParseableEnum):

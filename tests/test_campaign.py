@@ -475,13 +475,17 @@ class TestCampaignManagerPreflight:
         config = self._config(tmp_path, **overrides)
         provider = MagicMock()
         provider.list_active.return_value = []
-        # Preflight checks AMI GameVersion tag against committed manifest.
-        # Mock provider to return the manifest's real game_version so the
-        # check succeeds — a test that wants to verify the mismatch path
-        # should override this return_value explicitly.
-        provider.describe_ami_tag.return_value = (
-            GameManifest.load().constants.game_version
-        )
+        # Preflight (Commit G R6) now dual-checks GameVersion AND
+        # ModCommitSha. Mock to dispatch on tag_key so both succeed; tests
+        # that want to verify mismatch paths override side_effect explicitly.
+        _m = GameManifest.load()
+        def _describe_ami_tag(*, ami_id, region, tag_key):
+            if tag_key == "GameVersion":
+                return _m.constants.game_version
+            if tag_key == "ModCommitSha":
+                return _m.constants.mod_commit_sha
+            raise KeyError(tag_key)
+        provider.describe_ami_tag.side_effect = _describe_ami_tag
         ledger = MagicMock()
         return CampaignManager(config, provider, ledger)
 
@@ -748,9 +752,14 @@ class TestLedgerTick:
         config = load_campaign_config(config_path)
         provider = MagicMock()
         provider.list_active.return_value = []
-        provider.describe_ami_tag.return_value = (
-            GameManifest.load().constants.game_version
-        )
+        _m = GameManifest.load()
+        def _describe_ami_tag(*, ami_id, region, tag_key):
+            if tag_key == "GameVersion":
+                return _m.constants.game_version
+            if tag_key == "ModCommitSha":
+                return _m.constants.mod_commit_sha
+            raise KeyError(tag_key)
+        provider.describe_ami_tag.side_effect = _describe_ami_tag
         provider.get_spot_price.return_value = 0.30
         ledger = CostLedger(
             path=tmp_path / "ledger.jsonl",

@@ -33,7 +33,7 @@ from .models import DamageType, HullSize, ShieldType, SlotSize, SlotType, Weapon
 
 logger = logging.getLogger(__name__)
 
-EXPECTED_SCHEMA_VERSION: int = 1
+EXPECTED_SCHEMA_VERSION: int = 2
 
 # Vanilla 0.98 baselines (one-time empirical dump 2026-04-19):
 # 118 weapons, 129 hullmods, 532 hulls. Pinned as lower bounds — modded
@@ -41,6 +41,13 @@ EXPECTED_SCHEMA_VERSION: int = 1
 MIN_VANILLA_WEAPON_COUNT: int = 100
 MIN_VANILLA_HULLMOD_COUNT: int = 60
 MIN_VANILLA_HULL_COUNT: int = 200
+
+# Commit G R8 floor: every non-skipped hull emitted by the probe must have
+# at least one applicable mod. An empty set means either the probe crashed
+# mid-iteration (dropped hull mid-probe) or the probe sprite wasn't live
+# in the combat engine when we asked — either way, un-interpretable data
+# that corrupts downstream optimization. Fail loud at load-time.
+MIN_APPLICABLE_HULLMODS_PER_HULL: int = 1
 
 # Known game-rule vocabulary for hull `size` we deliberately filter out
 # rather than warn on. Fighter wings appear in `getAllShipHullSpecs()` but
@@ -129,6 +136,10 @@ class WeaponSpec:
 
 @dataclass(frozen=True)
 class HullmodSpec:
+    """Schema v2: no `applicable_hull_sizes` or `incompatible_with` —
+    applicability is per-hull (see `HullManifestEntry.applicable_hullmods`)
+    and conditional conflicts are per-hull (see
+    `HullManifestEntry.conditional_exclusions`). Single source of truth."""
     id: str
     tier: int
     hidden: bool
@@ -136,8 +147,6 @@ class HullmodSpec:
     tags: frozenset[str]
     ui_tags: frozenset[str]
     op_cost_by_size: dict[HullSize, int]
-    applicable_hull_sizes: frozenset[HullSize]
-    incompatible_with: frozenset[str]
 
     def op_cost(self, hull_size: HullSize) -> int:
         return self.op_cost_by_size.get(hull_size, 0)
@@ -155,6 +164,9 @@ class HullSlot:
 
 @dataclass(frozen=True)
 class HullManifestEntry:
+    """Schema v2: `applicable_hullmods` + `conditional_exclusions` hold
+    the authoritative per-hull applicability answer (engine-probed by
+    PROBE_ITERATE). Python consumers NEVER re-derive applicability."""
     id: str
     size: HullSize
     ordnance_points: int
@@ -170,6 +182,11 @@ class HullManifestEntry:
     is_d_hull: bool
     is_carrier: bool
     base_hull_id: str | None
+    # Schema v2 — per-hull applicability.
+    applicable_hullmods: frozenset[str]
+    # Schema v2 — installed-mod A → set of mods B that drop out of
+    # applicability when A is present on THIS hull (engine-probed).
+    conditional_exclusions: dict[str, frozenset[str]]
 
 
 @dataclass(frozen=True)
@@ -186,6 +203,15 @@ class GameConstants:
     max_logistics_hullmods: int
     shield_damage_mult_by_type: dict[DamageType, float]
     armor_damage_mult_by_type: dict[DamageType, float]
+    # Schema v2 — hull multiplier (FRAGMENTATION / KINETIC / HE / ENERGY /
+    # OTHER, all 1.0 in vanilla 0.98a but structurally present for future
+    # balance-patch drift detection).
+    hull_damage_mult_by_type: dict[DamageType, float]
+    # Schema v2 — determinism canary: IDs of hullmods whose
+    # isApplicableToShip returned different values on back-to-back probes
+    # of the same ShipAPI. Zero in vanilla 0.98a-RC8; non-empty is a
+    # hard test-suite failure (the mod surface is unreliable).
+    stateful_hullmods: frozenset[str]
 
 
 @dataclass(frozen=True)
@@ -223,11 +249,30 @@ class GameManifest:
             spec = _parse_hullmod(raw)
             if spec is not None:
                 hullmods[hid] = spec
+        # Parse hulls with cross-ref filtering against `hullmods` — any mod
+        # ID in a hull's applicable_hullmods or conditional_exclusions that
+        # doesn't resolve to a hullmods key gets dropped with a WARN (per
+        # CLAUDE.md Principle #5: warn-and-skip, not hard-fail on unknown).
         hulls: dict[str, HullManifestEntry] = {}
+        known_hullmod_ids = set(hullmods.keys())
         for hid, raw in data["hulls"].items():
-            spec = _parse_hull(raw)
+            spec = _parse_hull(raw, known_hullmod_ids=known_hullmod_ids)
             if spec is not None:
                 hulls[hid] = spec
+        # Load-time floor invariant (audit R8): every non-skipped hull must
+        # have ≥ MIN_APPLICABLE_HULLMODS_PER_HULL applicable mods. An empty
+        # set means the probe crashed mid-iteration or the ship wasn't
+        # live — either way the manifest is not safe to optimize against.
+        empty_hulls = [
+            hid for hid, h in hulls.items()
+            if len(h.applicable_hullmods) < MIN_APPLICABLE_HULLMODS_PER_HULL
+        ]
+        if empty_hulls:
+            raise ValueError(
+                f"{len(empty_hulls)} hulls have no applicable_hullmods — "
+                f"probe output is corrupt. Examples: {empty_hulls[:5]}. "
+                f"Regenerate via `uv run python scripts/update_manifest.py`."
+            )
         return cls(
             weapons=weapons,
             hullmods=hullmods,
@@ -298,13 +343,6 @@ def _parse_hullmod(raw: dict[str, Any]) -> HullmodSpec | None:
         if size is None:
             continue
         op_cost_by_size[size] = int(cost)
-    applicable: list[HullSize] = []
-    for size_name in raw.get("applicable_hull_sizes") or []:
-        size = _parse_enum(
-            HullSize, size_name, field_name="applicable_hull_sizes", spec_id=hid
-        )
-        if size is not None:
-            applicable.append(size)
     return HullmodSpec(
         id=hid,
         tier=int(raw.get("tier", 0)),
@@ -313,8 +351,6 @@ def _parse_hullmod(raw: dict[str, Any]) -> HullmodSpec | None:
         tags=frozenset(raw.get("tags", [])),
         ui_tags=frozenset(raw.get("ui_tags", [])),
         op_cost_by_size=op_cost_by_size,
-        applicable_hull_sizes=frozenset(applicable),
-        incompatible_with=frozenset(raw.get("incompatible_with", [])),
     )
 
 
@@ -344,7 +380,11 @@ def _parse_slot(raw: dict[str, Any], *, hull_id: str) -> HullSlot | None:
     )
 
 
-def _parse_hull(raw: dict[str, Any]) -> HullManifestEntry | None:
+def _parse_hull(
+    raw: dict[str, Any],
+    *,
+    known_hullmod_ids: frozenset[str] | set[str],
+) -> HullManifestEntry | None:
     hid = raw.get("id", "<unknown>")
     raw_size = raw.get("size")
     if raw_size in _IGNORED_HULL_SIZES:
@@ -363,6 +403,45 @@ def _parse_hull(raw: dict[str, Any]) -> HullManifestEntry | None:
     base_hull_id = raw.get("base_hull_id")
     if isinstance(base_hull_id, str) and not base_hull_id:
         base_hull_id = None
+
+    # Schema v2 — per-hull applicable_hullmods + conditional_exclusions.
+    # Drop any mod ID that isn't in the known hullmods set (WARN + skip
+    # per CLAUDE.md Principle #5). Dangling refs indicate the probe saw
+    # a hullmod that our loader subsequently rejected due to an unknown
+    # enum value; letting it through would trip downstream `hullmods[x]`
+    # lookups with KeyError.
+    applicable_raw = raw.get("applicable_hullmods") or []
+    applicable_filtered: set[str] = set()
+    for m in applicable_raw:
+        if m in known_hullmod_ids:
+            applicable_filtered.add(m)
+        else:
+            logger.warning(
+                "manifest: hull %r applicable_hullmods references unknown mod %r; skipping",
+                hid, m,
+            )
+
+    cond_raw = raw.get("conditional_exclusions") or {}
+    cond_filtered: dict[str, frozenset[str]] = {}
+    for a, b_list in cond_raw.items():
+        if a not in known_hullmod_ids:
+            logger.warning(
+                "manifest: hull %r conditional_exclusions key %r not in known hullmods; skipping",
+                hid, a,
+            )
+            continue
+        filtered_b: set[str] = set()
+        for b in b_list or []:
+            if b in known_hullmod_ids:
+                filtered_b.add(b)
+            else:
+                logger.warning(
+                    "manifest: hull %r conditional_exclusions[%r] lists unknown mod %r; skipping",
+                    hid, a, b,
+                )
+        if filtered_b:
+            cond_filtered[a] = frozenset(filtered_b)
+
     return HullManifestEntry(
         id=hid,
         size=hsize,
@@ -379,6 +458,8 @@ def _parse_hull(raw: dict[str, Any]) -> HullManifestEntry | None:
         is_d_hull=bool(raw.get("is_d_hull", False)),
         is_carrier=bool(raw.get("is_carrier", False)),
         base_hull_id=base_hull_id,
+        applicable_hullmods=frozenset(applicable_filtered),
+        conditional_exclusions=cond_filtered,
     )
 
 
@@ -420,4 +501,9 @@ def _parse_constants(raw: dict[str, Any]) -> GameConstants:
             raw.get("armor_damage_mult_by_type"),
             field_name="armor_damage_mult_by_type",
         ),
+        hull_damage_mult_by_type=_parse_damage_mult(
+            raw.get("hull_damage_mult_by_type"),
+            field_name="hull_damage_mult_by_type",
+        ),
+        stateful_hullmods=frozenset(raw.get("stateful_hullmods") or []),
     )

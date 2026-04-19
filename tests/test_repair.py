@@ -110,11 +110,18 @@ class TestRepairBuild:
         assert isinstance(repaired.hullmods, frozenset)
 
     def test_so_removed_on_capital(self, manifest):
-        """Manifest probe: safetyoverrides excluded from CAPITAL_SHIP."""
+        """Schema v2 probe: safetyoverrides has applicable_hull_sizes ⊆
+        {FRIGATE, DESTROYER, CRUISER} — a capital hull's per-hull
+        applicable_hullmods must exclude it. Repair drops it."""
+        from tests.conftest import attach_synthetic_hull
+        from starsector_optimizer.models import HullSize as HS
         gd = _game_data(hullmods={"safetyoverrides": _hullmod("safetyoverrides", cost=15)})
         hull = _hull(op=100, hull_size=HullSize.CAPITAL_SHIP)
+        # Synthetic CAPITAL hull does NOT list safetyoverrides as applicable —
+        # mirrors probe behavior against a CAPITAL ship.
+        m = attach_synthetic_hull(manifest, hull.id, [], size=HS.CAPITAL_SHIP)
         build = Build("test", {}, frozenset(["safetyoverrides"]), 0, 0)
-        repaired = repair_build(build, hull, gd, manifest)
+        repaired = repair_build(build, hull, gd, m)
         assert "safetyoverrides" not in repaired.hullmods
 
     def test_logistics_limit(self, manifest):

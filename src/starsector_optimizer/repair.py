@@ -12,7 +12,6 @@ from .game_manifest import GameManifest, SLOT_WEAPON_COMPATIBILITY
 from .models import (
     Build,
     GameData,
-    HullSize,
     ShipHull,
 )
 
@@ -34,28 +33,33 @@ def _repair_incompatibilities(
     hullmods: set[str], hull: ShipHull,
     game_data: GameData, manifest: GameManifest,
 ) -> set[str]:
-    """Remove hullmods that violate size or pair-incompatibility rules."""
-    # Hull size restrictions — from manifest-probed applicable_hull_sizes.
-    # Empty set means probe-unknown: treat as applicable (consistent with
-    # search_space.get_eligible_hullmods, which only rejects non-empty
-    # disjoint sets).
-    for mod_id in list(hullmods):
-        spec = manifest.hullmods.get(mod_id)
-        if spec is None:
-            continue
-        if spec.applicable_hull_sizes and hull.hull_size not in spec.applicable_hull_sizes:
-            hullmods.discard(mod_id)
+    """Drop any hullmod not per-hull applicable, then resolve pairwise
+    conditional exclusions on this hull by cheaper-side-loses.
 
-    # Pair incompatibilities — drop the cheaper side of each conflict
-    # (greedy but deterministic under the id ordering). Iterate a snapshot
-    # so concurrent mutation during the drop loop is safe.
-    for a in list(hullmods):
+    Schema v2: the `applicable_hullmods` set and `conditional_exclusions`
+    map on the hull carry the ENTIRE set of applicability and conflict
+    rules — engine-probed, built-in-aware, hull-specific. Python never
+    re-derives.
+    """
+    hull_entry = manifest.hulls.get(hull.id)
+    if hull_entry is None:
+        # Hull isn't in the manifest (shouldn't happen for a hull the
+        # optimizer proposes on — floor invariant gates this at load);
+        # fall through conservatively by keeping everything.
+        return hullmods
+
+    # Drop anything the hull doesn't accept standalone (covers hull-size,
+    # shield-type, carrier, phase, civilian, built-in-induced exclusion).
+    hullmods &= hull_entry.applicable_hullmods
+
+    # Pair incompatibilities — iterate the hull's conditional_exclusions
+    # map. For each installed A that would block B, drop the cheaper side.
+    # Deterministic under (cost, id) ordering so ties break reproducibly.
+    for a in sorted(hullmods):
         if a not in hullmods:
             continue
-        a_spec = manifest.hullmods.get(a)
-        if a_spec is None:
-            continue
-        for b in list(a_spec.incompatible_with):
+        blocked = hull_entry.conditional_exclusions.get(a, frozenset())
+        for b in sorted(blocked):
             if b not in hullmods or b == a:
                 continue
             cost_a = (game_data.hullmods[a].op_cost(hull.hull_size)
@@ -208,25 +212,25 @@ def is_feasible(
                     f"doesn't match slot {slot_id} size {slot.slot_size.value}"
                 )
 
-    # C3: Pair incompatibilities (manifest-probed)
-    installed = build.hullmods
-    for mod_id in installed:
-        spec = manifest.hullmods.get(mod_id)
-        if spec is None:
-            continue
-        for other in spec.incompatible_with:
-            if other in installed and mod_id < other:
-                violations.append(f"Incompatible hullmods: {mod_id} + {other}")
-
-    # C4: Hull-size restrictions (manifest-probed applicable_hull_sizes)
-    for mod_id in build.hullmods:
-        spec = manifest.hullmods.get(mod_id)
-        if spec is None:
-            continue
-        if spec.applicable_hull_sizes and hull.hull_size not in spec.applicable_hull_sizes:
-            violations.append(
-                f"Hullmod {mod_id} not allowed on {hull.hull_size.value}"
-            )
+    # C3/C4 merged: per-hull applicability + conditional exclusions
+    # (schema v2 — per-hull probe authoritative; hull-size, shield type,
+    # carrier, phase, civilian, built-in conflicts all subsumed).
+    hull_entry = manifest.hulls.get(hull.id)
+    if hull_entry is not None:
+        installed = build.hullmods
+        for mod_id in installed:
+            if mod_id not in hull_entry.applicable_hullmods:
+                violations.append(
+                    f"Hullmod {mod_id} not applicable on hull {hull.id}"
+                )
+        for a in installed:
+            blocked = hull_entry.conditional_exclusions.get(a, frozenset())
+            for b in blocked:
+                if b in installed and a < b:
+                    violations.append(
+                        f"Conditional conflict on hull {hull.id}: "
+                        f"{a} blocks {b}"
+                    )
 
     # C5: Logistics limit
     cap = manifest.constants.max_logistics_hullmods

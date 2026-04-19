@@ -34,23 +34,30 @@ logger = logging.getLogger("update_manifest")
 # Sentinel / output filenames inside `<work_dir>/saves/common/`.
 # Keep in sync with ManifestDumper.MANIFEST_* constants.
 #
-# The manifest is split into 4 part files because the game's
-# writeTextFileToCommon caps each write at 1 MiB (confirmed on 0.98a)
-# and the compact manifest is ~1.3 MiB total. Python loader merges.
+# Schema v2 (Commit G): hulls are split across N part files
+# (combat_harness_manifest_hulls_000.json.data, _001, etc.) because
+# per-hull applicable_hullmods + conditional_exclusions push the blob
+# past the 1 MiB writeTextFileToCommon cap. Python glob-reads the
+# parts and merges into a single "hulls" dict.
 REQUEST_FILE = "combat_harness_manifest_request.data"
 DONE_FILE = "combat_harness_manifest_done.data"
-MANIFEST_PARTS = {
+MANIFEST_SINGLE_PARTS = {
     "constants": "combat_harness_manifest_constants.json.data",
     "weapons":   "combat_harness_manifest_weapons.json.data",
     "hullmods":  "combat_harness_manifest_hullmods.json.data",
-    "hulls":     "combat_harness_manifest_hulls.json.data",
 }
+MANIFEST_HULLS_GLOB = "combat_harness_manifest_hulls_*.json.data"
 
 # Defaults borrowed from instance_manager.InstanceConfig — mirror the
 # constants used by LocalInstancePool so behavior is consistent.
 DEFAULT_DISPLAY = 150  # out-of-range of LocalInstancePool's :100–:103
 DEFAULT_SCREEN = "1920x1080x24"
-DEFAULT_TIMEOUT_SECONDS = 180
+DEFAULT_TIMEOUT_SECONDS = 600  # Commit G R4: was 180; too tight for JVM boot
+                               # + menu nav + probe-iterate ~8s of actual work
+                               # + dump-write on slow dev hardware. Probe is
+                               # one-shot + operator-observed; over-budget
+                               # strictly beats flaky under-budget when each
+                               # flake burns a game boot.
 POLL_INTERVAL_SECONDS = 1.0
 PROCESS_KILL_TIMEOUT_SECONDS = 5.0
 
@@ -224,7 +231,7 @@ def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
     saves_common = work_dir / "saves" / "common"
     request_path = saves_common / REQUEST_FILE
     done_path = saves_common / DONE_FILE
-    part_paths = {k: saves_common / v for k, v in MANIFEST_PARTS.items()}
+    single_paths = {k: saves_common / v for k, v in MANIFEST_SINGLE_PARTS.items()}
 
     # Place the sentinel — the mod's TitleScreenPlugin will detect this
     # at title-screen stabilize and run ManifestDumper.dump then exit.
@@ -241,8 +248,14 @@ def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
         _click_launcher(display_num)
 
         def _all_parts_present() -> bool:
-            return (done_path.exists() and
-                    all(p.exists() for p in part_paths.values()))
+            # Done sentinel is written LAST by the Java side, so its
+            # presence implies all other parts are on disk.
+            if not done_path.exists():
+                return False
+            if not all(p.exists() for p in single_paths.values()):
+                return False
+            hulls_parts = sorted(saves_common.glob(MANIFEST_HULLS_GLOB))
+            return len(hulls_parts) >= 1
 
         deadline = time.monotonic() + timeout_seconds
         while time.monotonic() < deadline:
@@ -263,12 +276,35 @@ def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
                 f"Check {log_path}."
             )
 
-        # Merge the 4 part files into a single repo artifact.
+        # Merge parts into a single repo artifact.
         import json as _json
         merged = {
             part_name: _json.loads(path.read_text())
-            for part_name, path in part_paths.items()
+            for part_name, path in single_paths.items()
         }
+        # Hulls: merge every numbered part file into one dict.
+        hulls_parts = sorted(saves_common.glob(MANIFEST_HULLS_GLOB))
+        if not hulls_parts:
+            raise RuntimeError(
+                f"No hulls part files found matching {MANIFEST_HULLS_GLOB} "
+                f"in {saves_common}. Probe output missing."
+            )
+        hulls_merged: dict = {}
+        for part in hulls_parts:
+            part_content = _json.loads(part.read_text())
+            # Assert disjoint keys across parts — the Java splitter
+            # guarantees this; overlap indicates a probe bug.
+            overlap = set(part_content.keys()) & set(hulls_merged.keys())
+            if overlap:
+                raise RuntimeError(
+                    f"Hull-part overlap between files — ids appear in "
+                    f"multiple parts: {sorted(overlap)[:5]}..."
+                )
+            hulls_merged.update(part_content)
+        merged["hulls"] = hulls_merged
+        logger.info("Merged %d hulls across %d part file(s)",
+                    len(hulls_merged), len(hulls_parts))
+
         repo_manifest_path.parent.mkdir(parents=True, exist_ok=True)
         # Indented on disk — the repo copy is for human review + tooling,
         # not size-constrained; indent=2 makes git diff readable.

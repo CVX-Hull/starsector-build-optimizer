@@ -33,6 +33,67 @@ def manifest():
     return GameManifest.load()
 
 
+def attach_synthetic_hull(manifest, hull_id, applicable_mod_ids,
+                          conditional_exclusions=None, *,
+                          size=None, shield_type=None, is_carrier=False,
+                          built_in_mods=()):
+    """Test helper: return a copy of `manifest` with one synthetic
+    `HullManifestEntry` added (or replaced) for the given hull_id.
+
+    Tests that use synthetic `ShipHull` objects (not in the committed
+    manifest) need a matching per-hull applicability entry. This helper
+    builds a minimal HullManifestEntry + returns a new GameManifest that
+    includes it. Does NOT mutate the session-scoped manifest fixture.
+    """
+    from starsector_optimizer.game_manifest import (
+        GameManifest, HullManifestEntry,
+    )
+    from starsector_optimizer.models import HullSize, ShieldType
+
+    entry = HullManifestEntry(
+        id=hull_id,
+        size=size if size is not None else HullSize.CRUISER,
+        ordnance_points=100,
+        hitpoints=5000.0,
+        armor_rating=500.0,
+        flux_capacity=5000.0,
+        flux_dissipation=300.0,
+        shield_type=shield_type if shield_type is not None else ShieldType.FRONT,
+        ship_system_id="",
+        built_in_mods=tuple(built_in_mods),
+        built_in_weapons={},
+        slots=(),
+        is_d_hull=False,
+        is_carrier=is_carrier,
+        base_hull_id=None,
+        applicable_hullmods=frozenset(applicable_mod_ids),
+        conditional_exclusions={
+            a: frozenset(bs) for a, bs in (conditional_exclusions or {}).items()
+        },
+    )
+    new_hulls = dict(manifest.hulls)
+    new_hulls[hull_id] = entry
+    # Also ensure any synthetic mod id is discoverable in hullmods (the
+    # load-time cross-ref invariant would normally drop dangling refs —
+    # tests pass `applicable_mod_ids` that may not exist in the base
+    # manifest, so we construct stub HullmodSpec entries for them).
+    from starsector_optimizer.game_manifest import HullmodSpec
+    new_hullmods = dict(manifest.hullmods)
+    for mid in applicable_mod_ids:
+        if mid not in new_hullmods:
+            new_hullmods[mid] = HullmodSpec(
+                id=mid, tier=0, hidden=False, hidden_everywhere=False,
+                tags=frozenset(), ui_tags=frozenset(),
+                op_cost_by_size={},
+            )
+    return GameManifest(
+        weapons=manifest.weapons,
+        hullmods=new_hullmods,
+        hulls=new_hulls,
+        constants=manifest.constants,
+    )
+
+
 @pytest.fixture
 def fake_redis():
     """Function-scoped fakeredis client. Fresh per test to avoid cross-test leakage."""

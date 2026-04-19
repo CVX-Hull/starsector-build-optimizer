@@ -97,12 +97,21 @@ def _make_game_data(hull: ShipHull) -> GameData:
 # --- HullSpaceStats tests ---
 
 
+def _attach(manifest, hull_id, applicable=("mod_a", "mod_b", "mod_c", "mod_hidden")):
+    """Schema v2: synthetic hulls need a matching per-hull applicability
+    entry or `get_eligible_hullmods` KeyErrors. Builds a patched manifest
+    that admits the given synthetic mods for `hull_id`."""
+    from tests.conftest import attach_synthetic_hull
+    return attach_synthetic_hull(manifest, hull_id, applicable)
+
+
 class TestHullSpaceStats:
 
     def test_basic_stats(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id)
+        stats = compute_hull_space_stats(hull, gd, m)
 
         assert stats.hull_id == "test_cruiser"
         assert stats.hull_size == HullSize.CRUISER
@@ -112,7 +121,8 @@ class TestHullSpaceStats:
         """Each slot has 'empty' + compatible weapons."""
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id)
+        stats = compute_hull_space_stats(hull, gd, m)
 
         # Slot 1 (BALLISTIC MEDIUM): empty + bal_med_1 + bal_med_2 = 3
         # Slot 2 (ENERGY SMALL): empty + ene_sml_1 + ene_sml_2 + ene_sml_3 = 4
@@ -123,28 +133,36 @@ class TestHullSpaceStats:
         """Product of options per slot."""
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id)
+        stats = compute_hull_space_stats(hull, gd, m)
 
         assert stats.weapon_combinations == 3 * 4 * 2  # 24
 
     def test_eligible_hullmods_excludes_hidden(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id)
+        stats = compute_hull_space_stats(hull, gd, m)
 
         assert stats.num_eligible_hullmods == 3  # mod_a, mod_b, mod_c (not hidden)
 
     def test_built_in_mods_excluded_from_eligible(self, manifest):
+        """Schema v2: built-ins filtered out at PROBE time (isApplicableToShip
+        returns false when the mod is already installed via hullSpec built-ins).
+        Simulated here by omitting mod_a from the applicable set."""
         hull = _make_hull(built_in_mods=["mod_a"])
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id,
+                    applicable=("mod_b", "mod_c", "mod_hidden"))
+        stats = compute_hull_space_stats(hull, gd, m)
 
-        assert stats.num_eligible_hullmods == 2  # mod_b, mod_c (mod_a is built-in)
+        assert stats.num_eligible_hullmods == 2  # mod_b, mod_c (mod_hidden filtered)
 
     def test_no_slots(self, manifest):
         hull = _make_hull(slots=[])
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id)
+        stats = compute_hull_space_stats(hull, gd, m)
 
         assert stats.num_slots == 0
         assert stats.options_per_slot == []
@@ -155,14 +173,16 @@ class TestHullSpaceStats:
         and are flat 30 for every hull size (audit bug H1 fix)."""
         hull = _make_hull(hull_size=HullSize.FRIGATE)
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd, manifest)
+        m = _attach(manifest, hull.id)
+        stats = compute_hull_space_stats(hull, gd, m)
 
         expected = manifest.constants.max_vents_per_ship
         assert stats.max_vents == expected
         assert stats.max_capacitors == manifest.constants.max_capacitors_per_ship
 
         hull2 = _make_hull(hull_size=HullSize.CAPITAL_SHIP)
-        stats2 = compute_hull_space_stats(hull2, gd, manifest)
+        m2 = _attach(manifest, hull2.id)
+        stats2 = compute_hull_space_stats(hull2, gd, m2)
         assert stats2.max_vents == expected
         assert stats2.max_capacitors == manifest.constants.max_capacitors_per_ship
 
@@ -278,7 +298,8 @@ class TestFormatReport:
     def test_report_contains_key_sections(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = [compute_hull_space_stats(hull, gd, manifest)]
+        m = _attach(manifest, hull.id)
+        stats = [compute_hull_space_stats(hull, gd, m)]
         params = SimulationParams(num_instances=8, sims_per_hull=1000, num_hulls=1)
         est = estimate_throughput(params)
         report = format_estimate_report(stats, est)
@@ -296,7 +317,8 @@ class TestFormatReport:
         ]
         hull = _make_hull(slots=slots)
         gd = _make_game_data(hull)
-        stats = [compute_hull_space_stats(hull, gd, manifest)]
+        m = _attach(manifest, hull.id)
+        stats = [compute_hull_space_stats(hull, gd, m)]
         params = SimulationParams()
         est = estimate_throughput(params)
         report = format_estimate_report(stats, est)

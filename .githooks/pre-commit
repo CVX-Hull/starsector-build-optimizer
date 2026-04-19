@@ -20,7 +20,10 @@ staged_files() {
 }
 
 needs_manifest_regen() {
-    staged_files | grep -qE '^(combat-harness/src/main/|game/starsector/data/)'
+    # Commit G R6: also gate on the Python schema loader. A Python-only
+    # schema edit without paired manifest regen desyncs the schema-version
+    # contract (old manifest → new loader raises ValueError at preflight).
+    staged_files | grep -qE '^(combat-harness/src/main/|game/starsector/data/|src/starsector_optimizer/game_manifest\.py$)'
 }
 
 manifest_was_regen() {

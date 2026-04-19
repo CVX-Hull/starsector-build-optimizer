@@ -53,21 +53,18 @@ public class MissionDefinition implements MissionDefinitionPlugin {
             api.setFleetTagline(FleetSide.PLAYER, "Manifest probe — auto-exits");
             api.setFleetTagline(FleetSide.ENEMY, "Dummy target");
 
-            // CRITICAL: probe ships must use EMPTY variants (no pre-installed
-            // hullmods) — stock variants like onslaught_Standard come with
-            // dedicated_targeting_core pre-installed, which would flag ITU
-            // as incompatible even though ITU is perfectly applicable to a
-            // clean Onslaught. createEmptyVariant + addFleetMember gives a
-            // stripped baseline where probe results reflect HULL-STRUCTURAL
-            // rules only, not stock-variant artifacts.
+            // Commit G: MissionDefinition spawns the MINIMAL stub needed to
+            // get past the single-sided deployment refusal — 1 player + 1
+            // enemy. The plugin's PROBE_ITERATE state spawns every probe
+            // hull itself via `CombatFleetManagerAPI.spawnFleetMember`,
+            // off-map, batched across frames, with explicit
+            // `engine.removeEntity` despawn. Reserves-based spawning
+            // (the Commit D approach) doesn't scale to ~500 hulls; the
+            // stub wolf stays deployed throughout as the anchor that
+            // keeps `isCombatOver()` from firing when the probe
+            // spawn/despawn sweep transiently empties the deployed
+            // fleet list.
             addProbeShipEmptyVariant(api, FleetSide.PLAYER, "wolf");
-            addProbeShipEmptyVariant(api, FleetSide.PLAYER, "hammerhead");
-            addProbeShipEmptyVariant(api, FleetSide.PLAYER, "eagle");
-            addProbeShipEmptyVariant(api, FleetSide.PLAYER, "onslaught");
-
-            // Enemy side: single cheap ship — required for combat to start
-            // (engine refuses a single-sided deployment). Empty variant too
-            // for consistency and to avoid any pollution.
             addProbeShipEmptyVariant(api, FleetSide.ENEMY, "lasher");
 
             api.initMap(-8000f, 8000f, -6000f, 6000f);

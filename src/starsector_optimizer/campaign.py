@@ -579,10 +579,14 @@ class CampaignManager:
             sys.exit(2)
 
     def _check_manifest_and_ami_tags(self) -> None:
-        """Assert the committed manifest loads AND every AMI's GameVersion tag
-        matches `manifest.constants.game_version`. Mismatch → stale AMI → the
-        worker will run against a different Starsector version than the one
-        the orchestrator has authoritative game-rule data for. Hard-fail.
+        """Assert the committed manifest loads AND every AMI's GameVersion +
+        ModCommitSha tags match the manifest's `game_version` + `mod_commit_sha`.
+
+        GameVersion catches engine-version drift. ModCommitSha (Commit G R6)
+        catches the drift case where the engine didn't change but the mod
+        did — a Python-only schema v2 commit on top of an AMI baked with a
+        pre-v2 mod would silently leave workers running v1 probe code
+        against a v2 manifest. Both checks are load-bearing.
         """
         from .game_manifest import GameManifest
         manifest = GameManifest.load()
@@ -591,9 +595,10 @@ class CampaignManager:
                 ami_gv = self._provider.describe_ami_tag(
                     ami_id=ami_id, region=region, tag_key="GameVersion",
                 )
+                ami_sha = self._provider.describe_ami_tag(
+                    ami_id=ami_id, region=region, tag_key="ModCommitSha",
+                )
             except AttributeError:
-                # Older CloudProvider impls without describe_ami_tag —
-                # skip the tag check and let operator catch drift visually.
                 logger.warning(
                     "provider %s lacks describe_ami_tag; skipping AMI tag check",
                     type(self._provider).__name__,
@@ -610,6 +615,27 @@ class CampaignManager:
                     f"but manifest.game_version={manifest.constants.game_version!r}. "
                     f"Re-bake AMI after running scripts/update_manifest.py; "
                     f"see .claude/skills/cloud-worker-ops.md."
+                )
+            # ModCommitSha dual-check (Commit G R6). Empty string AMI tag
+            # is the pre-Commit-G bake signature — reject it; empty manifest
+            # sha is the "mod wasn't built from git" signature (local dev
+            # build) — warn, don't block (operator shortcut path).
+            mfst_sha = manifest.constants.mod_commit_sha
+            if not mfst_sha:
+                logger.warning(
+                    "manifest.constants.mod_commit_sha is empty — cannot "
+                    "cross-check against AMI ModCommitSha=%r. Local dev "
+                    "regen will produce this; rerun with a real git SHA "
+                    "via `-Dstarsector.combatharness.modCommitSha=...`.",
+                    ami_sha,
+                )
+                continue
+            if ami_sha != mfst_sha:
+                raise _PreflightFailure(
+                    f"AMI {ami_id} in {region} tagged ModCommitSha={ami_sha!r} "
+                    f"but manifest.mod_commit_sha={mfst_sha!r}. Re-bake AMI "
+                    f"after `./gradlew deploy` + `scripts/update_manifest.py`; "
+                    f"stale-mod AMI would run pre-G probe code against v2 schema."
                 )
         self._manifest = manifest
 

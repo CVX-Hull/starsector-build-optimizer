@@ -79,51 +79,52 @@ def get_eligible_hullmods(
 ) -> list[HullMod]:
     """Get hullmods eligible for installation on this hull.
 
-    Filters out:
-    - Hidden mods (ui-invisible or story-only).
-    - Built-in mods (already installed permanently on the hull).
-    - Mods whose manifest-probed `applicable_hull_sizes` excludes this
-      hull's size (authoritative engine-rule from the probe; empty
-      `applicable_hull_sizes` means probe-unknown → treat as applicable
-      rather than silently exclude, so unprobed mods remain candidates).
+    Schema v2: the engine's `isApplicableToShip` result on an empty-variant
+    probe ship is the single source of truth. `applicable_hullmods` already
+    encodes hull-size restrictions, shield-type restrictions,
+    carrier-only/phase-only/civilian-only filters, AND built-in-induced
+    conflicts (the probe ship inherits built-ins from its hullSpec, so
+    mods blocked by a built-in never appear in the applicable set).
+    No Python-side game-rule re-derivation.
     """
-    builtin = set(hull.built_in_mods)
-    eligible: list[HullMod] = []
-    for hm in hullmods.values():
-        if hm.is_hidden:
-            continue
-        if hm.id in builtin:
-            continue
-        spec = manifest.hullmods.get(hm.id)
-        if spec is not None and spec.applicable_hull_sizes:
-            if hull.hull_size not in spec.applicable_hull_sizes:
-                continue
-        eligible.append(hm)
-    return sorted(eligible, key=lambda m: m.id)
+    applicable = manifest.hulls[hull.id].applicable_hullmods
+    return sorted(
+        (hullmods[m] for m in applicable
+         if m in hullmods and not hullmods[m].is_hidden),
+        key=lambda m: m.id,
+    )
 
 
 def _collect_incompatible_pairs(
-    eligible_ids: set[str], manifest: GameManifest,
+    eligible_ids: set[str],
+    hull: ShipHull,
+    manifest: GameManifest,
 ) -> list[tuple[str, str]]:
-    """Enumerate every (a, b) pair from manifest-probed incompatibility edges.
+    """Enumerate every (a, b) pair where installing A makes B inapplicable
+    on THIS hull (from the probe's conditional_exclusions map).
 
-    Each undirected edge is emitted once with the canonical ordering a<b so
-    downstream consumers (repair + is_feasible) don't need to deduplicate.
+    Schema v2: pairwise incompatibility is per-hull, not per-hullmod. An
+    edge (a, b) exists iff on a variant of this specific hull with A
+    installed, isApplicableToShip(B) returns false. This captures
+    user-induced pair conflicts (ITU vs DTC on any hull where both
+    apply) AND hull-specific conflicts transparently.
+
+    Each undirected edge is emitted once with canonical ordering a<b.
     """
+    cond_excl = manifest.hulls[hull.id].conditional_exclusions
     pairs: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    for hm_id in eligible_ids:
-        spec = manifest.hullmods.get(hm_id)
-        if spec is None:
+    for a, blocked in cond_excl.items():
+        if a not in eligible_ids:
             continue
-        for other in spec.incompatible_with:
-            if other not in eligible_ids:
+        for b in blocked:
+            if b not in eligible_ids:
                 continue
-            a, b = (hm_id, other) if hm_id < other else (other, hm_id)
-            if (a, b) in seen:
+            edge = (a, b) if a < b else (b, a)
+            if edge in seen:
                 continue
-            seen.add((a, b))
-            pairs.append((a, b))
+            seen.add(edge)
+            pairs.append(edge)
     return pairs
 
 
@@ -141,9 +142,10 @@ def build_search_space(
     sync with the Optuna study's per-(hull, regime) identity. Pass
     `REGIME_ENDGAME` to preserve pre-5F unfiltered behaviour.
 
-    `manifest` supplies authoritative game-rule data (hullmod applicable_hull_sizes,
-    hullmod incompatible_with edges, engine caps on vents/capacitors). Loaded
-    once at orchestrator startup via `GameManifest.load()`.
+    `manifest` supplies authoritative game-rule data (per-hull
+    `applicable_hullmods` + `conditional_exclusions` from the engine
+    probe, engine caps on vents/capacitors). Loaded once at orchestrator
+    startup via `GameManifest.load()`.
     """
     weapon_options: dict[str, list[str]] = {}
     total_weapons_admitted = 0
@@ -162,7 +164,7 @@ def build_search_space(
     eligible_pre = get_eligible_hullmods(hull, game_data.hullmods, manifest)
     eligible = [m for m in eligible_pre if _regime_admits_hullmod(m, regime)]
     eligible_ids = {m.id for m in eligible}
-    pairs = _collect_incompatible_pairs(eligible_ids, manifest)
+    pairs = _collect_incompatible_pairs(eligible_ids, hull, manifest)
 
     logger.info(
         "Regime '%s' admits %d/%d hullmods, %d/%d weapons for hull=%s "

@@ -68,6 +68,18 @@ variable "game_version" {
   EOT
 }
 
+variable "mod_commit_sha" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    Commit G R6: git SHA of the combat-harness mod baked into this AMI.
+    MUST match manifest.constants.mod_commit_sha; preflight
+    cross-checks so a stale-mod AMI is rejected even when the engine
+    version is unchanged (the drift case that GameVersion alone can't
+    catch). Populate via `packer build -var "mod_commit_sha=$(git rev-parse HEAD)"`.
+  EOT
+}
+
 source "amazon-ebs" "worker" {
   region                      = var.region
   instance_type               = var.instance_type
@@ -88,9 +100,10 @@ source "amazon-ebs" "worker" {
   }
 
   tags = {
-    Project     = "starsector"
-    Role        = "worker-image"
-    GameVersion = var.game_version
+    Project      = "starsector"
+    Role         = "worker-image"
+    GameVersion  = var.game_version
+    ModCommitSha = var.mod_commit_sha
   }
 }
 
