@@ -49,14 +49,19 @@ tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
 
 studies:
   # 8 hulls spanning F → D → C → CAP, all early regime, 1 seed each.
-  - {hull: wolf,          regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: lasher,        regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: hammerhead,    regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: sunder,        regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: eagle,         regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: dominator,     regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: falcon,        regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
-  - {hull: onslaught_mk1, regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  # Archetype coverage maps to the 9 role-modes in phase7-search-space-compression.md:
+  # wolf=flanker · lasher=low-tech brawler · hammerhead=kinetic-HE brawler ·
+  # sunder=long-range sniper (large energy) · eagle=turret-flex/line ·
+  # dominator=low-tech tank · gryphon=burst-missile · onslaught=low-tech capital brawler.
+  # Omitted on purpose: carriers (fighter-LPC modeling OOS), phase (AI mispilots, §4.16).
+  - {hull: wolf,       regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: lasher,     regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: sunder,     regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: eagle,      regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: dominator,  regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: gryphon,    regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
+  - {hull: onslaught,  regime: early, seeds: [0], budget_per_study: 600, workers_per_study: 12, sampler: tpe}
 
 max_lifetime_hours: 6.0
 fleet_provision_timeout_seconds: 600.0

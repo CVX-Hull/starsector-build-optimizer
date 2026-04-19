@@ -36,6 +36,21 @@ See the session-of-record findings (live-surfaced + fixed) inline in:
 - **Proposed fix:** scope `_seen` and `_results` per-dispatch-attempt by keying on `(matchup_id, dispatch_nonce)` where `dispatch_nonce` is freshly generated per `_dispatch_and_wait` call and included in the matchup payload → worker echoes it back in the POST. Alternative: TTL-expire `_seen` entries after `visibility_timeout_seconds + result_timeout_seconds` + janitor interval so late POSTs from abandoned dispatches can't block retries.
 - **Why deferred:** unreachable in the current call graph; any fix is premature until a retry path is introduced.
 
+### H4 — `compute_effective_stats` ignores `hull.built_in_mods`
+
+- **Location:** `src/starsector_optimizer/hullmod_effects.py:131-204` (`compute_effective_stats`). Iterates `build.hullmods` only (lines 155, 165); `hull.built_in_mods` is never read.
+- **Finding (surfaced 2026-04-19 during Phase 7 prep hull-selection review):** the Python heuristic scorer treats every hull as if its factory-built-in hullmods were absent. Concrete impact on the Phase 7 prep hull set (`examples/phase7-prep.yaml`):
+  - `lasher` has `builtInMods=["ballistic_rangefinder"]` — real-engine play extends all ballistic turret ranges to match hardpoint range. Scorer undercounts Lasher turret effective range.
+  - `onslaught` has `builtInMods=["hbi"]` (High-Burst Ion / projectile-speed buff depending on mapping) — scorer misses the buff entirely if `hbi` is also absent from `HULLMOD_EFFECTS`.
+  - Other 6 hulls in the prep set have no built-ins; no immediate impact.
+- **Scope of miscalibration:** Python heuristic ONLY. The Java combat harness uses the real engine, so `CombatResult` fitness values are correct. The gap affects: (a) warm-start trial quality (heuristic ranks used to seed Optuna), (b) the EB regression prior `γ̂` (7-covariate heuristic regression; `composite_score` is one of the 7). Phase 5D EB shrinkage treats the heuristic as a noisy α covariate and shrinks per-trial weight `w_i = τ̂²/(τ̂² + σ̂²_i)` as evidence accumulates, bounding the harm asymptotically. But the bias is systematic (always-on factory buff), not random, so it doesn't fully cancel.
+- **Observed?** **Not empirically benchmarked** — caught by code review, not a failing test or suspicious JSONL.
+- **Proposed fix:** two parts, either independent or joint.
+  1. `compute_effective_stats` reads `hull.built_in_mods + list(build.hullmods)` (or set-union; dedupe) in both the armor-flat and multiplier passes.
+  2. `HULLMOD_EFFECTS` gains entries for `ballistic_rangefinder`, `hbi`, and any other built-ins that appear on hulls in the Phase 7+ roster (`apogee.sensor_array`, `afflictor.phasefield`, `legion.heavyflightdeck`, etc.). Run a grep to enumerate: `python -c "import json, re, pathlib; ...` over `game/starsector/data/hulls/*.ship` to list all `builtInMods` values, cross-reference against `HULLMOD_EFFECTS` keys.
+- **Why deferred:** a pre-campaign inline fix would change the heuristic feature distribution for two of the eight prep-campaign hulls mid-run — the EB regression prior γ̂ is trained per-study, so the within-study signal would still be coherent, but cross-hull γ̂ reconciliation gets harder. Better to ship the prep campaign with the current heuristic, then fix + re-run the 7D overnight on Hammerhead to quantify Δρ before committing.
+- **Gating criterion to revisit:** Phase 7 kernel implementation — when the GP needs `HullInputFeatures` columns that depend on effective-stat correctness, this fix lands as a co-requisite.
+
 ### H3 — `BoundedSemaphore` vs Redis source-queue depth invariant
 
 - **Location:** `src/starsector_optimizer/cloud_worker_pool.py:228` (`self._dispatch_semaphore`), `:242` (unconditional `lpush`).
@@ -120,6 +135,7 @@ Proposed as a new §12 in `docs/reference/phase6-cloud-worker-federation.md` at 
 | H1 TimeoutTuner dormant | N/A (never wired) | No — scope decision | User decides delete vs wire-in |
 | H2 POST-before-register race | No — no retry path | No — unreachable | A retry path is introduced |
 | H3 semaphore vs queue depth | No | No — not a bug | Queue depth > slots in prod |
+| H4 built-in hullmods absent from heuristic | Code review only | Defer to Phase 7 kernel work | GP needs effective-stat correctness |
 | M1 janitor ping-pong | No | Defensible low-cost fix | "requeued stuck matchup" > 1× per id |
 | M2 test study_id literals | Cosmetic | Yes — low priority | Sampler plumbing is revisited |
 | L1 notebooks | Cosmetic | Yes — low priority | Someone opens the notebooks |
