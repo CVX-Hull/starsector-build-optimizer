@@ -471,9 +471,17 @@ class TestCampaignManagerPreflight:
 
     def _manager_with_mocks(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import CampaignManager
+        from starsector_optimizer.game_manifest import GameManifest
         config = self._config(tmp_path, **overrides)
         provider = MagicMock()
         provider.list_active.return_value = []
+        # Preflight checks AMI GameVersion tag against committed manifest.
+        # Mock provider to return the manifest's real game_version so the
+        # check succeeds — a test that wants to verify the mismatch path
+        # should override this return_value explicitly.
+        provider.describe_ami_tag.return_value = (
+            GameManifest.load().constants.game_version
+        )
         ledger = MagicMock()
         return CampaignManager(config, provider, ledger)
 
@@ -560,7 +568,7 @@ class TestCampaignManagerPreflight:
             "userspace tailscale: tailnet IP not bound to a local interface"
         )
 
-        def redis_ctor(*, host, port, socket_timeout):
+        def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
         def subprocess_stub(cmd, *args, **kwargs):
@@ -627,7 +635,7 @@ class TestCampaignManagerPreflight:
         tailnet_client = MagicMock()
         tailnet_client.ping.side_effect = Exception("no route")
 
-        def redis_ctor(*, host, port, socket_timeout):
+        def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
         def subprocess_stub(cmd, *args, **kwargs):
@@ -672,7 +680,7 @@ class TestCampaignManagerPreflight:
         tailnet_client = MagicMock()
         tailnet_client.ping.side_effect = Exception("userspace mode")
 
-        def redis_ctor(*, host, port, socket_timeout):
+        def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
         with patch("subprocess.run", side_effect=subprocess_stub), \
@@ -711,7 +719,7 @@ class TestCampaignManagerPreflight:
         tailnet_client = MagicMock()
         tailnet_client.ping.return_value = True
 
-        def redis_ctor(*, host, port, socket_timeout):
+        def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
         with patch("subprocess.run") as mock_run, \
@@ -725,6 +733,180 @@ class TestCampaignManagerPreflight:
         assert loopback_client.delete.call_count == len(stale_keys)
         deleted_args = {c.args[0] for c in loopback_client.delete.call_args_list}
         assert deleted_args == set(stale_keys)
+
+
+class TestLedgerTick:
+    """Phase-7-prep: CampaignManager._tick_ledger SCANs worker heartbeats,
+    attributes cost via spot-price cache, records one ledger row per tick
+    per live worker. Budget hit → BudgetExceeded propagates."""
+
+    def _manager(self, tmp_path, **overrides):
+        from starsector_optimizer.campaign import CampaignManager, CostLedger
+        from starsector_optimizer.game_manifest import GameManifest
+        config_path = _minimal_campaign_yaml(tmp_path, **overrides)
+        from starsector_optimizer.campaign import load_campaign_config
+        config = load_campaign_config(config_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        provider.describe_ami_tag.return_value = (
+            GameManifest.load().constants.game_version
+        )
+        provider.get_spot_price.return_value = 0.30
+        ledger = CostLedger(
+            path=tmp_path / "ledger.jsonl",
+            budget_usd=config.budget_usd,
+        )
+        mgr = CampaignManager(config, provider, ledger)
+        return mgr, provider, ledger
+
+    def _seed_heartbeat(self, redis_client, project_tag, worker_id,
+                         region="us-east-1", instance_type="c7a.2xlarge",
+                         ts_offset=0.0):
+        redis_client.hset(
+            f"worker:{project_tag}:{worker_id}:heartbeat",
+            mapping={
+                "timestamp": time.time() - ts_offset,
+                "region": region,
+                "instance_type": instance_type,
+                "load_avg_1min": 4.0,
+                "load_avg_5min": 3.8,
+                "load_avg_15min": 3.5,
+                "cpu_count": 8,
+            },
+        )
+
+    def test_tick_ledger_writes_row_per_live_worker(self, tmp_path, fake_redis):
+        mgr, provider, ledger = self._manager(tmp_path)
+        mgr._redis = fake_redis
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-b")
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-c")
+        mgr._tick_ledger()
+        rows = [json.loads(l) for l in
+                (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        assert len(rows) == 3
+        assert all(r["delta_usd"] > 0 for r in rows)
+        assert {r["worker_id"] for r in rows} == {"worker-a", "worker-b", "worker-c"}
+
+    def test_tick_ledger_raises_budget_exceeded(self, tmp_path, fake_redis):
+        mgr, provider, ledger = self._manager(tmp_path, budget_usd=0.001)
+        mgr._redis = fake_redis
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        provider.get_spot_price.return_value = 5.0  # exceeds 0.001 instantly
+        from starsector_optimizer.campaign import BudgetExceeded
+        with pytest.raises(BudgetExceeded):
+            mgr._tick_ledger()
+
+    def test_tick_ledger_caches_spot_price_across_ticks(self, tmp_path, fake_redis):
+        mgr, provider, ledger = self._manager(tmp_path)
+        mgr._redis = fake_redis
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        for _ in range(4):
+            mgr._tick_ledger()
+            # re-seed timestamp so heartbeat stays live
+            self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        # Cache: one call per (region, instance_type) across 4 ticks.
+        assert provider.get_spot_price.call_count == 1
+
+    def test_tick_ledger_skips_stale_heartbeat(self, tmp_path, fake_redis):
+        """Heartbeat older than heartbeat_stale_multiplier × interval →
+        worker treated as dead, no ledger row written."""
+        mgr, provider, ledger = self._manager(tmp_path)
+        mgr._redis = fake_redis
+        stale_offset = (
+            mgr._config.ledger_heartbeat_interval_seconds
+            * mgr._config.heartbeat_stale_multiplier + 10
+        )
+        self._seed_heartbeat(
+            fake_redis, "starsector-test-campaign", "worker-a",
+            ts_offset=stale_offset,
+        )
+        mgr._tick_ledger()
+        assert not (tmp_path / "ledger.jsonl").exists() or (
+            (tmp_path / "ledger.jsonl").read_text() == ""
+        )
+
+    def test_tick_ledger_hours_elapsed_capped_at_interval(self, tmp_path, fake_redis):
+        """Consecutive ticks at interval_seconds apart → each tick charges
+        at most `interval_seconds/3600` hours per worker."""
+        mgr, provider, ledger = self._manager(tmp_path)
+        mgr._redis = fake_redis
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        mgr._tick_ledger()
+        # Re-seed so live, then tick again.
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        mgr._tick_ledger()
+        rows = [json.loads(l) for l in
+                (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        interval_hours = mgr._config.ledger_heartbeat_interval_seconds / 3600.0
+        for r in rows:
+            # Allow tiny float slack.
+            assert r["hours_elapsed"] <= interval_hours + 0.001
+
+
+class TestRunJanitorPass:
+    """Phase-7-prep: janitor resets enqueued_at on re-queue, tracks
+    requeue_count per item, drops + ERROR on max_requeues exceeded."""
+
+    def _seed_stale_item(self, fake_redis, source, processing,
+                         matchup_id, age_seconds=300.0,
+                         requeue_count=0):
+        payload = {
+            "matchup_id": matchup_id,
+            "enqueued_at": time.time() - age_seconds,
+            "requeue_count": requeue_count,
+        }
+        fake_redis.lpush(processing, json.dumps(payload))
+
+    def test_janitor_resets_enqueued_at_on_requeue(self, fake_redis):
+        from starsector_optimizer.campaign import run_janitor_pass
+        source = "q:test:src"
+        processing = "q:test:proc"
+        self._seed_stale_item(fake_redis, source, processing, "m1", age_seconds=120.0)
+        requeued = run_janitor_pass(
+            fake_redis, source, processing,
+            visibility_timeout_seconds=60.0, max_requeues=5,
+        )
+        assert requeued == 1
+        raw = fake_redis.lindex(source, 0)
+        item = json.loads(raw)
+        # Fresh enqueued_at is within the last few seconds of now, much newer
+        # than the 120s-stale original.
+        assert time.time() - item["enqueued_at"] < 10.0
+
+    def test_janitor_increments_requeue_count(self, fake_redis):
+        from starsector_optimizer.campaign import run_janitor_pass
+        source = "q:test:src"
+        processing = "q:test:proc"
+        self._seed_stale_item(
+            fake_redis, source, processing, "m1", age_seconds=120.0,
+            requeue_count=2,
+        )
+        run_janitor_pass(
+            fake_redis, source, processing,
+            visibility_timeout_seconds=60.0, max_requeues=5,
+        )
+        item = json.loads(fake_redis.lindex(source, 0))
+        assert item["requeue_count"] == 3
+
+    def test_janitor_drops_on_max_requeues_exceeded(self, fake_redis, caplog):
+        from starsector_optimizer.campaign import run_janitor_pass
+        source = "q:test:src"
+        processing = "q:test:proc"
+        self._seed_stale_item(
+            fake_redis, source, processing, "m1", age_seconds=120.0,
+            requeue_count=5,  # equal to max — next bump hits 6 which exceeds
+        )
+        with caplog.at_level(logging.ERROR, logger="starsector_optimizer.campaign"):
+            requeued = run_janitor_pass(
+                fake_redis, source, processing,
+                visibility_timeout_seconds=60.0, max_requeues=5,
+            )
+        assert requeued == 0
+        # Item dropped from processing, NOT pushed back to source.
+        assert fake_redis.llen(processing) == 0
+        assert fake_redis.llen(source) == 0
+        assert any("max_requeues" in r.getMessage() for r in caplog.records)
 
 
 class TestCampaignNameValidation:

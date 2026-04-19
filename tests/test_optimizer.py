@@ -39,8 +39,8 @@ def wolf_hull(game_data):
 
 
 @pytest.fixture(scope="module")
-def wolf_space(wolf_hull, game_data):
-    return build_search_space(wolf_hull, game_data, REGIME_ENDGAME)
+def wolf_space(wolf_hull, game_data, manifest):
+    return build_search_space(wolf_hull, game_data, REGIME_ENDGAME, manifest)
 
 
 # --- Build Conversion Tests ---
@@ -48,9 +48,9 @@ def wolf_space(wolf_hull, game_data):
 
 class TestBuildConversion:
 
-    def test_build_to_params_round_trip(self, wolf_hull, wolf_space, game_data):
+    def test_build_to_params_round_trip(self, wolf_hull, wolf_space, game_data, manifest):
         """Build -> params -> Build preserves all fields."""
-        build = generate_random_build(wolf_hull, game_data)
+        build = generate_random_build(wolf_hull, game_data, manifest)
         params = build_to_trial_params(build, wolf_space)
         reconstructed = trial_params_to_build(params, "wolf")
         assert reconstructed.weapon_assignments == build.weapon_assignments
@@ -58,16 +58,16 @@ class TestBuildConversion:
         assert reconstructed.flux_vents == build.flux_vents
         assert reconstructed.flux_capacitors == build.flux_capacitors
 
-    def test_params_include_all_weapon_slots(self, wolf_hull, wolf_space, game_data):
+    def test_params_include_all_weapon_slots(self, wolf_hull, wolf_space, game_data, manifest):
         """Every weapon slot in SearchSpace has a corresponding param."""
-        build = generate_random_build(wolf_hull, game_data)
+        build = generate_random_build(wolf_hull, game_data, manifest)
         params = build_to_trial_params(build, wolf_space)
         for slot_id in wolf_space.weapon_options:
             assert f"weapon_{slot_id}" in params
 
-    def test_params_include_all_hullmods(self, wolf_hull, wolf_space, game_data):
+    def test_params_include_all_hullmods(self, wolf_hull, wolf_space, game_data, manifest):
         """Every eligible hullmod has a boolean param."""
-        build = generate_random_build(wolf_hull, game_data)
+        build = generate_random_build(wolf_hull, game_data, manifest)
         params = build_to_trial_params(build, wolf_space)
         for mod_id in wolf_space.eligible_hullmods:
             assert f"hullmod_{mod_id}" in params
@@ -90,9 +90,9 @@ class TestBuildConversion:
         for sid in wolf_space.weapon_options:
             assert reconstructed.weapon_assignments[sid] is None
 
-    def test_hullmods_round_trip(self, wolf_hull, wolf_space, game_data):
+    def test_hullmods_round_trip(self, wolf_hull, wolf_space, game_data, manifest):
         """Hullmod flags survive round-trip."""
-        build = generate_random_build(wolf_hull, game_data)
+        build = generate_random_build(wolf_hull, game_data, manifest)
         params = build_to_trial_params(build, wolf_space)
         reconstructed = trial_params_to_build(params, "wolf")
         assert reconstructed.hullmods == build.hullmods
@@ -287,35 +287,35 @@ class TestSamplerFactory:
 
 class TestWarmStart:
 
-    def test_adds_trials_to_study(self, wolf_hull, game_data):
+    def test_adds_trials_to_study(self, wolf_hull, game_data, manifest):
         """Study gains warm_start_n completed trials."""
         study = optuna.create_study(direction="maximize")
         config = OptimizerConfig(warm_start_n=10, warm_start_sample_n=100)
-        warm_start(study, wolf_hull, game_data, config)
+        warm_start(study, wolf_hull, game_data, config, manifest)
         assert len(study.trials) == 10
 
-    def test_trials_have_positive_scores(self, wolf_hull, game_data):
+    def test_trials_have_positive_scores(self, wolf_hull, game_data, manifest):
         """All warm-start trial values are positive (scaled heuristic scores)."""
         study = optuna.create_study(direction="maximize")
         config = OptimizerConfig(warm_start_n=5, warm_start_sample_n=50)
-        warm_start(study, wolf_hull, game_data, config)
+        warm_start(study, wolf_hull, game_data, config, manifest)
         for trial in study.trials:
             assert trial.value is not None
             assert trial.value > 0
 
-    def test_trials_are_complete(self, wolf_hull, game_data):
+    def test_trials_are_complete(self, wolf_hull, game_data, manifest):
         """All warm-start trials have COMPLETE state."""
         study = optuna.create_study(direction="maximize")
         config = OptimizerConfig(warm_start_n=5, warm_start_sample_n=50)
-        warm_start(study, wolf_hull, game_data, config)
+        warm_start(study, wolf_hull, game_data, config, manifest)
         for trial in study.trials:
             assert trial.state == optuna.trial.TrialState.COMPLETE
 
-    def test_warm_start_scale_applied(self, wolf_hull, game_data):
+    def test_warm_start_scale_applied(self, wolf_hull, game_data, manifest):
         """Scores are scaled by warm_start_scale."""
         study = optuna.create_study(direction="maximize")
         config = OptimizerConfig(warm_start_n=3, warm_start_sample_n=30, warm_start_scale=0.1)
-        warm_start(study, wolf_hull, game_data, config)
+        warm_start(study, wolf_hull, game_data, config, manifest)
         # Heuristic composite scores are typically 0.2-0.8
         # Scaled by 0.1, should be 0.02-0.08
         for trial in study.trials:
@@ -331,7 +331,7 @@ class TestOptimizeHullIntegration:
     def _make_mock_pool(self, *, num_instances=1):
         """Create a mock LocalInstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.models import CombatResult, EngineStats, ShipCombatResult, DamageBreakdown
         from starsector_optimizer.instance_manager import LocalInstancePool
 
         mock_pool = MagicMock(spec=LocalInstancePool)
@@ -362,12 +362,17 @@ class TestOptimizeHullIntegration:
                 player_ships=(player_ship,), enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=EngineStats(
+                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                ),
             )
 
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_no_orphaned_trials(self, wolf_hull, game_data):
+    def test_no_orphaned_trials(self, wolf_hull, game_data, manifest):
         """After optimize_hull, no trials are in RUNNING or WAITING state."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -377,7 +382,7 @@ class TestOptimizeHullIntegration:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=3, warm_start_n=5, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
         for trial in study.trials:
@@ -385,7 +390,7 @@ class TestOptimizeHullIntegration:
                 f"Trial {trial.number} is {trial.state.name}, expected COMPLETE or PRUNED"
             )
 
-    def test_trial_count_matches_budget(self, wolf_hull, game_data):
+    def test_trial_count_matches_budget(self, wolf_hull, game_data, manifest):
         """Study has at least warm_start_n + sim_budget trials (stock builds add more)."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -395,11 +400,11 @@ class TestOptimizeHullIntegration:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=3, warm_start_n=5, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Stock builds + heuristic warm-start + sim trials
         assert len(study.trials) >= config.warm_start_n + config.sim_budget
 
-    def test_error_recovery(self, wolf_hull, game_data):
+    def test_error_recovery(self, wolf_hull, game_data, manifest):
         """InstanceError during run_matchup doesn't crash the optimizer."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -421,7 +426,7 @@ class TestOptimizeHullIntegration:
         config = OptimizerConfig(sim_budget=4, warm_start_n=5, warm_start_sample_n=20)
 
         # Should not raise — error is caught internally
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
         sim_trials = [t for t in study.trials if t.number >= config.warm_start_n]
         for trial in sim_trials:
@@ -558,7 +563,7 @@ class TestStagedEvaluator:
     def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
         """Create a mock LocalInstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.models import CombatResult, EngineStats, ShipCombatResult, DamageBreakdown
         from starsector_optimizer.instance_manager import LocalInstancePool
 
         mock_pool = MagicMock(spec=LocalInstancePool)
@@ -600,12 +605,17 @@ class TestStagedEvaluator:
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=EngineStats(
+                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                ),
             )
 
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_cached_builds_skip_evaluation(self, wolf_hull, game_data):
+    def test_cached_builds_skip_evaluation(self, wolf_hull, game_data, manifest):
         """Cached builds are told to Optuna immediately without run_matchup()."""
         from unittest.mock import MagicMock
         from starsector_optimizer.optimizer import (
@@ -627,12 +637,12 @@ class TestStagedEvaluator:
         # Small budget to keep test fast
         config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # With 2 sim trials and 1 opponent, we expect at most 2 run_matchup calls
         # (fewer if cache hits occur — same build proposed twice)
         assert call_count[0] <= config.sim_budget
 
-    def test_pruned_builds_not_cached(self, wolf_hull, game_data):
+    def test_pruned_builds_not_cached(self, wolf_hull, game_data, manifest):
         """Pruned builds should NOT be in the cache."""
         from starsector_optimizer.optimizer import optimize_hull, BuildCache
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -648,7 +658,7 @@ class TestStagedEvaluator:
             wilcoxon_n_startup_steps=0,
         )
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         pruned = [t for t in study.trials
                   if t.state == optuna.trial.TrialState.PRUNED]
         # With all ENEMY wins and wilcoxon_n_startup_steps=0, some should be pruned
@@ -658,7 +668,7 @@ class TestStagedEvaluator:
         for trial in study.trials:
             assert trial.state in allowed
 
-    def test_completed_builds_cached(self, wolf_hull, game_data):
+    def test_completed_builds_cached(self, wolf_hull, game_data, manifest):
         """Non-pruned builds are stored in cache after completion."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -668,14 +678,14 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and t.value is not None and t.value > 0]
         # At least some completed trials should exist with positive fitness
         assert len(completed) > 0
 
-    def test_all_opponents_evaluated_when_not_pruned(self, wolf_hull, game_data):
+    def test_all_opponents_evaluated_when_not_pruned(self, wolf_hull, game_data, manifest):
         """Good builds get matchups against all opponents."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -696,7 +706,7 @@ class TestStagedEvaluator:
 
         pool.run_matchup = tracking_run
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         # Find trials that went through simulation (have matchup IDs containing their number)
         # Each such trial should have matchups against both opponents
@@ -714,7 +724,7 @@ class TestStagedEvaluator:
                 f"expected {len(opponents)}"
             )
 
-    def test_intermediate_values_per_opponent(self, wolf_hull, game_data):
+    def test_intermediate_values_per_opponent(self, wolf_hull, game_data, manifest):
         """Staged evaluator reports one intermediate value per opponent evaluated."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -725,7 +735,7 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Find trials with intermediate values (sim trials that weren't cache hits)
         trials_with_intermediates = [
             t for t in study.trials if len(t.intermediate_values) > 0
@@ -738,7 +748,7 @@ class TestStagedEvaluator:
                 f"intermediate values, expected {len(opponents)}"
             )
 
-    def test_matchup_id_routes_to_correct_build(self, wolf_hull, game_data):
+    def test_matchup_id_routes_to_correct_build(self, wolf_hull, game_data, manifest):
         """Each result's matchup_id correctly identifies the trial and opponent."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -757,14 +767,14 @@ class TestStagedEvaluator:
 
         pool.run_matchup = tracking_run
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         # All matchup IDs should follow the pattern: {hull}_opt_{trial:06d}_vs_{opponent}
         for mid in all_matchup_ids:
             assert "_vs_" in mid, f"Matchup ID missing '_vs_': {mid}"
             assert "wolf_opt_" in mid, f"Matchup ID missing 'wolf_opt_': {mid}"
 
-    def test_instance_error_scores_negative(self, wolf_hull, game_data):
+    def test_instance_error_scores_negative(self, wolf_hull, game_data, manifest):
         """InstanceError during run_matchup() scores affected trials as -1.0."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -785,14 +795,14 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=4, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Some trials should have -1.0 value (from the failed matchup)
         negative_trials = [t for t in study.trials
                            if t.state == optuna.trial.TrialState.COMPLETE
                            and t.value is not None and t.value < 0]
         assert len(negative_trials) > 0, "Expected some trials with negative scores from InstanceError"
 
-    def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data):
+    def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data, manifest):
         """Intermediate trial.report() values are raw combat_fitness at rung positions."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -802,7 +812,7 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault")})
         config = OptimizerConfig(sim_budget=10, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         trials_with_iv = [t for t in study.trials if len(t.intermediate_values) > 0]
         assert len(trials_with_iv) > 2
@@ -821,7 +831,7 @@ class TestStagedEvaluator:
                     f"expected raw PLAYER win score in [1.0, 1.5]"
                 )
 
-    def test_intermediate_reports_are_raw_scores(self, wolf_hull, game_data):
+    def test_intermediate_reports_are_raw_scores(self, wolf_hull, game_data, manifest):
         """Intermediate trial.report() values are raw combat_fitness, not cumulative z-scores."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -833,7 +843,7 @@ class TestStagedEvaluator:
         })
         config = OptimizerConfig(sim_budget=8, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         trials_with_iv = [t for t in study.trials if len(t.intermediate_values) > 0]
         assert len(trials_with_iv) > 0
         # Raw combat_fitness scores: PLAYER wins are in [1.0, 1.5],
@@ -849,7 +859,7 @@ class TestStagedEvaluator:
                 f"Raw score {v} outside PLAYER win range [1.0, 1.5]"
             )
 
-    def test_failure_score_bypasses_transformations(self, wolf_hull, game_data):
+    def test_failure_score_bypasses_transformations(self, wolf_hull, game_data, manifest):
         """Invalid builds get raw config.failure_score, not transformed."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -870,13 +880,13 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         failure_trials = [t for t in study.trials
                           if t.state == optuna.trial.TrialState.COMPLETE
                           and t.value is not None and t.value == config.failure_score]
         assert len(failure_trials) > 0, "Expected some trials with raw failure_score"
 
-    def test_cached_builds_return_transformed_score(self, wolf_hull, game_data):
+    def test_cached_builds_return_transformed_score(self, wolf_hull, game_data, manifest):
         """Cache stores post-transformation value; cache hit returns it."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -887,13 +897,13 @@ class TestStagedEvaluator:
         # Small budget — with dedup, some builds may be cache hits
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Pipeline should complete; cache hits return same value as original
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
-    def test_all_trials_complete_without_error(self, wolf_hull, game_data):
+    def test_all_trials_complete_without_error(self, wolf_hull, game_data, manifest):
         """Multi-opponent evaluation completes without errors (general regression test)."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -902,13 +912,13 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault")})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and len(t.intermediate_values) > 0]
         assert len(completed) > 0
 
-    def test_active_opponents_limits_rungs(self, wolf_hull, game_data, tmp_path):
+    def test_active_opponents_limits_rungs(self, wolf_hull, game_data, tmp_path, manifest):
         """With active_opponents=3 and pool of 5, builds complete after 3 opponents."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -927,14 +937,14 @@ class TestStagedEvaluator:
             eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:
             assert rec["opponents_total"] == 3
             assert len(rec["opponent_order"]) == 3
 
-    def test_active_opponents_exceeds_pool_uses_all(self, wolf_hull, game_data, tmp_path):
+    def test_active_opponents_exceeds_pool_uses_all(self, wolf_hull, game_data, tmp_path, manifest):
         """With active_opponents=20 and pool of 3, all 3 are used."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -950,14 +960,14 @@ class TestStagedEvaluator:
             eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:
             assert rec["opponents_total"] == 3
 
 
-    def test_twfe_fitness_in_finalize(self, wolf_hull, game_data):
+    def test_twfe_fitness_in_finalize(self, wolf_hull, game_data, manifest):
         """study.tell() receives Box-Cox-shaped value derived from TWFE alpha."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -966,7 +976,7 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault")})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         sim_trials = [t for t in study.trials
                       if t.state == optuna.trial.TrialState.COMPLETE
                       and t.value is not None
@@ -978,7 +988,7 @@ class TestStagedEvaluator:
         for trial in sim_trials:
             assert 0.0 <= trial.value <= 1.0
 
-    def test_incumbent_tracking(self, wolf_hull, game_data):
+    def test_incumbent_tracking(self, wolf_hull, game_data, manifest):
         """After evaluating builds, incumbent tracks the best build's opponents."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -988,13 +998,13 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Pipeline should complete — incumbent tracking does not crash
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
-    def test_score_matrix_populated_on_result(self, wolf_hull, game_data, tmp_path):
+    def test_score_matrix_populated_on_result(self, wolf_hull, game_data, tmp_path, manifest):
         """ScoreMatrix receives records for each matchup result."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1009,7 +1019,7 @@ class TestStagedEvaluator:
             eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         # Eval log records confirm opponents were evaluated (ScoreMatrix was populated)
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
@@ -1017,7 +1027,7 @@ class TestStagedEvaluator:
             assert rec["opponents_evaluated"] > 0
             assert len(rec["opponent_results"]) == rec["opponents_evaluated"]
 
-    def test_incumbent_overlap_forces_opponents(self, wolf_hull, game_data, tmp_path):
+    def test_incumbent_overlap_forces_opponents(self, wolf_hull, game_data, tmp_path, manifest):
         """After burn-in, new builds share opponents with the incumbent."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1039,7 +1049,7 @@ class TestStagedEvaluator:
             active_opponents=3, twfe=twfe_cfg, eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         # After burn-in (first 3), later builds should share opponents with earlier ones
@@ -1047,7 +1057,7 @@ class TestStagedEvaluator:
         # but we verify the pipeline completes and produces valid results
         assert len(records) >= 3
 
-    def test_anchor_first_ordering(self, wolf_hull, game_data, tmp_path):
+    def test_anchor_first_ordering(self, wolf_hull, game_data, tmp_path, manifest):
         """After burn-in, anchors appear at the front of the opponent order."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1067,7 +1077,7 @@ class TestStagedEvaluator:
             active_opponents=4, twfe=twfe_cfg, eval_log_path=log_path,
         )
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         # Post-burn-in records should have consistent first opponents (anchors)
@@ -1084,7 +1094,7 @@ class TestStagedEvaluator:
                         f"Anchor opponents should be consistent: {first_opps}"
                     )
 
-    def test_anchor_computation_after_burn_in(self, wolf_hull, game_data):
+    def test_anchor_computation_after_burn_in(self, wolf_hull, game_data, manifest):
         """Anchors are computed and locked after anchor_burn_in builds."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1100,7 +1110,7 @@ class TestStagedEvaluator:
         )
 
         # Pipeline should complete without errors — anchors computed after burn-in
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 3  # More than burn-in count
@@ -1121,7 +1131,7 @@ class TestParallelDispatch:
         """
         import threading
         from unittest.mock import MagicMock
-        from starsector_optimizer.models import CombatResult, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.models import CombatResult, EngineStats, ShipCombatResult, DamageBreakdown
         from starsector_optimizer.instance_manager import LocalInstancePool
 
         mock_pool = MagicMock(spec=LocalInstancePool)
@@ -1165,12 +1175,17 @@ class TestParallelDispatch:
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=EngineStats(
+                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                ),
             )
 
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_all_instances_used(self, game_data):
+    def test_all_instances_used(self, game_data, manifest):
         """With num_workers=3 and multiple opponents, at least 3 distinct
         threads call run_matchup — evidence StagedEvaluator's ThreadPoolExecutor
         is dispatching in parallel per pool.num_workers.
@@ -1183,14 +1198,14 @@ class TestParallelDispatch:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         used_threads = {tid for tid, _ in pool._call_log}
         assert len(used_threads) >= 3, (
             f"Expected at least 3 distinct threads, got: {used_threads}"
         )
 
-    def test_single_instance_works(self, game_data):
+    def test_single_instance_works(self, game_data, manifest):
         """With num_instances=1, optimization completes normally."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1199,12 +1214,12 @@ class TestParallelDispatch:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
-    def test_build_not_dispatched_twice(self, game_data):
+    def test_build_not_dispatched_twice(self, game_data, manifest):
         """Same build is never evaluated on two instances simultaneously."""
         import threading
         from starsector_optimizer.optimizer import optimize_hull
@@ -1234,14 +1249,14 @@ class TestParallelDispatch:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         for prefix, count in max_concurrent.items():
             assert count == 1, (
                 f"Build {prefix} had {count} concurrent dispatches, expected 1"
             )
 
-    def test_queue_drains_after_budget(self, game_data):
+    def test_queue_drains_after_budget(self, game_data, manifest):
         """After sim_budget reached, builds in queue still complete."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1251,7 +1266,7 @@ class TestParallelDispatch:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         # All sim trials should be COMPLETE or PRUNED (not abandoned mid-evaluation)
         allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
@@ -1316,7 +1331,7 @@ class TestEBShrinkage:
         assert config.eb.eb_min_builds == 8
         assert config.eb.ols_ridge == 1e-4
 
-    def test_build_covariate_vector_order(self, wolf_hull, game_data):
+    def test_build_covariate_vector_order(self, wolf_hull, game_data, manifest):
         """Covariate vector has the documented 7 elements in §2.7 order."""
         from starsector_optimizer.optimizer import _build_covariate_vector, _EBRecord
         from starsector_optimizer.models import EngineStats
@@ -1330,28 +1345,41 @@ class TestEBShrinkage:
                 hull_id="wolf", weapon_assignments={},
                 hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
             ),
-            wolf_hull, game_data,
+            wolf_hull, game_data, manifest,
         )
         sr = heuristic_score(build, wolf_hull, game_data)
         es = EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.4, ballistic_range_bonus=300.0,
+            shield_damage_taken_mult=0.75,
         )
-        record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=es)
+        record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=es, build=build)
 
-        X = _build_covariate_vector(record)
-        assert X.shape == (7,)
-        # Order: engine trio (3), total_dps, engagement_range, kinetic_dps_fraction, composite_score
-        assert X[0] == pytest.approx(12000.0)
-        assert X[1] == pytest.approx(800.0)
-        assert X[2] == pytest.approx(1050.0)
-        assert X[3] == pytest.approx(sr.total_dps)
-        assert X[4] == pytest.approx(sr.engagement_range)
+        X = _build_covariate_vector(record, build, wolf_hull, manifest)
+        # Post-Phase-7-prep: 10-dim vector in pinned order (see plan §arch decision 6).
+        # eff trio + 3 new engine reads + 3 python scorer + op_used_fraction.
+        assert X.shape == (10,)
+        assert X[0] == pytest.approx(12000.0)      # eff_max_flux
+        assert X[1] == pytest.approx(800.0)        # eff_flux_dissipation
+        assert X[2] == pytest.approx(1050.0)       # eff_armor_rating
+        assert X[3] == pytest.approx(1.4)          # eff_hull_hp_pct
+        assert X[4] == pytest.approx(300.0)        # ballistic_range_bonus
+        assert X[5] == pytest.approx(0.75)         # shield_damage_taken_mult
+        assert X[6] == pytest.approx(sr.total_dps)
+        assert X[7] == pytest.approx(sr.engagement_range)
         expected_kin_frac = sr.kinetic_dps / max(sr.total_dps, 1e-12)
-        assert X[5] == pytest.approx(expected_kin_frac)
-        assert X[6] == pytest.approx(sr.composite_score)
+        assert X[8] == pytest.approx(expected_kin_frac)
+        # X[9] = op_used_fraction — hull-dependent, just assert it's a finite ratio
+        assert 0.0 <= X[9] <= 1.0
 
-    def test_build_covariate_vector_fallback_warns(self, wolf_hull, game_data):
-        """When engine_stats is None, fall back to effective_stats and warn."""
+    def test_build_covariate_vector_hard_errors_on_missing_engine_stats(
+        self, wolf_hull, game_data, manifest,
+    ):
+        """Post-Phase-7-prep: engine_stats=None is a HARD invariant violation
+        (the Java SETUP hook always emits). The old Python compute_effective_stats
+        fallback path was eliminated — it silently mixed sourced rows with
+        re-derived rows and biased γ̂.
+        """
         from starsector_optimizer.optimizer import _build_covariate_vector, _EBRecord
         from starsector_optimizer.scorer import heuristic_score
         from starsector_optimizer.repair import repair_build
@@ -1362,18 +1390,13 @@ class TestEBShrinkage:
                 hull_id="wolf", weapon_assignments={},
                 hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
             ),
-            wolf_hull, game_data,
+            wolf_hull, game_data, manifest,
         )
         sr = heuristic_score(build, wolf_hull, game_data)
-        record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=None)
+        record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=None, build=build)
 
-        with pytest.warns(UserWarning, match="engine_stats"):
-            X = _build_covariate_vector(record)
-
-        assert X.shape == (7,)
-        assert X[0] == pytest.approx(sr.effective_stats.flux_capacity)
-        assert X[1] == pytest.approx(sr.effective_stats.flux_dissipation)
-        assert X[2] == pytest.approx(sr.effective_stats.armor_rating)
+        with pytest.raises(AssertionError, match="engine_stats missing"):
+            _build_covariate_vector(record, build, wolf_hull, manifest)
 
 
 class TestStagedEvaluatorEBIntegration:
@@ -1392,6 +1415,8 @@ class TestStagedEvaluatorEBIntegration:
         mock_pool.num_workers = num_instances
         default_es = engine_stats or EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            shield_damage_taken_mult=1.0,
         )
 
         def mock_run_matchup(matchup):
@@ -1426,7 +1451,7 @@ class TestStagedEvaluatorEBIntegration:
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_handle_result_captures_engine_stats(self, wolf_hull, game_data):
+    def test_handle_result_captures_engine_stats(self, wolf_hull, game_data, manifest):
         """First CombatResult with engine_stats populates _InFlightBuild.engine_stats."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1434,17 +1459,19 @@ class TestStagedEvaluatorEBIntegration:
 
         custom_es = EngineStats(
             eff_max_flux=9999.0, eff_flux_dissipation=555.0, eff_armor_rating=777.0,
+            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            shield_damage_taken_mult=1.0,
         )
         pool = self._make_mock_pool(engine_stats=custom_es)
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(sim_budget=3, warm_start_n=2, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
-    def test_finalize_uses_raw_alpha_when_few_builds(self, wolf_hull, game_data):
+    def test_finalize_uses_raw_alpha_when_few_builds(self, wolf_hull, game_data, manifest):
         """With n_builds < eb_min_builds, shrinkage is skipped."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1458,14 +1485,14 @@ class TestStagedEvaluatorEBIntegration:
             eb=EBShrinkageConfig(eb_min_builds=8),
         )
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Pipeline runs cleanly without shrinkage
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and t.value is not None]
         assert len(completed) > 0
 
-    def test_eb_pipeline_runs_above_min_builds(self, wolf_hull, game_data):
+    def test_eb_pipeline_runs_above_min_builds(self, wolf_hull, game_data, manifest):
         """With n_builds >= eb_min_builds, shrinkage engages and study still completes."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1479,7 +1506,7 @@ class TestStagedEvaluatorEBIntegration:
             eb=EBShrinkageConfig(eb_min_builds=4),
         )
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         completed = [t for t in study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE
                      and t.value is not None]
@@ -1501,6 +1528,8 @@ class TestEvalLogAuditFields:
         mock_pool.num_workers = 1
         default_es = engine_stats or EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            shield_damage_taken_mult=1.0,
         )
 
         def mock_run_matchup(matchup):
@@ -1535,7 +1564,7 @@ class TestEvalLogAuditFields:
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_twfe_fitness_field_present(self, wolf_hull, game_data, tmp_path):
+    def test_twfe_fitness_field_present(self, wolf_hull, game_data, tmp_path, manifest):
         """Every completed record has a twfe_fitness field (pre-shrinkage α̂)."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1549,7 +1578,7 @@ class TestEvalLogAuditFields:
             sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
             eval_log_path=log_path,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
         completed = [r for r in recs if not r["pruned"]]
@@ -1558,7 +1587,7 @@ class TestEvalLogAuditFields:
             assert "twfe_fitness" in rec
             assert isinstance(rec["twfe_fitness"], float)
 
-    def test_engine_stats_in_log(self, wolf_hull, game_data, tmp_path):
+    def test_engine_stats_in_log(self, wolf_hull, game_data, tmp_path, manifest):
         """Completed records persist the engine_stats dict used in EB."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1567,6 +1596,8 @@ class TestEvalLogAuditFields:
 
         es = EngineStats(
             eff_max_flux=9999.0, eff_flux_dissipation=555.0, eff_armor_rating=777.0,
+            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            shield_damage_taken_mult=1.0,
         )
         pool = self._make_mock_pool(engine_stats=es)
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -1575,7 +1606,7 @@ class TestEvalLogAuditFields:
             sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
             eval_log_path=log_path,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
         completed = [r for r in recs if not r["pruned"]]
@@ -1586,7 +1617,7 @@ class TestEvalLogAuditFields:
             assert rec["engine_stats"]["eff_flux_dissipation"] == pytest.approx(555.0)
             assert rec["engine_stats"]["eff_armor_rating"] == pytest.approx(777.0)
 
-    def test_covariate_vector_in_log(self, wolf_hull, game_data, tmp_path):
+    def test_covariate_vector_in_log(self, wolf_hull, game_data, tmp_path, manifest):
         """Completed records persist the 7-dim covariate vector used as X_i."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -1600,18 +1631,19 @@ class TestEvalLogAuditFields:
             sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
             eval_log_path=log_path,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
         completed = [r for r in recs if not r["pruned"]]
         assert len(completed) > 0
         for rec in completed:
             assert "covariate_vector" in rec
-            assert len(rec["covariate_vector"]) == 7
+            # Post-Phase-7-prep: 10-dim vector (engine 6 + scorer 3 + op_used_fraction).
+            assert len(rec["covariate_vector"]) == 10
             assert all(isinstance(x, float) for x in rec["covariate_vector"])
 
     def test_eb_diagnostics_omitted_before_shrinkage_kicks_in(
-        self, wolf_hull, game_data, tmp_path,
+        self, wolf_hull, game_data, tmp_path, manifest,
     ):
         """Pre-shrinkage trials (n < eb_min_builds, or var(α) ≈ 0) omit
         eb_diagnostics — signalling to downstream analysis that eb_fitness
@@ -1631,7 +1663,7 @@ class TestEvalLogAuditFields:
             sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
             eval_log_path=log_path,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
         completed = [r for r in recs if not r["pruned"]]
@@ -1655,6 +1687,8 @@ class TestEvalLogAuditFields:
         mock_pool.num_workers = 1
         default_es = EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            shield_damage_taken_mult=1.0,
         )
 
         def mock_run_matchup(matchup):
@@ -1697,7 +1731,7 @@ class TestEvalLogAuditFields:
         return mock_pool
 
     def test_eb_diagnostics_populated_after_shrinkage_activates(
-        self, wolf_hull, game_data, tmp_path,
+        self, wolf_hull, game_data, tmp_path, manifest,
     ):
         """Once score_matrix.n_builds >= eb_min_builds AND var(α) is non-
         trivial, completed rows carry eb_diagnostics with all five fields:
@@ -1720,7 +1754,7 @@ class TestEvalLogAuditFields:
             eval_log_path=log_path,
             eb=EBShrinkageConfig(eb_min_builds=3),
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
         with_diag = [
@@ -1959,6 +1993,8 @@ class TestShapeFitness:
         mock_pool.num_workers = num_instances
         es = EngineStats(
             eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            shield_damage_taken_mult=1.0,
         )
 
         def mock_run_matchup(matchup):
@@ -2001,7 +2037,7 @@ class TestShapeFitness:
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_shape_fitness_spreads_cluster(self, wolf_hull, game_data):
+    def test_shape_fitness_spreads_cluster(self, wolf_hull, game_data, manifest):
         """End-to-end: completed-trial values ∈ (0, 1] and span a range;
         ceiling fraction is small (A3 actually opens up the top quartile)."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -2013,7 +2049,7 @@ class TestShapeFitness:
         config = OptimizerConfig(
             sim_budget=10, warm_start_n=3, warm_start_sample_n=20,
         )
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config)
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         sim_trials = [t for t in study.trials
                       if t.state == optuna.trial.TrialState.COMPLETE
                       and t.value is not None
@@ -2029,7 +2065,7 @@ class TestShapeFitness:
             "keep the top quartile open"
         )
 
-    def test_eval_log_records_shape_diag(self, wolf_hull, game_data, tmp_path):
+    def test_eval_log_records_shape_diag(self, wolf_hull, game_data, tmp_path, manifest):
         """After 10 trials, JSONL rows carry shape_lambda + shape_passthrough_reason.
         Early rows show passthrough (reason populated); later rows show a fitted λ."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -2044,7 +2080,7 @@ class TestShapeFitness:
             sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
             eval_log_path=log_path,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
         completed = [r for r in recs if not r["pruned"]]
         assert len(completed) >= 10
@@ -2062,7 +2098,7 @@ class TestShapeFitness:
             "Expected at least one Box-Cox-active row after min_samples threshold"
         )
 
-    def test_shape_first_activation_logged_once(self, wolf_hull, game_data, caplog):
+    def test_shape_first_activation_logged_once(self, wolf_hull, game_data, caplog, manifest):
         """The 'A3 Box-Cox activated' INFO log fires exactly once per run."""
         import logging
         from starsector_optimizer.optimizer import optimize_hull
@@ -2075,7 +2111,7 @@ class TestShapeFitness:
             sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
         )
         with caplog.at_level(logging.INFO, logger="starsector_optimizer.optimizer"):
-            optimize_hull("wolf", game_data, pool, opp_pool, config)
+            optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         activation_records = [r for r in caplog.records
                               if "Box-Cox activated" in r.getMessage()]
         assert len(activation_records) == 1, (
@@ -2090,7 +2126,7 @@ class TestRegimeStudyIsolation:
         """Reuse TestShapeFitness/TestStagedEvaluator mock-pool pattern (PLAYER winner)."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, ShipCombatResult, DamageBreakdown,
+            CombatResult, EngineStats, ShipCombatResult, EngineStats, DamageBreakdown,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
@@ -2123,12 +2159,17 @@ class TestRegimeStudyIsolation:
                 player_ships=(player_ship,), enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                engine_stats=EngineStats(
+                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                ),
             )
 
         mock_pool.run_matchup = mock_run_matchup
         return mock_pool
 
-    def test_study_name_includes_regime(self, wolf_hull, game_data, tmp_path):
+    def test_study_name_includes_regime(self, wolf_hull, game_data, tmp_path, manifest):
         """Running two regimes on the same hull + same DB creates two
         distinct studies named f'{hull_id}__{regime.name}'."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -2148,13 +2189,13 @@ class TestRegimeStudyIsolation:
             sim_budget=3, warm_start_n=2, warm_start_sample_n=10,
             study_storage=storage, regime=REGIME_ENDGAME,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, cfg_mid)
-        optimize_hull("wolf", game_data, pool, opp_pool, cfg_endgame)
+        optimize_hull("wolf", game_data, pool, opp_pool, cfg_mid, manifest)
+        optimize_hull("wolf", game_data, pool, opp_pool, cfg_endgame, manifest)
         names = set(optuna.get_all_study_names(storage=storage))
         assert "wolf__mid" in names
         assert "wolf__endgame" in names
 
-    def test_eval_log_records_regime(self, wolf_hull, game_data, tmp_path):
+    def test_eval_log_records_regime(self, wolf_hull, game_data, tmp_path, manifest):
         """Every JSONL row carries 'regime' == configured regime.name."""
         import json
         from starsector_optimizer.optimizer import optimize_hull
@@ -2168,13 +2209,13 @@ class TestRegimeStudyIsolation:
             sim_budget=5, warm_start_n=2, warm_start_sample_n=10,
             eval_log_path=log_path, regime=REGIME_MID,
         )
-        optimize_hull("wolf", game_data, pool, opp_pool, config)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         recs = [json.loads(line) for line in log_path.read_text().splitlines()]
         assert len(recs) >= 5
         for rec in recs:
             assert rec.get("regime") == "mid"
 
-    def test_warm_start_missing_study_raises(self, wolf_hull, game_data, tmp_path):
+    def test_warm_start_missing_study_raises(self, wolf_hull, game_data, tmp_path, manifest):
         """warm_start_from_regime against an empty DB raises a clear ValueError."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
@@ -2189,10 +2230,10 @@ class TestRegimeStudyIsolation:
             warm_start_from_regime="early",
         )
         with pytest.raises(ValueError, match="early"):
-            optimize_hull("wolf", game_data, pool, opp_pool, config)
+            optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
     def test_warm_start_enqueues_prior_regime_incumbents(
-        self, wolf_hull, game_data, tmp_path, caplog
+        self, wolf_hull, game_data, tmp_path, caplog, manifest
     ):
         """Run endgame, then run mid with warm_start_from_regime='endgame';
         the warm-start helper emits its (enqueued, skipped) log line —
@@ -2212,7 +2253,7 @@ class TestRegimeStudyIsolation:
             sim_budget=5, warm_start_n=2, warm_start_sample_n=10,
             study_storage=storage, regime=REGIME_ENDGAME,
         )
-        seed_study = optimize_hull("wolf", game_data, pool, opp_pool, cfg_seed)
+        seed_study = optimize_hull("wolf", game_data, pool, opp_pool, cfg_seed, manifest)
         completed = [t for t in seed_study.trials
                      if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) >= 1, "seed study must have at least one completed trial"
@@ -2224,7 +2265,7 @@ class TestRegimeStudyIsolation:
                 study_storage=storage, regime=REGIME_MID,
                 warm_start_from_regime="endgame",
             )
-            optimize_hull("wolf", game_data, pool, opp_pool, cfg_warm)
+            optimize_hull("wolf", game_data, pool, opp_pool, cfg_warm, manifest)
 
         # Warm-start summary line must appear; contract is one log per run.
         summary_lines = [
@@ -2242,7 +2283,7 @@ class TestRegimeStudyIsolation:
         assert "skipped" in summary_lines[0]
 
     def test_warm_start_only_enqueues_feasible_trials(
-        self, wolf_hull, game_data, tmp_path
+        self, wolf_hull, game_data, tmp_path, manifest
     ):
         """Infeasible prior-regime trials are skipped, not silently enqueued.
 
@@ -2293,7 +2334,78 @@ class TestRegimeStudyIsolation:
             top_m=2,
             hull=wolf_hull,
             game_data=game_data,
+            manifest=manifest,
         )
         assert isinstance(enqueued, int)
         assert isinstance(skipped, int)
         assert enqueued + skipped == 2
+
+
+class TestPhase7PrepInvariants:
+    """Phase-7-prep relaunch: pinned contracts added in 2026-04-19 refactor."""
+
+    def test_warm_start_n_zero_default(self):
+        """Composite_score dropped from the EB prior means the heuristic-
+        warm-start N defaults to 0. Stock-build warm-start (Phase 1 of
+        `warm_start`) continues to seed; heuristic prior is opt-in only.
+        """
+        from starsector_optimizer.optimizer import OptimizerConfig
+        assert OptimizerConfig().warm_start_n == 0
+
+    def test_enginestats_has_six_frozen_fields(self):
+        """EngineStats grew from 3 → 6 fields; must be frozen-dataclass
+        construction (missing field raises TypeError)."""
+        from starsector_optimizer.models import EngineStats
+        es = EngineStats(
+            eff_max_flux=1.0, eff_flux_dissipation=2.0, eff_armor_rating=3.0,
+            eff_hull_hp_pct=4.0, ballistic_range_bonus=5.0,
+            shield_damage_taken_mult=6.0,
+        )
+        assert es.eff_max_flux == 1.0
+        assert es.eff_hull_hp_pct == 4.0
+        assert es.ballistic_range_bonus == 5.0
+        assert es.shield_damage_taken_mult == 6.0
+        # Missing field → TypeError
+        with pytest.raises(TypeError):
+            EngineStats(1.0, 2.0, 3.0)  # only 3 args
+        # Frozen → cannot mutate
+        import dataclasses as _dc
+        with pytest.raises(_dc.FrozenInstanceError):
+            es.eff_max_flux = 99.0  # type: ignore[misc]
+
+    def test_op_used_fraction_formula(self, game_data, manifest):
+        """_op_used_fraction reads OP costs authoritatively from the manifest.
+        Built a known Build on a vanilla hull; assert the ratio matches the
+        expected (ΣW + ΣM + vents + caps) / hull.ordnance_points."""
+        from starsector_optimizer.optimizer import _op_used_fraction
+        from starsector_optimizer.models import Build
+        hull = game_data.hulls["hammerhead"]  # has BALLISTIC slots
+        # Pick a small ballistic weapon and a cheap hullmod that exist in
+        # the manifest. Using any BALLISTIC SMALL weapon.
+        weapon_id = next(
+            (w.id for w in manifest.weapons.values()
+             if w.size.value == "MEDIUM" and w.op_cost > 0
+             and w.type.value == "BALLISTIC"),
+            None,
+        )
+        assert weapon_id is not None, "no MEDIUM BALLISTIC weapon in manifest"
+        hullmod_id = next(
+            (h.id for h in manifest.hullmods.values() if h.op_cost_by_size),
+            None,
+        )
+        assert hullmod_id is not None
+        slot_id = next(s.id for s in hull.weapon_slots
+                       if s.slot_type.value == "BALLISTIC" and s.slot_size.value == "MEDIUM")
+        build = Build(
+            hull_id="hammerhead",
+            weapon_assignments={slot_id: weapon_id},
+            hullmods=frozenset([hullmod_id]),
+            flux_vents=3, flux_capacitors=2,
+        )
+        expected_num = (
+            manifest.weapons[weapon_id].op_cost
+            + manifest.hullmods[hullmod_id].op_cost(hull.hull_size)
+            + 3 + 2
+        )
+        expected = expected_num / hull.ordnance_points
+        assert _op_used_fraction(build, hull, manifest) == pytest.approx(expected)

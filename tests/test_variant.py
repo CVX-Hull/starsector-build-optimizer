@@ -178,12 +178,12 @@ class TestLoadExistingVariant:
 
 class TestVariantToBuild:
 
-    def test_round_trip(self, game_data, game_dir):
+    def test_round_trip(self, game_data, game_dir, manifest):
         """Build → variant → variant_to_build preserves key fields."""
         from starsector_optimizer.variant import variant_to_build
         from starsector_optimizer.calibration import generate_random_build
         hull = game_data.hulls["wolf"]
-        build = generate_random_build(hull, game_data)
+        build = generate_random_build(hull, game_data, manifest)
         variant = generate_variant(build, hull, game_data)
         reconstructed = variant_to_build(variant, "wolf")
         assert reconstructed.hull_id == build.hull_id

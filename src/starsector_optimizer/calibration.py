@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from .game_manifest import GameManifest
 from .models import REGIME_ENDGAME, Build, GameData, RegimeConfig, ShipHull
 from .repair import repair_build
 from .scorer import heuristic_score, DEFAULT_WEIGHTS
@@ -13,6 +14,7 @@ from .search_space import build_search_space
 def generate_random_build(
     hull: ShipHull,
     game_data: GameData,
+    manifest: GameManifest,
     rng: np.random.Generator | None = None,
     regime: RegimeConfig = REGIME_ENDGAME,
 ) -> Build:
@@ -25,24 +27,20 @@ def generate_random_build(
     if rng is None:
         rng = np.random.default_rng()
 
-    space = build_search_space(hull, game_data, regime)
+    space = build_search_space(hull, game_data, regime, manifest)
 
-    # Random weapon per slot: 70% fill, 30% empty
     weapons: dict[str, str | None] = {}
     for slot_id, options in space.weapon_options.items():
         if rng.random() < 0.3 or len(options) <= 1:
             weapons[slot_id] = None
         else:
-            # Skip "empty" (index 0), pick from actual weapons
             weapons[slot_id] = rng.choice(options[1:])
 
-    # Random hullmods: 20% chance each
     hullmods = frozenset(
         m for m in space.eligible_hullmods
         if rng.random() < 0.2
     )
 
-    # Random vent fraction
     vent_fraction = float(rng.random())
 
     raw_build = Build(
@@ -53,12 +51,14 @@ def generate_random_build(
         flux_capacitors=0,
     )
 
-    return repair_build(raw_build, hull, game_data, vent_fraction=vent_fraction)
+    return repair_build(raw_build, hull, game_data, manifest,
+                        vent_fraction=vent_fraction)
 
 
 def generate_diverse_builds(
     hull: ShipHull,
     game_data: GameData,
+    manifest: GameManifest,
     n: int,
     seed: int = 42,
     regime: RegimeConfig = REGIME_ENDGAME,
@@ -67,7 +67,7 @@ def generate_diverse_builds(
     rng = np.random.default_rng(seed)
     builds = []
     for _ in range(n):
-        build = generate_random_build(hull, game_data, rng, regime=regime)
+        build = generate_random_build(hull, game_data, manifest, rng, regime=regime)
         builds.append(build)
     return builds
 

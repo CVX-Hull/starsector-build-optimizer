@@ -60,6 +60,9 @@ def _parse_setup_stats(data: dict) -> EngineStats | None:
             float(player["eff_max_flux"]),
             float(player["eff_flux_dissipation"]),
             float(player["eff_armor_rating"]),
+            float(player["eff_hull_hp_pct"]),
+            float(player["ballistic_range_bonus"]),
+            float(player["shield_damage_taken_mult"]),
         )
     except (KeyError, TypeError, ValueError) as e:
         warnings.warn(f"Malformed setup_stats, skipping: {e}", UserWarning, stacklevel=2)

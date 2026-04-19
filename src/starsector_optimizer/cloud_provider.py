@@ -109,6 +109,18 @@ class CloudProvider(abc.ABC):
     def get_spot_price(self, region: str, instance_type: str) -> float:
         """Most-recent observed spot price in USD/hour."""
 
+    def describe_ami_tag(
+        self, *, ami_id: str, region: str, tag_key: str,
+    ) -> str:
+        """Look up a tag value on an AMI. Default impl raises AttributeError
+        so the preflight code can skip the check on providers that don't
+        support tag introspection (Hetzner stub / fakes).
+        """
+        raise AttributeError(
+            f"{type(self).__name__} does not implement describe_ami_tag; "
+            f"preflight AMI tag check will be skipped."
+        )
+
 
 # ---- AWS ---------------------------------------------------------------------
 
@@ -531,6 +543,31 @@ class AWSProvider(CloudProvider):
         if not prices:
             return 0.0
         return float(prices[0]["SpotPrice"])
+
+    def describe_ami_tag(
+        self, *, ami_id: str, region: str, tag_key: str,
+    ) -> str:
+        """Read a tag value off the named AMI (image-id must match exactly).
+
+        Raises ValueError if the AMI doesn't exist or isn't tagged with
+        `tag_key`. Preflight uses this to cross-check baked GameVersion
+        against the committed manifest — mismatch blocks campaign launch.
+        """
+        client = self._client(region)
+        response = client.describe_images(ImageIds=[ami_id])
+        images = response.get("Images", [])
+        if not images:
+            raise ValueError(
+                f"AMI {ami_id} not found in region {region}; "
+                f"re-bake via scripts/cloud/packer or update ami_ids_by_region."
+            )
+        for tag in images[0].get("Tags") or []:
+            if tag.get("Key") == tag_key:
+                return str(tag.get("Value", ""))
+        raise ValueError(
+            f"AMI {ami_id} in {region} has no tag '{tag_key}'. "
+            f"Re-bake with the tag set in scripts/cloud/packer/aws.pkr.hcl."
+        )
 
 
 # ---- Hetzner (stub until $500+ campaigns) -----------------------------------

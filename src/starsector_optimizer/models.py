@@ -13,35 +13,11 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# --- Game constants (single source of truth) ---
-
-MAX_VENTS: dict[str, int] = {
-    "FRIGATE": 10,
-    "DESTROYER": 20,
-    "CRUISER": 30,
-    "CAPITAL_SHIP": 50,
-}
-
-MAX_CAPACITORS: dict[str, int] = MAX_VENTS
-
-FLUX_PER_CAPACITOR: int = 200
-DISSIPATION_PER_VENT: int = 10
-
-SHIELD_DAMAGE_MULT: dict[str, float] = {
-    "KINETIC": 2.0,
-    "HIGH_EXPLOSIVE": 0.5,
-    "ENERGY": 1.0,
-    "FRAGMENTATION": 0.25,
-}
-
-ARMOR_DAMAGE_MULT: dict[str, float] = {
-    "KINETIC": 0.5,
-    "HIGH_EXPLOSIVE": 2.0,
-    "ENERGY": 1.0,
-    "FRAGMENTATION": 0.25,
-}
-
-MAX_LOGISTICS_HULLMODS: int = 2
+# Game-rule constants are no longer hardcoded here — every value the engine
+# owns (flux_per_capacitor, dissipation_per_vent, max_logistics_hullmods,
+# max_vents_per_ship, shield/armor damage multipliers, default CR) lives in
+# the authoritative game manifest written by the combat-harness mod. See
+# `game_manifest.GameManifest.constants` + spec 29.
 
 
 # --- Enums ---
@@ -97,7 +73,7 @@ class SlotSize(_ParseableEnum):
 class MountType(_ParseableEnum):
     TURRET = "TURRET"
     HARDPOINT = "HARDPOINT"
-    HIDDEN = "HIDDEN"  # Non-assignable (built-in weapons only)
+    OTHER = "OTHER"  # Non-assignable (built-ins, system slots, decoratives)
 
 
 class ShieldType(_ParseableEnum):
@@ -163,14 +139,12 @@ class ShipHull:
     built_in_weapons: dict[str, str] = field(default_factory=dict)
     hints: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
-
-    @property
-    def max_vents(self) -> int:
-        return MAX_VENTS[self.hull_size.value]
-
-    @property
-    def max_capacitors(self) -> int:
-        return MAX_CAPACITORS[self.hull_size.value]
+    # Engine vent/capacitor caps. Populated at construction from
+    # `GameManifest.constants` (flat 30 in vanilla 0.98a); historic Python
+    # code read these off a hull-size-keyed dict that was wrong for capitals
+    # (bug H1 per the phase6 audit).
+    max_vents: int = 30
+    max_capacitors: int = 30
 
 
 @dataclass
@@ -241,14 +215,6 @@ class Weapon:
             return float("inf")
         return self.sustained_dps / flux
 
-    @property
-    def shield_dps(self) -> float:
-        return self.sustained_dps * SHIELD_DAMAGE_MULT[self.damage_type.value]
-
-    @property
-    def armor_dps(self) -> float:
-        return self.sustained_dps * ARMOR_DAMAGE_MULT[self.damage_type.value]
-
 
 @dataclass
 class HullMod:
@@ -300,22 +266,6 @@ class BuildSpec:
 
 
 @dataclass(frozen=True)
-class EffectiveStats:
-    flux_dissipation: float
-    flux_capacity: float
-    armor_rating: float
-    hull_hitpoints: float
-    shield_efficiency: float
-    shield_upkeep: float
-    has_shields: bool
-    max_speed: float
-    weapon_range_bonus: float
-    weapon_range_threshold: float | None   # SO: ranges above this are compressed
-    weapon_range_compression: float        # SO: multiplier for range above threshold
-    peak_performance_time: float
-
-
-@dataclass(frozen=True)
 class ScorerResult:
     composite_score: float
     total_dps: float
@@ -331,7 +281,6 @@ class ScorerResult:
     damage_mix: float
     engagement_range: float
     op_efficiency: float
-    effective_stats: EffectiveStats
 
 
 @dataclass
@@ -378,10 +327,18 @@ class EngineStats:
     Populated by `CombatHarnessPlugin.doSetup()` via `MutableShipStats` accessors
     after hullmod effects are applied. Used by Phase 5D EB shrinkage to regress
     TWFE α̂ on authoritative engine values rather than Python recomputed ones.
+
+    Six fields post-Phase-7-prep: the original three (eff_max_flux,
+    eff_flux_dissipation, eff_armor_rating) plus three new ones tracking
+    hull HP ratio, ballistic range bonus, and shield damage taken multiplier.
+    See docs/specs/28-deconfounding.md §10-dim covariate vector.
     """
     eff_max_flux: float
     eff_flux_dissipation: float
     eff_armor_rating: float
+    eff_hull_hp_pct: float
+    ballistic_range_bonus: float
+    shield_damage_taken_mult: float
 
 
 @dataclass(frozen=True)
@@ -612,6 +569,18 @@ class CampaignConfig:
     # construction (they never run the JVM; workers do). Default matches
     # the workstation convention `game/starsector` used by local runs.
     game_dir: str = "game/starsector"
+    # Phase-7-prep relaunch additions — operational safety for long-running
+    # concurrent-dispatch campaigns. See plan §architectural decisions.
+    # Spot-price cache TTL in the ledger tick (per-(region,instance_type)
+    # cached rate; refresh past TTL so cost is close to actual spend).
+    spot_price_cache_ttl_seconds: float = 300.0
+    # Hard cap on janitor requeues before dropping a pathological matchup.
+    # Protects against infinite re-queue of broken matchups.
+    max_requeues: int = 5
+    # Heartbeat staleness multiplier — a worker whose heartbeat is older
+    # than `heartbeat_stale_multiplier × interval_seconds` is treated as
+    # dead by the ledger tick and not charged.
+    heartbeat_stale_multiplier: int = 3
 
     def __repr__(self) -> str:
         fields = []

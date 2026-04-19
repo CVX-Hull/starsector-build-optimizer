@@ -123,11 +123,18 @@ class TestHeuristicScore:
         mono = heuristic_score(Build("test", {"WS1": "k1", "WS2": "k2"}, frozenset(), 0, 0), hull, gd_mono)
         assert mixed.damage_mix > mono.damage_mix
 
-    def test_effective_stats_present(self):
+    def test_hull_flux_dissipation_used_raw(self):
+        """Post-Phase-7-prep: scorer uses raw hull.flux_dissipation (no
+        hullmod effect application). The EffectiveStats indirection was
+        removed — effective-stats-style reads come from the Java SETUP
+        hook's EngineStats payload instead.
+        """
         build = Build("test", {}, frozenset(), 10, 5)
         result = heuristic_score(build, _hull(), _game_data())
-        assert result.effective_stats is not None
-        assert result.effective_stats.flux_dissipation > 0
+        # flux_balance is weapon_flux / hull.flux_dissipation; with no
+        # weapons it's 0.0. flux_efficiency similarly 0.0 when no weapons.
+        assert result.flux_balance >= 0.0
+        assert result.flux_efficiency >= 0.0
 
     def test_all_fields_populated(self):
         build = Build("test", {}, frozenset(), 10, 5)

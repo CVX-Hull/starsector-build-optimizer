@@ -6,7 +6,6 @@ from .models import (
     CombatResult,
     DamageBreakdown,
     DamageType,
-    EffectiveStats,
     GameData,
     Heartbeat,
     HullMod,
@@ -23,7 +22,7 @@ from .models import (
     WeaponSlot,
     WeaponType,
 )
-from .hullmod_effects import compute_effective_stats, HULLMOD_EFFECTS
+from .game_manifest import GameManifest
 from .parser import load_game_data
 from .search_space import build_search_space, SearchSpace
 from .repair import repair_build, is_feasible
@@ -32,7 +31,6 @@ from .variant import build_to_build_spec, generate_variant, write_variant_file, 
 from .calibration import generate_diverse_builds, compute_build_features
 from .result_parser import parse_combat_result, parse_results_file, write_queue_file
 from .instance_manager import InstanceConfig, LocalInstancePool
-from .timeout_tuner import TimeoutTuner
 from .combat_fitness import combat_fitness, aggregate_combat_fitness
 from .opponent_pool import (
     OpponentPool, discover_opponent_pool, get_opponents,
@@ -44,11 +42,11 @@ from .optimizer import (
 )
 
 __all__ = [
-    "Build", "BuildSpec", "CombatResult", "DamageBreakdown", "DamageType", "EffectiveStats",
+    "Build", "BuildSpec", "CombatResult", "DamageBreakdown", "DamageType",
     "GameData", "Heartbeat", "HullMod", "HullSize", "MatchupConfig", "MountType", "ScorerResult",
     "ShieldType", "ShipCombatResult", "ShipHull", "SlotSize", "SlotType",
     "Weapon", "WeaponSlot", "WeaponType",
-    "compute_effective_stats", "HULLMOD_EFFECTS",
+    "GameManifest",
     "load_game_data",
     "build_search_space", "SearchSpace",
     "repair_build", "is_feasible",
@@ -57,7 +55,6 @@ __all__ = [
     "generate_diverse_builds", "compute_build_features",
     "parse_combat_result", "parse_results_file", "write_queue_file",
     "InstanceConfig", "LocalInstancePool",
-    "TimeoutTuner",
     "OpponentPool", "discover_opponent_pool", "get_opponents",
     "generate_matchups", "compute_fitness", "hp_differential",
     "OptimizerConfig", "BuildCache", "StagedEvaluator", "optimize_hull", "warm_start",

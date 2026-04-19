@@ -28,6 +28,11 @@ import sys
 import time
 from dataclasses import asdict
 from datetime import datetime, timezone
+
+# Wall-clock seconds per hour — used by the ledger tick to convert
+# heartbeat interval seconds into fractional hours for billing.
+# Named constant (not a magic number) per CLAUDE.md Design Invariants.
+_SECONDS_PER_HOUR: float = 3600.0
 from pathlib import Path
 from typing import Any, Callable
 
@@ -158,6 +163,9 @@ def load_campaign_config(path: Path) -> CampaignConfig:
         "global_auto_stop": global_auto_stop,
     }
     # Pass through every optional tuning field if present in YAML.
+    # Keep this list in lockstep with `CampaignConfig` field additions —
+    # adding a field to the dataclass without listing it here silently
+    # drops operator YAML overrides (audit finding V1 / 2026-04-19).
     for opt in (
         "max_lifetime_hours", "visibility_timeout_seconds",
         "janitor_interval_seconds", "worker_poll_margin_seconds",
@@ -165,6 +173,12 @@ def load_campaign_config(path: Path) -> CampaignConfig:
         "ledger_heartbeat_interval_seconds", "base_flask_port",
         "redis_port", "redis_preflight_timeout_seconds",
         "matchup_slots_per_worker",
+        "teardown_retry_delay_seconds", "teardown_thread_join_seconds",
+        "flask_ports_per_study", "game_dir",
+        # Phase-7-prep additions (spot-price cache TTL, janitor hard cap,
+        # heartbeat staleness multiplier).
+        "spot_price_cache_ttl_seconds", "max_requeues",
+        "heartbeat_stale_multiplier",
     ):
         if opt in raw:
             kwargs[opt] = raw[opt]
@@ -256,8 +270,16 @@ def run_janitor_pass(
     source_list: str,
     processing_list: str,
     visibility_timeout_seconds: float,
+    max_requeues: int,
 ) -> int:
-    """Re-queue items in the processing list older than visibility_timeout_seconds."""
+    """Re-queue items in the processing list older than visibility_timeout_seconds.
+
+    Resets `enqueued_at` so the re-queued item gets a fresh visibility window
+    (prevents the M1 ping-pong bug where slow-but-healthy matchups get
+    re-queued every janitor interval forever). Tracks `requeue_count` per
+    item and drops items exceeding `max_requeues` with an ERROR log so
+    pathological matchups surface rather than loop silently.
+    """
     now = time.time()
     requeued = 0
     for raw in redis_client.lrange(processing_list, 0, -1):
@@ -266,16 +288,26 @@ def run_janitor_pass(
         except json.JSONDecodeError:
             continue
         enqueued_at = item.get("enqueued_at", now)
-        if (now - enqueued_at) > visibility_timeout_seconds:
-            removed = redis_client.lrem(processing_list, 1, raw)
-            if removed != 1:
-                continue
-            redis_client.lpush(source_list, raw)
-            requeued += 1
-            logger.warning(
-                "requeued stuck matchup: matchup_id=%s age=%.1fs",
-                item.get("matchup_id", "?"), now - enqueued_at,
+        if (now - enqueued_at) <= visibility_timeout_seconds:
+            continue
+        removed = redis_client.lrem(processing_list, 1, raw)
+        if removed != 1:
+            continue
+        requeue_count = int(item.get("requeue_count", 0)) + 1
+        if requeue_count > max_requeues:
+            logger.error(
+                "matchup %s exceeded max_requeues=%d; dropping",
+                item.get("matchup_id", "?"), max_requeues,
             )
+            continue
+        item["enqueued_at"] = now
+        item["requeue_count"] = requeue_count
+        redis_client.lpush(source_list, json.dumps(item))
+        requeued += 1
+        logger.warning(
+            "requeued stuck matchup: matchup_id=%s age=%.1fs requeue_count=%d",
+            item.get("matchup_id", "?"), now - enqueued_at, requeue_count,
+        )
     return requeued
 
 
@@ -481,6 +513,14 @@ class CampaignManager:
         self._tailnet_ip: str | None = None
         self._study_procs: list[subprocess.Popen] = []
         self._teardown_done = False
+        # Ledger-tick state. _redis is populated by _preflight, reused by
+        # _tick_ledger; _spot_price_cache holds (rate, fetched_at) per
+        # (region, instance_type) refreshed past spot_price_cache_ttl_seconds;
+        # _last_tick_ts[worker_id] -> last tick wall time so delta is
+        # capped at min(interval, now - last_tick) per tick.
+        self._redis: Any = None
+        self._spot_price_cache: dict[tuple[str, str], tuple[float, float]] = {}
+        self._last_tick_ts: dict[str, float] = {}
         atexit.register(self._atexit_teardown)
 
     @property
@@ -507,7 +547,7 @@ class CampaignManager:
     # ---- Preflight ----
 
     def _preflight(self) -> None:
-        """Four checks. Failure → logger.error(remediation) + sys.exit(2)."""
+        """Five checks + long-lived redis client. Failure → sys.exit(2)."""
         try:
             self._tailnet_ip = _resolve_tailnet_ip()
             _check_redis_reachable(
@@ -522,9 +562,56 @@ class CampaignManager:
             )
             _check_aws_credentials()
             _check_authkey_syntax(self._config.tailscale_authkey_secret)
+            self._check_manifest_and_ami_tags()
+            # Stash a long-lived Redis client for the ledger tick (SCAN +
+            # HGETALL per tick). 127.0.0.1 works for both kernel-mode
+            # tailscale (tailnet-IP bound locally) and userspace-mode
+            # (tailscale serve TCP proxy to localhost).
+            import redis
+            self._redis = redis.Redis(
+                host="127.0.0.1",
+                port=self._config.redis_port,
+                socket_timeout=self._config.redis_preflight_timeout_seconds,
+                decode_responses=True,
+            )
         except _PreflightFailure as e:
             logger.error("preflight failed: %s", e)
             sys.exit(2)
+
+    def _check_manifest_and_ami_tags(self) -> None:
+        """Assert the committed manifest loads AND every AMI's GameVersion tag
+        matches `manifest.constants.game_version`. Mismatch → stale AMI → the
+        worker will run against a different Starsector version than the one
+        the orchestrator has authoritative game-rule data for. Hard-fail.
+        """
+        from .game_manifest import GameManifest
+        manifest = GameManifest.load()
+        for region, ami_id in self._config.ami_ids_by_region.items():
+            try:
+                ami_gv = self._provider.describe_ami_tag(
+                    ami_id=ami_id, region=region, tag_key="GameVersion",
+                )
+            except AttributeError:
+                # Older CloudProvider impls without describe_ami_tag —
+                # skip the tag check and let operator catch drift visually.
+                logger.warning(
+                    "provider %s lacks describe_ami_tag; skipping AMI tag check",
+                    type(self._provider).__name__,
+                )
+                return
+            except Exception as e:
+                raise _PreflightFailure(
+                    f"describe_ami_tag({ami_id}, {region}) failed: {e}. "
+                    f"The AMI may be missing or in a different account."
+                ) from e
+            if ami_gv != manifest.constants.game_version:
+                raise _PreflightFailure(
+                    f"AMI {ami_id} in {region} tagged GameVersion={ami_gv!r} "
+                    f"but manifest.game_version={manifest.constants.game_version!r}. "
+                    f"Re-bake AMI after running scripts/update_manifest.py; "
+                    f"see .claude/skills/cloud-worker-ops.md."
+                )
+        self._manifest = manifest
 
     # ---- Subprocess env generation ----
 
@@ -591,9 +678,74 @@ class CampaignManager:
         interval = self._config.ledger_heartbeat_interval_seconds
         while any(p.poll() is None for p in study_procs):
             time.sleep(interval)
-            # Ledger ticking happens here in the real impl. Budget
-            # enforcement still fires via BudgetExceeded exceptions from
-            # CostLedger.record_heartbeat. Stub until live smoke.
+            self._tick_ledger()
+
+    def _tick_ledger(self) -> None:
+        """Iterate live worker heartbeats, attribute spot-price cost to each.
+
+        Reads `worker:<project_tag>:*:heartbeat` hashes from Redis, filters
+        out heartbeats older than `heartbeat_stale_multiplier × interval` as
+        dead, fetches spot price per (region, instance_type) via the
+        orchestrator-local cache, and records one ledger row per live worker
+        per tick. `BudgetExceeded` propagates out of `record_heartbeat`
+        → out of this method → caught by `run()`'s `except BudgetExceeded`.
+        """
+        if self._redis is None:
+            return
+        interval = self._config.ledger_heartbeat_interval_seconds
+        stale_cutoff = interval * self._config.heartbeat_stale_multiplier
+        now = time.time()
+        pattern = f"worker:{self._project_tag}:*:heartbeat"
+        for key in self._redis.scan_iter(match=pattern):
+            try:
+                hash_data = self._redis.hgetall(key)
+            except Exception as e:
+                logger.warning("ledger_tick: hgetall %s failed: %s", key, e)
+                continue
+            if not hash_data:
+                continue
+            try:
+                hb_ts = float(hash_data.get("timestamp", 0))
+            except (TypeError, ValueError):
+                continue
+            if now - hb_ts > stale_cutoff:
+                continue
+            # worker_id extracted from the key: worker:<project>:<worker>:heartbeat
+            parts = key.split(":") if isinstance(key, str) else []
+            worker_id = parts[2] if len(parts) >= 4 else hash_data.get("worker_id", "unknown")
+            region = hash_data.get("region", "unknown")
+            instance_type = hash_data.get("instance_type", "unknown")
+            rate = self._get_spot_price_cached(region, instance_type, now)
+            last_tick = self._last_tick_ts.get(worker_id, now - interval)
+            hours_elapsed = min(interval, now - last_tick) / _SECONDS_PER_HOUR
+            self._last_tick_ts[worker_id] = now
+            self._ledger.record_heartbeat(
+                worker_id=worker_id,
+                region=region,
+                instance_type=instance_type,
+                hours_elapsed=hours_elapsed,
+                rate_usd_per_hr=rate,
+            )
+
+    def _get_spot_price_cached(
+        self, region: str, instance_type: str, now: float,
+    ) -> float:
+        """Return cached spot price, refreshing past ttl."""
+        ttl = self._config.spot_price_cache_ttl_seconds
+        key = (region, instance_type)
+        cached = self._spot_price_cache.get(key)
+        if cached is not None and (now - cached[1]) <= ttl:
+            return cached[0]
+        try:
+            rate = self._provider.get_spot_price(region, instance_type)
+        except Exception as e:
+            logger.warning(
+                "get_spot_price(%s, %s) failed: %s — using 0.0",
+                region, instance_type, e,
+            )
+            rate = 0.0
+        self._spot_price_cache[key] = (rate, now)
+        return rate
 
     def teardown(self) -> None:
         """Terminate workers campaign-wide, assert list_active empty. One retry.

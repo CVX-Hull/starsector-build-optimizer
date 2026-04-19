@@ -64,6 +64,7 @@ def pool(fake_redis):
         result_timeout_seconds=2.0,
         visibility_timeout_seconds=120.0,
         janitor_interval_seconds=0.1,
+        max_requeues=5,
     )
     p.setup()
     yield p
@@ -146,6 +147,7 @@ class TestTimeout:
             result_timeout_seconds=0.3,
             visibility_timeout_seconds=120.0,
             janitor_interval_seconds=60.0,
+            max_requeues=5,
         )
         p.setup()
         try:
@@ -200,7 +202,7 @@ class TestDictToCombatResultRoundTrip:
             enemy_ships_destroyed=1,
             player_ships_retreated=0,
             enemy_ships_retreated=0,
-            engine_stats=EngineStats(8000.0, 600.0, 1500.0),
+            engine_stats=EngineStats(8000.0, 600.0, 1500.0, 1.0, 0.0, 1.0),
         )
 
         as_dict = dataclasses.asdict(original)

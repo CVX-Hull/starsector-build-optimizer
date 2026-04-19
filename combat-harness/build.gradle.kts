@@ -24,6 +24,7 @@ dependencies {
     testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
     testImplementation(files("${gameDir}/json.jar"))
     testImplementation(files("${gameDir}/starfarer.api.jar"))
+    testImplementation(files("${gameDir}/log4j-1.2.9.jar"))
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 

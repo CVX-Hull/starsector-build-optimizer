@@ -11,8 +11,13 @@ build/
 # IDE
 .idea/
 
-# Game data (large binaries)
-game/
+# Game data (large binaries) — ignore everything under game/ except
+# the authoritative manifest. Negation requires un-excluding parent
+# directories first (gitignore "parent dir excluded" limitation).
+game/*
+!game/starsector/
+game/starsector/*
+!game/starsector/manifest.json
 
 # OS
 .DS_Store

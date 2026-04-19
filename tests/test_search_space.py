@@ -115,16 +115,16 @@ class TestGetCompatibleWeapons:
 
 
 class TestGetEligibleHullmods:
-    def test_excludes_hidden(self):
+    def test_excludes_hidden(self, manifest):
         mods = {"m1": _hullmod("m1", is_hidden=False), "m2": _hullmod("m2", is_hidden=True)}
         hull = _hull()
-        result = get_eligible_hullmods(hull, mods)
+        result = get_eligible_hullmods(hull, mods, manifest)
         assert {m.id for m in result} == {"m1"}
 
-    def test_excludes_builtin(self):
+    def test_excludes_builtin(self, manifest):
         mods = {"m1": _hullmod("m1"), "m2": _hullmod("m2")}
         hull = _hull(built_in_mods=["m2"])
-        result = get_eligible_hullmods(hull, mods)
+        result = get_eligible_hullmods(hull, mods, manifest)
         assert {m.id for m in result} == {"m1"}
 
 
@@ -132,29 +132,31 @@ class TestGetEligibleHullmods:
 
 
 class TestBuildSearchSpace:
-    def test_returns_search_space(self, game_data):
+    def test_returns_search_space(self, game_data, manifest):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME, manifest)
         assert isinstance(space, SearchSpace)
         assert space.hull_id == "eagle"
 
-    def test_eagle_has_weapon_options(self, game_data):
+    def test_eagle_has_weapon_options(self, game_data, manifest):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME, manifest)
         assert len(space.weapon_options) > 0
 
-    def test_each_slot_starts_with_empty(self, game_data):
+    def test_each_slot_starts_with_empty(self, game_data, manifest):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME, manifest)
         for slot_id, options in space.weapon_options.items():
             assert options[0] == "empty", f"Slot {slot_id} doesn't start with 'empty'"
 
-    def test_slot_options_are_compatible(self, game_data):
+    def test_slot_options_are_compatible(self, game_data, manifest):
         """Every weapon in a slot's options must be compatible with that slot."""
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME, manifest)
         slot_map = {s.id: s for s in eagle.weapon_slots}
-        from starsector_optimizer.hullmod_effects import SLOT_COMPATIBILITY
+        from starsector_optimizer.game_manifest import (
+            SLOT_WEAPON_COMPATIBILITY as SLOT_COMPATIBILITY,
+        )
         for slot_id, options in space.weapon_options.items():
             slot = slot_map[slot_id]
             allowed = SLOT_COMPATIBILITY[slot.slot_type]
@@ -167,24 +169,24 @@ class TestBuildSearchSpace:
                 )
                 assert weapon.size == slot.slot_size
 
-    def test_builtin_weapon_slots_excluded(self, game_data):
+    def test_builtin_weapon_slots_excluded(self, game_data, manifest):
         """Slots with built-in weapons should not appear in weapon_options."""
         for hull in game_data.hulls.values():
             if not hull.built_in_weapons:
                 continue
-            space = build_search_space(hull, game_data, REGIME_ENDGAME)
+            space = build_search_space(hull, game_data, REGIME_ENDGAME, manifest)
             for slot_id in hull.built_in_weapons:
                 assert slot_id not in space.weapon_options
             break  # just test one hull with built-in weapons
 
-    def test_has_eligible_hullmods(self, game_data):
+    def test_has_eligible_hullmods(self, game_data, manifest):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME, manifest)
         assert len(space.eligible_hullmods) > 10
 
-    def test_has_max_vents_caps(self, game_data):
+    def test_has_max_vents_caps(self, game_data, manifest):
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_ENDGAME)
+        space = build_search_space(eagle, game_data, REGIME_ENDGAME, manifest)
         assert space.max_vents == 30  # CRUISER
         assert space.max_capacitors == 30
 
@@ -234,25 +236,25 @@ def _fixture_game_data_with_tagged_components():
 
 
 class TestRegimeMask:
-    def test_endgame_regime_admits_everything(self):
+    def test_endgame_regime_admits_everything(self, manifest):
         hull, gd = _fixture_game_data_with_tagged_components()
-        space = build_search_space(hull, gd, REGIME_ENDGAME)
+        space = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
         assert set(space.eligible_hullmods) == {"mt0", "mt1", "mt3", "mt_nds", "mt_rare"}
         # Weapon options include "empty" + all three weapons
         assert set(space.weapon_options["WS001"]) == {"empty", "w_clean", "w_rare", "w_codex"}
 
-    def test_mid_regime_excludes_no_drop_tagged_hullmods(self):
+    def test_mid_regime_excludes_no_drop_tagged_hullmods(self, manifest):
         hull, gd = _fixture_game_data_with_tagged_components()
-        mid = build_search_space(hull, gd, REGIME_MID)
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        mid = build_search_space(hull, gd, REGIME_MID, manifest)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
         assert "mt_nds" in endgame.eligible_hullmods
         assert "mt_nds" not in mid.eligible_hullmods
 
-    def test_early_regime_enforces_tier_ceiling(self):
+    def test_early_regime_enforces_tier_ceiling(self, manifest):
         hull, gd = _fixture_game_data_with_tagged_components()
-        early = build_search_space(hull, gd, REGIME_EARLY)
-        late = build_search_space(hull, gd, REGIME_LATE)
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        early = build_search_space(hull, gd, REGIME_EARLY, manifest)
+        late = build_search_space(hull, gd, REGIME_LATE, manifest)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
         # mt3 (tier 3) must be absent from early (max_hullmod_tier=1) but present elsewhere
         assert "mt3" not in early.eligible_hullmods
         assert "mt3" in late.eligible_hullmods
@@ -261,38 +263,38 @@ class TestRegimeMask:
         assert "mt0" in early.eligible_hullmods
         assert "mt1" in early.eligible_hullmods
 
-    def test_regime_excludes_rare_bp_weapons(self):
+    def test_regime_excludes_rare_bp_weapons(self, manifest):
         hull, gd = _fixture_game_data_with_tagged_components()
-        early = build_search_space(hull, gd, REGIME_EARLY)
-        mid = build_search_space(hull, gd, REGIME_MID)
-        late = build_search_space(hull, gd, REGIME_LATE)
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
+        early = build_search_space(hull, gd, REGIME_EARLY, manifest)
+        mid = build_search_space(hull, gd, REGIME_MID, manifest)
+        late = build_search_space(hull, gd, REGIME_LATE, manifest)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
         assert "w_rare" not in early.weapon_options["WS001"]
         assert "w_rare" not in mid.weapon_options["WS001"]
         assert "w_rare" in late.weapon_options["WS001"]
         assert "w_rare" in endgame.weapon_options["WS001"]
 
-    def test_regime_mask_preserves_ordering(self):
+    def test_regime_mask_preserves_ordering(self, manifest):
         """Surviving items keep their original relative order (determinism)."""
         hull, gd = _fixture_game_data_with_tagged_components()
-        endgame = build_search_space(hull, gd, REGIME_ENDGAME)
-        mid = build_search_space(hull, gd, REGIME_MID)
+        endgame = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
+        mid = build_search_space(hull, gd, REGIME_MID, manifest)
         # Build the expected sub-sequence: the endgame order filtered to mid's admitted set.
         admitted = set(mid.eligible_hullmods)
         expected_sub = [h for h in endgame.eligible_hullmods if h in admitted]
         assert mid.eligible_hullmods == expected_sub
 
-    def test_build_search_space_signature_has_regime(self, game_data):
+    def test_build_search_space_signature_has_regime(self, game_data, manifest):
         """Calling without regime must raise TypeError — no silent default."""
         eagle = game_data.hulls["eagle"]
         with pytest.raises(TypeError):
             build_search_space(eagle, game_data)  # type: ignore[call-arg]
         # explicit regime works
-        space = build_search_space(eagle, game_data, REGIME_MID)
+        space = build_search_space(eagle, game_data, REGIME_MID, manifest)
         assert isinstance(space, SearchSpace)
 
-    def test_regime_does_not_filter_hulls(self, game_data):
+    def test_regime_does_not_filter_hulls(self, game_data, manifest):
         """Regime never vetoes the hull itself — hull is user-picked."""
         eagle = game_data.hulls["eagle"]
-        space = build_search_space(eagle, game_data, REGIME_EARLY)
+        space = build_search_space(eagle, game_data, REGIME_EARLY, manifest)
         assert space.hull_id == "eagle"

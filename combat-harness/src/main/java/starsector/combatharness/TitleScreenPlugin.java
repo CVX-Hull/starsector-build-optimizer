@@ -41,11 +41,24 @@ public class TitleScreenPlugin extends BaseEveryFrameCombatPlugin {
         frameCount++;
         if (frameCount < TITLE_STABILIZE_FRAMES) return;
 
-        // Check for queue file
-        if (!MatchupQueue.existsInCommon()) return;
+        // Either a queued matchup OR a manifest-probe request funnels through
+        // the same Optimizer Arena navigation path — the MissionDefinition
+        // branches on the manifest-request sentinel so the probe runs inside
+        // a real CombatEngine where ShipAPI instances are live. Doing it at
+        // title-screen level fails because HullModEffect.getUnapplicableReason
+        // needs a real ship, not a factoried stub.
+        boolean probeRequested = Global.getSettings().fileExistsInCommon(
+                ManifestDumper.MANIFEST_REQUEST_FILE);
+        boolean queuePresent = MatchupQueue.existsInCommon();
+        if (!probeRequested && !queuePresent) return;
 
         triggered = true;
-        log.info("TitleScreenPlugin: queue detected, auto-navigating to Optimizer Arena...");
+        if (probeRequested) {
+            log.info("TitleScreenPlugin: manifest request detected, navigating "
+                    + "to Optimizer Arena for combat-context probe...");
+        } else {
+            log.info("TitleScreenPlugin: queue detected, auto-navigating to Optimizer Arena...");
+        }
 
         // Navigate in a separate thread (Robot delays would block the rendering thread)
         new Thread(new Runnable() {

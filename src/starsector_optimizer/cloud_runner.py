@@ -125,6 +125,7 @@ def run_cloud_study(
         result_timeout_seconds=campaign.result_timeout_seconds,
         visibility_timeout_seconds=campaign.visibility_timeout_seconds,
         janitor_interval_seconds=campaign.janitor_interval_seconds,
+        max_requeues=campaign.max_requeues,
     )
 
     try:

@@ -21,6 +21,18 @@ def game_data(game_dir):
     return load_game_data(game_dir)
 
 
+@pytest.fixture(scope="session")
+def manifest():
+    """The committed GameManifest.
+
+    Loaded once per test session — matches production: the orchestrator
+    loads the manifest once at startup. Tests that mutate manifest state
+    should construct their own local manifest, not modify this fixture.
+    """
+    from starsector_optimizer.game_manifest import GameManifest
+    return GameManifest.load()
+
+
 @pytest.fixture
 def fake_redis():
     """Function-scoped fakeredis client. Fresh per test to avoid cross-test leakage."""

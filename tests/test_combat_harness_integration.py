@@ -22,10 +22,10 @@ VARIANT_DIR = Path(__file__).parent.parent / "game" / "starsector" / "data" / "v
 class TestQueueGeneration:
     """Test that Python can write valid queue files for the Java mod."""
 
-    def test_generate_queue_json(self, game_data):
+    def test_generate_queue_json(self, game_data, manifest):
         """Generate a queue with multiple matchup configs."""
         eagle = game_data.hulls["eagle"]
-        build = generate_random_build(eagle, game_data)
+        build = generate_random_build(eagle, game_data, manifest)
         spec = build_to_build_spec(build, eagle, game_data, "eagle_test_001")
 
         queue = [
@@ -68,13 +68,13 @@ class TestQueueGeneration:
         assert mc.time_limit_seconds == 300.0
         assert mc.time_mult == 3.0
 
-    def test_deploy_queue_file(self, game_data):
+    def test_deploy_queue_file(self, game_data, manifest):
         """Write queue file to saves/common/ with .data extension."""
         if not SAVES_COMMON.exists():
             pytest.skip("saves/common/ not found")
 
         eagle = game_data.hulls["eagle"]
-        build = generate_random_build(eagle, game_data)
+        build = generate_random_build(eagle, game_data, manifest)
         spec = build_to_build_spec(build, eagle, game_data, "eagle_inttest_001")
 
         queue = [

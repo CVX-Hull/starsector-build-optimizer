@@ -117,6 +117,7 @@ class CloudWorkerPool(EvaluatorPool):
         result_timeout_seconds: float,
         visibility_timeout_seconds: float,
         janitor_interval_seconds: float,
+        max_requeues: int,
         teardown_thread_join_seconds: float = 5.0,
     ) -> None:
         self._study_id = study_id
@@ -128,6 +129,7 @@ class CloudWorkerPool(EvaluatorPool):
         self._result_timeout_seconds = result_timeout_seconds
         self._visibility_timeout_seconds = visibility_timeout_seconds
         self._janitor_interval_seconds = janitor_interval_seconds
+        self._max_requeues = max_requeues
         self._teardown_thread_join_seconds = teardown_thread_join_seconds
 
         self._source = _source_key(project_tag, study_id)
@@ -262,6 +264,7 @@ class CloudWorkerPool(EvaluatorPool):
                     self._source,
                     self._processing,
                     self._visibility_timeout_seconds,
+                    self._max_requeues,
                 )
             except Exception as e:
                 logger.error("janitor pass failed: %s", e)

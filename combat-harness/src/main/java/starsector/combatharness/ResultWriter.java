@@ -29,7 +29,11 @@ public class ResultWriter {
                                                  float duration,
                                                  float effMaxFlux,
                                                  float effFluxDissipation,
-                                                 float effArmorRating) throws JSONException {
+                                                 float effArmorRating,
+                                                 float effHullHpPct,
+                                                 float ballisticRangeBonus,
+                                                 float shieldDamageTakenMult)
+            throws JSONException {
         JSONArray playerArr = new JSONArray();
         JSONArray enemyArr = new JSONArray();
 
@@ -64,32 +68,45 @@ public class ResultWriter {
         result.put("enemy_ships", enemyArr);
         result.put("aggregate", aggregateToJSON(playerTotalDealt, enemyTotalDealt,
                 playerDestroyed, enemyDestroyed, 0, 0));
-        // Phase 5D: emit player SETUP stats when all three reads succeeded.
-        // The game's bundled org.json rejects NaN in put(), so on a failed
-        // read (any value is NaN — should never happen in production after
-        // a successful loadout swap) we omit the key; Python parser treats
-        // absence as engine_stats=None, matching pre-5D log replay semantics.
+        // Phase 5D + Phase-7-prep: emit 6 engine-truth player SETUP stats
+        // only when all reads succeeded. The game's bundled org.json rejects
+        // NaN in put(), so on a failed read (any value is NaN — should never
+        // happen in production after a successful loadout swap) we omit the
+        // key; Python parser treats absence as engine_stats=None, matching
+        // pre-5D log replay semantics.
         if (!Float.isNaN(effMaxFlux)
                 && !Float.isNaN(effFluxDissipation)
-                && !Float.isNaN(effArmorRating)) {
+                && !Float.isNaN(effArmorRating)
+                && !Float.isNaN(effHullHpPct)
+                && !Float.isNaN(ballisticRangeBonus)
+                && !Float.isNaN(shieldDamageTakenMult)) {
             result.put("setup_stats",
-                    buildSetupStatsJSON(effMaxFlux, effFluxDissipation, effArmorRating));
+                    buildSetupStatsJSON(effMaxFlux, effFluxDissipation, effArmorRating,
+                            effHullHpPct, ballisticRangeBonus, shieldDamageTakenMult));
         }
         return result;
     }
 
     /**
-     * Phase 5D — wrap post-SETUP engine-computed player stats for EB shrinkage.
-     * Matches the individual-primitive parameter style of damageToJSON / fluxStatsToJSON.
-     * Caller must ensure all three values are finite (org.json rejects NaN).
+     * Phase 5D + Phase-7-prep — wrap post-SETUP engine-computed player stats
+     * for EB shrinkage. Matches the individual-primitive parameter style of
+     * damageToJSON / fluxStatsToJSON. Caller must ensure all six values are
+     * finite (org.json rejects NaN).
      */
     public static JSONObject buildSetupStatsJSON(float effMaxFlux,
                                                   float effFluxDissipation,
-                                                  float effArmorRating) throws JSONException {
+                                                  float effArmorRating,
+                                                  float effHullHpPct,
+                                                  float ballisticRangeBonus,
+                                                  float shieldDamageTakenMult)
+            throws JSONException {
         JSONObject player = new JSONObject();
         player.put("eff_max_flux", effMaxFlux);
         player.put("eff_flux_dissipation", effFluxDissipation);
         player.put("eff_armor_rating", effArmorRating);
+        player.put("eff_hull_hp_pct", effHullHpPct);
+        player.put("ballistic_range_bonus", ballisticRangeBonus);
+        player.put("shield_damage_taken_mult", shieldDamageTakenMult);
         JSONObject wrapper = new JSONObject();
         wrapper.put("player", player);
         return wrapper;

@@ -8,7 +8,6 @@ from starsector_optimizer.models import (
     CombatResult,
     DamageBreakdown,
     DamageType,
-    EffectiveStats,
     GameData,
     HullMod,
     HullSize,
@@ -147,26 +146,15 @@ class TestShipHull:
         assert hull.hull_size == HullSize.CRUISER
         assert hull.ordnance_points == 155
 
-    def test_max_vents_frigate(self):
-        hull = _make_hull(hull_size=HullSize.FRIGATE)
-        assert hull.max_vents == 10
-
-    def test_max_vents_destroyer(self):
-        hull = _make_hull(hull_size=HullSize.DESTROYER)
-        assert hull.max_vents == 20
-
-    def test_max_vents_cruiser(self):
-        hull = _make_hull(hull_size=HullSize.CRUISER)
-        assert hull.max_vents == 30
-
-    def test_max_vents_capital(self):
-        hull = _make_hull(hull_size=HullSize.CAPITAL_SHIP)
-        assert hull.max_vents == 50
-
-    def test_max_capacitors_equals_max_vents(self):
+    def test_max_vents_is_flat_30_default(self):
+        """Post-Phase-7-prep: max_vents is a flat dataclass field defaulting
+        to 30 (the vanilla manifest.constants.max_vents_per_ship value). The
+        old hull-size-keyed dict gave capitals 50, which was wrong per
+        audit bug H1 — the engine caps at 30 for every hull size."""
         for size in HullSize:
             hull = _make_hull(hull_size=size)
-            assert hull.max_capacitors == hull.max_vents
+            assert hull.max_vents == 30
+            assert hull.max_capacitors == 30
 
 
 # --- Weapon tests ---
@@ -238,21 +226,23 @@ class TestWeaponDerivedMetrics:
         w = _make_weapon(flux_per_shot=0.0, flux_per_second=0.0)
         assert w.flux_efficiency == float("inf") or w.flux_efficiency > 1e6
 
-    def test_shield_dps_kinetic(self):
-        w = _make_weapon(damage_type=DamageType.KINETIC)
-        assert pytest.approx(w.shield_dps, rel=0.01) == w.sustained_dps * 2.0
+    # Weapon.shield_dps / armor_dps properties deleted post-Phase-7-prep;
+    # damage multipliers now live in manifest.constants.{shield,armor}_damage_mult_by_type
+    # and the scorer / covariate-builder apply them when needed. Nothing
+    # downstream reads weapon.shield_dps anymore, so the properties were
+    # dropped.
 
-    def test_shield_dps_he(self):
-        w = _make_weapon(damage_type=DamageType.HIGH_EXPLOSIVE)
-        assert pytest.approx(w.shield_dps, rel=0.01) == w.sustained_dps * 0.5
-
-    def test_armor_dps_kinetic(self):
-        w = _make_weapon(damage_type=DamageType.KINETIC)
-        assert pytest.approx(w.armor_dps, rel=0.01) == w.sustained_dps * 0.5
-
-    def test_armor_dps_he(self):
-        w = _make_weapon(damage_type=DamageType.HIGH_EXPLOSIVE)
-        assert pytest.approx(w.armor_dps, rel=0.01) == w.sustained_dps * 2.0
+    def test_damage_multipliers_loaded_from_manifest(self, manifest):
+        """Engine rule: KINETIC vs shield = 2.0x, HE vs shield = 0.5x.
+        These live in manifest.constants and flow from Java →
+        settings.json → manifest, no longer hardcoded in Python.
+        """
+        shield = manifest.constants.shield_damage_mult_by_type
+        assert shield[DamageType.KINETIC] == 2.0
+        assert shield[DamageType.HIGH_EXPLOSIVE] == 0.5
+        armor = manifest.constants.armor_damage_mult_by_type
+        assert armor[DamageType.KINETIC] == 0.5
+        assert armor[DamageType.HIGH_EXPLOSIVE] == 2.0
 
     def test_is_pd(self):
         w = _make_weapon(hints=["PD", "ANTI_FTR"])
@@ -333,38 +323,20 @@ class TestBuild:
         assert isinstance(build.hullmods, frozenset)
 
 
-# --- EffectiveStats and ScorerResult tests ---
-
-
-class TestEffectiveStats:
-    def test_construction(self):
-        stats = EffectiveStats(
-            flux_dissipation=700.0, flux_capacity=11000.0,
-            armor_rating=1000.0, hull_hitpoints=8000.0,
-            shield_efficiency=0.8, shield_upkeep=0.4,
-            has_shields=True, max_speed=60.0,
-            weapon_range_bonus=0.0, weapon_range_threshold=None,
-            weapon_range_compression=1.0,
-            peak_performance_time=480.0,
-        )
-        assert stats.flux_dissipation == 700.0
-        assert stats.has_shields is True
+# --- ScorerResult tests (EffectiveStats deleted post-Phase-7-prep) ---
 
 
 class TestScorerResult:
     def test_construction(self):
-        stats = EffectiveStats(700, 11000, 1000, 8000, 0.8, 0.4,
-                               True, 60, 0, None, 1.0, 480)
         result = ScorerResult(
             composite_score=0.75, total_dps=500.0, kinetic_dps=300.0,
             he_dps=200.0, energy_dps=0.0, flux_balance=0.7,
             flux_efficiency=1.5, effective_hp=20000.0, armor_ehp=5000.0,
             shield_ehp=10000.0, range_coherence=0.9, damage_mix=0.8,
             engagement_range=700.0, op_efficiency=3.5,
-            effective_stats=stats,
         )
         assert result.composite_score == 0.75
-        assert result.effective_stats.flux_dissipation == 700
+        assert result.total_dps == 500.0
 
 
 # --- GameData tests ---

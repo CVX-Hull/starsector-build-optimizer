@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from .game_manifest import GameManifest
 from .models import GameData, HullSize, ShipHull
 from .search_space import build_search_space
 
@@ -64,7 +65,9 @@ class ThroughputEstimate:
     cost_estimates: dict[str, float]  # provider name → USD
 
 
-def compute_hull_space_stats(hull: ShipHull, game_data: GameData) -> HullSpaceStats:
+def compute_hull_space_stats(
+    hull: ShipHull, game_data: GameData, manifest: GameManifest,
+) -> HullSpaceStats:
     """Compute search space statistics for a single hull.
 
     Uses `REGIME_ENDGAME` to reflect the unfiltered (superset) component
@@ -72,7 +75,7 @@ def compute_hull_space_stats(hull: ShipHull, game_data: GameData) -> HullSpaceSt
     maximum, not a regime-masked subset.
     """
     from .models import REGIME_ENDGAME
-    space = build_search_space(hull, game_data, REGIME_ENDGAME)
+    space = build_search_space(hull, game_data, REGIME_ENDGAME, manifest)
 
     options_per_slot = [len(opts) for opts in space.weapon_options.values()]
     weapon_combinations = math.prod(options_per_slot) if options_per_slot else 1
@@ -85,14 +88,17 @@ def compute_hull_space_stats(hull: ShipHull, game_data: GameData) -> HullSpaceSt
         options_per_slot=options_per_slot,
         weapon_combinations=weapon_combinations,
         num_eligible_hullmods=len(space.eligible_hullmods),
-        max_vents=hull.max_vents,
-        max_capacitors=hull.max_capacitors,
+        max_vents=manifest.constants.max_vents_per_ship,
+        max_capacitors=manifest.constants.max_capacitors_per_ship,
     )
 
 
-def compute_all_hull_stats(game_data: GameData) -> list[HullSpaceStats]:
+def compute_all_hull_stats(
+    game_data: GameData, manifest: GameManifest,
+) -> list[HullSpaceStats]:
     """Compute search space statistics for all hulls, sorted by weapon_combinations descending."""
-    stats = [compute_hull_space_stats(h, game_data) for h in game_data.hulls.values()]
+    stats = [compute_hull_space_stats(h, game_data, manifest)
+             for h in game_data.hulls.values()]
     stats.sort(key=lambda s: s.weapon_combinations, reverse=True)
     return stats
 

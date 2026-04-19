@@ -183,15 +183,83 @@ def should_exit(config: WorkerConfig, started_at: float) -> bool:
     return elapsed_hours >= config.max_lifetime_hours
 
 
+# IMDSv2 constants (AWS EC2 Instance Metadata Service). Same TTL + URL base
+# pattern as cloud_userdata.py — kept as module constants so the timing
+# budget is explicit (not magic numbers in function bodies).
+_IMDSV2_TOKEN_TTL_SECONDS: int = 300
+_IMDS_REQUEST_TIMEOUT_SECONDS: float = 2.0
+_IMDS_BASE_URL: str = "http://169.254.169.254"
+_WORKER_VM_METADATA: dict[str, str] = {}
+
+
+def _fetch_vm_metadata() -> dict[str, str]:
+    """Populate `_WORKER_VM_METADATA` via IMDSv2 — region + instance type.
+
+    Cached in the module-level dict so subsequent heartbeats don't hammer
+    the IMDSv2 endpoint. On any IMDS failure (unreachable, HTTP error,
+    timeout) logs ERROR (not WARN — this is a cloud-worker misconfiguration
+    whose only observable effect is a mis-attributed ledger row) and
+    populates the fallback `"unknown"` values. The ledger will then record
+    rate_usd_per_hr=0.0 (get_spot_price miss path) so the cost row is
+    self-identifying as an IMDS failure rather than silently under-charged.
+    """
+    import urllib.request
+    import urllib.error
+    if _WORKER_VM_METADATA:
+        return _WORKER_VM_METADATA
+    fallback = {"region": "unknown", "instance_type": "unknown"}
+    try:
+        token_req = urllib.request.Request(
+            f"{_IMDS_BASE_URL}/latest/api/token",
+            method="PUT",
+            headers={
+                "X-aws-ec2-metadata-token-ttl-seconds": str(_IMDSV2_TOKEN_TTL_SECONDS),
+            },
+        )
+        with urllib.request.urlopen(
+            token_req, timeout=_IMDS_REQUEST_TIMEOUT_SECONDS,
+        ) as resp:
+            token = resp.read().decode().strip()
+
+        def _get(path: str) -> str:
+            req = urllib.request.Request(
+                f"{_IMDS_BASE_URL}/latest/meta-data/{path}",
+                headers={"X-aws-ec2-metadata-token": token},
+            )
+            with urllib.request.urlopen(
+                req, timeout=_IMDS_REQUEST_TIMEOUT_SECONDS,
+            ) as r:
+                return r.read().decode().strip()
+
+        region = _get("placement/region")
+        instance_type = _get("instance-type")
+        _WORKER_VM_METADATA["region"] = region
+        _WORKER_VM_METADATA["instance_type"] = instance_type
+        return _WORKER_VM_METADATA
+    except Exception as e:
+        logging.getLogger(__name__).error(
+            "IMDSv2 metadata fetch failed: %s — ledger will record unknown",
+            e,
+        )
+        _WORKER_VM_METADATA.update(fallback)
+        return _WORKER_VM_METADATA
+
+
 def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
-    """Write worker liveness + CPU-load telemetry.
+    """Write worker liveness + CPU-load + VM-identity telemetry.
 
     `load_avg_*` comes from `os.getloadavg()` so the orchestrator can verify
     the configured `matchup_slots_per_worker` actually matches the box's
     capacity: on c7a.2xlarge (8 vCPU, 2 JVMs @ ~2.5 cores each), healthy
     load_1min should land around 5–7. A persistent load_1min > cpu_count
     indicates over-subscription; < 3 indicates under-utilization.
+
+    `region`/`instance_type` come from the IMDSv2 fetch cached in
+    `_WORKER_VM_METADATA` (populated on first call). The ledger tick
+    (CampaignManager._tick_ledger) reads these to attribute cost per
+    region × instance_type bucket via the provider's spot-price API.
     """
+    meta = _fetch_vm_metadata()
     load_1, load_5, load_15 = os.getloadavg()
     redis_client.hset(
         f"worker:{project_tag}:{worker_id}:heartbeat",
@@ -201,6 +269,8 @@ def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
             "load_avg_5min": load_5,
             "load_avg_15min": load_15,
             "cpu_count": os.cpu_count() or 0,
+            "region": meta.get("region", "unknown"),
+            "instance_type": meta.get("instance_type", "unknown"),
         },
     )
 

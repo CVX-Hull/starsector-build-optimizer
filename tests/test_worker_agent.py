@@ -88,7 +88,7 @@ class TestJanitor:
         processing = "queue:s:processing"
         stuck = json.dumps({"matchup_id": "m1", "enqueued_at": time.time() - 9999})
         fake_redis.lpush(processing, stuck)
-        run_janitor_pass(fake_redis, source, processing, visibility_timeout_seconds=120.0)
+        run_janitor_pass(fake_redis, source, processing, visibility_timeout_seconds=120.0, max_requeues=5)
         assert fake_redis.llen(source) == 1
         assert fake_redis.llen(processing) == 0
 
@@ -98,7 +98,7 @@ class TestJanitor:
         processing = "queue:s:processing"
         fresh = json.dumps({"matchup_id": "m1", "enqueued_at": time.time()})
         fake_redis.lpush(processing, fresh)
-        run_janitor_pass(fake_redis, source, processing, visibility_timeout_seconds=120.0)
+        run_janitor_pass(fake_redis, source, processing, visibility_timeout_seconds=120.0, max_requeues=5)
         assert fake_redis.llen(source) == 0
         assert fake_redis.llen(processing) == 1
 
@@ -247,6 +247,52 @@ class TestHeartbeat:
         heartbeat(fake_redis, "starsector-smokeB", worker_config.worker_id)
         assert fake_redis.exists(f"worker:starsector-smokeA:{worker_config.worker_id}:heartbeat")
         assert fake_redis.exists(f"worker:starsector-smokeB:{worker_config.worker_id}:heartbeat")
+
+    def test_heartbeat_payload_includes_region_and_instance_type(
+        self, worker_config, fake_redis,
+    ):
+        """Phase-7-prep: heartbeat carries IMDSv2-derived region + instance_type
+        so the orchestrator's _tick_ledger can attribute cost per (region,
+        instance_type) bucket. Seed the module-level cache to avoid hitting
+        the real IMDS endpoint during the unit test.
+        """
+        import starsector_optimizer.worker_agent as wa
+        wa._WORKER_VM_METADATA.clear()
+        wa._WORKER_VM_METADATA.update({
+            "region": "us-east-1", "instance_type": "c7a.2xlarge",
+        })
+        try:
+            wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id)
+            key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
+            hb = fake_redis.hgetall(key)
+            normalized = {
+                (k.decode() if isinstance(k, bytes) else k):
+                (v.decode() if isinstance(v, bytes) else v)
+                for k, v in hb.items()
+            }
+            assert normalized["region"] == "us-east-1"
+            assert normalized["instance_type"] == "c7a.2xlarge"
+            assert "timestamp" in normalized
+        finally:
+            wa._WORKER_VM_METADATA.clear()
+
+    def test_fetch_vm_metadata_falls_back_on_imds_failure(self, caplog):
+        """IMDSv2 endpoint unreachable → ERROR-log + {"unknown", "unknown"}
+        fallback, so the ledger tick writes a self-identifying zero-rate row
+        rather than silently mis-attributing cost.
+        """
+        import logging
+        import starsector_optimizer.worker_agent as wa
+        wa._WORKER_VM_METADATA.clear()
+        with patch("urllib.request.urlopen",
+                   side_effect=Exception("IMDS unreachable")):
+            with caplog.at_level(
+                logging.ERROR, logger="starsector_optimizer.worker_agent",
+            ):
+                result = wa._fetch_vm_metadata()
+        assert result == {"region": "unknown", "instance_type": "unknown"}
+        assert any("IMDSv2" in r.getMessage() for r in caplog.records)
+        wa._WORKER_VM_METADATA.clear()
 
 
 class TestConsumerConcurrency:

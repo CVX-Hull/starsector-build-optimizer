@@ -247,12 +247,18 @@ class TestParseSetupStats:
     """Phase 5D — tolerant parsing of the new Java setup_stats block."""
 
     def test_populates_engine_stats(self):
+        """Post-Phase-7-prep: 6-field setup_stats block (added 3 fields:
+        eff_hull_hp_pct / ballistic_range_bonus / shield_damage_taken_mult).
+        """
         data = dict(SAMPLE_RESULT)
         data["setup_stats"] = {
             "player": {
                 "eff_max_flux": 12000.0,
                 "eff_flux_dissipation": 800.0,
                 "eff_armor_rating": 1050.0,
+                "eff_hull_hp_pct": 1.4,
+                "ballistic_range_bonus": 300.0,
+                "shield_damage_taken_mult": 0.75,
             }
         }
         result = parse_combat_result(data)
@@ -260,6 +266,9 @@ class TestParseSetupStats:
         assert result.engine_stats.eff_max_flux == pytest.approx(12000.0)
         assert result.engine_stats.eff_flux_dissipation == pytest.approx(800.0)
         assert result.engine_stats.eff_armor_rating == pytest.approx(1050.0)
+        assert result.engine_stats.eff_hull_hp_pct == pytest.approx(1.4)
+        assert result.engine_stats.ballistic_range_bonus == pytest.approx(300.0)
+        assert result.engine_stats.shield_damage_taken_mult == pytest.approx(0.75)
 
     def test_missing_block_is_none_no_warn(self):
         """Absent setup_stats → engine_stats=None, NO warning (legitimate pre-5D)."""
@@ -298,6 +307,9 @@ class TestParseSetupStats:
                 "eff_max_flux": float("nan"),
                 "eff_flux_dissipation": 800.0,
                 "eff_armor_rating": 1050.0,
+                "eff_hull_hp_pct": 1.0,
+                "ballistic_range_bonus": 0.0,
+                "shield_damage_taken_mult": 1.0,
             }
         }
         with pytest.warns(UserWarning, match="NaN"):

@@ -67,30 +67,43 @@ class ResultWriterTest {
     }
 
     @Test
-    void buildSetupStatsJSONContainsPlayerBlock() throws Exception {
-        JSONObject json = ResultWriter.buildSetupStatsJSON(12000f, 800f, 1050f);
+    void buildSetupStatsJSONContainsAllSixPlayerFields() throws Exception {
+        JSONObject json = ResultWriter.buildSetupStatsJSON(
+                12000f, 800f, 1050f, 1.4f, 300f, 0.75f);
 
         assertTrue(json.has("player"));
         JSONObject player = json.getJSONObject("player");
         assertEquals(12000f, (float) player.getDouble("eff_max_flux"), 0.01f);
         assertEquals(800f, (float) player.getDouble("eff_flux_dissipation"), 0.01f);
         assertEquals(1050f, (float) player.getDouble("eff_armor_rating"), 0.01f);
+        assertEquals(1.4f, (float) player.getDouble("eff_hull_hp_pct"), 0.01f);
+        assertEquals(300f, (float) player.getDouble("ballistic_range_bonus"), 0.01f);
+        assertEquals(0.75f, (float) player.getDouble("shield_damage_taken_mult"), 0.01f);
     }
 
     @Test
     void buildSetupStatsJSONPropagatesZeros() throws Exception {
-        JSONObject json = ResultWriter.buildSetupStatsJSON(0f, 0f, 0f);
+        JSONObject json = ResultWriter.buildSetupStatsJSON(
+                0f, 0f, 0f, 0f, 0f, 0f);
 
         JSONObject player = json.getJSONObject("player");
         assertEquals(0f, (float) player.getDouble("eff_max_flux"), 0.01f);
         assertEquals(0f, (float) player.getDouble("eff_flux_dissipation"), 0.01f);
         assertEquals(0f, (float) player.getDouble("eff_armor_rating"), 0.01f);
+        assertEquals(0f, (float) player.getDouble("eff_hull_hp_pct"), 0.01f);
+        assertEquals(0f, (float) player.getDouble("ballistic_range_bonus"), 0.01f);
+        assertEquals(0f, (float) player.getDouble("shield_damage_taken_mult"), 0.01f);
     }
 
     @Test
-    void buildSetupStatsJSONRejectsNaN() {
+    void buildSetupStatsJSONRejectsNaNInAnyField() {
         // Game's bundled org.json rejects NaN in put(). Caller must check.
+        // Any of the 6 fields being NaN must fail fast.
         assertThrows(Exception.class, () ->
-                ResultWriter.buildSetupStatsJSON(Float.NaN, 800f, 1050f));
+                ResultWriter.buildSetupStatsJSON(Float.NaN, 800f, 1050f, 1.4f, 300f, 0.75f));
+        assertThrows(Exception.class, () ->
+                ResultWriter.buildSetupStatsJSON(12000f, 800f, 1050f, Float.NaN, 300f, 0.75f));
+        assertThrows(Exception.class, () ->
+                ResultWriter.buildSetupStatsJSON(12000f, 800f, 1050f, 1.4f, 300f, Float.NaN));
     }
 }

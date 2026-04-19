@@ -1,11 +1,17 @@
-"""Per-hull search space builder."""
+"""Per-hull search space builder — manifest-driven.
+
+All game-rule filtering (slot compatibility, hullmod incompatibilities,
+hull-size applicability) reads from `GameManifest`, not hand-coded tables.
+The old `hullmod_effects.py` registry has been deleted; see spec 29 for
+the manifest-as-oracle contract.
+"""
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 
-from .hullmod_effects import INCOMPATIBLE_PAIRS, SLOT_COMPATIBILITY
+from .game_manifest import GameManifest, SLOT_WEAPON_COMPATIBILITY
 from .models import (
     GameData,
     HullMod,
@@ -57,7 +63,7 @@ def get_compatible_weapons(
     weapons: dict[str, Weapon],
 ) -> list[Weapon]:
     """Get weapons compatible with a slot (matching type, size, and assignability)."""
-    allowed_types = SLOT_COMPATIBILITY.get(slot.slot_type, set())
+    allowed_types = SLOT_WEAPON_COMPATIBILITY.get(slot.slot_type, frozenset())
     return sorted(
         [w for w in weapons.values()
          if w.weapon_type in allowed_types and w.size == slot.slot_size
@@ -69,20 +75,63 @@ def get_compatible_weapons(
 def get_eligible_hullmods(
     hull: ShipHull,
     hullmods: dict[str, HullMod],
+    manifest: GameManifest,
 ) -> list[HullMod]:
-    """Get hullmods eligible for installation on a hull."""
+    """Get hullmods eligible for installation on this hull.
+
+    Filters out:
+    - Hidden mods (ui-invisible or story-only).
+    - Built-in mods (already installed permanently on the hull).
+    - Mods whose manifest-probed `applicable_hull_sizes` excludes this
+      hull's size (authoritative engine-rule from the probe; empty
+      `applicable_hull_sizes` means probe-unknown → treat as applicable
+      rather than silently exclude, so unprobed mods remain candidates).
+    """
     builtin = set(hull.built_in_mods)
-    return sorted(
-        [m for m in hullmods.values()
-         if not m.is_hidden and m.id not in builtin],
-        key=lambda m: m.id,
-    )
+    eligible: list[HullMod] = []
+    for hm in hullmods.values():
+        if hm.is_hidden:
+            continue
+        if hm.id in builtin:
+            continue
+        spec = manifest.hullmods.get(hm.id)
+        if spec is not None and spec.applicable_hull_sizes:
+            if hull.hull_size not in spec.applicable_hull_sizes:
+                continue
+        eligible.append(hm)
+    return sorted(eligible, key=lambda m: m.id)
+
+
+def _collect_incompatible_pairs(
+    eligible_ids: set[str], manifest: GameManifest,
+) -> list[tuple[str, str]]:
+    """Enumerate every (a, b) pair from manifest-probed incompatibility edges.
+
+    Each undirected edge is emitted once with the canonical ordering a<b so
+    downstream consumers (repair + is_feasible) don't need to deduplicate.
+    """
+    pairs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for hm_id in eligible_ids:
+        spec = manifest.hullmods.get(hm_id)
+        if spec is None:
+            continue
+        for other in spec.incompatible_with:
+            if other not in eligible_ids:
+                continue
+            a, b = (hm_id, other) if hm_id < other else (other, hm_id)
+            if (a, b) in seen:
+                continue
+            seen.add((a, b))
+            pairs.append((a, b))
+    return pairs
 
 
 def build_search_space(
     hull: ShipHull,
     game_data: GameData,
     regime: RegimeConfig,
+    manifest: GameManifest,
 ) -> SearchSpace:
     """Build the optimization search space for a given hull under the given loadout regime.
 
@@ -91,15 +140,18 @@ def build_search_space(
     per-run feasible set; a silent default would let the mask drift out of
     sync with the Optuna study's per-(hull, regime) identity. Pass
     `REGIME_ENDGAME` to preserve pre-5F unfiltered behaviour.
+
+    `manifest` supplies authoritative game-rule data (hullmod applicable_hull_sizes,
+    hullmod incompatible_with edges, engine caps on vents/capacitors). Loaded
+    once at orchestrator startup via `GameManifest.load()`.
     """
-    # Weapon options per slot (excluding built-in and non-assignable slots)
     weapon_options: dict[str, list[str]] = {}
     total_weapons_admitted = 0
     total_weapons_considered = 0
     for slot in hull.weapon_slots:
         if slot.id in hull.built_in_weapons:
             continue
-        if slot.slot_type not in SLOT_COMPATIBILITY:
+        if slot.slot_type not in SLOT_WEAPON_COMPATIBILITY:
             continue  # SYSTEM, BUILT_IN, DECORATIVE, LAUNCH_BAY, etc.
         compatible = get_compatible_weapons(slot, game_data.weapons)
         total_weapons_considered += len(compatible)
@@ -107,30 +159,25 @@ def build_search_space(
         total_weapons_admitted += len(admitted)
         weapon_options[slot.id] = ["empty"] + [w.id for w in admitted]
 
-    # Eligible hullmods, then regime mask
-    eligible_pre = get_eligible_hullmods(hull, game_data.hullmods)
+    eligible_pre = get_eligible_hullmods(hull, game_data.hullmods, manifest)
     eligible = [m for m in eligible_pre if _regime_admits_hullmod(m, regime)]
-
-    # Filter incompatible pairs to only include eligible hullmod ids
     eligible_ids = {m.id for m in eligible}
-    pairs = [
-        (a, b) for a, b in INCOMPATIBLE_PAIRS
-        if a in eligible_ids and b in eligible_ids
-    ]
+    pairs = _collect_incompatible_pairs(eligible_ids, manifest)
 
     logger.info(
-        "Regime '%s' admits %d/%d hullmods, %d/%d weapons for hull=%s",
+        "Regime '%s' admits %d/%d hullmods, %d/%d weapons for hull=%s "
+        "(%d incompatibility edges)",
         regime.name,
         len(eligible), len(eligible_pre),
         total_weapons_admitted, total_weapons_considered,
-        hull.id,
+        hull.id, len(pairs),
     )
 
     return SearchSpace(
         hull_id=hull.id,
         weapon_options=weapon_options,
         eligible_hullmods=[m.id for m in eligible],
-        max_vents=hull.max_vents,
-        max_capacitors=hull.max_capacitors,
+        max_vents=manifest.constants.max_vents_per_ship,
+        max_capacitors=manifest.constants.max_capacitors_per_ship,
         incompatible_pairs=pairs,
     )

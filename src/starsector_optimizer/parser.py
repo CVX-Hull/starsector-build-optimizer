@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from .hullmod_effects import validate_registry
 from .models import (
     DamageType,
     GameData,
@@ -326,9 +325,8 @@ def load_game_data(
         len(game_data.hullmods), hidden_mods,
     )
 
-    # Validate hullmod registry against parsed data
-    warnings = validate_registry(game_data)
-    for w in warnings:
-        logger.warning(w)
-
+    # hullmod registry validation lived here pre-Phase-7-prep; now the
+    # authoritative registry is the game manifest (loaded separately by
+    # the orchestrator via GameManifest.load) and its own test suite
+    # (tests/test_game_manifest.py) validates content invariants.
     return game_data

@@ -99,69 +99,72 @@ def _make_game_data(hull: ShipHull) -> GameData:
 
 class TestHullSpaceStats:
 
-    def test_basic_stats(self):
+    def test_basic_stats(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
         assert stats.hull_id == "test_cruiser"
         assert stats.hull_size == HullSize.CRUISER
         assert stats.num_slots == 3  # 3 assignable slots
 
-    def test_options_per_slot(self):
+    def test_options_per_slot(self, manifest):
         """Each slot has 'empty' + compatible weapons."""
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
         # Slot 1 (BALLISTIC MEDIUM): empty + bal_med_1 + bal_med_2 = 3
         # Slot 2 (ENERGY SMALL): empty + ene_sml_1 + ene_sml_2 + ene_sml_3 = 4
         # Slot 3 (MISSILE LARGE): empty + mis_lrg_1 = 2
         assert stats.options_per_slot == [3, 4, 2]
 
-    def test_weapon_combinations(self):
+    def test_weapon_combinations(self, manifest):
         """Product of options per slot."""
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
         assert stats.weapon_combinations == 3 * 4 * 2  # 24
 
-    def test_eligible_hullmods_excludes_hidden(self):
+    def test_eligible_hullmods_excludes_hidden(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
         assert stats.num_eligible_hullmods == 3  # mod_a, mod_b, mod_c (not hidden)
 
-    def test_built_in_mods_excluded_from_eligible(self):
+    def test_built_in_mods_excluded_from_eligible(self, manifest):
         hull = _make_hull(built_in_mods=["mod_a"])
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
         assert stats.num_eligible_hullmods == 2  # mod_b, mod_c (mod_a is built-in)
 
-    def test_no_slots(self):
+    def test_no_slots(self, manifest):
         hull = _make_hull(slots=[])
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
         assert stats.num_slots == 0
         assert stats.options_per_slot == []
         assert stats.weapon_combinations == 1  # empty product = 1
 
-    def test_max_vents_capacitors(self):
+    def test_max_vents_capacitors(self, manifest):
+        """Post-Phase-7-prep: max_vents/capacitors come from manifest.constants
+        and are flat 30 for every hull size (audit bug H1 fix)."""
         hull = _make_hull(hull_size=HullSize.FRIGATE)
         gd = _make_game_data(hull)
-        stats = compute_hull_space_stats(hull, gd)
+        stats = compute_hull_space_stats(hull, gd, manifest)
 
-        assert stats.max_vents == 10
-        assert stats.max_capacitors == 10
+        expected = manifest.constants.max_vents_per_ship
+        assert stats.max_vents == expected
+        assert stats.max_capacitors == manifest.constants.max_capacitors_per_ship
 
         hull2 = _make_hull(hull_size=HullSize.CAPITAL_SHIP)
-        stats2 = compute_hull_space_stats(hull2, gd)
-        assert stats2.max_vents == 50
-        assert stats2.max_capacitors == 50
+        stats2 = compute_hull_space_stats(hull2, gd, manifest)
+        assert stats2.max_vents == expected
+        assert stats2.max_capacitors == manifest.constants.max_capacitors_per_ship
 
 
 # --- ThroughputEstimate tests ---
@@ -272,10 +275,10 @@ class TestEstimateThroughput:
 
 class TestFormatReport:
 
-    def test_report_contains_key_sections(self):
+    def test_report_contains_key_sections(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
-        stats = [compute_hull_space_stats(hull, gd)]
+        stats = [compute_hull_space_stats(hull, gd, manifest)]
         params = SimulationParams(num_instances=8, sims_per_hull=1000, num_hulls=1)
         est = estimate_throughput(params)
         report = format_estimate_report(stats, est)
@@ -285,7 +288,7 @@ class TestFormatReport:
         assert "Cost" in report
         assert "test_cruiser" in report
 
-    def test_report_large_numbers_readable(self):
+    def test_report_large_numbers_readable(self, manifest):
         """Weapon combinations should be formatted with exponent for large numbers."""
         slots = [
             WeaponSlot(f"WS{i:02d}", SlotType.UNIVERSAL, SlotSize.MEDIUM, MountType.TURRET, 0, 360, (0, 0))
@@ -293,7 +296,7 @@ class TestFormatReport:
         ]
         hull = _make_hull(slots=slots)
         gd = _make_game_data(hull)
-        stats = [compute_hull_space_stats(hull, gd)]
+        stats = [compute_hull_space_stats(hull, gd, manifest)]
         params = SimulationParams()
         est = estimate_throughput(params)
         report = format_estimate_report(stats, est)

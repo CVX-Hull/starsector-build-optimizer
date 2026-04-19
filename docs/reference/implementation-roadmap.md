@@ -179,22 +179,17 @@ Complete. 24 unit tests + 14 result parser tests passing. Integration-tested: 2 
 
 ---
 
-## Phase 3.5: Timeout Tuning ✓ COMPLETE
+## Phase 3.5: Timeout Tuning — REMOVED 2026-04-19
 
-### Goal
-Data-driven timeout tuning for combat matchups.
-
-### Status
-Complete. 10 timeout tuner tests passing. Enriched heartbeat confirmed in integration test (6-field format).
-
-### Implementation
-
-**Modules:**
-- `src/starsector_optimizer/timeout_tuner.py` — `TimeoutTuner` with data-driven priors + Weibull AFT
-
-**Timeout tuner:** Data-driven priors from GameData (no magic numbers): `approach_time(speeds) + combat_estimate(EHP, DPS) * safety_mult`. Blends with lifelines WeibullAFTFitter as data accumulates.
-
-**Enriched heartbeat:** 6 fields: `<timestamp_ms> <elapsed> <player_hp> <enemy_hp> <player_alive> <enemy_alive>`
+Phase 3.5 shipped a `TimeoutTuner` module (Weibull AFT data-driven timeout
+prediction), but it was never wired into production — Phase 5B's
+WilcoxonPruner + ASHA handled between-trial pruning better, and Phase 6's
+fixed `InstanceConfig.matchup_timeout_seconds` was load-bearing. The module
+sat dormant through Phases 4–6 (audit finding H1); removed in the
+Phase-7-prep refactor (2026-04-19) per the "delete don't refactor" policy.
+The enriched 6-field heartbeat format (`<ts_ms> <elapsed> <player_hp>
+<enemy_hp> <player_alive> <enemy_alive>`) lives on — it's orthogonal to
+the timeout tuner and is consumed by `instance_manager.py`'s health check.
 
 ---
 
@@ -270,7 +265,7 @@ Complete. 437 tests passing across all test files. Previously tested with a 203-
    - Final output: ranked builds with confidence intervals and per-opponent matchup profiles
 
 7. **Result logging and visualization**
-   - Append-only JSONL log (feeds both TimeoutTuner and Phase 8 surrogate)
+   - Append-only JSONL log (feeds Phase 8 surrogate; Phase 3.5 TimeoutTuner removed 2026-04-19)
    - Per-trial: build spec, repaired build, all opponent scores, heartbeat trajectories
    - Convergence curves, per-opponent win rates, build comparison table
 

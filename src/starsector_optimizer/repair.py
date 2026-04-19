@@ -1,19 +1,19 @@
-"""Constraint repair operator — boundary between optimizer-space and domain-space."""
+"""Constraint repair operator — boundary between optimizer-space and domain-space.
+
+All game-rule constraints (incompat pairs, hull-size restrictions, vent/cap
+caps, logistics-mod cap, slot compat) come from the GameManifest. The old
+hand-coded `hullmod_effects.py` registry is gone; every callsite here
+takes the manifest as a positional arg.
+"""
 
 from __future__ import annotations
 
-from .hullmod_effects import (
-    HULL_SIZE_RESTRICTIONS,
-    INCOMPATIBLE_PAIRS,
-    SHIELD_DEPENDENT_MODS,
-    SLOT_COMPATIBILITY,
-)
+from .game_manifest import GameManifest, SLOT_WEAPON_COMPATIBILITY
 from .models import (
     Build,
     GameData,
     HullSize,
     ShipHull,
-    MAX_LOGISTICS_HULLMODS,
 )
 
 
@@ -30,42 +30,56 @@ def compute_op_cost(build: Build, hull: ShipHull, game_data: GameData) -> int:
     return cost
 
 
-def _repair_incompatibilities(hullmods: set[str], hull: ShipHull, game_data: GameData) -> set[str]:
-    """Remove hullmods that violate incompatibility or size restriction rules."""
-    # Hull size restrictions
+def _repair_incompatibilities(
+    hullmods: set[str], hull: ShipHull,
+    game_data: GameData, manifest: GameManifest,
+) -> set[str]:
+    """Remove hullmods that violate size or pair-incompatibility rules."""
+    # Hull size restrictions — from manifest-probed applicable_hull_sizes.
+    # Empty set means probe-unknown: treat as applicable (consistent with
+    # search_space.get_eligible_hullmods, which only rejects non-empty
+    # disjoint sets).
     for mod_id in list(hullmods):
-        if mod_id in HULL_SIZE_RESTRICTIONS:
-            if hull.hull_size not in HULL_SIZE_RESTRICTIONS[mod_id]:
-                hullmods.discard(mod_id)
+        spec = manifest.hullmods.get(mod_id)
+        if spec is None:
+            continue
+        if spec.applicable_hull_sizes and hull.hull_size not in spec.applicable_hull_sizes:
+            hullmods.discard(mod_id)
 
-    # Incompatible pairs
-    for a, b in INCOMPATIBLE_PAIRS:
-        if a in hullmods and b in hullmods:
-            # Remove the one with lower OP cost
-            cost_a = game_data.hullmods[a].op_cost(hull.hull_size) if a in game_data.hullmods else 0
-            cost_b = game_data.hullmods[b].op_cost(hull.hull_size) if b in game_data.hullmods else 0
+    # Pair incompatibilities — drop the cheaper side of each conflict
+    # (greedy but deterministic under the id ordering). Iterate a snapshot
+    # so concurrent mutation during the drop loop is safe.
+    for a in list(hullmods):
+        if a not in hullmods:
+            continue
+        a_spec = manifest.hullmods.get(a)
+        if a_spec is None:
+            continue
+        for b in list(a_spec.incompatible_with):
+            if b not in hullmods or b == a:
+                continue
+            cost_a = (game_data.hullmods[a].op_cost(hull.hull_size)
+                      if a in game_data.hullmods else 0)
+            cost_b = (game_data.hullmods[b].op_cost(hull.hull_size)
+                      if b in game_data.hullmods else 0)
             hullmods.discard(b if cost_b <= cost_a else a)
-
-    # Shield-dependent mods: remove if hull has no shields or Shield Shunt installed
-    has_shields = hull.shield_type.value not in ("NONE", "PHASE") and "shield_shunt" not in hullmods
-    if not has_shields:
-        for mod_id in list(hullmods):
-            if mod_id in SHIELD_DEPENDENT_MODS:
-                hullmods.discard(mod_id)
 
     return hullmods
 
 
-def _repair_logistics(hullmods: set[str], hull: ShipHull, game_data: GameData) -> set[str]:
-    """Enforce max logistics hullmod limit."""
+def _repair_logistics(
+    hullmods: set[str], hull: ShipHull,
+    game_data: GameData, manifest: GameManifest,
+) -> set[str]:
+    """Enforce max_logistics_hullmods cap from the manifest."""
+    cap = manifest.constants.max_logistics_hullmods
     logistics = [(m, game_data.hullmods[m].op_cost(hull.hull_size))
                  for m in hullmods
                  if m in game_data.hullmods and game_data.hullmods[m].is_logistics]
-    if len(logistics) <= MAX_LOGISTICS_HULLMODS:
+    if len(logistics) <= cap:
         return hullmods
-    # Keep the highest-cost logistics mods
     logistics.sort(key=lambda x: x[1], reverse=True)
-    to_remove = {m for m, _ in logistics[MAX_LOGISTICS_HULLMODS:]}
+    to_remove = {m for m, _ in logistics[cap:]}
     return hullmods - to_remove
 
 
@@ -87,7 +101,6 @@ def _repair_op_budget(
         return c
 
     while _total_cost() > hull.ordnance_points:
-        # Build list of removable items with value/OP
         candidates = []
         for slot_id, wid in weapons.items():
             if wid and wid in game_data.weapons:
@@ -102,7 +115,6 @@ def _repair_op_budget(
         if not candidates:
             break
 
-        # Remove lowest value item
         candidates.sort(key=lambda x: x[2])
         kind, key, _ = candidates[0]
         if kind == "weapon":
@@ -117,26 +129,22 @@ def repair_build(
     build: Build,
     hull: ShipHull,
     game_data: GameData,
+    manifest: GameManifest,
     vent_fraction: float = 0.5,
 ) -> Build:
     """Repair a build to satisfy all constraints.
 
-    This is the boundary between optimizer-space and domain-space.
+    Boundary between optimizer-space and domain-space. `manifest` supplies
+    game-rule source-of-truth — callers pass a manifest loaded once at
+    orchestrator startup.
     """
-    # Work with mutable copies
     weapons = dict(build.weapon_assignments)
     hullmods = set(build.hullmods)
 
-    # Step 1: Fix hullmod incompatibilities and restrictions
-    hullmods = _repair_incompatibilities(hullmods, hull, game_data)
-
-    # Step 2: Fix logistics limit
-    hullmods = _repair_logistics(hullmods, hull, game_data)
-
-    # Step 3: Fix OP budget (drop items, vents/caps reset to 0 for budget calc)
+    hullmods = _repair_incompatibilities(hullmods, hull, game_data, manifest)
+    hullmods = _repair_logistics(hullmods, hull, game_data, manifest)
     weapons, hullmods = _repair_op_budget(weapons, hullmods, hull, game_data)
 
-    # Step 4: Allocate remaining OP to vents/caps
     item_cost = 0
     for wid in weapons.values():
         if wid and wid in game_data.weapons:
@@ -146,11 +154,12 @@ def repair_build(
             item_cost += game_data.hullmods[mid].op_cost(hull.hull_size)
 
     remaining = max(0, hull.ordnance_points - item_cost)
-    vents = min(round(vent_fraction * remaining), hull.max_vents)
-    caps = min(remaining - vents, hull.max_capacitors)
-    # If caps went negative (vents took too much), reduce vents
+    vent_cap = manifest.constants.max_vents_per_ship
+    cap_cap = manifest.constants.max_capacitors_per_ship
+    vents = min(round(vent_fraction * remaining), vent_cap)
+    caps = min(remaining - vents, cap_cap)
     if caps < 0:
-        vents = min(remaining, hull.max_vents)
+        vents = min(remaining, vent_cap)
         caps = 0
 
     return Build(
@@ -166,9 +175,10 @@ def is_feasible(
     build: Build,
     hull: ShipHull,
     game_data: GameData,
+    manifest: GameManifest,
 ) -> tuple[bool, list[str]]:
     """Check if a build satisfies all constraints."""
-    violations = []
+    violations: list[str] = []
 
     # C1: OP budget
     cost = compute_op_cost(build, hull, game_data)
@@ -186,7 +196,7 @@ def is_feasible(
         slot = slot_map[slot_id]
         if weapon_id in game_data.weapons:
             weapon = game_data.weapons[weapon_id]
-            allowed = SLOT_COMPATIBILITY.get(slot.slot_type, set())
+            allowed = SLOT_WEAPON_COMPATIBILITY.get(slot.slot_type, frozenset())
             if weapon.weapon_type not in allowed:
                 violations.append(
                     f"Weapon {weapon_id} type {weapon.weapon_type.value} "
@@ -198,29 +208,41 @@ def is_feasible(
                     f"doesn't match slot {slot_id} size {slot.slot_size.value}"
                 )
 
-    # C3: Incompatible pairs
-    for a, b in INCOMPATIBLE_PAIRS:
-        if a in build.hullmods and b in build.hullmods:
-            violations.append(f"Incompatible hullmods: {a} + {b}")
+    # C3: Pair incompatibilities (manifest-probed)
+    installed = build.hullmods
+    for mod_id in installed:
+        spec = manifest.hullmods.get(mod_id)
+        if spec is None:
+            continue
+        for other in spec.incompatible_with:
+            if other in installed and mod_id < other:
+                violations.append(f"Incompatible hullmods: {mod_id} + {other}")
 
-    # C4: Hull size restrictions
+    # C4: Hull-size restrictions (manifest-probed applicable_hull_sizes)
     for mod_id in build.hullmods:
-        if mod_id in HULL_SIZE_RESTRICTIONS:
-            if hull.hull_size not in HULL_SIZE_RESTRICTIONS[mod_id]:
-                violations.append(f"Hullmod {mod_id} not allowed on {hull.hull_size.value}")
+        spec = manifest.hullmods.get(mod_id)
+        if spec is None:
+            continue
+        if spec.applicable_hull_sizes and hull.hull_size not in spec.applicable_hull_sizes:
+            violations.append(
+                f"Hullmod {mod_id} not allowed on {hull.hull_size.value}"
+            )
 
     # C5: Logistics limit
+    cap = manifest.constants.max_logistics_hullmods
     logistics_count = sum(
         1 for m in build.hullmods
         if m in game_data.hullmods and game_data.hullmods[m].is_logistics
     )
-    if logistics_count > MAX_LOGISTICS_HULLMODS:
-        violations.append(f"Too many logistics mods: {logistics_count} > {MAX_LOGISTICS_HULLMODS}")
+    if logistics_count > cap:
+        violations.append(f"Too many logistics mods: {logistics_count} > {cap}")
 
     # C6: Vent/cap limits
-    if build.flux_vents > hull.max_vents:
-        violations.append(f"Vents exceed max: {build.flux_vents} > {hull.max_vents}")
-    if build.flux_capacitors > hull.max_capacitors:
-        violations.append(f"Caps exceed max: {build.flux_capacitors} > {hull.max_capacitors}")
+    vent_cap = manifest.constants.max_vents_per_ship
+    cap_cap = manifest.constants.max_capacitors_per_ship
+    if build.flux_vents > vent_cap:
+        violations.append(f"Vents exceed max: {build.flux_vents} > {vent_cap}")
+    if build.flux_capacitors > cap_cap:
+        violations.append(f"Caps exceed max: {build.flux_capacitors} > {cap_cap}")
 
     return (len(violations) == 0, violations)

@@ -36,6 +36,7 @@ from scipy.stats import boxcox
 
 from .calibration import generate_diverse_builds
 from .evaluator_pool import EvaluatorPool
+from .game_manifest import GameManifest
 from .instance_manager import InstanceError
 from .models import (
     Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig,
@@ -68,7 +69,11 @@ class OptimizerConfig:
     """Configuration for an optimization run."""
 
     sim_budget: int = 200
-    warm_start_n: int = 500
+    # Post-Phase-7-prep: default 0 because the heuristic composite_score has
+    # been dropped from the EB regression prior (structurally incomplete per
+    # the 2026-04-19 postmortem). Stock-build warm-start continues to seed the
+    # study; the Python-scored heuristic warm-start is opt-in only.
+    warm_start_n: int = 0
     warm_start_sample_n: int = 50_000
     warm_start_scale: float = 0.1
     n_startup_trials: int = 100
@@ -301,10 +306,11 @@ def warm_start(
     hull: ShipHull,
     game_data: GameData,
     config: OptimizerConfig,
+    manifest: GameManifest,
     game_dir: Path | None = None,
 ) -> None:
     """Seed the study with stock builds and top heuristic builds."""
-    space = build_search_space(hull, game_data, config.regime)
+    space = build_search_space(hull, game_data, config.regime, manifest)
     distributions = define_distributions(space)
     stock_count = 0
 
@@ -327,7 +333,8 @@ def warm_start(
 
     # Phase 2: Seed with top heuristic builds (diverse random, regime-masked)
     builds = generate_diverse_builds(
-        hull, game_data, n=config.warm_start_sample_n, regime=config.regime,
+        hull, game_data, manifest,
+        n=config.warm_start_sample_n, regime=config.regime,
     )
     scored = [
         (b, heuristic_score(b, hull, game_data).composite_score)
@@ -358,7 +365,7 @@ class _InFlightBuild:
     """Tracks a build progressing through staged opponent evaluation.
 
     Mutable controller record — NOT a domain model. Design Principle 2
-    immutability applies to frozen domain classes (`Build`, `EffectiveStats`,
+    immutability applies to frozen domain classes (`Build`, `EngineStats`,
     `ScorerResult`), not to transient per-build evaluation state.
     """
 
@@ -390,10 +397,15 @@ class _EBRecord:
     Drops `completed_results`, `raw_scores`, `build_spec`, and the Optuna
     `trial` handle relative to `_InFlightBuild` (~10× memory reduction at
     2000-trial scale).
+
+    Post-Phase-7-prep: carries the `Build` too so `_build_covariate_vector`
+    can compute `op_used_fraction` from the manifest without needing the
+    full `_InFlightBuild` live.
     """
     trial_number: int
     scorer_result: ScorerResult
     engine_stats: EngineStats | None
+    build: Build
 
 
 @dataclass(frozen=True)
@@ -415,48 +427,85 @@ class _EBDiagnostics:
     kept_cov_columns: tuple[int, ...]  # X columns surviving zero-std filter
 
 
-def _build_covariate_vector(record: _EBRecord) -> np.ndarray:
-    """Assemble the 7-dim covariate vector for EB shrinkage (§2.7 order).
+def _op_used_fraction(
+    build: Build, hull: ShipHull, manifest: "GameManifest",
+) -> float:
+    """Ordnance-point utilization on a pre-matchup build (manifest-driven).
 
-    Order:
-        0. eff_max_flux          (engine, or Python fallback)
-        1. eff_flux_dissipation  (engine, or Python fallback)
-        2. eff_armor_rating      (engine, or Python fallback)
-        3. total_weapon_dps      (raw unweighted sum from ScorerResult.total_dps)
-        4. engagement_range      (DPS-weighted mean from ScorerResult)
-        5. kinetic_dps_fraction  (kinetic_dps / max(total_dps, ε))
-        6. composite_score       (calibrated heuristic scalar)
+    Reads OP costs from the manifest (authoritative). Built-in hullmods are
+    free per game rule — manifest exposes built_in_mods on each hull so we
+    don't double-charge their OP cost. Vents and capacitors charge 1 OP each.
     """
+    hull_entry = manifest.hulls.get(hull.id)
+    if hull_entry is None:
+        return 0.0
+    op_weapons = 0
+    for wid in build.weapon_assignments.values():
+        if not wid:
+            continue
+        w = manifest.weapons.get(wid)
+        if w is not None:
+            op_weapons += w.op_cost
+    op_hullmods = 0
+    for hid in build.hullmods:
+        hm = manifest.hullmods.get(hid)
+        if hm is not None:
+            op_hullmods += hm.op_cost(hull.hull_size)
+    op_flux = build.flux_vents + build.flux_capacitors
+    return (op_weapons + op_hullmods + op_flux) / max(hull_entry.ordnance_points, 1)
+
+
+def _build_covariate_vector(
+    record: _EBRecord, build: Build, hull: ShipHull, manifest: "GameManifest",
+) -> np.ndarray:
+    """Assemble the 10-dim covariate vector for EB shrinkage.
+
+    Post-Phase-7-prep: dropped `composite_score` (11–22% of |γ̂| via the
+    structurally incomplete HULLMOD_EFFECTS registry per the 2026-04-19
+    postmortem) and added 3 engine-truth reads + 1 Python-raw build-
+    structural feature ranked by signal per the prep-relaunch checklist.
+
+    Order (engine-truth block first, then Python-raw block):
+        0. eff_max_flux
+        1. eff_flux_dissipation
+        2. eff_armor_rating
+        3. eff_hull_hp_pct            (NEW: hullBonus / base hull HP ratio)
+        4. ballistic_range_bonus      (NEW: ITU/DTC/Unstable Injector)
+        5. shield_damage_taken_mult   (NEW: Hardened Shields / S-mod FSE)
+        6. total_weapon_dps           (Python scorer, raw)
+        7. engagement_range           (Python scorer, raw DPS-weighted)
+        8. kinetic_dps_fraction       (Python scorer, raw)
+        9. op_used_fraction           (NEW: manifest-driven OP budget util)
+
+    engine_stats=None is a HARD error — the Java SETUP hook always emits,
+    the manifest-as-oracle refactor eliminates the old Python fallback, and
+    mixing engine-sourced rows with Python-re-derived rows was the exact
+    "1 authoritative reading replaced by 1 wrong re-derivation" pattern
+    that the refactor eliminates.
+    """
+    if record.engine_stats is None:
+        raise AssertionError(
+            f"engine_stats missing for trial {record.trial_number}; "
+            "this should be impossible post-manifest — the Java "
+            "SETUP hook guarantees emission. Rebuild the combat-harness "
+            "mod with the Phase 7-prep SETUP reads and redeploy."
+        )
     sr = record.scorer_result
     total_dps = sr.total_dps
     kin_frac = sr.kinetic_dps / max(total_dps, _EPSILON)
-    if record.engine_stats is not None:
-        es = record.engine_stats
-        eff_flux, eff_diss, eff_arm = (
-            es.eff_max_flux, es.eff_flux_dissipation, es.eff_armor_rating,
-        )
-    else:
-        # Test-fixture / replay-only fallback: in deployed production runs,
-        # Java always emits setup_stats so this branch never triggers.
-        # Mixing Java- and Python-sourced rows in one X matrix introduces a
-        # measurement-source confound; `eb_min_builds` gates early rows but
-        # a long-lived miss (Java mod absent) would bias γ̂. Flagged at WARN.
-        fallback = sr.effective_stats
-        eff_flux, eff_diss, eff_arm = (
-            fallback.flux_capacity,
-            fallback.flux_dissipation,
-            fallback.armor_rating,
-        )
-        import warnings as _w
-        _w.warn(
-            f"engine_stats missing for trial {record.trial_number}; "
-            "using Python compute_effective_stats fallback (replay/test only)",
-            UserWarning,
-            stacklevel=2,
-        )
+    es = record.engine_stats
+    op_frac = _op_used_fraction(build, hull, manifest)
     return np.array([
-        eff_flux, eff_diss, eff_arm,
-        total_dps, sr.engagement_range, kin_frac, sr.composite_score,
+        es.eff_max_flux,
+        es.eff_flux_dissipation,
+        es.eff_armor_rating,
+        es.eff_hull_hp_pct,
+        es.ballistic_range_bonus,
+        es.shield_damage_taken_mult,
+        total_dps,
+        sr.engagement_range,
+        kin_frac,
+        op_frac,
     ])
 
 
@@ -480,6 +529,7 @@ class StagedEvaluator:
         cache: BuildCache,
         config: OptimizerConfig,
         distributions: dict[str, optuna.distributions.BaseDistribution],
+        manifest: GameManifest,
         eval_log_path: Path | None = None,
     ) -> None:
         self._study = study
@@ -490,6 +540,7 @@ class StagedEvaluator:
         self._cache = cache
         self._config = config
         self._distributions = distributions
+        self._manifest = manifest
         self._eval_log_path = eval_log_path
         self._opponents = get_opponents(opponent_pool, hull.hull_size)
         self._fitness_config = config.combat_fitness
@@ -733,7 +784,7 @@ class StagedEvaluator:
                 trial.params, self._hull_id,
                 fixed_params=self._config.fixed_params,
             ),
-            self._hull, self._game_data,
+            self._hull, self._game_data, self._manifest,
         )
 
         cached = self._cache.get(build)
@@ -779,6 +830,7 @@ class StagedEvaluator:
             trial_number=ifb.trial.number,
             scorer_result=ifb.scorer_result,
             engine_stats=ifb.engine_stats,
+            build=ifb.build,
         )
         # A2′: EB shrinkage + optional triple-goal rank correction
         eb_fitness, eb_diag = self._apply_eb_shrinkage(
@@ -803,7 +855,9 @@ class StagedEvaluator:
 
         if self._eval_log_path:
             record = self._completed_records[ifb.trial.number]
-            covariate = _build_covariate_vector(record)
+            covariate = _build_covariate_vector(
+                record, ifb.build, self._hull, self._manifest,
+            )
             _append_eval_log(
                 self._eval_log_path, self._hull_id, ifb.trial.number,
                 ifb.build, ifb.completed_results, shaped_fitness,
@@ -848,7 +902,13 @@ class StagedEvaluator:
             [self._score_matrix.build_sigma_sq(i) for i in indices]
         )
         X = np.vstack([
-            _build_covariate_vector(self._completed_records[i]) for i in indices
+            _build_covariate_vector(
+                self._completed_records[i],
+                self._completed_records[i].build,
+                self._hull,
+                self._manifest,
+            )
+            for i in indices
         ])
         alpha_eb, gamma, tau2, kept = eb_shrinkage(alphas, sigma_sqs, X, eb_cfg)
         if eb_cfg.triple_goal:
@@ -1126,6 +1186,7 @@ def _enqueue_warm_start_from_regime(
     top_m: int,
     hull: ShipHull,
     game_data: GameData,
+    manifest: GameManifest,
     target_space: SearchSpace | None = None,
 ) -> tuple[int, int]:
     """Phase 5F cross-regime warm-start. Copy top-M completed trials from a
@@ -1162,7 +1223,7 @@ def _enqueue_warm_start_from_regime(
     for trial in top:
         try:
             raw = trial_params_to_build(trial.params, hull.id)
-            repaired = repair_build(raw, hull, game_data)
+            repaired = repair_build(raw, hull, game_data, manifest)
         except Exception as exc:
             logger.warning(
                 "Warm-start: could not reconstruct build from trial %d: %s",
@@ -1170,7 +1231,7 @@ def _enqueue_warm_start_from_regime(
             )
             skipped += 1
             continue
-        feasible_ok, _viol = is_feasible(repaired, hull, game_data)
+        feasible_ok, _viol = is_feasible(repaired, hull, game_data, manifest)
         if not feasible_ok:
             logger.warning(
                 "Warm-start: repaired build from trial %d is not feasible",
@@ -1303,6 +1364,9 @@ def _append_eval_log(
             "eff_max_flux": engine_stats.eff_max_flux,
             "eff_flux_dissipation": engine_stats.eff_flux_dissipation,
             "eff_armor_rating": engine_stats.eff_armor_rating,
+            "eff_hull_hp_pct": engine_stats.eff_hull_hp_pct,
+            "ballistic_range_bonus": engine_stats.ballistic_range_bonus,
+            "shield_damage_taken_mult": engine_stats.shield_damage_taken_mult,
         }
     if covariate_vector is not None:
         record["covariate_vector"] = [float(x) for x in covariate_vector]
@@ -1330,11 +1394,12 @@ def optimize_hull(
     pool: EvaluatorPool,
     opponent_pool: OpponentPool,
     config: OptimizerConfig,
+    manifest: GameManifest,
 ) -> optuna.Study:
     """Main optimization entry point. Returns the Optuna study."""
     preflight_check(hull_id, game_data, pool, opponent_pool)
     hull = game_data.hulls[hull_id]
-    space = build_search_space(hull, game_data, config.regime)
+    space = build_search_space(hull, game_data, config.regime, manifest)
     distributions = define_distributions(space, fixed_params=config.fixed_params)
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
@@ -1375,11 +1440,12 @@ def optimize_hull(
             top_m=config.warm_start_n,
             hull=hull,
             game_data=game_data,
+            manifest=manifest,
             target_space=space,
         )
 
     game_dir = getattr(pool, "game_dir", None)
-    warm_start(study, hull, game_data, config, game_dir=game_dir)
+    warm_start(study, hull, game_data, config, manifest, game_dir=game_dir)
 
     evaluator = StagedEvaluator(
         study=study,
@@ -1391,6 +1457,7 @@ def optimize_hull(
         cache=BuildCache(),
         config=config,
         distributions=distributions,
+        manifest=manifest,
         eval_log_path=config.eval_log_path,
     )
     evaluator.run()
