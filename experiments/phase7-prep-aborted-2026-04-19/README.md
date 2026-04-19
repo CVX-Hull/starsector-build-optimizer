@@ -92,7 +92,73 @@ own stock variants. The optimizer is beating opponents that happen to be
 weak (civilian freighters, non-combat hulls) but systematically loses
 head-to-head against well-tuned stock variants of the same hull.
 
-### Root cause: `HULLMOD_EFFECTS` registry is ~13 % complete
+### Finding updated 2026-04-19 after full notebook analysis
+
+The initial chat-time verdict (`heuristic effective weight ~0.3 %`) was **wrong**.
+Running the formal decomposition in `phase7_prep_postmortem.ipynb` gives:
+
+| hull | w_prior (on γ̂ᵀX) | heuristic share of \|γ̂\| | effective weight |
+|------|------------------|--------------------------|------------------|
+| onslaught | 0.96 | 0.11 | **10.5 %** |
+| wolf | 0.95 | 0.14 | **12.5 %** |
+| hammerhead | 0.97 | 0.15 | **15.1 %** |
+| eagle | 0.96 | 0.17 | **15.9 %** |
+| lasher | 1.00 | 0.19 | **18.7 %** |
+| sunder | 0.95 | 0.20 | **19.0 %** |
+| gryphon | 0.95 | 0.22 | **20.6 %** |
+| dominator | 0.97 | 0.23 | **22.2 %** |
+
+**The heuristic drives 10-22 % of the final fitness signal, not 0.3 %.**
+The EB posterior is not down-weighting the heuristic — it's down-weighting the
+simulation signal (w_twfe = 3-5 %, w_prior = 95-99 %) because the TWFE α̂
+estimator's σ² dwarfs τ² on these hulls. The prior dominates, and the heuristic
+is 11-22 % of that prior after lasso selection.
+
+Additional finding: the lasso drops **all three engine-truth stats**
+(`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`) 100 % of the time
+— they're near-hull-constant across builds, so there's no variance for the
+lasso to exploit. The 4 kept covariates are `total_weapon_dps`,
+`engagement_range`, `kinetic_dps_fraction`, `composite_score`.
+
+### Flat-landscape correlation (structural)
+
+Pearson correlation of **τ̂² (between-build variance of simulation α̂)**
+with **win %** across the 8 hulls = **+0.745**. Hulls with low τ̂² produce
+indistinguishable α̂ estimates and cannot be optimized; hulls with higher τ̂²
+show learnable gradient.
+
+τ̂² scales with hull size / OP budget: lasher 2e-7, wolf 1e-4, eagle 4e-4,
+onslaught 7e-4, gryphon/hammerhead/dominator 8e-4, sunder 1.3e-3. That's a
+**3000× bandwidth range**. A single GP without hull-size conditioning in
+Phase 7 won't handle this span.
+
+### Damage-dealt distribution in loss tier
+
+`combat_fitness` is tiered-continuous (ENEMY-win scores vary -1.0 to -0.5
+with `kill` fraction). But frigate losses cluster at `damage_dealt = 0`:
+
+| hull | median damage dealt in losses | mean |
+|------|------------------------------|------|
+| lasher | 0.000 | 0.000 |
+| wolf | 0.000 | 0.004 |
+| eagle | 0.000 | 0.056 |
+| gryphon | 0.000 | 0.072 |
+| onslaught | 0.000 | 0.104 |
+| hammerhead | 0.000 | 0.129 |
+| sunder | 0.078 | 0.189 |
+| dominator | 0.278 | 0.273 |
+
+Frigate/cruiser losses are complete wipes — the ship never touches the
+enemy. Continuous scoring exists but has zero input to differentiate on.
+
+### TPE progression — is the learner stuck or moving?
+
+Lasher actually has the **strongest** trial-vs-fitness correlation (+0.516),
+moving α̂ median from -0.003 to +0.032 over 170 trials. But at that rate,
+reaching win-consistent α̂ needs 10 000+ trials per hull. TPE is learning,
+just too slowly for a 600-trial budget.
+
+### Root cause discarded: `HULLMOD_EFFECTS` registry is ~13 % complete
 
 Cross-referencing every hullmod selected in the 8 studies against
 `src/starsector_optimizer/hullmod_effects.py::HULLMOD_EFFECTS`:
