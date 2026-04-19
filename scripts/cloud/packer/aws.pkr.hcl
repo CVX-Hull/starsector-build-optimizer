@@ -56,6 +56,18 @@ variable "project_src" {
   description = "Local path to Python project src/ (host side)."
 }
 
+variable "game_version" {
+  type        = string
+  default     = "Starsector 0.98a-RC8"
+  description = <<-EOT
+    Starsector engine version baked into this AMI. MUST match
+    manifest.constants.game_version; CampaignManager._check_manifest_and_ami_tags
+    preflights the AMI GameVersion tag against the committed manifest and
+    aborts if they disagree. Update this variable whenever the engine
+    version bumps (and regenerate the manifest via scripts/update_manifest.py).
+  EOT
+}
+
 source "amazon-ebs" "worker" {
   region                      = var.region
   instance_type               = var.instance_type
@@ -76,8 +88,9 @@ source "amazon-ebs" "worker" {
   }
 
   tags = {
-    Project = "starsector"
-    Role    = "worker-image"
+    Project     = "starsector"
+    Role        = "worker-image"
+    GameVersion = var.game_version
   }
 }
 
