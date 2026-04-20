@@ -38,6 +38,12 @@ data/
 # Experiment databases (too large for git, back up separately)
 experiments/**/*.db
 
+# Orchestrator logs are ~70 MB of werkzeug/progress chatter per run —
+# all load-bearing signals are either in events.log (extracted by
+# scripts/cloud/extract_events.sh) or redundant with evaluation_log.jsonl
+# and ledger.jsonl. Never commit.
+experiments/**/orchestrator.log
+
 # Notebook outputs (re-generated on execution)
 notebooks/.ipynb_checkpoints/
 

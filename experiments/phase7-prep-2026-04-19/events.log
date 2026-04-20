@@ -1,0 +1,65 @@
+20:10:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000018_vs_doom_Attack age=152.2s requeue_count=1
+20:15:14 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=hammerhead_opt_000012_vs_mule_Fighter_Support age=149.9s requeue_count=1
+20:15:14 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=hammerhead_opt_000005_vs_manticore_Support age=155.1s requeue_count=1
+20:20:20 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=lasher_opt_000065_vs_picket_Assault age=135.5s requeue_count=1
+20:20:20 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=lasher_opt_000063_vs_picket_Assault age=137.4s requeue_count=1
+20:20:20 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=lasher_opt_000062_vs_picket_Assault age=137.7s requeue_count=1
+20:22:17 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=sunder_opt_000058_vs_condor_Support age=135.2s requeue_count=1
+20:22:18 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=sunder_opt_000053_vs_condor_Support age=139.9s requeue_count=1
+20:22:18 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=sunder_opt_000051_vs_condor_Support age=152.1s requeue_count=1
+20:22:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000047_vs_aurora_Assault age=120.7s requeue_count=1
+20:22:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000036_vs_heron_Attack1 age=124.1s requeue_count=1
+20:22:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000030_vs_gryphon_DEM age=135.4s requeue_count=1
+20:22:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000040_vs_heron_Attack1 age=137.9s requeue_count=1
+20:22:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000024_vs_mora_Torpedo age=138.6s requeue_count=1
+20:22:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000038_vs_dominator_Assault age=146.0s requeue_count=1
+20:23:18 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=sunder_opt_000061_vs_condor_Support age=173.8s requeue_count=1
+20:27:14 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=hammerhead_opt_000052_vs_sunder_Support age=148.0s requeue_count=1
+20:46:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000081_vs_aurora_Assault age=133.0s requeue_count=1
+21:39:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000212_vs_eradicator_Fighter_Support age=155.6s requeue_count=1
+21:46:18 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=sunder_opt_000313_vs_mule_Fighter_Support age=146.8s requeue_count=1
+21:47:18 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=eagle_opt_000216_vs_falcon_CS age=124.4s requeue_count=1
+21:47:18 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=eagle_opt_000231_vs_falcon_CS age=139.7s requeue_count=1
+21:47:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000212_vs_gryphon_FS age=132.7s requeue_count=1
+21:47:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000236_vs_doom_Attack age=169.4s requeue_count=1
+21:48:14 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=hammerhead_opt_000254_vs_condor_Attack age=171.4s requeue_count=1
+21:48:16 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=onslaught_opt_000249_vs_invictus_Standard age=151.5s requeue_count=1
+21:48:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000219_vs_dominator_AntiCV age=151.1s requeue_count=1
+21:48:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000238_vs_falcon_Attack age=153.4s requeue_count=1
+21:48:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000228_vs_dominator_Assault age=155.6s requeue_count=1
+21:59:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000248_vs_eradicator_Outdated2 age=173.1s requeue_count=1
+22:02:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000248_vs_aurora_Assault age=120.5s requeue_count=1
+22:06:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000248_vs_dominator_AntiCV age=122.9s requeue_count=1
+22:24:37 __main__ WARNING: budget threshold crossed: threshold=0.50 cumulative=35.00 budget=70.00
+22:37:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000363_vs_apogee_Starting age=143.1s requeue_count=1
+22:50:14 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=hammerhead_opt_000430_vs_mule_Fighter_Support age=160.7s requeue_count=1
+22:55:03 starsector_optimizer.optimizer INFO: Run summary: 548 finalized + 1 pruned + 0 errored in 10177.5s (193.8 finalized/hr); EB activated on 501/548 finalized (91%); mean |Δ|=0.0191
+22:55:04 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'wolf__early__tpe__seed0'}
+22:57:20 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'wolf__early__tpe__seed0'}
+23:16:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000440_vs_apogee_Starting age=173.4s requeue_count=1
+23:21:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000374_vs_aurora_Assault age=123.1s requeue_count=1
+23:42:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=gryphon_opt_000490_vs_apogee_Starting age=176.3s requeue_count=1
+23:45:40 starsector_optimizer.optimizer INFO: Run summary: 558 finalized + 23 pruned + 0 errored in 13208.0s (152.1 finalized/hr); EB activated on 530/558 finalized (95%); mean |Δ|=0.0654
+23:45:42 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'sunder__early__tpe__seed0'}
+23:47:18 starsector_optimizer.optimizer INFO: Run summary: 584 finalized + 7 pruned + 0 errored in 13305.2s (158.0 finalized/hr); EB activated on 553/584 finalized (95%); mean |Δ|=0.0548
+23:47:20 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'lasher__early__tpe__seed0'}
+23:47:37 starsector_optimizer.cloud_provider INFO: terminated 3 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'sunder__early__tpe__seed0'}
+23:48:13 starsector_optimizer.cloud_provider INFO: terminated 4 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'lasher__early__tpe__seed0'}
+23:59:19 starsector_optimizer.campaign WARNING: requeued stuck matchup: matchup_id=dominator_opt_000432_vs_dominator_AntiCV age=125.8s requeue_count=1
+23:59:37 starsector_optimizer.optimizer INFO: Run summary: 480 finalized + 109 pruned + 0 errored in 14047.5s (123.0 finalized/hr); EB activated on 467/480 finalized (97%); mean |Δ|=0.1255
+23:59:38 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'hammerhead__early__tpe__seed0'}
+00:02:04 starsector_optimizer.cloud_provider INFO: terminated 5 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'hammerhead__early__tpe__seed0'}
+00:08:38 __main__ WARNING: budget threshold crossed: threshold=0.80 cumulative=56.00 budget=70.00
+00:26:56 starsector_optimizer.optimizer INFO: Run summary: 591 finalized + 0 pruned + 0 errored in 15679.1s (135.7 finalized/hr); EB activated on 573/591 finalized (97%); mean |Δ|=0.0776
+00:26:58 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'gryphon__early__tpe__seed0'}
+00:27:40 starsector_optimizer.optimizer INFO: Run summary: 596 finalized + 3 pruned + 0 errored in 15719.4s (136.5 finalized/hr); EB activated on 584/596 finalized (98%); mean |Δ|=0.1034
+00:27:41 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'onslaught__early__tpe__seed0'}
+00:29:13 starsector_optimizer.cloud_provider INFO: terminated 4 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'gryphon__early__tpe__seed0'}
+00:29:57 starsector_optimizer.cloud_provider INFO: terminated 5 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'onslaught__early__tpe__seed0'}
+00:39:38 starsector_optimizer.optimizer INFO: Run summary: 557 finalized + 42 pruned + 0 errored in 16440.4s (122.0 finalized/hr); EB activated on 541/557 finalized (97%); mean |Δ|=0.0682
+00:39:39 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'eagle__early__tpe__seed0'}
+00:41:34 starsector_optimizer.cloud_provider INFO: terminated 5 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'eagle__early__tpe__seed0'}
+01:37:57 starsector_optimizer.optimizer INFO: Run summary: 576 finalized + 23 pruned + 0 errored in 19938.0s (104.0 finalized/hr); EB activated on 558/576 finalized (97%); mean |Δ|=0.1306
+01:37:59 starsector_optimizer.cloud_provider INFO: terminated 6 instances in us-east-1 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'dominator__early__tpe__seed0'}
+01:38:52 starsector_optimizer.cloud_provider INFO: terminated 2 instances in us-east-2 for tags={'Project': 'starsector-phase7-prep-early', 'Fleet': 'dominator__early__tpe__seed0'}
+01:39:59 __main__ INFO: teardown complete: campaign=phase7-prep-early
