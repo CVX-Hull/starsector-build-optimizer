@@ -540,6 +540,32 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         for (ShipAPI s : playerShips) dumpShipState("PLAYER", s);
         for (ShipAPI s : enemyShips) dumpShipState("ENEMY ", s);
 
+        // [V2_SETUP_VARIANT] — log the variant ID at SETUP + first-3 physical
+        // weapon picks of each deployed player ship. The Wave-0-step-4 forensics
+        // caught cross-trial spec contamination (live ship had a prior trial's
+        // physical weapons); this log lets us tell whether the deployed
+        // variant ID matches the spec (and the physical weapons happen to
+        // diverge — a setVariant→deploy propagation bug, V1-style) OR the
+        // deployed variant ID is itself wrong (e.g., the placeholder bled
+        // through, or addToFleet returned a stale FleetMember).
+        for (int i = 0; i < playerShips.size(); i++) {
+            ShipAPI s = playerShips.get(i);
+            String vid = "<null>";
+            try {
+                ShipVariantAPI v = s.getVariant();
+                if (v != null) {
+                    vid = safeShipVariantId(v);
+                }
+            } catch (Throwable ignored) {}
+            String physW1 = physicalWeaponIdAtSlot(s, "WS 001");
+            String physW2 = physicalWeaponIdAtSlot(s, "WS 002");
+            String physW3 = physicalWeaponIdAtSlot(s, "WS 003");
+            log.info("[V2_SETUP_VARIANT] matchup=" + currentConfig.matchupId
+                    + " idx=" + i + " ship_id=" + s.getId()
+                    + " variant_id=" + vid
+                    + " phys_w1=" + physW1 + " phys_w2=" + physW2 + " phys_w3=" + physW3);
+        }
+
         // Verify the deployed ship's live state matches the spec MissionDefinition
         // built. The variant was constructed pre-deployment via VariantBuilder +
         // addFleetMember, so weapons + hullmods + flux must already be bound.
@@ -974,6 +1000,36 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             float cy = sumY / count;
             vp.set(cx - vp.getVisibleWidth() / 2f, cy - vp.getVisibleHeight() / 2f,
                     vp.getVisibleWidth(), vp.getVisibleHeight());
+        }
+    }
+
+    /** Null-safe accessor for a ShipVariantAPI's hull-variant id. */
+    private static String safeShipVariantId(ShipVariantAPI v) {
+        try {
+            return v.getHullVariantId();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    /** Return the weapon id physically mounted at the given slot on the
+     * deployed ship, or "<empty>" if no weapon is mounted there. Reads
+     * `getAllWeapons()` (post-deployment WeaponAPIs), matching the
+     * loadout diagnostic's contract — the optimizer's signal depends on
+     * what's PHYSICALLY mounted, not the variant's static view. */
+    private static String physicalWeaponIdAtSlot(ShipAPI ship, String slotId) {
+        try {
+            List<WeaponAPI> mounted = ship.getAllWeapons();
+            if (mounted == null) return "<null>";
+            for (WeaponAPI w : mounted) {
+                if (w == null || w.getSlot() == null) continue;
+                if (slotId.equals(w.getSlot().getId())) {
+                    return String.valueOf(w.getId());
+                }
+            }
+            return "<empty>";
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
         }
     }
 }

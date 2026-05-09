@@ -31,8 +31,10 @@ combat-harness/mod/workdir/matchup.json
 combat-harness/mod/workdir/result.json
 combat-harness/mod/workdir/heartbeat.txt
 
-# Active run artifacts (future runs write here, committed data lives in experiments/)
-data/
+# Active run artifacts (future runs write here, committed data lives in experiments/).
+# Rooted because combat-harness/src/main/java/data/ is the Java `data` package
+# (MissionDefinition + ManifestDumper live there), which must stay tracked.
+/data/
 *.db
 
 # Experiment databases (too large for git, back up separately)

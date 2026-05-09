@@ -129,11 +129,19 @@ public class MissionDefinition implements MissionDefinitionPlugin {
                 FleetMemberAPI member = api.addToFleet(
                         FleetSide.PLAYER, stockVariant,
                         FleetMemberType.SHIP, stockVariant, false);
+                String beforeId = safeVariantId(member);
                 ShipVariantAPI customVariant = VariantBuilder.createVariant(spec);
                 // setVariant args: (variant, withFighters, force).
                 // force=true overrides the existing variant unconditionally.
                 member.setVariant(customVariant, false, true);
                 member.getRepairTracker().setCR(spec.cr);
+                log.info("[V2_DEPLOY] matchup=" + first.matchupId
+                        + " spec=" + spec.variantId
+                        + " placeholder=" + stockVariant
+                        + " before_setvariant=" + beforeId
+                        + " custom=" + safeVariantHullId(customVariant)
+                        + " after_setvariant=" + safeVariantId(member)
+                        + " member_id=" + safeMemberId(member));
             } catch (Throwable t) {
                 log.error("Failed to build player ship from spec "
                         + spec.variantId + " (hull=" + spec.hullId + ")", t);
@@ -174,6 +182,34 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         // Fallback: assume vanilla `_Standard` exists. addToFleet will throw
         // if it doesn't, surfacing a clear error rather than silent retreat.
         return hullId + "_Standard";
+    }
+
+    /** Null-safe accessor for FleetMember variant id. */
+    private static String safeVariantId(FleetMemberAPI member) {
+        try {
+            ShipVariantAPI v = member.getVariant();
+            return v == null ? "<null>" : safeVariantHullId(v);
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    /** Null-safe accessor for variant hull-variant id. */
+    private static String safeVariantHullId(ShipVariantAPI v) {
+        try {
+            return v.getHullVariantId();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    /** Null-safe accessor for FleetMember id. */
+    private static String safeMemberId(FleetMemberAPI member) {
+        try {
+            return member.getId();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
     }
 
     /**
