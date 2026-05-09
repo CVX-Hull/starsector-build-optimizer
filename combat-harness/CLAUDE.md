@@ -16,8 +16,8 @@ Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports re
 Single matchup per mission cycle. Flow:
 1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array with 1 matchup config)
 2. Game launches → TitleScreenPlugin detects queue on title screen → MenuNavigator auto-navigates to Optimizer Arena (resets on every return to title screen for persistent session reuse)
-3. MissionDefinition (compiled in JAR) adds placeholder ships via `addToFleet()` for proper deployment/CR/AI
-4. CombatHarnessPlugin swaps player ship loadout in-place from `BuildSpec` data (variant `clear()` + `addWeapon`/`addMod`)
+3. MissionDefinition (compiled in JAR) builds each player ship's variant from the `BuildSpec` via `VariantBuilder.createFleetMember(spec)` and adds it via `addFleetMember()` so weapons + hullmods are bound at deployment; enemy ships use stock variant IDs via `addToFleet()`
+4. CombatHarnessPlugin verifies the deployed loadout against the spec (LoadoutDiagnostic) — no mid-combat variant mutation
 5. Plugin state machine: INIT → SETUP → FIGHTING → DONE → WAITING
 6. After matchup: ResultWriter writes results + done signal, Robot dismiss thread launched, then `endCombat()` called (Robot must launch before endCombat — engine stops calling advance() immediately after)
 7. TitleScreenPlugin detects queue (new or same) → auto-navigates to mission → fresh MissionDefinition cycle
@@ -88,7 +88,7 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 - **Gradle version:** Gradle 8.x doesn't support Java 26. Use Gradle 9.4+.
 - **Fleet manager accumulation:** `getAllEverDeployedCopy()` accumulates across batched matchups.
 - **Missing icon.jpg:** Game requires icon in mission descriptor. Crashes if absent.
-- **`spawnFleetMember()` retreat bug:** Ships spawned mid-combat via `spawnFleetMember()` always have `directRetreat=true`. No API call overrides this — the engine re-sets it below the public API level. Workaround: use `addToFleet()` in MissionDefinition (proper deployment) + in-place variant swap via `variant.clear()` + `addWeapon()`/`addMod()`.
+- **`spawnFleetMember()` retreat bug:** Ships spawned mid-combat via `spawnFleetMember()` always have `directRetreat=true`. No API call overrides this — the engine re-sets it below the public API level. Workaround: build the variant pre-deployment via `VariantBuilder.createFleetMember(spec)` + `MissionDefinitionAPI.addFleetMember(side, member)` so the ship deploys with the correct loadout from the start. (Earlier attempts used `addToFleet(stockVariant)` + a mid-combat `variant.clear()` + `addWeapon()`/`addMod()` swap; that mutates the variant data structure but does NOT back-propagate to the physical `WeaponAPI` instances bound at deployment, so `ship.getAllWeapons()` came back empty even though `getNonBuiltInWeaponSlots()` reflected the swap. Flux vents/caps DID propagate because they're read live from `MutableShipStatsAPI` — that asymmetry hid the bug.)
 - **`spawnShipOrWing()` with programmatic variants:** `createEmptyVariant()` does NOT register variants for `spawnShipOrWing()` lookup. Only `.variant` files loaded at startup are registered.
 - **xdotool vs LWJGL:** `xdotool` click events do NOT work on LWJGL/OpenGL windows. Only `java.awt.Robot` (from inside the JVM) can interact with in-game UI. xdotool only works on the Swing launcher window.
 - **`endCombat()` stops `advance()` immediately:** After calling `engine.endCombat()`, the engine stops calling the plugin's `advance()` method within the same or next frame. Any work that must happen after combat (e.g., launching Robot dismiss thread) must be done in the same frame, before the `endCombat()` call.

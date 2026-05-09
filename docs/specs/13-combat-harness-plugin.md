@@ -21,15 +21,16 @@ One matchup per mission. After `endCombat()`, Robot dismisses results, game retu
 1. Get `queue.get(0)` → `currentConfig` (single matchup per mission)
 2. Apply time multiplier: `engine.getTimeMult().modifyMult("harness", config.timeMult)`
 3. Create new DamageTracker, register via `engine.getListenerManager().addListener(tracker)`
-4. Collect ships deployed by MissionDefinition (via `addToFleet()` — proper CR/AI behavior):
+4. Collect ships deployed by MissionDefinition (player via `addFleetMember(side, member)` from a `VariantBuilder`-built variant; enemies via stock `addToFleet(variantId)`):
    - Iterate `engine.getShips()`, skip fighters
    - Owner 0 → playerShips, Owner 1 → enemyShips
-5. Swap player ship loadout to real build spec:
-   - `variant.clear()` + `addWeapon()`/`addMod()` for each weapon/hullmod
-   - `setNumFluxVents()`, `setNumFluxCapacitors()`, `autoGenerateWeaponGroups()`
-   - `ship.setCurrentCR(spec.cr)`, `ship.setCRAtDeployment(spec.cr)`
-6. **Engine-computed SETUP stats read (6 fields):** After loadout
-   swap, read the player ship's effective post-hullmod stats via
+5. Verify the deployed loadout against the spec by emitting a per-player-ship
+   `LoadoutDiagnostic` (`spec_*` vs `live_*` for weapons / hullmods / flux
+   vents / flux capacitors). The variant was built pre-deployment in
+   `MissionDefinition` via `VariantBuilder.createFleetMember(spec)`, so every
+   field should match; the orchestrator WARNs on mismatch.
+6. **Engine-computed SETUP stats read (6 fields):** After deployment,
+   read the player ship's effective post-hullmod stats via
    the engine's authoritative `MutableShipStats` accessors and
    cache on plugin fields for emission in the result JSON:
 
@@ -136,11 +137,10 @@ Three in-scope simplifications the harness makes deliberately —
 documented so downstream analysis does not mistake them for bugs and
 Phase 7's self-correcting mixture can absorb the resulting evidence.
 
-1. **Weapon groups are engine-generated.** After `variant.clear()` +
-   `addWeapon()`/`addMod()` in SETUP.5, the harness calls
-   `variant.autoGenerateWeaponGroups()` (`VariantBuilder.java:48`;
-   same call in `CombatHarnessPlugin` during loadout swap).
-   `BuildSpec` carries no group metadata, so the Python side cannot
+1. **Weapon groups are engine-generated.** `VariantBuilder.createVariant`
+   calls `variant.autoGenerateWeaponGroups()` (`VariantBuilder.java:48`)
+   after wiring weapons + hullmods, so the deployed ship gets engine-
+   default groups. `BuildSpec` carries no group metadata, so the Python side cannot
    specify `autofire` (off for ammo-limited missiles),
    `mode = ALTERNATING` (expensive ballistics), or cross-weapon
    grouping (flux-balanced firing patterns). Stock `.variant` files

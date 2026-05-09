@@ -27,10 +27,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
-import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -44,10 +42,11 @@ import java.io.InputStream;
 /**
  * Single-matchup-per-mission combat harness.
  *
- * MissionDefinition adds placeholder ships via addToFleet() for proper deployment.
- * This plugin swaps the player ship's loadout in-place, runs one matchup,
- * writes results, and calls endCombat() to return to the mission screen.
- * Python + Robot-click automation restarts the mission with a new queue.
+ * MissionDefinition builds each player ship's variant from the BuildSpec
+ * up-front and adds the FleetMember via addFleetMember() so weapons and
+ * hullmods are bound at deployment. This plugin runs one matchup, writes
+ * results, and calls endCombat() to return to the mission screen. Python +
+ * Robot-click automation restarts the mission with a new queue.
  */
 public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
@@ -501,7 +500,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         currentTracker = new DamageTracker();
         engine.getListenerManager().addListener(currentTracker);
 
-        // Collect ships deployed by MissionDefinition (addToFleet — proper CR/AI)
+        // Collect ships deployed by MissionDefinition (addFleetMember/addToFleet — proper CR/AI)
         playerShips.clear();
         enemyShips.clear();
         for (ShipAPI ship : engine.getShips()) {
@@ -510,32 +509,16 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             else if (ship.getOwner() == 1) enemyShips.add(ship);
         }
 
-        // Swap player ship loadout to the real build spec, then verify each
-        // ship's live state against the spec. The verification block is
-        // required-present in the result JSON; the orchestrator fail-loud
-        // refuses any matchup whose swap silently dropped weapons / hullmods.
+        // Verify the deployed ship's live state matches the spec MissionDefinition
+        // built. The variant was constructed pre-deployment via VariantBuilder +
+        // addFleetMember, so weapons + hullmods + flux must already be bound.
+        // The orchestrator fail-loud-WARNs any matchup whose `weapons_match` or
+        // `hullmods_match` is false — this is the only way the system catches a
+        // silent regression in MissionDefinition's pre-deploy build path.
         currentLoadoutDiagnosticPlayer = new JSONArray();
         for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
             ShipAPI ship = playerShips.get(i);
             MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
-
-            com.fs.starfarer.api.combat.ShipVariantAPI v = ship.getVariant();
-            v.clear();
-            for (java.util.Map.Entry<String, String> e : spec.weaponAssignments.entrySet()) {
-                v.addWeapon(e.getKey(), e.getValue());
-            }
-            for (String modId : spec.hullmods) {
-                v.addMod(modId);
-            }
-            v.setNumFluxVents(spec.fluxVents);
-            v.setNumFluxCapacitors(spec.fluxCapacitors);
-            v.autoGenerateWeaponGroups();
-
-            ship.setCurrentCR(spec.cr);
-            ship.setCRAtDeployment(spec.cr);
-            log.info("  Swapped loadout: " + spec.variantId
-                    + " weapons=" + spec.weaponAssignments.size()
-                    + " mods=" + spec.hullmods.length);
 
             try {
                 JSONObject diag = buildLoadoutDiagnostic(ship, spec);
@@ -562,7 +545,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
 
         // Phase 5D + Phase-7-prep — read engine-computed player SETUP stats
-        // after loadout swap. These feed the A2′ EB shrinkage regression prior.
+        // after deployment. These feed the A2′ EB shrinkage regression prior.
         // Any null-path stores NaN so the Python parser flags it as malformed
         // (always-emit policy).
         currentEffMaxFlux = Float.NaN;
@@ -742,19 +725,20 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         return total / ships.size();
     }
 
-    /** Build the per-player-ship loadout-swap diagnostic JSON. Captures the
-     *  spec's intent vs the live ship's actual state immediately after the
-     *  in-place variant mutation. The Python orchestrator fail-loud refuses
-     *  any matchup whose `weapons_match` or `hullmods_match` is false — this
-     *  is the only way the system catches a silent swap regression.
+    /** Build the per-player-ship loadout diagnostic JSON. Captures the spec's
+     *  intent vs the live ship's actual state. With the variant built
+     *  pre-deployment via VariantBuilder + addFleetMember, every field should
+     *  match. The Python orchestrator WARNs on any mismatch — this is the
+     *  guard against MissionDefinition silently dropping a weapon/hullmod
+     *  (e.g. unknown ID, OP overflow, future engine validation tightening).
      *
-     *  Why this matters: weapons are physical WeaponAPI instances bound at
-     *  ship-deployment time, and hullmods apply their effects via
-     *  HullModEffect.applyEffects*ShipCreation. Mutating `ship.getVariant()`
-     *  AFTER the ship has been deployed by addToFleet() is not guaranteed
-     *  to back-propagate to either layer. Flux vents/caps DO propagate
-     *  because they're read live from MutableShipStatsAPI — that's the
-     *  asymmetry that hides the bug from the existing setup_stats block. */
+     *  Historical note: an earlier path used addToFleet(stockVariant) +
+     *  mid-combat ship.getVariant().clear()/addWeapon. That swap was hidden
+     *  from the engine — physical WeaponAPI instances are bound at
+     *  deployment and a post-deployment ShipVariantAPI mutation does NOT
+     *  back-propagate. Flux vents/caps DID propagate (read live from
+     *  MutableShipStatsAPI), masking the asymmetry in the engine-stats
+     *  setup block. The diagnostic is the canary that originally caught it. */
     private JSONObject buildLoadoutDiagnostic(ShipAPI ship,
                                               MatchupConfig.BuildSpec spec) throws JSONException {
         JSONObject diag = new JSONObject();

@@ -16,6 +16,7 @@ import starsector.combatharness.CombatHarnessPlugin;
 import starsector.combatharness.ManifestDumper;
 import starsector.combatharness.MatchupConfig;
 import starsector.combatharness.MatchupQueue;
+import starsector.combatharness.VariantBuilder;
 
 /**
  * Sets up the first matchup's ships and attaches the CombatHarnessPlugin.
@@ -101,16 +102,31 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         api.setFleetTagline(FleetSide.PLAYER, "Optimizer Candidate");
         api.setFleetTagline(FleetSide.ENEMY, "Test Opponent");
 
-        // Add first matchup's ships — required for the deployment screen to work.
-        // Use addToFleet() with stock variants so the game handles CR/deployment
-        // correctly. The plugin will swap the loadout to the real build at combat start.
+        // Build player ships from the BuildSpec directly and add them via
+        // `addFleetMember(side, FleetMemberAPI)`. This is the same path
+        // `addProbeShipEmptyVariant` uses for the manifest probe — pre-deployment
+        // variant construction so weapons + hullmods are bound to the physical
+        // ShipAPI when it's instantiated.
+        //
+        // The earlier "stock variant + mid-combat in-place swap" approach
+        // produced a variant whose `getNonBuiltInHullmods` reflected the swap
+        // but whose `getAllWeapons()` returned `[]` — physical WeaponAPI
+        // instances are bound at deployment and ShipVariantAPI mutation does
+        // not back-propagate to them. (Flux vents/caps DO propagate because
+        // they're read live from MutableShipStatsAPI; that asymmetry hid the
+        // bug from the engine-stats setup block.)
         MatchupConfig first = queue.get(0);
 
         for (int i = 0; i < first.playerBuilds.length; i++) {
-            String hullId = first.playerBuilds[i].hullId;
-            String stockVariant = findAnyVariantForHull(hullId);
-            api.addToFleet(FleetSide.PLAYER, stockVariant,
-                    FleetMemberType.SHIP, stockVariant, false);
+            MatchupConfig.BuildSpec spec = first.playerBuilds[i];
+            try {
+                FleetMemberAPI member = VariantBuilder.createFleetMember(spec);
+                api.addFleetMember(FleetSide.PLAYER, member);
+            } catch (Throwable t) {
+                log.error("Failed to build player ship from spec "
+                        + spec.variantId + " (hull=" + spec.hullId + ")", t);
+                throw t;
+            }
         }
 
         // Enemy ships: use stock variant IDs
@@ -127,20 +143,6 @@ public class MissionDefinition implements MissionDefinitionPlugin {
 
         // Attach plugin — handles combat monitoring and subsequent matchups
         api.addPlugin(new CombatHarnessPlugin());
-    }
-
-    /**
-     * Find any stock variant ID for a given hull ID.
-     * Used to create placeholder ships for the deployment screen.
-     */
-    private static String findAnyVariantForHull(String hullId) {
-        for (String vid : Global.getSettings().getAllVariantIds()) {
-            if (vid.startsWith(hullId + "_")) {
-                return vid;
-            }
-        }
-        // Fallback: use hull_id + "_Standard" convention
-        return hullId + "_Standard";
     }
 
     /**
