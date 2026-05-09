@@ -37,6 +37,16 @@ from .models import WorkerConfig
 _ENV_FILE = "/etc/starsector-worker.env"
 _SERVICE = "starsector-worker.service"
 _IMDSV2_TOKEN_TTL_SECONDS = 300
+# Path the AMI bakes the combat-harness jar at — must match the Packer
+# `file` block in `scripts/cloud/packer/aws.pkr.hcl` and the gradle deploy
+# task in `combat-harness/build.gradle.kts`. The mod_info.json's
+# `jars` entry resolves relative to the mod root, so the absolute path is
+# `<game_dir>/mods/combat-harness/jars/combat-harness.jar`.
+_BAKED_MOD_JAR_PATH = "/opt/starsector/mods/combat-harness/jars/combat-harness.jar"
+
+# `_SHA256_HEX_LEN` would be a magic number if inlined; the cloud-init
+# script validates the operator-supplied digest length against this.
+_SHA256_HEX_LEN = 64
 
 
 def render_user_data(
@@ -44,6 +54,8 @@ def render_user_data(
     *,
     tailscale_authkey: str,
     debug_ssh_pubkey: str = "",
+    mod_jar_override_url: str = "",
+    mod_jar_override_sha256: str = "",
 ) -> str:
     """Produce the cloud-init bash script for a real worker boot.
 
@@ -59,7 +71,20 @@ def render_user_data(
     SSH (`--ssh` on `tailscale up`) was tried smoke #8 2026-05-09 and removed
     because it hijacks port 22 and gates via the tailnet ACL (default
     personal tailnets silent-deny for SSH).
+
+    `mod_jar_override_url` + `mod_jar_override_sha256`: optional pair. When
+    BOTH are non-empty, after `tailscale up` the script curls the URL,
+    verifies sha256, and overlays the result onto the AMI-baked combat-
+    harness jar before starting the worker. Lets Java-only iterations skip
+    AMI rebakes — operator runs `scripts/cloud/serve_mod_jar.sh` to publish
+    a freshly built JAR over the tailnet, exports the two env vars,
+    relaunches the campaign, and the workers fetch the new jar at boot.
+    Both vars must be set together: setting URL alone or SHA256 alone is a
+    boot-time fatal (we never silently skip verification). The override is
+    fail-closed — any download error, sha mismatch, or chown failure halts
+    the script via `set -euo pipefail` before `systemctl start`.
     """
+    _validate_jar_override(mod_jar_override_url, mod_jar_override_sha256)
     env_lines: list[str] = []
     for f in dataclasses.fields(worker_config):
         value = getattr(worker_config, f.name)
@@ -109,6 +134,7 @@ tailscale up --auth-key=file:"$TS_AUTHKEY_FILE" \\
     --accept-dns=false
 shred -u "$TS_AUTHKEY_FILE"
 {debug_pubkey_block}
+{_render_jar_override_block(mod_jar_override_url, mod_jar_override_sha256)}
 
 # --- Environment file for the worker service (0600 via umask) ---
 cat >{_ENV_FILE} <<'STARSECTOR_WORKER_ENV_EOF'
@@ -134,6 +160,65 @@ systemctl daemon-reload
 systemctl start {_SERVICE}
 """
     return script
+
+
+def _validate_jar_override(url: str, sha256: str) -> None:
+    """Operator-facing validation: surface contract breaks at render time.
+
+    Catches the easy mistakes (one var set without the other, malformed
+    digest length) while the orchestrator is still in Python where the
+    error is visible. The cloud-init script also re-validates at boot —
+    that's the authoritative line of defense — but failing here lets the
+    operator notice before paying for a fleet provision.
+    """
+    if bool(url) != bool(sha256):
+        raise ValueError(
+            "mod_jar_override_url and mod_jar_override_sha256 must be set "
+            "together; setting one without the other would silently skip "
+            "verification."
+        )
+    if sha256 and len(sha256) != _SHA256_HEX_LEN:
+        raise ValueError(
+            f"mod_jar_override_sha256 must be {_SHA256_HEX_LEN} hex chars "
+            f"(got {len(sha256)}); use `sha256sum combat-harness.jar`."
+        )
+
+
+def _render_jar_override_block(url: str, sha256: str) -> str:
+    """Bash block that curls a fresh combat-harness.jar from the operator's
+    workstation over the tailnet, verifies sha256, and overlays the AMI's
+    baked jar. Empty when no override is configured.
+
+    Fail-closed: every failure mode (curl error, sha mismatch, install
+    failure) propagates out via `set -euo pipefail` and halts boot before
+    `systemctl start`. The worker never runs against a wrong-jar AMI.
+    """
+    if not url:
+        return ""
+    return f"""
+# --- Optional combat-harness.jar overlay (Java-only fast iteration) ---
+# When set, fetches a freshly built jar from the operator's workstation
+# over the tailnet and replaces the AMI-baked jar before starting the
+# worker. Verified against the operator-supplied sha256 — any mismatch
+# halts boot. Lets Java-only iterations skip AMI rebakes (~15min →
+# ~30s per loop). See scripts/cloud/serve_mod_jar.sh.
+JAR_OVERRIDE_URL={shlex.quote(url)}
+JAR_OVERRIDE_SHA256={shlex.quote(sha256)}
+JAR_TMP=$(mktemp --suffix=.jar)
+echo "[mod-jar-overlay] fetching $JAR_OVERRIDE_URL"
+curl --silent --fail --show-error --location \\
+    --max-time 60 --retry 3 --retry-delay 2 \\
+    -o "$JAR_TMP" "$JAR_OVERRIDE_URL"
+JAR_ACTUAL_SHA=$(sha256sum "$JAR_TMP" | awk '{{print $1}}')
+if [ "$JAR_ACTUAL_SHA" != "$JAR_OVERRIDE_SHA256" ]; then
+    echo "[mod-jar-overlay] sha256 mismatch: expected=$JAR_OVERRIDE_SHA256 actual=$JAR_ACTUAL_SHA" >&2
+    rm -f "$JAR_TMP"
+    exit 1
+fi
+install -m 0644 -o ubuntu -g ubuntu "$JAR_TMP" {_BAKED_MOD_JAR_PATH}
+rm -f "$JAR_TMP"
+echo "[mod-jar-overlay] installed jar (sha256=$JAR_OVERRIDE_SHA256)"
+"""
 
 
 def render_probe_user_data(campaign_id: str) -> str:

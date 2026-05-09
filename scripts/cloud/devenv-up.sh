@@ -35,6 +35,7 @@ REDIS_LOG="$STATE_DIR/redis/redis.log"
 
 FLASK_PORT_MIN="${STARSECTOR_FLASK_PORT_MIN:-9000}"
 FLASK_PORT_MAX="${STARSECTOR_FLASK_PORT_MAX:-9099}"
+MOD_JAR_PORT="${STARSECTOR_MOD_JAR_PORT:-8081}"
 
 : "${TAILSCALE_AUTHKEY:?TAILSCALE_AUTHKEY must be exported before running devenv-up.sh}"
 
@@ -110,10 +111,17 @@ for port in $(seq "$FLASK_PORT_MIN" "$FLASK_PORT_MAX"); do
         --tcp="$port" "tcp://127.0.0.1:$port" >/dev/null
 done
 
+# Mod-jar override port — serve_mod_jar.sh binds 127.0.0.1:$MOD_JAR_PORT
+# and the workers fetch from the tailnet IP. Idempotent; harmless if no
+# JAR server is running.
+tailscale --socket="$TS_SOCKET" serve --bg \
+    --tcp="$MOD_JAR_PORT" "tcp://127.0.0.1:$MOD_JAR_PORT" >/dev/null
+
 TS_IP="$(tailscale --socket="$TS_SOCKET" ip -4 | head -1)"
 
 msg "tailnet IP: $TS_IP"
 msg "redis exposed on $TS_IP:$REDIS_PORT via tailscale serve"
 msg "flask ports $FLASK_PORT_MIN-$FLASK_PORT_MAX exposed via tailscale serve"
+msg "mod-jar port $MOD_JAR_PORT exposed via tailscale serve (run scripts/cloud/serve_mod_jar.sh)"
 msg "next: scripts/cloud/launch_campaign.sh <campaign.yaml>"
 msg "tear down: scripts/cloud/devenv-down.sh"

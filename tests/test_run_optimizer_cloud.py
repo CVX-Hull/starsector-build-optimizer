@@ -227,10 +227,15 @@ class TestRunCloudStudyOrdering:
 
         rendered = {}
 
-        def fake_render(worker_cfg, *, tailscale_authkey, debug_ssh_pubkey=""):
+        def fake_render(
+            worker_cfg, *, tailscale_authkey, debug_ssh_pubkey="",
+            mod_jar_override_url="", mod_jar_override_sha256="",
+        ):
             rendered["worker_cfg"] = worker_cfg
             rendered["authkey"] = tailscale_authkey
             rendered["debug_ssh_pubkey"] = debug_ssh_pubkey
+            rendered["mod_jar_override_url"] = mod_jar_override_url
+            rendered["mod_jar_override_sha256"] = mod_jar_override_sha256
             return "#!/bin/bash\necho stub\n"
 
         monkeypatch.setattr(cloud_runner, "render_user_data", fake_render)

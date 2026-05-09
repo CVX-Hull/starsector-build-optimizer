@@ -137,10 +137,24 @@ def run_cloud_study(
     # Empty string = no debug pubkey injected; production runs should
     # leave it unset.
     debug_ssh_pubkey = os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip()
+    # Optional Java-only fast-iteration override: when both vars are set,
+    # workers fetch the combat-harness jar from the operator's workstation
+    # over the tailnet at boot and overlay the AMI-baked copy. Use
+    # `scripts/cloud/serve_mod_jar.sh` to publish + print the env vars.
+    # Both must be set together; `_validate_jar_override` raises ValueError
+    # on a half-set pair.
+    mod_jar_override_url = os.environ.get(
+        "STARSECTOR_MOD_JAR_OVERRIDE_URL", "",
+    ).strip()
+    mod_jar_override_sha256 = os.environ.get(
+        "STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "",
+    ).strip()
     user_data = render_user_data(
         worker_cfg,
         tailscale_authkey=tailscale_authkey,
         debug_ssh_pubkey=debug_ssh_pubkey,
+        mod_jar_override_url=mod_jar_override_url,
+        mod_jar_override_sha256=mod_jar_override_sha256,
     )
 
     provider = AWSProvider(regions=campaign.regions)

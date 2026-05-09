@@ -241,6 +241,27 @@ scripts/cloud/devenv-down.sh
 
 `launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that re-runs `teardown.sh` + `final_audit.sh` on any exit path (success, SIGKILL, crash). In-process, `CampaignManager.run()` has a `try/finally: terminate_all_tagged` sweep + `atexit.register(teardown)`. Each study subprocess also has its own `try/finally: terminate_fleet` for its own fleet. **Four layers of teardown belt-and-suspenders.**
 
+### Java-only fast iteration (no AMI rebake)
+
+For Java-only edits to `combat-harness/`, skip the Packer rebake. The worker's UserData fetches a freshly built jar from the workstation over the tailnet at boot, sha256-verified, and overlays the AMI-baked copy.
+
+```bash
+# Workstation terminal A: build + serve (Ctrl-C when iteration is done)
+scripts/cloud/serve_mod_jar.sh
+# → builds combat-harness.jar, prints URL + SHA256, serves on port 8081
+
+# Workstation terminal B: export the env vars + launch
+eval "$(scripts/cloud/serve_mod_jar.sh --env)"   # rebuilds + exports
+scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
+```
+
+The `STARSECTOR_MOD_JAR_OVERRIDE_URL` + `STARSECTOR_MOD_JAR_OVERRIDE_SHA256` env vars are read by `cloud_runner.py` and rendered into UserData. Workers `curl` the JAR after `tailscale up`, sha256-verify, and `install` it before `systemctl start starsector-worker.service`. Any failure (404, sha mismatch, network) halts boot via `set -euo pipefail` — workers never run against the wrong jar.
+
+When to AMI-rebake instead:
+- Game files, Python code (`uv.lock`), or systemd unit changed → rebake
+- Java-only changes → skip rebake, use the override path
+- Mixed (Python + Java) → rebake (overlay only handles the JAR)
+
 ### Study-per-(hull,regime,seed) sizing cheatsheet
 
 - **≤24 workers per study**: TPE (default). Efficient, precise, recommended.

@@ -323,6 +323,100 @@ class TestRenderUserDataSSHAccess:
         assert ts_pos < ak_pos < svc_pos
 
 
+_DUMMY_SHA256 = "0123456789abcdef" * 4  # 64 hex chars
+_DUMMY_JAR_URL = "http://100.64.0.1:8081/combat-harness.jar"
+
+
+class TestRenderUserDataJarOverride:
+    """Optional combat-harness.jar overlay for Java-only fast iteration.
+
+    Operator runs `scripts/cloud/serve_mod_jar.sh` to publish a freshly
+    built jar over the tailnet, exports STARSECTOR_MOD_JAR_OVERRIDE_URL +
+    STARSECTOR_MOD_JAR_OVERRIDE_SHA256, relaunches the campaign. Workers
+    fetch the jar at boot and overlay the AMI-baked copy. Decouples
+    Java-only edits from AMI rebakes (~15min → ~30s per loop).
+    """
+
+    def test_omitted_by_default(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        assert "mod-jar-overlay" not in out
+        assert "JAR_OVERRIDE_URL" not in out
+        assert "/opt/starsector/mods/combat-harness/jars/combat-harness.jar" not in out
+
+    def test_emitted_when_both_provided(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            mod_jar_override_url=_DUMMY_JAR_URL,
+            mod_jar_override_sha256=_DUMMY_SHA256,
+        )
+        assert _DUMMY_JAR_URL in out
+        assert _DUMMY_SHA256 in out
+        assert "/opt/starsector/mods/combat-harness/jars/combat-harness.jar" in out
+        # sha256 verification must happen — never silently install.
+        assert "sha256sum" in out
+
+    def test_url_without_sha_raises(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        with pytest.raises(ValueError, match="must be set together"):
+            render_user_data(
+                cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+                mod_jar_override_url=_DUMMY_JAR_URL,
+            )
+
+    def test_sha_without_url_raises(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        with pytest.raises(ValueError, match="must be set together"):
+            render_user_data(
+                cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+                mod_jar_override_sha256=_DUMMY_SHA256,
+            )
+
+    def test_malformed_sha_raises(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        with pytest.raises(ValueError, match="64 hex chars"):
+            render_user_data(
+                cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+                mod_jar_override_url=_DUMMY_JAR_URL,
+                mod_jar_override_sha256="abcd",
+            )
+
+    def test_overlay_runs_after_tailscale_before_systemctl(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            mod_jar_override_url=_DUMMY_JAR_URL,
+            mod_jar_override_sha256=_DUMMY_SHA256,
+        )
+        ts_pos = out.find("tailscale up")
+        jar_pos = out.find("mod-jar-overlay")
+        svc_pos = out.find("systemctl start")
+        assert -1 < ts_pos < jar_pos < svc_pos, (
+            "jar overlay must fetch over tailnet and complete before "
+            "systemctl start; otherwise the worker boots against the wrong jar"
+        )
+
+    def test_curl_uses_fail_so_pipefail_traps(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            mod_jar_override_url=_DUMMY_JAR_URL,
+            mod_jar_override_sha256=_DUMMY_SHA256,
+        )
+        # curl must use --fail so HTTP 4xx/5xx halts via set -euo pipefail
+        # (otherwise a stale URL silently writes the error body to JAR_TMP
+        # and sha256 mismatch fires — same outcome but lossier diagnostic).
+        assert "--fail" in out
+
+
 class TestRenderProbeUserData:
     def test_returns_str(self):
         from starsector_optimizer.cloud_userdata import render_probe_user_data
