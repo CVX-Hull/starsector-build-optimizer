@@ -38,10 +38,12 @@ partial_fleet_policy: abort
 # pool concurrency = workers_per_study × matchup_slots_per_worker = 3 × 2 = 6.
 matchup_slots_per_worker: 2
 
-# AMI from 2026-04-18 bake; re-bake produces new IDs.
-# AMIs rebuilt 2026-04-18 for threaded worker_agent + project_tag-scoped Redis keys.
+# AMI from 2026-05-09 re-bake (post-V2 loadout fix, commit dc71e3b). The
+# 2026-04-18 / 2026-04-19 AMIs (ami-013af3c3b247d43ef) are pre-V2-loadout-fix
+# and produce hull-vs-naked-hull combat — see
+# docs/reports/2026-05-10-v1-loadout-bug-invalidation.md.
 ami_ids_by_region:
-  us-east-1: ami-013af3c3b247d43ef
+  us-east-1: ami-0a434660884e985e3
 
 ssh_key_name: starsector-probe
 

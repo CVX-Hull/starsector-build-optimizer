@@ -58,7 +58,10 @@ logger = logging.getLogger("loadout_ab_test")
 
 HULL = "hammerhead"
 ENEMY = "harbinger_Strike"
-RUNS_PER_BUILD = 3
+# n=10 per arm satisfies the validation-plan single-intermittent-failure
+# detection target (1 − 0.7^10 ≈ 97 % vs ~66 % at n=3 for a hypothetical
+# 30 %-rate flake). Override for fast debug runs via STARSECTOR_AB_RUNS.
+RUNS_PER_BUILD = int(os.environ.get("STARSECTOR_AB_RUNS", "10"))
 
 BUILD_ARMED = BuildSpec(
     variant_id="hammerhead_AB_ARMED",
@@ -145,7 +148,7 @@ def main() -> int:
     region = os.environ.get("STARSECTOR_AB_REGION", "us-east-1")
     ami_id = os.environ.get(
         "STARSECTOR_AB_AMI",
-        "ami-0b89617b369149ff7",  # smoke-campaign.yaml's AMI
+        "ami-0a434660884e985e3",  # smoke-campaign.yaml's post-V2-loadout-fix AMI
     )
     mod_jar_url = os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_URL", "").strip()
     mod_jar_sha = os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "").strip()
