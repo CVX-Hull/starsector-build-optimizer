@@ -8,7 +8,7 @@ from .game_manifest import GameManifest
 from .models import REGIME_ENDGAME, Build, GameData, RegimeConfig, ShipHull
 from .repair import repair_build
 from .scorer import heuristic_score, DEFAULT_WEIGHTS
-from .search_space import build_search_space
+from .search_space import SearchSpace, build_search_space
 
 
 def generate_random_build(
@@ -17,17 +17,25 @@ def generate_random_build(
     manifest: GameManifest,
     rng: np.random.Generator | None = None,
     regime: RegimeConfig = REGIME_ENDGAME,
+    space: SearchSpace | None = None,
 ) -> Build:
     """Generate a random build for a hull, then repair to ensure feasibility.
 
     Default `regime=REGIME_ENDGAME` preserves the pre-5F unfiltered catalogue
     for callers that were not regime-aware (warm-start random sampling, etc.).
     Pass an explicit regime to sample within a masked component set.
+
+    Pass `space` (a pre-built SearchSpace) to avoid recomputing the regime
+    mask + incompat-pairs on every call — useful when generating thousands
+    of random builds in a single hot loop. Without it, this function rebuilds
+    the search space from scratch each invocation (50K log emits during a
+    50K-sample warm-start).
     """
     if rng is None:
         rng = np.random.default_rng()
 
-    space = build_search_space(hull, game_data, regime, manifest)
+    if space is None:
+        space = build_search_space(hull, game_data, regime, manifest)
 
     weapons: dict[str, str | None] = {}
     for slot_id, options in space.weapon_options.items():
@@ -65,9 +73,12 @@ def generate_diverse_builds(
 ) -> list[Build]:
     """Generate n diverse, feasible builds under `regime` (default: endgame)."""
     rng = np.random.default_rng(seed)
+    space = build_search_space(hull, game_data, regime, manifest)
     builds = []
     for _ in range(n):
-        build = generate_random_build(hull, game_data, manifest, rng, regime=regime)
+        build = generate_random_build(
+            hull, game_data, manifest, rng, regime=regime, space=space,
+        )
         builds.append(build)
     return builds
 
