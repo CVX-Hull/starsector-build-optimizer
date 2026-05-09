@@ -160,6 +160,7 @@ def _dict_to_combat_result(data: dict[str, Any]) -> CombatResult:
         engine_stats=(
             EngineStats(**engine_stats_raw) if engine_stats_raw is not None else None
         ),
+        debug_dumps=tuple(data.get("debug_dumps") or ()),
     )
 
 
@@ -247,6 +248,15 @@ class CloudWorkerPool(EvaluatorPool):
                     return jsonify({"error": "bad result"}), 400
                 self._results[matchup_id] = parsed
                 _log_loadout_diagnostics(matchup_id, parsed)
+                # Pass-through harness debug dumps (`[SHIP_DUMP]`,
+                # `[FIGHT_TICK]`, `[WIN_DUMP]` lines from
+                # CombatHarnessPlugin). Logged at INFO so smoke-time
+                # investigations have ship-state evidence without grepping
+                # worker game stdout. Bounded volume — harness emits at most
+                # ~1 line/sec.
+                if parsed.debug_dumps:
+                    for line in parsed.debug_dumps:
+                        logger.info("DEBUG_DUMP matchup=%s %s", matchup_id, line)
                 self._seen.add(matchup_id)
                 event = self._result_events.get(matchup_id)
             if event is not None:

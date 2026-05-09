@@ -143,7 +143,7 @@ class ResultWriterTest {
                 new DamageTracker(),
                 "TIMEOUT", 30.0f,
                 12000f, 800f, 1050f, 1.0f, 0f, 1.0f,
-                playerDiag);
+                playerDiag, null);
 
         assertTrue(result.has("loadout_diagnostic"),
                 "result must always carry loadout_diagnostic — required-present");
@@ -167,7 +167,7 @@ class ResultWriterTest {
                 new DamageTracker(),
                 "TIMEOUT", 30.0f,
                 12000f, 800f, 1050f, 1.0f, 0f, 1.0f,
-                null);
+                null, null);
 
         JSONObject diag = result.getJSONObject("loadout_diagnostic");
         assertEquals(0, diag.getJSONArray("player").length());

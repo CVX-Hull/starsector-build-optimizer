@@ -388,6 +388,12 @@ class CombatResult:
     enemy_ships_retreated: int
     player_loadout_diagnostics: tuple[LoadoutDiagnostic, ...]
     engine_stats: EngineStats | None = None
+    # Optional Java-harness debug log lines: [SHIP_DUMP], [FIGHT_TICK],
+    # [WIN_DUMP]. Survives the worker → POST /result boundary so the
+    # orchestrator can inspect ship-state evolution without depending on
+    # heartbeat tail timing (workers terminate <1s after endCombat and the
+    # heartbeat hash resets to "no logs"). Default empty when harness opts out.
+    debug_dumps: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

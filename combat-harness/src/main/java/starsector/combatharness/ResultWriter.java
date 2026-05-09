@@ -33,7 +33,8 @@ public class ResultWriter {
                                                  float effHullHpPct,
                                                  float ballisticRangeBonus,
                                                  float shieldDamageTakenMult,
-                                                 JSONArray loadoutDiagnosticPlayer)
+                                                 JSONArray loadoutDiagnosticPlayer,
+                                                 JSONArray debugDumps)
             throws JSONException {
         JSONArray playerArr = new JSONArray();
         JSONArray enemyArr = new JSONArray();
@@ -93,6 +94,13 @@ public class ResultWriter {
         loadoutDiag.put("player",
                 loadoutDiagnosticPlayer != null ? loadoutDiagnosticPlayer : new JSONArray());
         result.put("loadout_diagnostic", loadoutDiag);
+        // Optional debug_dumps — only emitted when the harness explicitly
+        // populated the array (caller may pass null to opt out). Not part of
+        // the Python `parse_combat_result` schema, but the Flask /result
+        // handler logs it pass-through (cloud_worker_pool.py).
+        if (debugDumps != null && debugDumps.length() > 0) {
+            result.put("debug_dumps", debugDumps);
+        }
         return result;
     }
 

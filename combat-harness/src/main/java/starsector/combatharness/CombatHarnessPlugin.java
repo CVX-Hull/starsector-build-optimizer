@@ -86,6 +86,13 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     // mutation actually took effect on the deployed ShipAPI. Cleared at the
     // start of every doSetup() so a stale entry can't leak across matchups.
     private JSONArray currentLoadoutDiagnosticPlayer = new JSONArray();
+    // Per-matchup accumulator for [SHIP_DUMP] / [FIGHT_TICK] / [WIN_DUMP]
+    // lines. Shipped back via the result JSON so the orchestrator logs the
+    // ship-state trail even when the worker terminates faster than the
+    // 30s heartbeat interval can capture (the heartbeat tail shows only
+    // the last 32KB of game stdout and gets reset to "no logs" on
+    // worker-side termination).
+    private JSONArray currentDebugDumps = new JSONArray();
     private int frameCount = 0;
 
     @Override
@@ -509,6 +516,32 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             else if (ship.getOwner() == 1) enemyShips.add(ship);
         }
 
+        // Force per-ship CR + clear any auto-set retreat. Even though
+        // VariantBuilder.createFleetMember sets `member.getRepairTracker().setCR(spec.cr)`
+        // BEFORE the deployment screen, the deployed `ShipAPI` does NOT
+        // inherit that — it deploys at `getCurrentCR()=0.0` (verified
+        // 2026-05-09 via [SHIP_DUMP] dumps after the addFleetMember refactor).
+        // CR=0 triggers auto-retreat: `ship.isRetreating()` returns true at
+        // SETUP, the AI immediately heads for the deploy point, and the
+        // matchup ends instantly with `winner=ENEMY, dur=0`. Setting CR live
+        // on the deployed ShipAPI clears this — the OLD addToFleet path
+        // worked because doSetup also did this; my 2026-05-10 refactor
+        // dropped the calls assuming FleetMember CR propagated. It doesn't.
+        for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
+            ShipAPI s = playerShips.get(i);
+            float cr = currentConfig.playerBuilds[i].cr;
+            try { s.setCurrentCR(cr); } catch (Throwable ignored) {}
+            try { s.setCRAtDeployment(cr); } catch (Throwable ignored) {}
+            try { s.setRetreating(false, false); } catch (Throwable ignored) {}
+        }
+
+        // [SHIP_DUMP] — diagnostic dump of every collected ship. Captures the
+        // post-deployment + post-CR-fix state so we can verify the CR/retreat
+        // override took effect. Format is parseable; the heartbeat tail glob
+        // captures the last 32KB and ships it to the orchestrator.
+        for (ShipAPI s : playerShips) dumpShipState("PLAYER", s);
+        for (ShipAPI s : enemyShips) dumpShipState("ENEMY ", s);
+
         // Verify the deployed ship's live state matches the spec MissionDefinition
         // built. The variant was constructed pre-deployment via VariantBuilder +
         // addFleetMember, so weapons + hullmods + flux must already be bound.
@@ -516,6 +549,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         // `hullmods_match` is false — this is the only way the system catches a
         // silent regression in MissionDefinition's pre-deploy build path.
         currentLoadoutDiagnosticPlayer = new JSONArray();
+        currentDebugDumps = new JSONArray();
         for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
             ShipAPI ship = playerShips.get(i);
             MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
@@ -630,6 +664,22 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         float elapsed = contactMade ? engine.getTotalElapsedTime(false) - matchupStartTime : 0f;
         boolean timedOut = contactMade && elapsed > currentConfig.timeLimitSeconds;
 
+        // [FIGHT_TICK] periodic per-frame state dump while combat runs. Every
+        // 60 frames (≈1s wall) dumps every tracked ship's alive/retreat/CR/hp
+        // state so we can see what changes between SETUP and the moment a
+        // matchup ends with `dur=0` + `hp_diff=0`. Independent of the regular
+        // heartbeat (which only logs aggregate counts).
+        if (frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
+            recordDebug("[FIGHT_TICK] frame=" + frameCount
+                    + " contactMade=" + contactMade
+                    + " elapsed=" + elapsed
+                    + " playerAlive=" + playerAlive
+                    + " enemyAlive=" + enemyAlive
+                    + " timedOut=" + timedOut);
+            for (ShipAPI s : playerShips) dumpShipState("PLAYER_F", s);
+            for (ShipAPI s : enemyShips) dumpShipState("ENEMY_F ", s);
+        }
+
         String winner = null;
         if (playerAlive == 0 && enemyAlive > 0) {
             winner = "ENEMY";
@@ -642,6 +692,19 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
 
         if (winner != null) {
+            // [WIN_DUMP] one-shot dump at win-detection — captures the exact
+            // ship states the result writer will see, before endCombat() ends
+            // the engine and despawns everything.
+            recordDebug("[WIN_DUMP] winner=" + winner
+                    + " contactMade=" + contactMade
+                    + " elapsed=" + elapsed
+                    + " playerAlive=" + playerAlive
+                    + " enemyAlive=" + enemyAlive
+                    + " spawnAge=" + (engine.getTotalElapsedTime(false) - spawnTime)
+                    + " timeLimit=" + currentConfig.timeLimitSeconds);
+            for (ShipAPI s : playerShips) dumpShipState("PLAYER_W", s);
+            for (ShipAPI s : enemyShips) dumpShipState("ENEMY_W ", s);
+
             JSONArray results = new JSONArray();
             try {
                 results.put(ResultWriter.buildMatchupResult(
@@ -651,7 +714,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                         currentEffArmorRating,
                         currentEffHullHpPct, currentBallisticRangeBonus,
                         currentShieldDamageTakenMult,
-                        currentLoadoutDiagnosticPlayer));
+                        currentLoadoutDiagnosticPlayer,
+                        currentDebugDumps));
                 ResultWriter.writeAllResults(results);
                 ResultWriter.writeDoneSignal();
                 log.info("Matchup " + currentConfig.matchupId
@@ -706,6 +770,62 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             log.info("Waiting timeout, exiting.");
             System.exit(0);
         }
+    }
+
+    /** [SHIP_DUMP] log everything available about a ship — used post-deploy
+     *  in doSetup, per-second in doFighting, and at win-detection. The
+     *  output line format is parseable: `[SHIP_DUMP side=X ...]` so a
+     *  worker_agent's heartbeat tail glob can ship the lines straight to
+     *  the orchestrator without further processing.
+     *
+     *  Defensively null-checks every API call — a ship that's already
+     *  despawned/dead returns null on several getters. We log "?" rather
+     *  than throw, so a single dead ship doesn't poison the rest of the
+     *  dump for that frame. */
+    private void dumpShipState(String side, ShipAPI ship) {
+        if (ship == null) {
+            log.info("[SHIP_DUMP] side=" + side + " <null ship>");
+            return;
+        }
+        StringBuilder sb = new StringBuilder("[SHIP_DUMP] side=").append(side);
+        try { sb.append(" id=").append(ship.getFleetMemberId()); } catch (Throwable ignored) {}
+        try { sb.append(" hull=").append(ship.getHullSpec().getHullId()); } catch (Throwable ignored) {}
+        try { sb.append(" owner=").append(ship.getOwner()); } catch (Throwable ignored) {}
+        try { sb.append(" alive=").append(ship.isAlive()); } catch (Throwable ignored) {}
+        try { sb.append(" retreat=").append(ship.isRetreating()); } catch (Throwable ignored) {}
+        try { sb.append(" hullLvl=").append(ship.getHullLevel()); } catch (Throwable ignored) {}
+        try { sb.append(" cr=").append(ship.getCurrentCR()); } catch (Throwable ignored) {}
+        try {
+            org.lwjgl.util.vector.Vector2f pos = ship.getLocation();
+            if (pos != null) sb.append(" pos=(").append(pos.x).append(",").append(pos.y).append(")");
+        } catch (Throwable ignored) {}
+        try {
+            com.fs.starfarer.api.combat.MutableShipStatsAPI s = ship.getMutableStats();
+            if (s != null) {
+                sb.append(" maxFlux=").append(s.getFluxCapacity().getModifiedValue());
+                sb.append(" diss=").append(s.getFluxDissipation().getModifiedValue());
+            }
+        } catch (Throwable ignored) {}
+        try {
+            java.util.List<WeaponAPI> wpns = ship.getAllWeapons();
+            sb.append(" liveWeaponCount=").append(wpns == null ? -1 : wpns.size());
+        } catch (Throwable ignored) {}
+        try {
+            // shipAI may be null if engine hasn't installed it yet. The bare
+            // class-name + AI presence is the AI-state signal we care about.
+            Object ai = ship.getShipAI();
+            sb.append(" hasAI=").append(ai != null);
+        } catch (Throwable ignored) { sb.append(" hasAI=?"); }
+        String line = sb.toString();
+        log.info(line);
+        currentDebugDumps.put(line);
+    }
+
+    /** Record a one-off debug line in the result JSON's debug_dumps array
+     *  AND log it. Use for [FIGHT_TICK], [WIN_DUMP] header lines, etc. */
+    private void recordDebug(String line) {
+        log.info(line);
+        currentDebugDumps.put(line);
     }
 
     private int countAlive(List<ShipAPI> ships) {

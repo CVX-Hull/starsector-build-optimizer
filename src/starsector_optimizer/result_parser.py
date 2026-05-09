@@ -118,6 +118,7 @@ def parse_combat_result(data: dict) -> CombatResult:
         enemy_ships_retreated=data["aggregate"]["enemy_ships_retreated"],
         player_loadout_diagnostics=_parse_loadout_diagnostic(data),
         engine_stats=_parse_setup_stats(data),
+        debug_dumps=tuple(data.get("debug_dumps") or ()),
     )
 
 

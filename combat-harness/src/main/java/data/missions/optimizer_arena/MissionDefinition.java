@@ -102,26 +102,38 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         api.setFleetTagline(FleetSide.PLAYER, "Optimizer Candidate");
         api.setFleetTagline(FleetSide.ENEMY, "Test Opponent");
 
-        // Build player ships from the BuildSpec directly and add them via
-        // `addFleetMember(side, FleetMemberAPI)`. This is the same path
-        // `addProbeShipEmptyVariant` uses for the manifest probe — pre-deployment
-        // variant construction so weapons + hullmods are bound to the physical
-        // ShipAPI when it's instantiated.
+        // Player ships: add via `addToFleet(stockVariant)`, then immediately
+        // `setVariant(customVariant)` on the returned FleetMember so the
+        // pre-deployment variant build still propagates weapons + hullmods.
         //
-        // The earlier "stock variant + mid-combat in-place swap" approach
-        // produced a variant whose `getNonBuiltInHullmods` reflected the swap
-        // but whose `getAllWeapons()` returned `[]` — physical WeaponAPI
-        // instances are bound at deployment and ShipVariantAPI mutation does
-        // not back-propagate to them. (Flux vents/caps DO propagate because
-        // they're read live from MutableShipStatsAPI; that asymmetry hid the
-        // bug from the engine-stats setup block.)
+        // Why not `addFleetMember(side, member)` with a pre-built FleetMember?
+        // Tested 2026-05-09 (smoke #15-#17 with [SHIP_DUMP] tracing): an
+        // `addFleetMember`-deployed ship comes up with `retreat=true` set
+        // internally and the AI immediately heads for the deploy point.
+        // Setting `setRetreating(false, false)` doesn't override (skill #14
+        // documents the same for `spawnFleetMember`). The matchup then ends
+        // in <2s with `winner=ENEMY, dur=0, hp_diff=0` — no real combat.
+        //
+        // `addToFleet(stockVariant, ...)` does NOT trigger this retreat
+        // (smoke #11 produced 42.7s real combat with this path). We use the
+        // stock variant only as a placeholder to get past the retreat
+        // initialization, then immediately `setVariant(...)` on the returned
+        // FleetMember — which propagates to the deployed `ShipAPI` because
+        // the swap happens BEFORE the deployment screen processes the fleet.
         MatchupConfig first = queue.get(0);
 
         for (int i = 0; i < first.playerBuilds.length; i++) {
             MatchupConfig.BuildSpec spec = first.playerBuilds[i];
             try {
-                FleetMemberAPI member = VariantBuilder.createFleetMember(spec);
-                api.addFleetMember(FleetSide.PLAYER, member);
+                String stockVariant = findAnyVariantForHull(spec.hullId);
+                FleetMemberAPI member = api.addToFleet(
+                        FleetSide.PLAYER, stockVariant,
+                        FleetMemberType.SHIP, stockVariant, false);
+                ShipVariantAPI customVariant = VariantBuilder.createVariant(spec);
+                // setVariant args: (variant, withFighters, force).
+                // force=true overrides the existing variant unconditionally.
+                member.setVariant(customVariant, false, true);
+                member.getRepairTracker().setCR(spec.cr);
             } catch (Throwable t) {
                 log.error("Failed to build player ship from spec "
                         + spec.variantId + " (hull=" + spec.hullId + ")", t);
@@ -143,6 +155,25 @@ public class MissionDefinition implements MissionDefinitionPlugin {
 
         // Attach plugin — handles combat monitoring and subsequent matchups
         api.addPlugin(new CombatHarnessPlugin());
+    }
+
+    /**
+     * Find any stock variant ID for a given hull ID. Used as a placeholder
+     * for `addToFleet` — the variant gets immediately swapped via
+     * `setVariant(customVariant)` on the returned FleetMember. The point of
+     * the placeholder is to get the engine to register the ship in the
+     * non-retreating "main fleet" track; the variant itself is overwritten
+     * before deployment.
+     */
+    private static String findAnyVariantForHull(String hullId) {
+        for (String vid : Global.getSettings().getAllVariantIds()) {
+            if (vid.startsWith(hullId + "_")) {
+                return vid;
+            }
+        }
+        // Fallback: assume vanilla `_Standard` exists. addToFleet will throw
+        // if it doesn't, surfacing a clear error rather than silent retreat.
+        return hullId + "_Standard";
     }
 
     /**
