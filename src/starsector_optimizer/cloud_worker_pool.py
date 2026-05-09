@@ -72,18 +72,32 @@ def _dict_to_ship(data: dict[str, Any]) -> ShipCombatResult:
     )
 
 
-def _log_loadout_mismatches(matchup_id: str, result: CombatResult) -> None:
-    """Loud WARN per (matchup_id, ship) when any field of the in-place
-    loadout swap failed to take. Non-fatal — the diagnostic phase needs the
-    full log of mismatches before we crash on them.
+def _log_loadout_diagnostics(matchup_id: str, result: CombatResult) -> None:
+    """Per-matchup loadout diagnostic emit. WARN on any mismatched field
+    (weapons / hullmods / flux vents / flux caps); INFO on the all-match
+    case so the success path is observable too.
+
+    The asymmetric "WARN on mismatch, silent on success" earlier version
+    made it hard to tell "diagnostic passed" from "diagnostic empty / never
+    ran" — exactly the failure mode that hid the smoke #12 weapons-not-
+    applied bug for so long. The success line is concise (one per matchup)
+    so it doesn't drown the log under prep-scale runs (~50k matchups).
     """
     for d in result.player_loadout_diagnostics:
-        if (
+        all_match = (
             d.weapons_match
             and d.hullmods_match
             and d.flux_vents_match
             and d.flux_capacitors_match
-        ):
+        )
+        if all_match:
+            logger.info(
+                "LOADOUT_OK matchup=%s ship=%s weapons=%d hullmods=%d "
+                "flux=(%d,%d)",
+                matchup_id, d.fleet_member_id,
+                len(d.live_weapons), len(d.live_hullmods),
+                d.live_flux_vents, d.live_flux_capacitors,
+            )
             continue
         logger.warning(
             "LOADOUT_MISMATCH matchup=%s ship=%s "
@@ -232,7 +246,7 @@ class CloudWorkerPool(EvaluatorPool):
                     logger.error("failed to parse result: %s", e)
                     return jsonify({"error": "bad result"}), 400
                 self._results[matchup_id] = parsed
-                _log_loadout_mismatches(matchup_id, parsed)
+                _log_loadout_diagnostics(matchup_id, parsed)
                 self._seen.add(matchup_id)
                 event = self._result_events.get(matchup_id)
             if event is not None:
