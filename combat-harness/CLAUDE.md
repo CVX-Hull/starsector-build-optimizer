@@ -6,97 +6,41 @@ last-validated: 2026-05-10
 
 # Combat Harness Mod
 
-Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports results as JSON. The deployed ship loadout uses the V2 placeholder-then-swap path (`addToFleet` stock variant → `FleetMember.setVariant` pre-deployment) — V1's mid-combat `variant.clear()` + `addWeapon()` mutated the variant data structure but failed to propagate to the deployed `WeaponAPI` instances. See [../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md) for the full V1 invalidation report.
+Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports results as JSON. The deployed ship loadout uses the V2 placeholder-then-swap path (`addToFleet` stock variant → `FleetMember.setVariant` pre-deployment); the V1 mid-combat `variant.clear()` + `addWeapon()` approach mutated the variant data structure but failed to propagate to the deployed `WeaponAPI` instances. Master invalidation report: [../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ## Commands
 
-- Build: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew jar`
-- Deploy to game: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew deploy`
-- Run tests: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew test`
-- Launch game with mod: `cd game/starsector && ./starsector.sh` (Linux only — no native macOS launch path)
-- Build + test + deploy: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew clean jar test deploy`
-- `STARSECTOR_JDK_HOME` is a JDK 17 (matching Starsector's bundled JRE). On macOS via Homebrew: `export STARSECTOR_JDK_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`. On Linux: typically `/usr/lib/jvm/java-17-openjdk` (build-host JDK ≥17; Gradle 9.4 tolerates higher).
+- Build: `JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew jar`
+- Test: `JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew test`
+- Deploy to game: `JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew deploy`
+- Build + test + deploy: `JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew clean jar test deploy`
+- Launch game with mod (Linux only): `cd ../game/starsector && ./starsector.sh`
+- `STARSECTOR_JDK_HOME` = JDK 17 (matching the bundled JRE). macOS Homebrew: `/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`. Linux: `/usr/lib/jvm/java-17-openjdk` (Gradle 9.4 tolerates higher build hosts).
 
-## Architecture
+## Architecture (one matchup per mission cycle)
 
-Single matchup per mission cycle. Flow:
-1. Python writes `combat_harness_queue.json.data` to `saves/common/` (JSON array with 1 matchup config)
-2. Game launches → TitleScreenPlugin detects queue on title screen → MenuNavigator auto-navigates to Optimizer Arena (resets on every return to title screen for persistent session reuse)
-3. MissionDefinition (compiled in JAR) deploys each player ship via the V2 placeholder-then-swap pattern: `addToFleet(side, stockVariantId, ...)` returns a `FleetMemberAPI`, then `member.setVariant(VariantBuilder.createVariant(spec), false, true)` swaps in the optimizer-generated variant before deployment. **Plus**: `CombatHarnessPlugin.doSetup` sets CR live on each deployed `ShipAPI` (`ship.setCurrentCR(cr)` + `ship.setCRAtDeployment(cr)` + `ship.setRetreating(false, false)`) — `getCurrentCR()` does NOT inherit from the FleetMember's repair tracker, and CR=0 triggers auto-retreat, so the FleetMember-level `getRepairTracker().setCR(spec.cr)` is necessary but not sufficient. Enemy ships use stock variant IDs via `addToFleet()`. (Earlier V1 path used `VariantBuilder.createFleetMember(spec)` + `addFleetMember(side, member)` to build the variant up-front — reverted 2026-05-10 because deployed ships boot with `retreat=true` set internally and `setRetreating(false, false)` cannot override.)
-4. CombatHarnessPlugin verifies the deployed loadout against the spec (LoadoutDiagnostic) — no mid-combat variant mutation
-5. Plugin state machine: INIT → SETUP → FIGHTING → DONE → WAITING
-6. After matchup: ResultWriter writes results + done signal, Robot dismiss thread launched, then `endCombat()` called (Robot must launch before endCombat — engine stops calling advance() immediately after)
-7. TitleScreenPlugin detects queue (new or same) → auto-navigates to mission → fresh MissionDefinition cycle
+1. Python writes `combat_harness_queue.json.data` to `saves/common/` (1 matchup config).
+2. Game launches → `TitleScreenPlugin` detects queue → `MenuNavigator` auto-navigates to Optimizer Arena (the `triggered` flag resets when `GameState != TITLE` so persistent session reuse works).
+3. `MissionDefinition` deploys each player ship via the **V2 placeholder-then-swap pattern**: `addToFleet(side, stockVariantId, ...)` returns a `FleetMemberAPI`, then `member.setVariant(VariantBuilder.createVariant(spec), false, true)` swaps in the optimizer-generated variant before the deployment screen processes the fleet. Enemy ships use stock variant IDs via `addToFleet()`.
+4. `CombatHarnessPlugin.doSetup` then sets CR live on each deployed `ShipAPI` (`setCurrentCR(cr)` + `setCRAtDeployment(cr)` + `setRetreating(false, false)`) — `getCurrentCR()` does NOT inherit from the FleetMember's repair tracker, and `CR=0` triggers auto-retreat. `LoadoutDiagnostic` validates the deployed loadout against the spec each frame as a permanent canary.
+5. Plugin state machine: INIT → SETUP → FIGHTING → DONE → WAITING.
+6. After matchup: `ResultWriter` writes results + done signal, Robot dismiss thread launched, **then** `endCombat()` called. The order matters — the engine stops calling `advance()` immediately after `endCombat()`, so any post-combat work must launch first.
+7. `TitleScreenPlugin` detects new queue → fresh mission cycle.
 
-### Why single-matchup-per-mission (not batched spawning)
-`spawnFleetMember()` mid-combat causes ships to retreat — the engine sets `directRetreat=true` at a level below the public API. No combination of `setDirectRetreat(false)`, `clearTasks()`, `reassign()`, `preventFullRetreat`, `setCanForceShipsToEngageWhenBattleClearlyLost`, no-op admiral AI, or per-frame `setRetreating(false,false)` overrides this. Only `addToFleet()` in MissionDefinition produces ships with proper AI behavior. See `docs/reference/tech-debt.md` for details.
+**Why single-matchup-per-mission**: `spawnFleetMember()` mid-combat causes ships to retreat via `directRetreat=true` set below the public API. `addFleetMember(side, member)` with a pre-built FleetMember has the same issue. Only `addToFleet()`-then-`setVariant` produces ships with proper AI behavior. Full bug catalog + rejected workarounds: [`starsector-modding`](../.claude/skills/starsector-modding.md) §"Ship Spawning — `spawnFleetMember()` Retreat Bug".
 
-## File Protocol
+## Design invariants
 
-| File | SettingsAPI Name | Written By | Purpose |
-|------|-----------------|------------|---------|
-| `saves/common/combat_harness_queue.json.data` | `combat_harness_queue.json` | Python | Batch of matchup configs |
-| `saves/common/combat_harness_results.json.data` | `combat_harness_results.json` | Java | Array of combat results |
-| `saves/common/combat_harness_done.data` | `combat_harness_done` | Java | Completion signal |
-| `saves/common/combat_harness_heartbeat.txt.data` | `combat_harness_heartbeat.txt` | Java | Liveness (every ~1s) |
-| `saves/common/combat_harness_shutdown.data` | `combat_harness_shutdown` | Python | Signal: exit cleanly |
+- `combat_harness_queue.json` is the ONLY input; `combat_harness_results.json` is the ONLY output; `combat_harness_done` is the completion signal Python polls for.
+- The plugin never modifies combat (no damage modification, no custom AI).
+- One matchup per mission — `endCombat()` + Robot dismiss + `TitleScreenPlugin` restart between matchups.
+- All config values have sane defaults (`time_mult=5` engine ceiling, `time_limit=300`, map `24000×18000`).
+- `MissionDefinition` gracefully handles missing queue (shows error in briefing).
 
-## File I/O — Security Sandbox
+## Pointers
 
-Starsector blocks ALL `java.io.File` access from mod code. All file I/O must use the game's SettingsAPI:
-
-```java
-// Read from saves/common/ (game appends .data to filename)
-String text = Global.getSettings().readTextFileFromCommon("combat_harness_queue.json");
-// Reads: saves/common/combat_harness_queue.json.data
-
-// Write to saves/common/
-Global.getSettings().writeTextFileToCommon("combat_harness_results.json", jsonStr);
-// Writes: saves/common/combat_harness_results.json.data
-
-// Check existence
-Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
-// Checks: saves/common/combat_harness_queue.json.data
-```
-
-**Critical:** The game appends `.data` to ALL filenames in `saves/common/`. Python must write files WITH the `.data` extension. Use flat filenames with `combat_harness_` prefix.
-
-## API Caveats
-
-1. **`init(CombatEngineAPI)` is deprecated.** Always null-check engine in `advance()`.
-2. **DamageListener `source` types vary.** `ShipAPI`, `DamagingProjectileAPI`, or `BeamAPI` — use `instanceof`.
-3. **Time multiplier ceiling.** Keep <=5x, higher causes physics/collision issues.
-4. **org.json has checked exceptions.** The game's `json.jar` is ancient — `put()`, `getString()`, `new JSONObject(String)` all throw checked `JSONException`.
-5. **MissionDefinition must be in the JAR.** Janino can't resolve JAR classes. Package: `data.missions.optimizer_arena`.
-6. **Null-check API return values defensively.** `getFluxTracker()`, `getDisabledWeapons()`, `getVariant()`, `getHullSpec()` can return null.
-7. **`getHullLevel()` is on `CombatEntityAPI`, inherited by `ShipAPI`.** Check full inheritance chain.
-8. **Track spawned ShipAPIs directly.** `getAllEverDeployedCopy()` accumulates across batched matchups. `engine.getShips()` drops destroyed ships.
-10. **`endCombat()` stops `advance()` immediately.** The engine stops calling `advance()` within the same or next frame after `endCombat()`. Any post-combat work must happen in the same frame, before the `endCombat()` call.
-9. **Mission descriptor requires `icon.jpg`.** Game crashes if missing.
-
-## Design Invariants
-
-- `combat_harness_queue.json` (in saves/common/) is the ONLY input
-- `combat_harness_results.json` (in saves/common/) is the ONLY output
-- `combat_harness_done` signals completion; Python polls for this, not results
-- The plugin never modifies combat (no damage modification, no custom AI)
-- Single matchup per mission — `endCombat()` + Robot dismiss + TitleScreenPlugin restart between matchups
-- All config values have sane defaults (time_mult=5, time_limit=300, map=24000x18000); 5x is the engine clamp ceiling — physics/collision integration breaks above 5x.
-- MissionDefinition gracefully handles missing queue (shows error in briefing)
-
-## Pitfalls Encountered
-
-- **Security sandbox:** All `java.io.File` usage blocked. Must use SettingsAPI.
-- **`.data` extension:** Game appends `.data` to all `saves/common/` filenames.
-- **Janino class resolution:** Loose `.java` scripts can't import JAR classes.
-- **org.json checked exceptions:** Modern org.json is unchecked; game's version is checked.
-- **JRE vs JDK:** Game ships a JRE (no javac). Need system JDK. Game's JRE is Java 17.
-- **Gradle version:** Gradle 8.x doesn't support Java 26. Use Gradle 9.4+.
-- **Fleet manager accumulation:** `getAllEverDeployedCopy()` accumulates across batched matchups.
-- **Missing icon.jpg:** Game requires icon in mission descriptor. Crashes if absent.
-- **`spawnFleetMember()` retreat bug:** Ships spawned mid-combat via `spawnFleetMember()` always have `directRetreat=true`. No API call overrides this — the engine re-sets it below the public API level. The same bug bites `addFleetMember(side, member)` with a pre-built FleetMember: ships boot with `retreat=true` set internally and `setRetreating(false, false)` cannot override (smoke #15-#17, 2026-05-09 — matchups end in <2s with `winner=ENEMY, dur=0`). **V2 working approach (2026-05-10):** `addToFleet(side, stockVariantId, ...)` returns a `FleetMemberAPI`; immediately swap the variant via `member.setVariant(VariantBuilder.createVariant(spec), false, true)` BEFORE the deployment screen processes the fleet. Set CR via `member.getRepairTracker().setCR(spec.cr)`. Plus: in the plugin's `doSetup`, the deployed `ShipAPI` does NOT inherit the FleetMember CR — set it live via `ship.setCurrentCR(cr)` + `ship.setCRAtDeployment(cr)` + `ship.setRetreating(false, false)` (else `getCurrentCR()=0` triggers auto-retreat). (An even earlier path mutated variants mid-combat via `variant.clear()` + `addWeapon()`/`addMod()`; that only changed the variant data structure, not the physical `WeaponAPI` instances bound at deployment, so weapons came back empty while flux vents/caps DID propagate from `MutableShipStatsAPI` — that asymmetry hid the bug.)
-- **`spawnShipOrWing()` with programmatic variants:** `createEmptyVariant()` does NOT register variants for `spawnShipOrWing()` lookup. Only `.variant` files loaded at startup are registered.
-- **xdotool vs LWJGL:** `xdotool` click events do NOT work on LWJGL/OpenGL windows. Only `java.awt.Robot` (from inside the JVM) can interact with in-game UI. xdotool only works on the Swing launcher window.
-- **`endCombat()` stops `advance()` immediately:** After calling `engine.endCombat()`, the engine stops calling the plugin's `advance()` method within the same or next frame. Any work that must happen after combat (e.g., launching Robot dismiss thread) must be done in the same frame, before the `endCombat()` call.
-- **Title screen plugin `triggered` flag must reset:** Global plugins that use a `triggered` boolean to run once on the title screen must reset it when `GameState != TITLE`. Otherwise the plugin only fires on the first mission per game launch, breaking persistent session reuse.
-- **Robot dismiss uses pixel-color polling:** After `endCombat()`, there's a ~1.5s white-flash transition before the results dialog renders. `dismissResults()` polls a 40x40 pixel region around the Continue button location using `Robot.createScreenCapture()`, checking for Starsector's cyan UI color (hue 185-210 in HSB). Clicks once the button color is detected (typically 1-3s). Falls back to blind click after 15s timeout. `Robot.createScreenCapture()` is NOT blocked by the security sandbox.
+- File protocol (queue / results / done / heartbeat / shutdown), JSON schemas, lifecycle: [spec 09](../docs/specs/09-combat-protocol.md).
+- Combat plugin contract (state machine, end-of-match ordering): [spec 13](../docs/specs/13-combat-harness-plugin.md).
+- Programmatic variant construction: [spec 27](../docs/specs/27-variant-builder.md).
+- Manifest-dumper probe-mode mission: [spec 29](../docs/specs/29-game-manifest.md).
+- Sandbox / file I/O / Janino / API caveats / Robot UI automation / Xvfb requirements / `MenuNavigator` coordinates: [`starsector-modding`](../.claude/skills/starsector-modding.md).
