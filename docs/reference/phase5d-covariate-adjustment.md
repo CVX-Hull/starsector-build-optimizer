@@ -197,7 +197,7 @@ The three surviving engine features — `eff_max_flux`, `eff_flux_dissipation`, 
 
 #### The 7-feature ship set
 
-Targeting p = 7 after the variance audit (sweep interpolation at p = 7 between p = 4 and p = 8: Δρ ≈ +0.30 at N = 368, well above the +0.02 gate):
+Targeting p = 7 after the variance audit. Pending re-validation under V2 loadout fix; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 | # | Feature | Source | Tier |
 |---|---|---|---|
@@ -226,11 +226,11 @@ Coverage of information axes: flux-cap (1), flux-sustain (2), armor-defense (3),
 | `effective_hp`, `armor_ehp`, `shield_ehp` | 16-feature v1 | Subsumed by engine-computed armor (+ eff_hull_hp/shield_eff dropped for variance) |
 | `range_coherence`, `damage_mix`, `op_efficiency` | 16-feature v1 | Hand-weighted composites; conservative drop |
 | `flux_vents`, `flux_capacitors` | 16-feature v1 | Baked into `eff_max_flux` / `eff_flux_dissipation` |
-| `n_hullmods` | 8-feature v2 | Hammerhead empirical ρ with fitness = 0.039 (no signal); type matters, not count, and type-indicators would bake exploit mods into the prior |
+| `n_hullmods` | 8-feature v2 | Hammerhead empirical ρ with fitness was approximately zero (no signal); precise value pending re-validation. Type matters, not count, and type-indicators would bake exploit mods into the prior |
 | `op_used_fraction` | 8-feature v2 | Repair operator greedily fills OP; observed 0.95–1.0 range → near-zero variance |
 | `eff_hull_hp` | 9-feature v3 | Only 1 Python-modeled HP hullmod; Assault Package provides some variance but it's an exploit-cluster mod |
-| `eff_max_speed` | 9-feature v3 | Only 1/313 builds used the sole speed-modifying hullmod (Safety Overrides) |
-| `eff_shield_damage_mult` | 9-feature v3 | Only 10/313 builds used Hardened Shields; `advancedshieldemitter` modifies turn rate, not efficiency |
+| `eff_max_speed` | 9-feature v3 | Few builds in the V1 corpus used the sole speed-modifying hullmod, Safety Overrides (precise count no longer cited; corpus invalidated by V1 loadout bug) |
+| `eff_shield_damage_mult` | 9-feature v3 | Few builds in the V1 corpus used Hardened Shields (precise count no longer cited; corpus invalidated by V1 loadout bug); `advancedshieldemitter` modifies turn rate, not efficiency |
 
 #### Expected Δρ at p = 7
 
@@ -279,8 +279,8 @@ No new Python runtime dependencies. `scipy.linalg.lstsq` + NumPy is sufficient. 
 - Unit: synthetic 2-level model with known `γ`, `τ²` — verify recovery of shrinkage weights and posterior mean within tolerance.
 - Unit: degenerate cases — all `σ̂_i² → 0` (no shrinkage), all `σ̂_i² → ∞` (full shrinkage), `τ̂² = 0` floor behavior.
 - Unit: `triple_goal_rank` preserves exact rank ordering; histogram equals the empirical α̂ histogram by construction.
-- Integration: replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl`. Verify mean α̂_EBT matches the reference value computed by `experiments/phase5d-covariate-2026-04-17/phase5d_fusion_validation.py::hammerhead_replay`.
-- Regression: ablation on three pipelines — A0 plain TWFE, A shipped scalar CV, A1+A2' new EB — on the Hammerhead log. Confirm LOOO ship-gate Δρ ≥ +0.02 vs both A0 and A (already validated at Δρ = +0.036 vs A0 and +0.057 vs A in the fusion validation).
+- Integration: replay on a per-hull `evaluation_log.jsonl` from a post-V2 production campaign and verify mean α̂_EBT matches an in-tree fusion-validation reference (re-validation pending; see [../reports/INDEX.md](../reports/INDEX.md)).
+- Regression: ablation on three pipelines — A0 plain TWFE, A shipped scalar CV, A1+A2' new EB — on the same log. Confirm LOOO ship-gate Δρ ≥ +0.02 vs both A0 and A.
 
 ### 3.3 Ship gate
 

@@ -2,6 +2,9 @@
 name: Plan Review
 description: Validate implementation plan against DDD+TDD practices, design invariants, and writing quality before approval
 disable-model-invocation: true
+type: skill
+status: shipped
+last-validated: 2026-05-10
 ---
 
 # Plan Review

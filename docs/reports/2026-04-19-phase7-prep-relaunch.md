@@ -6,6 +6,14 @@ last-validated: 2026-04-19
 
 # Pre-Phase-7-prep relaunch checklist (2026-04-19)
 
+> **V1 invalidation note (2026-05-10):** This report was authored before
+> the V2 combat-harness loadout fix (commit `dc71e3b`). Internal-sim
+> magnitudes cited herein reflect the V1-confounded measurement context.
+> See [2026-05-10-v1-loadout-bug-invalidation.md](2026-05-10-v1-loadout-bug-invalidation.md)
+> for the master invalidation index. The deferred-audit / action-item
+> *content* of this report remains valid; only its empirical references
+> are pending V2 re-validation.
+
 Action items that must land before the next Phase 7 prep cloud campaign.
 
 ## Why this exists

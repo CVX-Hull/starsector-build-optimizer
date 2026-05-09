@@ -2,11 +2,14 @@
 # Produces the cross-hull, early-regime dataset Phase 7's BoTorch
 # composed-kernel work warm-starts from.
 #
-# Budget rationale (from experiments/phase6-planning/cost_model.py):
-#   600 trials × 8 hulls × ~12 matchups/trial ≈ 57,600 matchups
-#   96 c7a.2xlarge VMs × 122 matchups/hr/VM → ~4.9 hr wall-clock
-#   96 × 4.2 hr × $0.15/hr spot ≈ $60.79 incl 3% preemption
-#   budget_usd=70.0 = ~15% safety margin.
+# Budget rationale: post-V2 budget model lives in
+# docs/reports/2026-05-10-validation-plan.md. The structural sizing
+# (600 trials × 8 hulls × ~12 matchups/trial ≈ 57,600 matchups,
+# fanned out across ~96 c7a.2xlarge spot VMs in two regions, with a
+# ~15% safety margin on budget_usd) is design-stable; specific
+# matchups/hr/VM and $/hr figures are pending re-validation under
+# the V2 loadout fix — see
+# docs/reports/2026-05-10-v1-loadout-bug-invalidation.md.
 #
 # Sampler: TPE is the only accepted value — CatCMAwM was removed 2026-04-19
 # because the Starsector search space is fully categorical (incompatible

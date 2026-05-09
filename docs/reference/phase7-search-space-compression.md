@@ -33,7 +33,7 @@ Plus the compiler-autotuning deep-dive that surfaced the transformed-overlap ker
 
 ### 1.1 Combinatorial explosion meets expensive eval
 
-A per-hull build is a tuple of `(hullmod subset ⊆ H, weapon-per-slot ∈ W × …, OP allocation ∈ ℝ^3)` where `|H| ≈ 30–80` available hullmods, `|W| ≈ 150` weapons per slot type, and there are ~8 slots per hull. The raw combinatorial set is ~2^80 × 150^8 ≈ 10^40. Each evaluation is a ~2-minute combat simulation. Overnight budget is 215 trials, 24-hour is 650, 3-day is ~1950 (measured from the 2026-04-13 Hammerhead run, `experiments/hammerhead-twfe-2026-04-13/optimizer.log`).
+A per-hull build is a tuple of `(hullmod subset ⊆ H, weapon-per-slot ∈ W × …, OP allocation ∈ ℝ^3)` where `|H| ≈ 30–80` available hullmods, `|W| ≈ 150` weapons per slot type, and there are ~8 slots per hull. The raw combinatorial set is ~2^80 × 150^8 ≈ 10^40. Each evaluation is a ~2-minute combat simulation. Per-hull trial budgets at overnight / 24-hour / 3-day campaign wall-clocks are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 The search problem is small-budget-expensive-combinatorial: typical BO regime. But two factors make the vanilla approach insufficient:
 
@@ -666,5 +666,5 @@ Step 7: Validation
 - `docs/reference/phase5d-covariate-adjustment.md` — EB fusion paradigm that §3.7 ICM residuals mirror.
 - `docs/reference/phase5f-regime-segmented-optimization.md` — `(hull, regime)` study unit that Phase 6 operates on.
 - `docs/reference/phase5-signal-quality.md` — TWFE + WilcoxonPruner + opponent curriculum upstream of Phase 6.
-- `experiments/hammerhead-twfe-2026-04-13/` — throughput + 89%-concentration observation motivating the dimensionality argument.
+- [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) — V1 invalidation that retired the original Hammerhead-twfe directory whose throughput + concentration observation motivated the dimensionality argument; the structural argument is unaffected.
 - `src/starsector_optimizer/parser.py` — `_ParseableEnum` forward-compatibility mechanism that underwrites the game-update-invariance design property.

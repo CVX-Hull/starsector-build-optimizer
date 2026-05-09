@@ -57,6 +57,7 @@ Phase 6 ships AWS spot-fleet evaluation while the workstation keeps every Optuna
 - `CloudWorkerPool` takes a single `total_matchup_slots` parameter (= `workers_per_study × matchup_slots_per_worker`); semaphore matches worker-side capacity exactly.
 - The worker agent spawns `matchup_slots_per_worker` Redis consumer threads sharing one `LocalInstancePool(num_instances=matchup_slots_per_worker)` so every JVM stays busy.
 - A dedicated heartbeat thread writes `os.getloadavg()` + `cpu_count` to `worker:<project_tag>:<worker_id>:heartbeat` so the orchestrator can verify `matchup_slots_per_worker` fits the box.
+- Healthy `load_avg_1min` band on c7a.2xlarge: ∈ [3, 8]. Sustained `load_avg_1min > cpu_count` indicates over-subscription; sustained `< 3` indicates under-utilization. The Tier-2.5 multi-worker smoke gate uses this as a health invariant.
 
 **Redis key namespacing**: every queue + heartbeat key is prefixed with `project_tag` (`queue:<project_tag>:<study_id>:source`, etc.); `_preflight` SCAN+DELs the `project_tag` prefix at startup so re-running a campaign with the same name never inherits stale processing-list items.
 
@@ -77,7 +78,13 @@ Phase 6 ships AWS spot-fleet evaluation while the workstation keeps every Optuna
 - Worker heartbeat carries region + instance_type from IMDSv2 (fallback `"unknown"` on failure → self-identifying zero-rate ledger row).
 - Preflight asserts AMI `GameVersion` AND `ModCommitSha` tags match `manifest.constants.{game_version, mod_commit_sha}` — dual check catches stale-mod AMIs even when the engine version is unchanged.
 
-**Secrets hygiene**: `CampaignConfig.__repr__` redacts `tailscale_authkey_secret`, `WorkerConfig.__repr__` redacts `bearer_token`; subprocess env dicts never logged (grep invariant).
+**Secrets hygiene**: `CampaignConfig.__repr__` redacts `tailscale_authkey_secret`, `WorkerConfig.__repr__` redacts `bearer_token`; subprocess env dicts never logged (grep invariant). Campaign YAML supports field-scoped `${VAR}` env-substitution for `tailscale_authkey_secret` only; campaign names are regex-validated against `^[a-zA-Z0-9._-]{1,64}$` for AWS LT naming compatibility.
+
+**Packer AMI bakes** (`scripts/cloud/packer/aws.pkr.hcl`): game files (`game/starsector/`), the combat-harness mod JAR, the uv venv, the Tailscale client, and `x11-xserver-utils` (for the LWJGL XRandR warmup that the launcher pre-fights). AMI tags `GameVersion` + `ModCommitSha` are checked at preflight against `manifest.constants` to block stale-mod AMIs even when the engine version is unchanged.
+
+**Tier-2 live-run gate** (4 hard checks; each must hold): `launch_campaign.sh examples/smoke-campaign.yaml` exits 0; `final_audit.sh smoke` exits 0; `data/campaigns/smoke/ledger.jsonl` has ≥ 1 `worker_heartbeat` row; the Optuna study DB has ≥ 1 `TrialState.COMPLETE`. Smoke is the gate that confirms a fresh AMI bake, a fresh tailnet, and a fresh code path all line up end-to-end.
+
+**Operator SSH on workers**: optional `STARSECTOR_DEBUG_SSH_PUBKEY` env var causes `cloud_userdata.render_user_data` to append the operator's public key to `/home/ubuntu/.ssh/authorized_keys` at boot. **Do not use `tailscale up --ssh`** — that hijacks port 22 for tailscaled's identity-based SSH server, which then silent-denies under a default-permissive personal tailnet ACL. Phase 7.5 (R2) plans Tailscale ACL-as-code via the Terraform provider so `tailscale ssh` works on first smoke without manual admin-panel ACL editing; until then, use the SSH-pubkey injection.
 
 **Concurrent-dispatch correctness fixes** (regression-tested):
 - `AWSProvider._ensure_security_group` blocks on `security_group_exists` boto3 waiter; `_create_fleet_in_region` retries `create_fleet` on `InvalidGroup.NotFound` with `any(transient)` predicate (Fleet-service replication lag under N≥6 concurrent studies).
@@ -106,7 +113,7 @@ Phase 6 ships AWS spot-fleet evaluation while the workstation keeps every Optuna
 - One-shot SETUP `[SHIP_DUMP]` and end-of-match `[WIN_DUMP]` lines stay always-on (load-bearing for any future loadout regression).
 - `cloud_worker_pool.py` janitor + Flask `/result` handlers use `logger.exception` so caught exceptions surface their stack trace.
 
-**Deferred follow-ups** (operational backstops, orthogonal to phase progression): plateau detector, tag-based sweeper cron, CloudWatch billing alarm. Two routed to Phase 7.5: (R1) launcher OCR fallback for drift-proofing across Starsector minor-version updates; (R2) Tailscale ACL-as-code via the Terraform provider so operator `tailscale ssh` works from a userspace-mode workstation. Detailed: [docs/reports/2026-04-19-phase6-deferred-audit.md](docs/reports/2026-04-19-phase6-deferred-audit.md).
+**Deferred follow-ups** (operational backstops, orthogonal to phase progression): plateau detector, tag-based sweeper cron, CloudWatch billing alarm. From the 2026-04-19 audit (`H` = high-severity, `M` = medium): **H2** POST-before-register race behind the unreachable retry path, **M1** janitor `enqueued_at` ping-pong under steady-state slow matchups, and the concurrency-shakedown gap between Tier-2.5 smoke and Phase 7 prep — each captured with reproduction + proposed fix in [docs/reports/2026-04-19-phase6-deferred-audit.md](docs/reports/2026-04-19-phase6-deferred-audit.md). H1 (`TimeoutTuner` dormancy) is moot — the module was deleted in the Phase-7-prep refactor. Two follow-ups routed to Phase 7.5: (R1) launcher OCR fallback for drift-proofing across Starsector minor-version updates; (R2) Tailscale ACL-as-code via the Terraform provider so operator `tailscale ssh` works from a userspace-mode workstation.
 
 **Backwards-compat policy**: no compat layer — pre-Phase-6 `scripts/cloud/deploy.sh` etc. are deleted; `create_fleet` / `provision_fleet(config, ...)` removed; `partial_fleet_decide` / `PartialFleetAbort` removed.
 

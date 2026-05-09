@@ -15,6 +15,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | Date | Report | Topic |
 |---|---|---|
 | 2026-05-10 | [V1 loadout-bug invalidation](2026-05-10-v1-loadout-bug-invalidation.md) | Master invalidation report. All Phase 5A–5F empirical claims pending re-validation. |
+| 2026-05-10 | [Validation campaign plan](2026-05-10-validation-plan.md) | **Draft.** Re-validation campaign plan: hull selection, per-mechanism gates, 4-wave architecture, budget + decision tree. |
 | 2026-05-10 | [Doc reorg summary](2026-05-10-doc-reorg-summary.md) | Documentation reorganization work-product: convention, files moved, files edited, decisions. |
 | 2026-04-19 | [Phase 6 deferred audit findings](2026-04-19-phase6-deferred-audit.md) | Audit items identified during the 2026-04-19 sweep but not fixed in that session. Pre-V2; concurrent-dispatch correctness items remain valid (they're code-path bugs, not measurement claims). |
 | 2026-04-19 | [Pre-Phase-7-prep relaunch checklist](2026-04-19-phase7-prep-relaunch.md) | Action items that must land before the next Phase 7 prep cloud campaign. Pre-V2; the action-item list is design-grade and unaffected by V1 invalidation. |

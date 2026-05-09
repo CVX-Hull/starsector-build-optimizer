@@ -464,9 +464,12 @@ def _build_covariate_vector(
 ) -> np.ndarray:
     """Assemble the 10-dim covariate vector for EB shrinkage.
 
-    Post-Phase-7-prep: dropped `composite_score` (11–22% of |γ̂| via the
-    structurally incomplete HULLMOD_EFFECTS registry per the 2026-04-19
-    postmortem) and added 3 engine-truth reads + 1 Python-raw build-
+    Post-Phase-7-prep: dropped `composite_score` (the manifest-as-oracle
+    refactor moved game-rule data out of the hand-coded registry into
+    `game/starsector/manifest.json` written by the Java `ManifestDumper`
+    and read by `GameManifest.load()`; the prior registry-derived scorer
+    output was a drift-prone proxy and is no longer admissible as a
+    covariate) and added 3 engine-truth reads + 1 Python-raw build-
     structural feature ranked by signal per the prep-relaunch checklist.
 
     Order (engine-truth block first, then Python-raw block):

@@ -2,6 +2,9 @@
 name: DDD+TDD Workflow
 description: Document-driven + test-driven development lifecycle for implementation phases in the Starsector optimizer project
 disable-model-invocation: true
+type: skill
+status: shipped
+last-validated: 2026-05-10
 ---
 
 # DDD+TDD Implementation Workflow

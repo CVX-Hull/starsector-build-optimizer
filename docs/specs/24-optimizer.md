@@ -291,8 +291,9 @@ this point is an invariant violation, not a legitimate replay path.
 
 **p/N budget**: p=10 at N=600 (Phase 7 prep) gives p/N=0.017, well
 below the phase5d 0.08 overfit threshold and inside the p≈8
-diminishing-returns knee from
-`experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`
+diminishing-returns knee from the original feature-count sweep
+(re-validation pending under V2; see
+[../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md))
 with modest headroom. The 4 additions are high-variance,
 high-coverage features.
 

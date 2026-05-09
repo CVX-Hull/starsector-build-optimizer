@@ -241,4 +241,4 @@ The Starsector build optimization problem is a well-structured instance of const
 4. **Conditional parameter relevance** (missile hullmods only with missiles)
 5. **Desire for diversity** (not just one optimum, but a map of archetypes)
 
-These features together point toward a specific set of methods — see [05-OPTIMIZATION-METHODS.md](./05-OPTIMIZATION-METHODS.md) for the recommended approaches.
+These features together point toward a specific set of methods — see [optimization-methods.md](optimization-methods.md) for the recommended approaches.

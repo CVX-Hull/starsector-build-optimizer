@@ -324,7 +324,7 @@ The first Hammerhead run drove the Phase 5C design. The second validated 5A–5C
 - `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research (opponent normalisation, multi-fidelity).
 - `docs/reference/phase5a-deconfounding-theory.md` — TWFE additive-decomposition synthesis (6-field literature consensus, foundation of 5A and 5C).
 - `docs/reference/phase5c-opponent-curriculum.md` — Phase 5C design + rejected alternatives (Elo rotation, per-frame Java tracking, hullmod blacklist).
-- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D design: empirical-Bayes shrinkage of A2 toward a heuristic-predicted regression prior (HN + triple-goal rank correction). Rejected alternatives include the original conditioning-paradigm design (CUPED / FWL / PDS lasso / ICP — refuted by `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite, MISO, one-factor CFA, and per-frame Java harness tracking.
+- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D design: empirical-Bayes shrinkage of A2 toward a heuristic-predicted regression prior (HN + triple-goal rank correction). Rejected alternatives include the original conditioning-paradigm design (CUPED / FWL / PDS lasso / ICP — refuted empirically; re-validation pending under V2, see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)), hand-weighted composite, MISO, one-factor CFA, and per-frame Java harness tracking.
 - `docs/reference/phase5e-shape-revision.md` — Phase 5E design: Box-Cox replaces rank shape; rejected alternatives (CFS, EM-Tobit, full MAP-Elites); Phase 5G (adversarial curriculum) research.
 - `docs/reference/phase5f-regime-segmented-optimization.md` — Phase 5F design: CMDP feasibility-aligned regime mask; one-run-per-regime; rejected alternatives (scalar penalty, archive-over-single-run, curriculum across regimes, multi-fidelity-by-tier, Pareto); 16-field 2026-04-17 literature sweep.
 - `docs/reference/phase7-search-space-compression.md` — Phase 7 design: custom BoTorch GP composite kernel (SAAS on hullmods, transformed-overlap + 7-attribute Matérn on weapons, 5-dim slot-feature Matérn, opponent features on smalls only, gated-sentinel conditional, ICM per-item + per-slot residuals); πBO archetype priors; BOCA warm-start; rejected alternatives (Ma-Blaschko tree, HyperMapper off-the-shelf, NAS weight-sharing, BOCS binary monomials, GFlowNets, Hearthstone MESB, silent hard-fill smalls); 10-field 2026-04-17 literature sweep + compiler-autotuning deep-dive.
@@ -342,7 +342,7 @@ The first Hammerhead run drove the Phase 5C design. The second validated 5A–5C
 | Frequent heartbeat timeouts | Throughput loss on multi-instance runs | Robot pixel-polling + heartbeat touch-not-delete | ✓ Fixed |
 | `combat_fitness` ignores damage breakdown, overloads, armor | Timeout quality poorly distinguished | Auxiliary signals (7-dim X) enter an EB prior on α̂_i via a between-build regression | ✓ Shipped (5D) |
 
-Specific counts (10/54 opponents, 11% pruning rate, 30–40% throughput loss) are pending V2 re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
+Specific counts and percentages are pending V2 re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 #### From second Hammerhead run (V1)
 
@@ -406,7 +406,7 @@ Posterior mean:
     w_i    = τ̂² / (τ̂² + σ̂_i²)
 ```
 
-`X_i` is the 7-dim pre-matchup covariate vector — selected by feature-count × dataset-size sweep (`experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`) **and** an empirical variance audit on the 2026-04-17 Hammerhead run (see §2.7 of `phase5d-covariate-adjustment.md`):
+`X_i` is the 7-dim pre-matchup covariate vector — selected by feature-count × dataset-size sweep **and** an empirical variance audit on the 2026-04-17 Hammerhead run (see §2.7 of `phase5d-covariate-adjustment.md`; both the sweep and the audit are pending V2 re-validation, see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)):
 
 1. `eff_max_flux` — Java `MutableShipStats.getFluxCapacity().getModifiedValue()` at SETUP
 2. `eff_flux_dissipation` — Java `MutableShipStats.getFluxDissipation().getModifiedValue()` at SETUP
@@ -424,7 +424,7 @@ Applied downstream of α̂_EB: a **triple-goal rank correction** (Lin, Louis & S
 
 **Cross-field equivalences.** The same closed-form appears under six independent names across fields: covariate-powered empirical Bayes (Ignatiadis-Wager 2022), Efron-Morris shrinkage with covariate target (1975), hierarchical Bayes BLUP with regression prior (Lindley-Smith 1972), Hachemeister credibility regression (1975, actuarial), Mislevy collateral-information IRT (1987, psychometrics), TrueSkill 2 with feature-based prior (Minka et al. 2018, games rating). The convergence across fields is the best available evidence this is the right formulation.
 
-**Rejected alternatives:** covariate-adjusted TWFE via FWL + PDS + ICP (conditioning paradigm, refuted empirically — see `experiments/phase5d-covariate-2026-04-17/REPORT.md`), hand-weighted composite fitness, per-frame Java harness tracking, one-factor CFA (fails on real data due to indicator heterogeneity), MISO. Full design and rejection rationale in `docs/reference/phase5d-covariate-adjustment.md`.
+**Rejected alternatives:** covariate-adjusted TWFE via FWL + PDS + ICP (conditioning paradigm, refuted empirically; re-validation pending under V2, see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)), hand-weighted composite fitness, per-frame Java harness tracking, one-factor CFA (fails on real data due to indicator heterogeneity), MISO. Full design and rejection rationale in `docs/reference/phase5d-covariate-adjustment.md`.
 
 **Phase 5E — A3 Shape Revision (✓ COMPLETE 2026-04-18)**
 
@@ -591,9 +591,9 @@ Qualitative effects:
 Specific magnitudes (Δρ deltas, ceiling-saturation %, top-k overlap multipliers, exploit-cluster spread ρ) are pending V2 re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md).
 
 ### Testing
-- **Phase 5D**: unit tests for `eb_shrinkage` (synthetic known-γ recovery; degenerate limits `σ̂²→0`, `σ̂²→∞`, `τ̂²=0` floor; MoM identifiability) and `triple_goal_rank` (exact rank preservation, histogram equality). Integration ablation on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` with LOOO ship-gate per §3.3 of `phase5d-covariate-adjustment.md`.
-- **Phase 5E**: `tests/test_optimizer.py::TestShapeFitness` (14 unit tests + 1 end-to-end, all passing); simulation re-validation at `experiments/signal-quality-5d-2026-04-18/` confirms ceiling 25% → 0.5%, top-5 0.02 → 0.44, invariant across 4 covariate-strength regimes (`calibration_sweep.py`). Production validation re-runs Hammerhead 1000-trial budget post-ship.
-- **Phase 5F**: ship-gate = replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` with the `mid` mask applied — verify (a) top-10 composition no longer contains `shrouded_lens` / `fragment_coordinator` / `neural_integrator` builds, (b) within-regime TPE convergence trace at matched in-regime trial count is comparable to the unmasked run, (c) a forward sanity run at N=300 with `mid` and `endgame` presets produces visibly distinct top clusters (endgame dominates on raw fitness; mid dominates on composite_score among deployment-reachable builds).
+- **Phase 5D**: unit tests for `eb_shrinkage` (synthetic known-γ recovery; degenerate limits `σ̂²→0`, `σ̂²→∞`, `τ̂²=0` floor; MoM identifiability) and `triple_goal_rank` (exact rank preservation, histogram equality). Integration ablation on a per-hull `evaluation_log.jsonl` from a post-V2 campaign with LOOO ship-gate per §3.3 of `phase5d-covariate-adjustment.md` (re-validation pending; see [../reports/INDEX.md](../reports/INDEX.md)).
+- **Phase 5E**: `tests/test_optimizer.py::TestShapeFitness` (14 unit tests + 1 end-to-end, all passing). Simulation re-validation of ceiling-saturation and top-k overlap is pending V2 (see [../reports/INDEX.md](../reports/INDEX.md)). Production validation re-runs the Hammerhead trial budget post-ship.
+- **Phase 5F**: ship-gate = replay on a per-hull `evaluation_log.jsonl` from a post-V2 campaign with the `mid` mask applied — verify (a) top-10 composition no longer contains `shrouded_lens` / `fragment_coordinator` / `neural_integrator` builds, (b) within-regime TPE convergence trace at matched in-regime trial count is comparable to the unmasked run, (c) a forward sanity run with `mid` and `endgame` presets produces visibly distinct top clusters (endgame dominates on raw fitness; mid dominates on composite_score among deployment-reachable builds). Re-validation pending; see [../reports/INDEX.md](../reports/INDEX.md).
 - **Phase 5G**: research only. Promoting to implementation requires extending the synthetic generative model with RPS-counterable exploits — the current flat-uplift exploit cannot validate exploiter-loop gains.
 
 ---
@@ -604,20 +604,20 @@ Specific magnitudes (Δρ deltas, ceiling-saturation %, top-k overlap multiplier
 Spend $N of compute and get $N of useful data — linear $→data scaling from $10 validation runs to $1000+ catalog campaigns. Unlocks multi-hull × multi-regime studies that would take weeks on the workstation. Full design in `docs/reference/phase6-cloud-worker-federation.md`.
 
 ### Status
-**Infrastructure complete (2026-04-18).** Python modules (`campaign.py`, `cloud_provider.py`, `cloud_worker_pool.py`, `worker_agent.py`, `evaluator_pool.py`), spec 22 rewrite, Packer AMI template, and operator scripts (`launch_campaign.sh`, `status.sh`, `teardown.sh`, `final_audit.sh`, `probe.sh`, `bake_image.sh`) are shipped. Tests green (577/577). Validation probe, pipeline smoke, sampler benchmark, and prep campaign deferred to operational sessions. CPU cloud viability validated 2026-04-18 (2.2-2.4× local per-instance) with the LWJGL XRandR fix in `instance_manager.py::_start_xvfb`.
+**Infrastructure complete (2026-04-18).** Python modules (`campaign.py`, `cloud_provider.py`, `cloud_worker_pool.py`, `worker_agent.py`, `evaluator_pool.py`), spec 22 rewrite, Packer AMI template, and operator scripts (`launch_campaign.sh`, `status.sh`, `teardown.sh`, `final_audit.sh`, `probe.sh`, `bake_image.sh`) are shipped. Tests green. Validation probe, pipeline smoke, sampler benchmark, and prep campaign deferred to operational sessions. CPU cloud viability was demonstrated under V1 with the LWJGL XRandR fix in `instance_manager.py::_start_xvfb`; precise multiplier vs local pending V2 re-validation, see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ### Budget staging
-**$85 combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget** (figures pinned by `experiments/phase6-planning/cost_model.py`). Campaign is **AWS-primary** (c7a.2xlarge spot, us-east-1 + us-east-2) because existing account vCPU quota is already ample (1,280 spot vCPU across the two regions = 160 eight-vCPU instances) — no quota ticket needed. Hetzner stays as a $500+ scale-up path. Line items:
+**Combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget.** Specific dollar figures and wall-clock estimates are pending V2 re-validation; see [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md) for the post-V2 budget model and [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) for context. Campaign is **AWS-primary** (c7a.2xlarge spot, us-east-1 + us-east-2) because existing account vCPU quota is already ample (1,280 spot vCPU across the two regions = 160 eight-vCPU instances) — no quota ticket needed. Hetzner stays as a $500+ scale-up path. Line items (placeholders until V2 re-validation):
 
 | Line | Cost |
 | --- | --- |
-| Validation probe + pipeline smoke | $1.35 |
-| ~~Sampler benchmark — 2 hulls × [TPE-24, CatCMAwM-24, CatCMAwM-48] × 1 hr~~ — SKIPPED 2026-04-19 | ~~$14.83~~ → $0 |
-| Prep campaign — 8 hulls × `early` × 1 seed × 600 trials (incl 3% preemption) | $60.79 |
-| Slack (includes reclaimed sampler-benchmark budget) | $22.86 |
-| **Total** | **$85** |
+| Validation probe + pipeline smoke | design-target small ($, pending V2 re-validation) |
+| ~~Sampler benchmark — 2 hulls × [TPE-24, CatCMAwM-24, CatCMAwM-48] × 1 hr~~ — SKIPPED 2026-04-19 | $0 |
+| Prep campaign — 8 hulls × `early` × 1 seed × 600 trials (incl preemption headroom) | dominates total (pending V2 re-validation) |
+| Slack (reruns, retries, headroom) | ~15% of total |
+| **Total** | **pending V2 re-validation** |
 
-Wall-clock: ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1 calendar day.
+Wall-clock: prep parallelizes across 8 studies; smoke runs in series. End-to-end target is ~1 calendar day; specific hours pending V2.
 
 **Sampler benchmark was skipped 2026-04-19** — CatCMAwM is structurally incompatible with this codebase's fully-categorical search space (`cmaes.CatCMAwM` requires ≥1 continuous variable, raises `x_space must be shape (n, 2), got (0,)`). With no Bayesian alternative to race TPE against, the benchmark has no meaningful decision to make. `_create_sampler` now accepts only `"tpe"`; prep uses TPE directly. Rationale in `docs/reference/phase6-cloud-worker-federation.md` §10 and `docs/specs/24-optimizer.md`.
 
@@ -630,17 +630,17 @@ Wall-clock: ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1 c
 
 ### Key design decisions
 
-**Study federation is the #1 architectural lever.** Optuna TPE (with `constant_liar=True`) degrades to random-sampling above ~30 in-flight trials per study. A $1000 mega-study wastes ~85% of spend as random sampling. Federation: many independent studies keyed by `(hull, regime, seed)`, each with ≤24 workers. Outer parallelism via the campaign manager; inner parallelism stays in TPE's efficient regime. For BREADTH (which $1000 buys), federation beats any single-study scaling on a multimodal landscape.
+**Study federation is the #1 architectural lever.** Optuna TPE (with `constant_liar=True`) degrades to random-sampling above ~30 in-flight trials per study. A single mega-study wastes most of the budget on random sampling at the front of TPE's startup. Federation: many independent studies keyed by `(hull, regime, seed)`, each with ≤24 workers. Outer parallelism via the campaign manager; inner parallelism stays in TPE's efficient regime. For BREADTH, federation beats any single-study scaling on a multimodal landscape.
 
-**Provider choice: AWS c7a.2xlarge spot primary for the $85 MVP, Hetzner deferred to $500+.** AWS is ~13% more expensive per matchup ($0.00123 vs Hetzner $0.00109) but existing account quota covers the 96-VM target with no lead time, while Hetzner's default 10-VM cap requires a 1-2 business-day ticket. At $85 the AWS premium is cheaper than a human-day of waiting; the trade inverts above $500 where the absolute cost delta (~$60+) exceeds a human-day of engineering. Skip GPU cloud (not needed), ARM (LWJGL x86_64 only), DigitalOcean/Vultr/Linode (no spot).
+**Provider choice: AWS c7a.2xlarge spot primary for the MVP, Hetzner deferred to $500+.** AWS has a small per-matchup premium over Hetzner (precise gap pending V2 re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)), but existing account quota covers the 96-VM target with no lead time, while Hetzner's default 10-VM cap requires a 1-2 business-day ticket. At MVP scale the AWS premium is cheaper than a human-day of waiting; the trade inverts above $500 where the absolute cost delta exceeds a human-day of engineering. Skip GPU cloud (not needed), ARM (LWJGL x86_64 only), DigitalOcean/Vultr/Linode (no spot).
 
-**Two-region spread** (us-east-1 + us-east-2, 48 VMs each) for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` + `CapacityRebalancing` + diversified instance-type list (c7a.2xlarge, c7i.2xlarge, c7a.4xlarge, c7i.4xlarge) drops preemption rate to ~3%. A $1 **pre-flight validation probe** runs 24h before the campaign (2 spot VMs per target region from production AMI, boot test, record signal, tear down). **Graceful degradation**: if only 48-60 of 96 target VMs provision (spot-pool depletion), the campaign runs at half-speed rather than aborting — partial fleet is a latency problem, not a correctness problem. Below `min_workers_to_start` (default 48) it waits or aborts.
+**Two-region spread** (us-east-1 + us-east-2) for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` + `CapacityRebalancing` + diversified instance-type list (c7a.2xlarge, c7i.2xlarge, c7a.4xlarge, c7i.4xlarge) keeps preemption rate low (precise rate pending V2 re-validation). A small **pre-flight validation probe** runs ahead of each campaign (a few spot VMs per target region from production AMI, boot test, record signal, tear down). **Graceful degradation**: if substantially fewer than the target VMs provision (spot-pool depletion), the campaign runs at reduced speed rather than aborting — partial fleet is a latency problem, not a correctness problem. Below `min_workers_to_start` (≥50% of target) it waits or aborts.
 
 **Sampler per study**: TPE is the only allowed value post-2026-04-19 (spec 24). Phase 7 replaces the sampler surface entirely; any high-worker or hybrid-schedule scheme belongs to the BoTorch redesign.
 
 **Packer pre-baked images — in scope from day 1, even at $85.** Marginal dollar savings are small (~$1); the load-bearing arguments are tail-latency collapse under burst provisioning, removal of bulk-apt / PyPI failure modes from the hot path, cheap mid-campaign worker replacement, and zero-cost amortization into future $500+ campaigns. AWS AMIs are region-scoped — build in us-east-1, `aws ec2 copy-image` to us-east-2 (~3-5 min, one-time; repeat on every Packer rebuild). Images include `x11-xserver-utils` (needed for the XRandR warmup fix — see spec 22).
 
-**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; `CostLedger.record_heartbeat` raises `BudgetExceeded` at 100%. Per-worker `max_lifetime_hours` (default **6**; 6 covers the prep's 4.1-hour wall-clock — 4 would self-kill mid-run). Deferred operational backstops: tag-based sweeper cron and CloudWatch billing alarm. Teardown discipline: **four layers** — (1) study subprocess `try/finally: provider.terminate_fleet` (targeted), (2) CampaignManager `try/finally: provider.terminate_all_tagged` (campaign-wide sweep backstop), (3) `atexit.register(self.teardown)`, (4) shell `trap EXIT` in `launch_campaign.sh` runs `teardown.sh + final_audit.sh`. SOP at `.claude/skills/cloud-worker-ops.md`.
+**Cost discipline is non-negotiable**: campaign YAML has `budget_usd` hard cap; `CostLedger.record_heartbeat` raises `BudgetExceeded` at 100%. Per-worker `max_lifetime_hours` (default **6**; design-set to cover the prep wall-clock with headroom — see the post-V2 budget model in [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md)). Deferred operational backstops: tag-based sweeper cron and CloudWatch billing alarm. Teardown discipline: **four layers** — (1) study subprocess `try/finally: provider.terminate_fleet` (targeted), (2) CampaignManager `try/finally: provider.terminate_all_tagged` (campaign-wide sweep backstop), (3) `atexit.register(self.teardown)`, (4) shell `trap EXIT` in `launch_campaign.sh` runs `teardown.sh + final_audit.sh`. SOP at `.claude/skills/cloud-worker-ops.md`.
 
 **Orchestrator topology**: workstation holds every Optuna Study (no distributed storage). Workers are pure `MatchupConfig → CombatResult` evaluators — they never touch Optuna. Study state is local SQLite per `(hull, regime, seed)` on the orchestrator subprocess that owns it; `study.db` never leaves the orchestrator. Workers run `worker_agent.py` which pulls from Redis via `BRPOPLPUSH source → processing` and POSTs results to a per-study Flask listener. No PostgreSQL / JournalStorage / GrpcStorageProxy complexity — explicitly rejected because JournalStorage + GrpcProxy is broken in Optuna 4.2-4.4 (issue #6084) and direct PostgreSQL adds ops burden.
 
@@ -666,7 +666,7 @@ Wall-clock: ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1 c
 
 7. **`.claude/skills/cloud-worker-ops.md`** — SOP for running campaigns. Invoked by future Claude sessions on any cloud-campaign ask.
 
-8. **Staged validation against the $85 Phase 6 + Phase 7-prep budget**: Tier-1 probe (~$0.05; fleet lifecycle) → Tier-2 pipeline smoke (~$1.20; full round-trip per phase6 doc §11) → sampler benchmark (~$14.83; §10) → Phase 7 prep campaign (~$60.79; 8 hulls × `early` × 1 seed × ~600 trials). All staged in `experiments/phase6-planning/` + `experiments/phase7-prep-early-2026-0X/` when live.
+8. **Staged validation against the Phase 6 + Phase 7-prep budget**: Tier-1 probe (fleet lifecycle) → Tier-2 pipeline smoke (full round-trip per phase6 doc §11) → sampler benchmark (skipped — see §10) → Phase 7 prep campaign (8 hulls × `early` × 1 seed × ~600 trials). Specific tier costs and wall-clocks are pending V2 re-validation; see [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md). Post-V2 evidence lands under `data/campaigns/<wave>/`; pre-V2 directories are listed in [../../experiments/INDEX.md](../../experiments/INDEX.md).
 
 ### Testing
 - Unit: plateau detector on synthetic traces, cost ledger monotonicity, `CloudProvider` mock interface compliance.
@@ -676,21 +676,21 @@ Wall-clock: ~4.1 hr prep (parallel across 8 studies) + 2 hr smoke + setup = ~1 c
 - Teardown audit: `final_audit.sh` reports zero tagged resources after any campaign exit.
 
 ### Expected impact
-- **$85 Phase 7 prep sequence** delivers (a) an empirically-selected sampler via the $14.83 pre-prep bake-off (§10 of `phase6-cloud-worker-federation.md`) and (b) cross-hull (F→D→C→CAP) early-regime data across 8 hulls × ~600 trials in ~4.1 hours at 96 AWS spot VMs split 48-48 across us-east-1 + us-east-2. Phase 7's attribute-kernel + per-hull role-mode mixture weights need exactly this cross-size transfer evidence to validate. Early-regime targeting is deliberate: late/endgame optima recover community meta, while early is the zone where novel-build discovery is load-bearing and also the tighter kernel test. Endgame follow-up is a cheap (~$15-20) supplementary run if Phase 7 reveals a gap.
-- 2-hour burst of 30 workers delivers ~360 builds (vs 56 builds in 8-hour workstation run) for **~$9** (AWS spot).
-- $1000 budget = ~49,000 builds = full Phase 5F validation (40 hulls × 4 regimes × ~300 builds) in 1-2 weeks of burst runs (post-Phase 7).
+- **Phase 7 prep sequence** delivers (a) the all-categorical sampler outcome (§10 of `phase6-cloud-worker-federation.md`; the planned bake-off was skipped because no Bayesian alternative to TPE survived the categorical search-space requirement) and (b) cross-hull (F→D→C→CAP) early-regime data across 8 hulls × ~600 trials at ~96 AWS spot VMs split across us-east-1 + us-east-2. Phase 7's attribute-kernel + per-hull role-mode mixture weights need exactly this cross-size transfer evidence to validate. Early-regime targeting is deliberate: late/endgame optima recover community meta, while early is the zone where novel-build discovery is load-bearing and also the tighter kernel test. Endgame follow-up is a small supplementary run if Phase 7 reveals a gap. Specific dollar figures and wall-clocks pending V2 re-validation; see [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md).
+- Cloud bursts deliver substantially more builds per dollar than a workstation run of equivalent wall-clock; precise multipliers and dollar-per-build figures pending V2 re-validation.
+- A larger budget unlocks full multi-hull × multi-regime Phase 5F validation in days rather than months; concrete sizing pending V2 re-validation.
 - Frees the workstation for interactive work (editing, analysis, ad-hoc experiments).
 - Precondition for Phase 7 (BoTorch GP): cross-hull validation at 8+ hulls is not feasible on the workstation alone.
 
 ### Rejected alternatives (full rationale in `phase6-cloud-worker-federation.md` §2-3)
-- **One mega-study with 100-200 workers**: TPE saturation wastes 85% of budget as random.
+- **One mega-study with 100-200 workers**: TPE saturation wastes most of the budget on random sampling at the front of TPE's startup.
 - **PostgreSQL + GrpcStorageProxy storage**: ops burden; not needed when federation keeps each study's SQLite local.
 - **JournalStorage + GrpcStorageProxy**: broken combination (Optuna #6084).
 - **Ray / Ray Tune**: no Hetzner support; custom node_provider is 100-LOC.
 - **SkyPilot / dstack / Modal / Covalent**: no Hetzner support; GPU/AI-focused.
 - **Kubernetes / EKS / Fargate**: overkill for single-operator bursts; cluster overhead dominates.
 - **Apache Airflow / Prefect / Dagster**: pipeline schedulers, not bursty batch compute.
-- **GPU cloud instances**: not needed — CPU is 2.4× local per-instance after XRandR fix.
+- **GPU cloud instances**: not needed — CPU per-instance throughput meets-or-exceeds local after the XRandR fix; precise multiplier pending V2 re-validation.
 - **AWS Batch array jobs**: ~30-60s scheduler latency per job transition; direct EC2 Fleet is simpler.
 - **EBS Fast Snapshot Restore (FSR)**: volume creation credits cap at 10 concurrent; breaks at 50-worker bursts.
 - **AWS Auto Scaling Warm Pools**: not cost-effective at $1000 scale (~$16/mo EBS idle); worth it at $10k+.
@@ -766,7 +766,7 @@ Follows BaCO (Hellsten 2024 arXiv:2212.11142 Eq. 3–5) for product structure + 
   2. Cold-start gate: new hull reaches 2000-trial TPE top-10 within 500 Phase-6 trials.
   3. Game-update gate: 5 new synthetic weapons interpolated from attributes — posterior mean within 0.2 σ with zero observations.
   4. Addressability gate: small-slot posterior prefers IPDAI + Dual Flak on missile-heavy opponent pools at p < 0.05.
-  5. Hammerhead replay on `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` — compare top-10 composition and convergence trace.
+  5. Hammerhead replay on a per-hull `evaluation_log.jsonl` from a post-V2 campaign — compare top-10 composition and convergence trace (re-validation pending; see [../reports/INDEX.md](../reports/INDEX.md)).
 
 ### Rejected alternatives (full rationale in `phase7-search-space-compression.md` §4)
 
@@ -787,7 +787,7 @@ Full design, theoretical grounding (mixed-categorical BO, SAASBO, ICM, πBO, nav
 
 ### Expected impact
 - 2–4× aggregate sample efficiency at N = 200–500 (conservative composition: SAASBO 2–5×, BaCO kernel 1.36–1.56×, πBO 2–5× if priors correct, slot-feature pooling 1.1–1.3×).
-- At Hammerhead-scale 650 trials / 24 h, 3× efficiency ≈ current 3-day run output in 24 h.
+- Design-target: ≥3× sample-efficiency multiplier compresses the wall-clock for a fixed trial budget proportionally; precise Hammerhead-scale numbers pending V2 re-validation.
 - Game-update transfer zero-shot for new weapons with attribute profiles near existing ones.
 
 ---
@@ -1039,7 +1039,7 @@ Validate end-to-end with real combat:
 
 #### Stage 3: Full Optimization (local 8 instances, or cloud GPU)
 
-**Both local and cloud CPU spot work.** The 2026-04-12 "GPU required" finding was a misdiagnosis — the actual failure was the LWJGL `ArrayIndexOutOfBoundsException: Index 0` from an uninitialized XRandR extension, fixed by the `xrandr --query` warmup in `instance_manager.py::_start_xvfb` + `x11-xserver-utils` baked into the AMI. 2026-04-18 benchmarks: CPU cloud (c7a.2xlarge / Hetzner CCX33) is 2.2–2.4× local per-instance throughput. See spec 22 "LWJGL / XRandR root cause" and Phase 6 in this roadmap.
+**Both local and cloud CPU spot work.** The 2026-04-12 "GPU required" finding was a misdiagnosis — the actual failure was the LWJGL `ArrayIndexOutOfBoundsException: Index 0` from an uninitialized XRandR extension, fixed by the `xrandr --query` warmup in `instance_manager.py::_start_xvfb` + `x11-xserver-utils` baked into the AMI. Design target: CPU cloud (c7a.2xlarge / Hetzner CCX33) ≥ 2× local per-instance throughput; precise multiplier pending V2 re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). See spec 22 "LWJGL / XRandR root cause" and Phase 6 in this roadmap.
 
 **Local (8 instances on dev machine):**
 ```
@@ -1058,10 +1058,10 @@ Single machine: all hulls sequential (8 parallel game instances)
 
 | Scope | Hulls | Setup | Sims | Wall-clock | Cost |
 |---|---|---|---|---|---|
-| Priority hulls | 10 | Local (8 inst) | ~10K | ~35h | $0 |
-| All cruisers+capitals | 40 | Local (8 inst) | ~38K | ~133h | $0 |
-| All combat-relevant | 118 | 3 × g4dn.2xl | ~112K | ~47h | ~$35 |
-| + QD validation (Phase 7) | 118 | 3 × g4dn.2xl | ~150K | ~63h | ~$47 |
+| Priority hulls | 10 | Local (8 inst) | ~10K | pending V2 re-validation | $0 |
+| All cruisers+capitals | 40 | Local (8 inst) | ~38K | pending V2 re-validation | $0 |
+| All combat-relevant | 118 | cloud spot fleet | ~112K | pending V2 re-validation | pending V2 re-validation |
+| + QD validation (Phase 7) | 118 | cloud spot fleet | ~150K | pending V2 re-validation | pending V2 re-validation |
 
 **Machine setup (cloud):** ~2 minutes per machine (parallel). Game dir is 361MB.
 

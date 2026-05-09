@@ -435,7 +435,7 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 - **"Let's run it overnight and see"** without a budget cap. No — set `budget_usd` explicitly first. A misconfig can burn $500 overnight.
 - **"Skip the baked image, just use cloud-init each time"**. Not supported. Packer bake is mandatory — cloud-init bulk apt/PyPI fails under 50+ concurrent cold starts.
 - **"GPU cloud for speed"**. CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU doesn't help this workload. Quantitative speedup pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
-- **"One giant study with 200 workers"**. TPE saturates above 24; 200-worker mega-study wastes 85% of budget as random. Federate into ≤24-worker studies per `(hull, regime, seed)`.
+- **"One giant study with 200 workers"**. TPE saturates above 24; a 200-worker mega-study wastes most of the budget on random sampling at the front of TPE's startup. Federate into ≤24-worker studies per `(hull, regime, seed)`.
 - **"PostgreSQL for Optuna storage"**. Not needed — each study runs its own SQLite locally in a subprocess on the orchestrator.
 - **"Let's try SkyPilot / Ray / Modal / Fargate"**. Already rejected in the design — see `docs/reference/phase6-cloud-worker-federation.md` §rejected alternatives.
 - **"Add warm pools" at <$10k/mo spend**. EBS idle cost dominates; not worth it.

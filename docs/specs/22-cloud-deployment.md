@@ -94,7 +94,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `base_flask_port` | `int` | `9000` | Study at `(study_idx, seed_idx)` listens on `base_flask_port + study_idx * len(seeds) + seed_idx` |
 | `redis_port` | `int` | `6379` | Workstation Redis port; shared by preflight ping and by `WorkerConfig.redis_port` in spawned children |
 | `redis_preflight_timeout_seconds` | `float` | `2.0` | `_preflight` Redis ping timeout — covers only the tailnet-binding-check, not campaign-wide connectivity |
-| `matchup_slots_per_worker` | `int` | `2` | Concurrent matchup slots per VM. The worker spawns this many Redis consumer threads sharing one `LocalInstancePool` so every JVM stays busy. Total pool concurrency = `workers_per_study × matchup_slots_per_worker`. c7a.2xlarge (8 vCPU) fits 2 JVMs at ~2.5 cores each |
+| `matchup_slots_per_worker` | `int` | `2` | Concurrent matchup slots per VM. The worker spawns this many Redis consumer threads sharing one `LocalInstancePool` so every JVM stays busy. Total pool concurrency = `workers_per_study × matchup_slots_per_worker`. c7a.2xlarge (8 vCPU) fits 2 JVMs (per-JVM core consumption pending V2 re-validation) |
 | `flask_ports_per_study` | `int` | `100` | Ceiling on Flask result-listener ports allocated per `study_idx`. Matches the `tcp:9000-9099` range documented in `.claude/skills/cloud-worker-ops.md` preflight gate 2. Per-seed ports are `base_flask_port + study_idx * flask_ports_per_study + seed_idx` |
 | `game_dir` | `str` | `"game/starsector"` | Orchestrator-side path to the Starsector install. Study subprocesses load game data here for constraint-aware sampling + opponent-pool construction; workers run the JVM from their AMI-baked `/opt/starsector` |
 | `teardown_retry_delay_seconds` | `float` | `10.0` | Wait before retrying `terminate_all_tagged` in `CampaignManager.teardown` when `list_active` still shows workers |
@@ -146,7 +146,7 @@ One JSONL row in `data/campaigns/<name>/ledger.jsonl`. All fields primitive and 
 Each study subprocess owns two Redis lists:
 - `queue:<project_tag>:<study_id>:source` — matchups awaiting a worker
 - `queue:<project_tag>:<study_id>:processing` — matchups claimed by a worker but not yet ack'd via `POST /result`
-- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU, 2 JVMs @ ~2.5 cores each), healthy `load_avg_1min` lands around 5–7. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying).
+- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU), the healthy `load_avg_1min` target band is design-set at [3, 8]. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying).
 
 Keys are namespaced by `project_tag` (= `starsector-<campaign_name>`) so a re-run of a campaign whose study_ids happen to match a prior run's never inherits stale processing-list items. `CampaignManager._preflight` additionally SCANs and DELs `queue:<project_tag>:*` + `worker:<project_tag>:*` at startup to defend against same-campaign re-launch.
 
@@ -443,7 +443,7 @@ None of these are ever logged (`grep -En "logger.*env\|print.*env" src/starsecto
 
 ### `HetznerProvider`
 
-Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implement when campaign budget ≥ $500. Hetzner's ~13% per-matchup advantage amortizes only at larger scale. See docs/reference/phase6-cloud-worker-federation.md §3."` Every abstract method raises.
+Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implement when campaign budget ≥ $500. Hetzner's per-matchup advantage amortizes only at larger scale (precise gap pending V2 re-validation; see ../reports/INDEX.md). See docs/reference/phase6-cloud-worker-federation.md §3."` Every abstract method raises.
 
 ## `EvaluatorPool` subclasses
 
@@ -476,7 +476,7 @@ uv run python -c 'from starsector_optimizer.worker_agent import main; print("OK"
 
 ## AWS-only MVP
 
-Phase 6 ships AWS only. Hetzner is stubbed. Rationale: AWS quota is verified at 1,792 spot vCPU across four US regions (no quota ticket needed); Hetzner default 10-VM project cap requires a 1–2 business-day ticket. At $85 total budget, the AWS premium (~13% per-matchup) is dominated by the Hetzner provisioning lead time. The stub is a one-line `NotImplementedError` so adding Hetzner post-Phase-7 is a greenfield effort, not a refactor.
+Phase 6 ships AWS only. Hetzner is stubbed. Rationale: AWS quota is verified at 1,792 spot vCPU across four US regions (no quota ticket needed); Hetzner default 10-VM project cap requires a 1–2 business-day ticket. At MVP-scale budget, the AWS per-matchup premium is dominated by the Hetzner provisioning lead time (precise gap pending V2 re-validation; see [../reports/INDEX.md](../reports/INDEX.md)). The stub is a one-line `NotImplementedError` so adding Hetzner post-Phase-7 is a greenfield effort, not a refactor.
 
 ## Packages discovered during testing (2026-04-12 Hetzner prototype, validated 2026-04-18)
 

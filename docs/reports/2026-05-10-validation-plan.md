@@ -27,28 +27,34 @@ Recommendation: **Hammerhead (primary) + Wolf (secondary, smaller)**.
 
 | Hull | Class | Slot count | log10 search space (operator estimate from CLAUDE.md inventory) | Opp pool size (hull-size match) | Role archetype |
 |---|---|---|---|---|---|
-| `hammerhead` | Destroyer | ~8 | ≈ 41–43 | ~15–25 destroyers | Kinetic/HE brawler |
-| `wolf` | Frigate | ~5 | ≈ 33–37 | ~30 frigates | Flanker / energy striker |
+| `hammerhead` | Destroyer | 8 (2 BAL + 4 HYB + 2 MIS) | ≈ 41–43 | ≈ 55 destroyer variants in `game/starsector/data/variants/` after `opponent_pool` filters | Kinetic/HE brawler |
+| `wolf` | Frigate | 6 (4 ENE + 2 MIS) | ≈ 33–37 | ≈ 70 frigate variants after filters | Flanker / energy striker |
 
 `ship_data.csv` confirms the hull classes
-(`game/starsector/data/hulls/ship_data.csv`).
+(`game/starsector/data/hulls/ship_data.csv`); slot counts verified
+against `game/starsector/data/hulls/{hammerhead,wolf}.ship`. Variant
+counts are from `game/starsector/data/variants/` filtered by
+`opponent_pool.discover_opponent_pool` (`fleet_pts > 0`; no
+STATION/HIDE_IN_CODEX/MODULE hints; no threat/dweller tags).
 
-**Hammerhead (primary)**: historical Phase 5 baseline (V1 LOOO ship-gate
-cleared at Δρ=+0.036, `docs/reference/phase5d-covariate-adjustment.md:3`).
-Re-validating on the same hull lets us cross-check V2 numbers against V1
-qualitative claims (sign, ranking, mechanism contribution) even though V1
-absolute numbers are invalidated. 8 weapon slots exercise loadout signal
-without capital-tier (log10≥60) cardinality. Destroyer opp pool is large
-enough for `n_anchors=3` (`models.py:464`) + `n_incumbent_overlap=5`
+**Hammerhead (primary)**: historical Phase 5 baseline. Re-validating on
+the same hull lets us cross-check V2 numbers against V1 qualitative
+claims (sign, ranking, mechanism contribution) even though V1 absolute
+magnitudes are invalidated; see
+[2026-05-10-v1-loadout-bug-invalidation.md](2026-05-10-v1-loadout-bug-invalidation.md).
+8 weapon slots exercise loadout signal without capital-tier (log10≥60)
+cardinality. Destroyer opp pool (≈ 55 variants) is large enough for
+`n_anchors=3` (`models.py:464`) + `n_incumbent_overlap=5`
 (`models.py:463`); 10 `active_opponents` (`optimizer.py:98`) covers
-~50 % of pool. Destroyer TTK lands inside the 300 s matchup time limit
+~18 % of pool. Destroyer TTK lands inside the 300 s matchup time limit
 (`optimizer.py:93`) reliably.
 
-**Wolf (secondary)**: cross-cuts hull size — frigate opp pool ~2× destroyer
-pool, different anchor / overlap statistics. Confirms post-V2 the V1
-frigate-gradient regression (`docs/reports/2026-04-19-phase7-prep-relaunch.md:18-20`,
-where τ̂² collapsed ~10⁵×) is fixed once weapons actually fire. Cheap
-per-trial (small hull, short TTK).
+**Wolf (secondary)**: cross-cuts hull size — frigate opp pool (≈ 70
+variants) ~1.3× destroyer pool, different anchor / overlap statistics.
+Confirms post-V2 the V1 frigate-gradient regression (see
+[2026-04-19-phase7-prep-relaunch.md](2026-04-19-phase7-prep-relaunch.md))
+is fixed once weapons actually fire. Cheap per-trial (small hull, short
+TTK).
 
 **Sample-size target**: Phase 5D EB requires `eb_min_builds=8`
 (`models.py:479`) and design doc targets N≥200 for stable γ̂ at the
@@ -80,8 +86,8 @@ share a single ablation matrix because both read from the same JSONL.
 | 4 | TWFE α̂/β̂ decomposition | `twfe_fitness` is bounded and finite; `α̂` ∈ approximately the design tier ranges (`models.py:438-440`: wins [1.0,1.5], timeouts [-0.49,+0.49]) for ≥ 95 % of trials | `twfe_fitness` JSONL field | ≥ 95 % finite within range | 200 | Always-on | JSONL `twfe_fitness` |
 | 5 | Scalar control variate (legacy) | `eb_min_builds` fallback path: when `len(_completed_records) < 8`, returned fitness equals raw α̂ (`optimizer.py:910-911`) | `eb_diagnostics` is `null` for the first 7 trials | All trials 0..6 have null `eb_diagnostics` | 7 | Always-on (early-trials) | JSONL `eb_diagnostics` |
 | 6 | Triple-goal rank correction | `triple_goal=True` (default `models.py:478`) leaves Spearman ρ within ±0.005 of EB-only across the run | Compute Spearman(`twfe_fitness`, `eb_fitness`) at end of run | ρ delta ≤ 0.005 (rank-monotone by construction; this is a regression assertion) | 200 | `triple_goal ∈ {True, False}` × 3 seeds | JSONL `eb_fitness` |
-| 7 | EB shrinkage of α̂ (10-cov) | **Δρ(EB-shrunk α̂ vs plain TWFE) ≥ +0.02 LOOO** at N≥250. Threshold from `docs/reference/phase5d-covariate-adjustment.md:299` (the original ship gate). **Re-validation required** because covariate set changed from p=7 to p=10 post-Phase-7-prep (`optimizer.py:471-489`) | Mean LOOO ρ across 3+ anchor opponents: hold one opponent out, retrain γ̂, evaluate ρ(α̂, held-out raw). EB run vs TWFE-only run on same trials | Δρ ≥ +0.02 vs A0 (plain TWFE). Strict gate from 5D doc | 250 finalized | `eb` on/off; off = scalar CV fallback. Drives the 3-seed ablation matrix | JSONL `eb_fitness`, `twfe_fitness`, `covariate_vector`, `eb_diagnostics`; analysis notebook computes LOOO ρ |
-| 8 | Box-Cox output warping | **Ceiling saturation < 1 %** AND **top-5 identification overlap ≥ 0.40**. Thresholds from `docs/reference/phase5e-shape-revision.md:137-138` (production target was 25.3 % → 0.4 % ceiling and 0.03 → 0.43 top-5) | Ceiling: `% trials with fitness ≥ 0.99`. Top-5: Jaccard(top-5 by `fitness`, top-5 by raw `eb_fitness`) | Ceiling ≤ 0.01, Jaccard ≥ 0.40 | 200 | `shape.min_samples=8` (default) on; off = min-max passthrough | JSONL `fitness`, `shape_lambda`, `shape_passthrough_reason` |
+| 7 | EB shrinkage of α̂ (10-cov) | **Δρ(EB-shrunk α̂ vs plain TWFE A0) ≥ +0.02 LOOO AND Δρ(EB vs scalar CV A) ≥ +0.02 LOOO** at N≥250. Both gates required per `docs/reference/phase5d-covariate-adjustment.md:291` (the original ship gate is "EB beats both A0 and A"). **Re-validation required** because covariate set changed from p=7 to p=10 post-Phase-7-prep (`optimizer.py:471-489`); the +0.02 threshold itself is operator-set at p=10 (no doc-derived value exists for the new covariate set — flag as "operator-set, recommend confirming"). | Mean LOOO ρ across 3+ anchor opponents: hold one opponent out, retrain γ̂, evaluate ρ(α̂, held-out raw). EB run vs TWFE-only run vs scalar-CV run on same trials | Δρ ≥ +0.02 vs both A0 and A. Strict gate from 5D doc | 250 finalized | `eb` on (C2) vs A0 baseline (C0a, no shrinkage) vs A baseline (C0b, scalar CV legacy). Drives the 3-seed ablation matrix | JSONL `eb_fitness`, `twfe_fitness`, `covariate_vector`, `eb_diagnostics`; analysis notebook computes LOOO ρ |
+| 8 | Box-Cox output warping | **Ceiling saturation < 1 %** AND **top-5 identification overlap ≥ 0.40**. Thresholds are **operator-set** — V1-era reference values (25.3 % → 0.4 % ceiling, 0.03 → 0.43 top-5) were stripped during the V1-invalidation reorg from `docs/reference/phase5e-shape-revision.md`; the gate magnitudes here carry forward the V1 design intent and need confirming once V2 data lands. | Ceiling: `% trials with fitness ≥ 0.99`. Top-5: Jaccard(top-5 by `fitness`, top-5 by raw `eb_fitness`) | Ceiling ≤ 0.01, Jaccard ≥ 0.40 | 200 | `shape.min_samples=8` (default) on; off = min-max passthrough | JSONL `fitness`, `shape_lambda`, `shape_passthrough_reason` |
 
 ### Group C — Pruner / staged evaluator (Wave 1 always-on)
 
@@ -119,7 +125,18 @@ share a single ablation matrix because both read from the same JSONL.
 |---|---|---|---|---|---|---|---|
 | 18 | V2 loadout invariant | **0 LOADOUT_MISMATCH WARNs** in 10 random Wave-0 matchups | Java `[SHIP_DUMP]` line + orchestrator `LOADOUT_MISMATCH` parse | 0 mismatches across 10 sample matchups | 10 | Always-on; verified by `scripts/cloud/loadout_ab_test.py` ARMED-vs-NAKED at smoke time | Orchestrator INFO `LOADOUT_OK` count; WARN `LOADOUT_MISMATCH` count |
 | 19 | Manifest-as-oracle | `manifest.constants.{game_version, mod_commit_sha}` matches AMI tags `GameVersion` / `ModCommitSha` (preflight assert per CLAUDE.md "Phase-7-prep refactor"). | `_preflight` log on each study subprocess | All studies log "manifest version match" or equivalent assert pass | n/a | Always-on | Orchestrator INFO log |
-| 20 | engine_stats SETUP read | `engine_stats` is non-null for ≥ 99.5 % of Wave-1 finalized trials (failure mode is `AssertionError` per `optimizer.py:490-496`) | JSONL `engine_stats` field | ≥ 99.5 % of finalized rows have non-null `engine_stats` | 200 | Always-on | JSONL `engine_stats` |
+| 20 | engine_stats SETUP read | `engine_stats` is non-null for **100 %** of Wave-1 finalized trials. Per `optimizer.py:490-496`, any null is a hard `AssertionError` — the design intent is fail-fast, not "tolerate at 0.5 %". A single null `engine_stats` row in the JSONL is a wave-aborting regression. | JSONL `engine_stats` field | 0 null rows in finalized JSONL | 200 | Always-on | JSONL `engine_stats` |
+
+**Coverage gate added (mechanism 4 augmentation)**: per-matchup tier
+boundaries from `combat_fitness.py` feed `twfe_fitness` directly. If
+the tier-boundary code is wrong, mechanism 4's "α̂ ∈ design tier
+ranges" check passes spuriously. Add a Wave 0 sanity gate: compute
+`combat_fitness` on each Wave-0 matchup and assert the per-matchup
+score lands in the design tier ranges (`models.py:438-440`); the
+`scorer.py` heuristic mode is exercised by mechanism 1. End-of-Wave-1
+assertion: per-trial covariate values (`total_dps`, `engagement_range`,
+`kinetic_dps_fraction`, etc.) lie inside the design ranges in
+`_build_covariate_vector`'s comments at `optimizer.py:471-489`.
 
 **Instrumentation gaps surfaced** (flagged, not fixed):
 
@@ -144,11 +161,14 @@ Steps:
 2. `scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml` —
    Tier-2 single-matchup smoke. Cost: ≈ $0.30.
 3. **V2 loadout invariant audit**: re-run `scripts/cloud/loadout_ab_test.py`
-   ARMED hammerhead × 3 + NAKED hammerhead × 3, confirm:
-   - ARMED damage ~ 20 k, ARMED winner=PLAYER × 3
-   - NAKED damage = 0.0, NAKED winner=ENEMY × 3
-   - 0 `LOADOUT_MISMATCH` WARNs across all 6 matchups
-   Cost: ≈ $0.10 (6 matchups, ~5 min on a single c7a.2xlarge).
+   ARMED hammerhead × 10 + NAKED hammerhead × 10 (bumped from n=3 each
+   for intermittent-failure detection — single-failure detection
+   probability `1 − 0.7^10 ≈ 97 %` if the fix has a 30 % intermittent
+   failure rate vs ~66 % at n=3), confirm:
+   - ARMED winner=PLAYER on all 10 matchups; ARMED damage > 0
+   - NAKED winner=ENEMY on all 10 matchups; NAKED damage = 0.0 exactly
+   - 0 `LOADOUT_MISMATCH` WARNs across all 20 matchups
+   Cost: ≈ $0.20 (20 matchups, ~10 min on a single c7a.2xlarge).
 4. `scripts/cloud/launch_campaign.sh examples/smoke-campaign-multiworker.yaml` —
    Tier-2.5 concurrency smoke (3 workers × 20 trials).
    Confirms multi-worker dispatch + janitor requeue. Cost: ≈ $1.00.
@@ -172,35 +192,42 @@ boot for each separate launch).
 sized up from 200 since covariate count grew p=7→p=10).
 **Concurrency per study**: 8 workers × 2 slots = 16 active matchups.
 
-Ablation matrix — 4 cells × 3 seeds = 12 studies:
+Ablation matrix — 5 cells × 3 seeds = 15 studies:
 
-| Cell | EB shrinkage | Box-Cox A3 | Triple-goal rank | Heuristic warm-start | Purpose |
-|---|---|---|---|---|---|
-| C0 | off (scalar CV) | off (min-max) | n/a | 0 | Plain-TWFE A0 baseline (5D's "A0") |
-| C1 | on | off | True | 0 | EB-only — isolates mechanism 7 |
-| C2 | on | on | True | 0 | Production default — isolates mechanism 8 (Box-Cox marginal) |
-| C3 | on | on | True | 50 | Heuristic warm-start ablation — isolates mechanism 2 (default-off decision) |
+| Cell | EB shrinkage | Scalar control variate | Box-Cox A3 | Triple-goal rank | Heuristic warm-start | Purpose |
+|---|---|---|---|---|---|---|
+| C0a | off | off | off (min-max) | n/a | 0 | Plain-TWFE A0 baseline (5D's "A0") — no shrinkage at all |
+| C0b | off | on | off (min-max) | n/a | 0 | Scalar CV "A" baseline (5D's shipped scalar control variate) — required for the doc's "EB beats both A0 and A" gate |
+| C1 | on | (n/a) | off | True | 0 | EB-only — isolates mechanism 7 |
+| C2 | on | (n/a) | on | True | 0 | Production default — isolates mechanism 8 (Box-Cox marginal) |
+| C3 | on | (n/a) | on | True | 50 | Heuristic warm-start ablation — isolates mechanism 2 (default-off decision) |
 
-C0 disabled by setting `eb_min_builds = sim_budget + 1`
+C0a/C0b disable EB by setting `eb_min_builds = sim_budget + 1`
 (operator-set, no command-line flag — patch in YAML or wrapper script).
+C0a additionally disables the scalar CV path; C0b runs with the legacy
+trimmed-α̂ scalar CV path active (`deconfounding.trimmed_alpha`).
 C1 disables Box-Cox by setting `shape.min_samples = sim_budget + 1`.
 
 **Wave 1 gate**:
 
-- C2 vs C0: Δρ(EB - TWFE) LOOO ≥ +0.02 (mechanism 7 gate).
+- C2 vs C0a: Δρ(EB − A0) LOOO ≥ +0.02 (mechanism 7 gate, half 1).
+- C2 vs C0b: Δρ(EB − A) LOOO ≥ +0.02 (mechanism 7 gate, half 2 — the
+  doc requires EB to beat the shipped scalar CV, not just plain TWFE).
 - C2 vs C1: Box-Cox ceiling saturation ≤ 0.01 AND top-5 Jaccard ≥ 0.40
   (mechanism 8 gate).
 - C3 vs C2: |Δ best-fitness| ≤ 1 σ (mechanism 2 confirms default-off).
-- All cells: WilcoxonPruner pruned ratio in [0.10, 0.60]; engine_stats
-  non-null ≥ 99.5 %; per-VM throughput in [92, 152] matchups/hr/VM.
+- All cells: WilcoxonPruner pruned ratio in [0.10, 0.60]; **0 null
+  `engine_stats` rows in finalized JSONL** (mechanism 20, hard gate);
+  per-VM throughput in [92, 152] matchups/hr/VM.
 - ≥ 1 finalized trial with `opponents_evaluated == active_opponents`
   AND ≥ 1 finalized trial pruned with `opponents_evaluated < active_opponents`.
 
-**Concurrency**: 12 studies running simultaneously is feasible inside the
-shakedown-tested ceiling (`phase7-prep-shakedown.yaml` already validated
-4 studies × 8 workers × 2 slots concurrently). Plan to run sequentially in
-3 batches of 4 cells (one per seed) to keep peak fleet at 32 VMs and avoid
-the SG-replication-lag retry path (`tests/test_cloud_provider.py::TestFleetProvisionSGPropagation`).
+**Concurrency**: 15 studies running simultaneously exceeds the
+shakedown-tested 4-study ceiling. Plan to run sequentially in
+**5 batches of 3 cells** (one per seed within each cell-group) to keep
+peak fleet at 24 VMs (3 cells × 8 workers) and avoid the
+SG-replication-lag retry path
+(`tests/test_cloud_provider.py::TestFleetProvisionSGPropagation`).
 
 ### Wave 2 — cross-regime + cross-hull validation
 
@@ -234,10 +261,13 @@ Use **`examples/phase7-prep.yaml` unchanged** (`budget_usd=70`,
 prep config and matches the Phase 7 BoTorch warm-start intent.
 
 **Wave 3 gate**: same gates as Wave 1 applied per-hull (Δρ EB ≥ +0.02
-on at least 5/8 hulls, Box-Cox ceiling ≤ 0.01 on all 8, throughput in
-[92, 152]). One operator-set lenience: 5/8 hulls instead of 8/8 because
-non-Hammerhead hulls have not been independently validated under V2;
-flag failures as future work, not campaign-aborting.
+vs both A0 and A on at least 5/8 hulls, Box-Cox ceiling ≤ 0.01 on all
+8, 0 null `engine_stats` rows across all hulls, throughput in
+[92, 152]). One operator-set lenience: 5/8 hulls instead of 8/8 for
+the EB gate because non-Hammerhead hulls have not been independently
+validated under V2; flag per-hull failures as future work, not
+campaign-aborting (but the 0-null `engine_stats` and Box-Cox-ceiling
+gates remain hard for all 8 hulls).
 
 ### Kill switch (campaign-abort triggers, applies to any wave)
 
@@ -250,8 +280,10 @@ Abort and re-evaluate if any of these trip:
    trials finalized.
 4. Per-VM throughput < 60 matchups/hr/VM sustained over 1 wall-clock hour
    (½ V1 baseline; suggests AMI / mod regression).
-5. > 0.5 % `engine_stats=None` in JSONL output (mechanism 20 broken;
-   per `optimizer.py:490-496` this should already raise hard).
+5. **Any** `engine_stats=None` in JSONL output (mechanism 20 broken;
+   per `optimizer.py:490-496` this is supposed to raise hard at trial
+   time — finding even one nullable row in the post-run JSONL means
+   the assertion is being bypassed somewhere).
 
 ## 4. Budget + time analysis
 
@@ -269,41 +301,49 @@ Anchor numbers (cite source per CLAUDE.md inventory):
 
 | Wave | VMs | Trials × studies | Matchups | VM-hours | Spot cost (×1.03 preempt) | Cumulative |
 |---|---|---|---|---|---|---|
-| 0 (probe + smoke + AB + multi) | peak 3 | 1 + 1 + 6 + 20 ≈ 28 matchups (smoke); ~30 min total | ~30 | ~1.5 | **$0.23** + AWS minute-rate boot overhead ≈ $1.45 | $1.45 |
-| 1 (4 cells × 3 seeds × 250 trials, 8 workers/study, sequential 3 batches) | peak 32 | 12 × 250 = 3000 trials | 3000 × 2.7 = 8100 | 8100 / 122 = 66.4 | 66.4 × $0.15 × 1.03 = **$10.27** | $11.72 |
-| 2 (3 sequential studies, 8 workers, ~700 trials total) | peak 8 | 700 trials | 700 × 2.7 = 1890 | 1890 / 122 = 15.5 | 15.5 × $0.15 × 1.03 = **$2.40** | $14.12 |
-| 3 (`phase7-prep.yaml`, 8 studies × 600 × 96 VMs) | peak 96 | 4800 trials | 4800 × 2.7 = 12960 (NB: prep-yaml comment uses 12 m/trial = 57600; the 2.7 number assumes heavier ASHA pruning) | 12960 / 122 = 106 | 106 × $0.15 × 1.03 = **$16.39** if 2.7 m/trial holds; **$70.79** at 12 m/trial | $30.51 (best-case) – $84.91 (Phase-7-prep budget cap) |
+| 0 (probe + smoke + AB + multi) | peak 3 | ~42 matchups across 4 launches | ~42 | ~1.7 | **$0.27** + AWS minute-rate boot overhead ≈ $1.55 | $1.55 |
+| 1 (5 cells × 3 seeds × 250 trials, 8 workers/study, sequential 5 batches of 3 cells) | peak 24 | 15 × 250 = 3750 trials | 3750 × 2.7 = 10125 | 10125 / 122 = 83.0 | 83.0 × $0.15 × 1.03 = **$12.82** | $14.37 |
+| 2 (3 sequential studies, 8 workers, ~700 trials total) | peak 8 | 700 trials | 700 × 2.7 = 1890 | 1890 / 122 = 15.5 | 15.5 × $0.15 × 1.03 = **$2.40** | $16.77 |
+| 3 (`phase7-prep.yaml`, 8 studies × 600 × 96 VMs) | peak 96 | 4800 trials | 2.7 m/trial best case = 12960 matchups; 12 m/trial worst case (per `phase7-prep.yaml:6`) = 57600 matchups | best 106 / worst 472 | best 106 × $0.15 × 1.03 = **$16.39**; worst 472 × $0.15 × 1.03 = **$72.92** | $33.16 (best) – $89.69 (worst) |
 
-**Cumulative through Wave 3 best-case**: $30.51. **Cumulative at the
-existing Phase 7 prep cap**: $84.91 (under the $85 ceiling).
-The 2.7 vs 12 m/trial gap is the biggest source of forecast uncertainty.
+**Cumulative through Wave 3 best-case**: $33.16. **Cumulative through
+Wave 3 worst-case (12 m/trial)**: $89.69 — **breaches the $85 ceiling
+by ~$4.69**. The 2.7 vs 12 m/trial gap is the biggest source of
+forecast uncertainty; if the V1 `phase7-prep.yaml:6` 12 m/trial number
+holds under V2, Wave 3 either needs trial-count or hull-count
+reduction (see Sensitivity below).
 
 **Recommendation**: launch Wave 1 first to **measure the actual
 matchups/trial under V2 (which has different TTK distributions than V1)**,
-then re-forecast Wave 3. Wave 1's $10.27 budget consumes 12 % of the
-$85 cap and gives a ground-truth m/trial number.
+then re-forecast Wave 3. Wave 1's $12.82 budget consumes ~15 % of the
+$85 cap and gives a ground-truth m/trial number. If the measured value
+is closer to 12 than 2.7, Wave 3 must reduce hull or trial count
+before launch.
 
 **Wall-clock**:
 
 - Wave 0: ~30 min sequential (VM boot dominates).
-- Wave 1: 3 batches × (250 trials × 2.7 / (8 VMs × 122 matchups/hr)) ≈
-  3 × 0.69 hr = 2.1 hr + 3 × ~5 min provisioning ≈ **2.4 hr**.
+- Wave 1: 5 batches × (250 trials × 2.7 / (8 VMs × 122 matchups/hr)) ≈
+  5 × 0.69 hr = 3.5 hr + 5 × ~5 min provisioning ≈ **3.9 hr**.
 - Wave 2: 3 studies × ~0.6 hr each = **1.8 hr**.
 - Wave 3: 8 studies in parallel × (600 × 2.7 / (12 × 122)) = 1.1 hr +
-  provisioning → **1.5 hr**.
-- **Campaign total**: **~6 hr active wall-clock**, with possible queue
-  time between waves driven by gate review (recommend 24-hr review
-  budget per gate; total 4–5 days calendar).
+  provisioning → **1.5 hr** (best case); ~5 hr worst case at 12 m/trial.
+- **Campaign total**: **~7–11 hr active wall-clock**, with queue time
+  between waves driven by gate review (recommend 24-hr review budget
+  per gate; total 4–5 days calendar).
 
 **Sensitivity** (±25 %):
 
-- Trial count +25 % → Wave 1 → $12.84, Wave 3 cap → $88.50 over.
-  Mitigation: drop one Wave 1 seed (3 → 2) saves $3.42.
-- Per-trial throughput −25 % (i.e. 92 m/hr/VM) → Wave 1 → $13.69,
-  Wave 3 → $94.39 over. Mitigation: as above, plus reduce Wave 3 to
-  6 hulls × 600 trials = $63.59.
+- Trial count +25 % at Wave 1 → +$3.21. Mitigation: drop one Wave 1
+  seed (3 → 2) saves ~$4.27.
+- Per-trial throughput −25 % (i.e. 92 m/hr/VM) → Wave 1 → $17.10
+  (+$4.28). Wave 3 worst-case → $97.32 (cap breach $12.32). Mitigation:
+  reduce Wave 3 to 6 hulls × 600 trials saves ~$18 — keeps total under
+  $85.
 - Per-trial throughput +25 % → costs scale linearly down; under-budget
   by $20+ — no action needed.
+- Wave 1 over-runs by +1.6 hr versus the previous 12-cell version (cost
+  to add the C0b scalar-CV ablation cell required by the doc gate).
 
 ## 5. Statistical-power notes (curse of dimensionality)
 
@@ -324,19 +364,45 @@ cardinality is far beyond enumeration. Validation strategy is therefore
   (`anchor_burn_in=30` + `n_anchors=3`, `models.py:464-465`); per-anchor
   sample at N=250 is n=247.
 
-### Δρ +0.02 statistical power
+### Δρ +0.02 statistical power — single-seed Spearman is underpowered
 
 For Spearman ρ at α=0.05 two-tailed, `var(ρ̂) ≈ (1−ρ²)/(n−1)`. At ρ≈0.3
-(mid 5E band) and Δρ=+0.02:
+and Δρ=+0.02, two-tailed power is `Φ(z − 1.96) + Φ(−z − 1.96)` where
+`z = Δρ / σ_ρ̂`:
 
-- n=200 → σ_ρ̂ ≈ 0.068 → single-seed power ≈ 9 %.
-- n=250 → σ_ρ̂ ≈ 0.060 → power ≈ 11 %.
-- 3 seeds via Stouffer's z → power ≈ 30 % (still marginal).
-- **Production methodology**: V1 ship gate +0.036 was a *5-anchor
-  bootstrap × 200-iter resample* (`docs/reference/phase5d-covariate-adjustment.md:301`),
-  not raw Spearman ρ. Bootstrap pools across anchors — single-seed
-  power calc is pessimistic. **Plan: report 5-anchor bootstrap CI as
-  headline; single-seed ρ as secondary diagnostic**, matching V1.
+- n=200 → σ_ρ̂ ≈ 0.0676 → z = 0.296 → single-seed power ≈ **6.0 %**.
+- n=250 → σ_ρ̂ ≈ 0.0605 → z = 0.331 → single-seed power ≈ **6.3 %**.
+- 3 seeds pooled (σ → σ/√3) at n=250 → z = 0.573 → power ≈ **8.9 %**.
+- Even at n=600 × 3 seeds → power ≈ **14.4 %**.
+
+**These power numbers say single-seed Spearman is the wrong primary
+gate** at any feasible N for a Δρ as small as +0.02. The plan therefore
+adopts the V1 production methodology as the headline gate:
+
+- **Headline metric: 5-anchor bootstrap 95 % CI for Δρ.** Hold one
+  anchor opponent out at a time, refit γ̂ on the remaining trials,
+  evaluate Spearman against the held-out anchor's raw α̂, repeat over
+  200 bootstrap resamples per anchor. The 5 anchors × 200 resamples
+  produces a 1000-sample pool whose effective N for confidence-interval
+  purposes is much higher than the per-trial N. The gate is **lower
+  bound of the bootstrap 95 % CI for Δρ ≥ 0** (i.e. positive with
+  confidence), with the +0.02 threshold serving as the design target
+  for the *point estimate*.
+- **Secondary diagnostic**: per-seed Spearman ρ on the held-out anchor,
+  reported as a rank-stability check (3 seeds × 5 anchors × 250 trials
+  = 3750 paired observations).
+
+The 5-anchor bootstrap pools across anchors, which makes the
+single-seed power calc pessimistic — but importantly the *single-seed*
+ρ should not be read as the gate even when N is sized up. The
+V1-shipped Phase 5D ship gate used the same methodology and is
+documented in [phase5d-covariate-adjustment.md](../reference/phase5d-covariate-adjustment.md)
+§3.3.
+
+**N=250 per cell** is therefore sized for the bootstrap headline, not
+single-seed power. Bumping to N=400 or N=600 is on the table if the
+Wave 1 bootstrap CI excludes Δρ ≥ 0 but the point estimate is positive
+(decision-tree branch added below).
 
 ## 6. Risk register + mitigations
 
@@ -355,25 +421,44 @@ For Spearman ρ at α=0.05 two-tailed, `var(ρ̂) ≈ (1−ρ²)/(n−1)`. At ρ
 
 ## 7. Decision tree for failure modes
 
-### F1: Wave 1 EB Δρ < +0.02 (mechanism 7 fails)
+### F1: Wave 1 EB Δρ < +0.02 (mechanism 7 fails on either A0 or A half)
 
-- **F1a**: If C2 has Δρ < +0.02 vs C0 *but* C1 (EB-only no Box-Cox) has
-  Δρ ≥ +0.02 vs C0 → Box-Cox is masking the EB win. Action: re-run C2
-  with `triple_goal=False` (mechanism 6 ablation). If still flat,
-  retain EB but reconfigure Box-Cox `min_samples` higher (50?).
-- **F1b**: If both C1 and C2 have Δρ < +0.02 but ≥ 0 → EB is net-neutral.
-  Action: investigate covariate set. The post-Phase-7-prep covariate
-  bump (p=7 → p=10) added 3 engine-stat covariates that may be
-  collinear with Python-raw covariates. Drop `op_used_fraction` first
-  (newest, `optimizer.py:434-459`) and re-run on the *existing* JSONL
-  (no new sim cost — analysis re-run only). This is a covariate-set
-  re-tune, not a campaign re-run.
-- **F1c**: If Δρ < 0 (active harm, like the V1 5D.v1 conditioning-paradigm
-  refutation) → roll back to scalar control variate as default
-  (`models.py:469-480` defaults change). Wave 3 would then run with
-  EB explicitly off. This is the *known-precedented* rollback path
-  (`docs/reference/phase5d-covariate-adjustment.md:9` documents the
-  v1 → v2 paradigm flip).
+The mechanism 7 gate has two halves: Δρ(EB − A0) and Δρ(EB − A). A
+failure on either half is a gate failure but the diagnosis differs.
+
+- **F1a**: If C2 has Δρ < +0.02 vs **A0** (C0a baseline) *but* C1 (EB
+  no Box-Cox) has Δρ ≥ +0.02 vs C0a → Box-Cox is masking the EB win.
+  Action: re-run C2 with `triple_goal=False` (mechanism 6 ablation).
+  If still flat, retain EB but reconfigure Box-Cox `min_samples`
+  higher (50?).
+- **F1b**: If both C1 and C2 have Δρ < +0.02 vs **A0** but ≥ 0 → EB is
+  net-neutral against plain TWFE. Investigate covariate set. The
+  post-Phase-7-prep covariate bump (p=7 → p=10) added 3 engine-stat
+  covariates that may be collinear with Python-raw covariates. Drop
+  `op_used_fraction` first (newest, `optimizer.py:434-459`) and re-run
+  on the *existing* JSONL (no new sim cost). Covariate re-tune, not
+  campaign re-run.
+- **F1c (paradigm flip)**: If C2 has Δρ < 0 vs **either** baseline
+  (active harm, mirrors the V1 5D.v1 conditioning-paradigm refutation)
+  → roll back to scalar control variate as default. Operationally:
+  change `EBShrinkageConfig` defaults at `models.py:469-480` so
+  `eb_min_builds` is effectively never reached, making the scalar CV
+  (legacy `deconfounding.trimmed_alpha`) the production path. Wave 3
+  runs with EB off. Known-precedented rollback path documented at
+  [phase5d-covariate-adjustment.md](../reference/phase5d-covariate-adjustment.md)
+  §4.5.
+- **F1d (EB beats A0 but loses to A)**: If Δρ(EB − A0) ≥ +0.02 but
+  Δρ(EB − A) < +0.02 → EB is better than no-shrinkage but no better
+  than the legacy scalar CV. Action: ship the simpler scalar CV path
+  for production (no statistical case for the more complex EB code).
+  Same rollback as F1c but with cleaner motivation.
+- **F1e (CI excludes 0 but point ≥ +0.02)**: If the bootstrap 95 % CI
+  for Δρ excludes 0 (i.e. EB is positive with confidence) but the
+  point estimate is < +0.02 (below design target) → **bump N**. Run
+  one additional 250-trial seed for both C0a/C0b/C2 (cost ~$2.50,
+  takes ~45 min) to widen the bootstrap pool. If the point estimate
+  remains < +0.02 at the larger N, accept the smaller effect as the
+  V2-era ship gate and document.
 
 ### F2: Wave 1 Box-Cox ceiling > 1 % OR top-5 Jaccard < 0.40
 

@@ -39,7 +39,6 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | Spec | Module | Contents |
 |---|---|---|
 | [01-data-models](./specs/01-data-models.md) | `models.py` | Dataclasses, enums, type definitions |
-| [29-game-manifest](./specs/29-game-manifest.md) | `game_manifest.py` | Authoritative game-rule manifest (replaces deleted spec 02) |
 | [03-game-data-parser](./specs/03-game-data-parser.md) | `parser.py` | CSV + JSON parsing |
 | [04-search-space](./specs/04-search-space.md) | `search_space.py` | Per-hull weapon/hullmod compatibility |
 | [05-repair-operator](./specs/05-repair-operator.md) | `repair.py` | Constraint enforcement |
@@ -57,6 +56,46 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | [12-result-writer](./specs/12-result-writer.md) | `ResultWriter.java` | Atomic result.json output |
 | [13-combat-harness-plugin](./specs/13-combat-harness-plugin.md) | `CombatHarnessPlugin.java` | EveryFrameCombatPlugin |
 | [14-mod-skeleton](./specs/14-mod-skeleton.md) | Mod files | ModPlugin, MissionDefinition, mod_info |
+| [15-matchup-queue](./specs/15-matchup-queue.md) | `MatchupQueue.java` | Batch queue — JSON-array reader |
+| [16-menu-navigator](./specs/16-menu-navigator.md) | `MenuNavigator.java` | java.awt.Robot menu clicking |
+| [19-result-parser](./specs/19-result-parser.md) | `result_parser.py` | Java JSON → Python dataclasses |
+| [27-variant-builder](./specs/27-variant-builder.md) | `VariantBuilder.java` | Programmatic ShipVariantAPI construction |
+
+**Phase 3: Instance Manager** (complete)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [17-throughput-estimator](./specs/17-throughput-estimator.md) | `estimator.py` | Wall-clock + cost estimation |
+| [18-instance-manager](./specs/18-instance-manager.md) | `instance_manager.py` | LocalInstancePool — N parallel JVMs via Xvfb |
+
+**Phase 4: Optimizer Integration** (complete)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [23-opponent-pool](./specs/23-opponent-pool.md) | `opponent_pool.py` | Diverse opponent pool per hull size |
+| [24-optimizer](./specs/24-optimizer.md) | `optimizer.py` | Optuna integration, ask-tell loop, warm-start |
+| [25-combat-fitness](./specs/25-combat-fitness.md) | `combat_fitness.py` | Hierarchical composite combat fitness score |
+| [26-parameter-importance](./specs/26-parameter-importance.md) | `importance.py` | fANOVA + fixed-param analysis |
+
+**Phase 5: Signal Quality** (5A–5F complete; 5G deferred)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [28-deconfounding](./specs/28-deconfounding.md) | `deconfounding.py` | TWFE decomposition + EB shrinkage + triple-goal rank correction |
+
+**Phase 6: Cloud Worker Federation** (infrastructure shipped 2026-04-18; Tier-2 live-validated 2026-05-09)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [22-cloud-deployment](./specs/22-cloud-deployment.md) | `cloud_provider.py`, `cloud_worker_pool.py`, `worker_agent.py`, `campaign.py` | AWS spot fleet, Redis reliable queue, Tailscale mesh, four-layer teardown |
+
+**Phase-7-prep refactor** (complete 2026-04-19)
+
+| Spec | Module | Contents |
+|---|---|---|
+| [29-game-manifest](./specs/29-game-manifest.md) | `game_manifest.py` + `ManifestDumper.java` | Manifest-as-oracle: `applicable_hullmods` + `conditional_exclusions` per hull from live-engine probe |
+
+Spec number registry (gaps at 02, 20, 21): see [specs/README.md](./specs/README.md).
 
 ### Reference Documents
 

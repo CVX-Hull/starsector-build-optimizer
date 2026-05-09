@@ -36,6 +36,13 @@ A "measurement" is anything derived from running this project's code:
 
 Citations from the published academic literature (e.g. "SAASBO reports 2-5× sample efficiency at d≈100") are reference-grade — they're not derived from this project's runs and don't go stale when our code changes. Cite the paper inline.
 
+**Game constants and engine list-prices are reference-grade**, not measurements:
+- Constants from `game/starsector/data/` (`MAX_FLUX_VENTS = 30`, weapon DPS values, hullmod tier definitions) are upstream-game-defined and stable per Starsector minor version. Inline freely.
+- Engine clamps (the 5.0× `time_mult` ceiling, `setRetreating(false, false)` semantics) are engine-defined, not measured.
+- AWS / Hetzner public list prices ($0.15/hr c7a.2xlarge spot, $0.05/GB·month EBS snapshot) are provider-published, not derived from our runs. Inline freely; flag the date if pinned to a specific quote.
+- Algorithmic floors and config defaults (`eb_min_builds = 8`, `min_samples = 8`, `tau2_floor_frac = 0.05`) are designed parameters, not measurements.
+- Threshold definitions in pass/fail gates ("Pass: Δρ ≥ +0.02") are designed gates, not measurements — but the *measured* values that motivated the threshold belong in a report.
+
 When a reference doc previously asserted an internal-sim number, replace with one of:
 
 1. **If a design threshold exists** —

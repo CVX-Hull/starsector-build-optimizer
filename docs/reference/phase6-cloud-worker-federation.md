@@ -12,7 +12,7 @@ Status: **INFRASTRUCTURE SHIPPED** (2026-04-18; per-study fleet ownership added 
 
 ## Budget staging
 
-Phase 6 ships against a combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget (larger campaigns come after Phase 7). The cost model lives in code (`scripts/cost_model.py` or equivalent) and is parameterized by provider constants (AWS c7a.2xlarge spot price, observed throughput rate, observed preemption rate); rerun the script after any pricing / throughput update rather than hand-editing numbers here.
+Phase 6 ships against a combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget (larger campaigns come after Phase 7). The cost model is parameterized by provider constants (AWS c7a.2xlarge spot price, observed throughput rate, observed preemption rate); the post-V2 budget model is captured in [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md) and should be re-derived there after any pricing / throughput update rather than hand-edited into this doc.
 
 **Line items**:
 
@@ -40,7 +40,7 @@ Spend $N of compute and get $N of useful optimization data — i.e., **linear $�
 
 2. **Phase 5E, 5F, Phase 7 all need scale.** Phase 5E Box-Cox validation wants large per-hull build counts. Phase 5F regime-segmented exploration multiplies that across regimes and hulls. Phase 7 BoTorch GP validation needs cross-hull transfer data. Cloud parallelism is the only realistic path to those data volumes.
 
-3. **Optuna sampler ceiling.** TPE degrades above ~30 concurrent workers per study (`constant_liar` imputation collapses KDE to random sampling). Spending $1000 on one mega-study wastes 85% of the budget as random sampling. Federation into many smaller studies keeps each sampler in its efficient zone.
+3. **Optuna sampler ceiling.** TPE degrades above ~30 concurrent workers per study (`constant_liar` imputation collapses KDE to random sampling). Spending most of a budget on a single mega-study wastes much of it on random sampling at the front of TPE's startup. Federation into many smaller studies keeps each sampler in its efficient zone.
 
 4. **Operator burden grows nonlinearly.** At 3 workers on the workstation (current), ad-hoc bash is fine. At 30+ cloud workers, ad-hoc bash kills entire budgets via runaway costs (no auto-stop) or orphaned resources (no teardown discipline).
 
@@ -234,7 +234,7 @@ Bootstrap cost on cold cloud-init: several minutes per worker (apt + rsync ~550 
 
 **Hard-stop mechanisms** (Phase 6 MVP ships 1+2; 3+4 are deferred as orthogonal operational backstops):
 1. Per-campaign `budget_usd` hard cap in `campaign.yaml` — `CostLedger.record_heartbeat` raises `BudgetExceeded` at 100%; `CampaignManager.run()`'s `finally` block triggers teardown.
-2. Per-worker lifetime cap (default **6 hours**; 6 covers the prep campaign's 4.1-hour wall-clock per `cost_model.py::prep_scenario`) — workers self-terminate.
+2. Per-worker lifetime cap (default **6 hours**; design-set to cover the prep campaign's wall-clock with headroom — see the post-V2 budget model in [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md)) — workers self-terminate.
 3. **Deferred**: tag-based sweeper cron every 15 min. Operational backstop layer above the three in-process layers.
 4. **Deferred**: CloudWatch billing alarm (AWS). Independent provider-side budget.
 

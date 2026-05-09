@@ -2,6 +2,9 @@
 name: Post-Implementation Audit
 description: Mechanical checks and sub-agent verification after completing implementation phases for the Starsector optimizer
 disable-model-invocation: true
+type: skill
+status: shipped
+last-validated: 2026-05-10
 ---
 
 # Post-Implementation Audit

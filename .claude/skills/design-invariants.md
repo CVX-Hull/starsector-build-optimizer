@@ -2,6 +2,9 @@
 name: Design Invariants Check
 description: Architectural invariant checklist for the Starsector ship build optimizer — derived from CLAUDE.md design principles and invariants
 disable-model-invocation: true
+type: skill
+status: shipped
+last-validated: 2026-05-10
 ---
 
 # Design Invariants Checklist

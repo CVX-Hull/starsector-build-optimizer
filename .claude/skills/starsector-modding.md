@@ -1,6 +1,9 @@
 ---
 name: starsector-modding
 description: Hard-won knowledge about Starsector 0.98a Java modding — security sandbox, API quirks, file I/O, Janino limitations, and combat plugin patterns.
+type: skill
+status: shipped
+last-validated: 2026-05-10
 ---
 
 # Starsector Modding Knowledge

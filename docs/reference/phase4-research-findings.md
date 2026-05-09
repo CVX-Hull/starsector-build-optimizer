@@ -300,4 +300,4 @@ These findings drove the Phase 5 research into opponent normalization, multi-fid
 | Doom | Cruiser (phase) | 12 | 62 | 76 | 9-34 |
 | Onslaught | Capital | 22 | 62 | 86 | 8-13 |
 
-All hulls have exactly 62 eligible hullmods and 2 incompatible pairs. The 62 binary hullmod flags dominate dimensionality — even frigates have 70D. This means TPE's high-D limitations apply universally. The heuristic warm-start (top-500 from 50K random builds) is critical for all hull sizes.
+Each hull has a manifest-derived eligible-hullmod set (~100 hullmods total, per-hull subset varies by ship size + type — see [docs/specs/29-game-manifest.md](../specs/29-game-manifest.md)). The hullmod-boolean flags dominate dimensionality even on frigates, so TPE's high-D limitations apply universally. The heuristic warm-start (top-500 from 50K random builds) is critical for all hull sizes.

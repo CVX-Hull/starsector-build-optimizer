@@ -225,7 +225,7 @@ else:
 
 **Key findings:**
 
-**GPU was originally believed to be required for cloud.** This was a misdiagnosis. The actual blocker was Xvfb's XRandR extension not populating its mode list until a client queries it; once `x11-xserver-utils` is installed and the warmup `xrandr --query` runs, LWJGL's headless OpenGL works on CPU-only cloud VMs at workable throughput. See [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md) for the live design. The original Hetzner CCX33 "26s of game-time in 120s wall-clock" measurement preceded the warmup fix.
+**GPU was originally believed to be required for cloud.** This was a misdiagnosis. The actual blocker was Xvfb's XRandR extension not populating its mode list until a client queries it; once `x11-xserver-utils` is installed and the warmup `xrandr --query` runs, LWJGL's headless OpenGL works on CPU-only cloud VMs at workable throughput. See [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md) for the live design. The pre-warmup-fix Hetzner CCX33 measurement that informed the original "GPU required" framing has been retired; specific post-fix throughput pending V2 re-validation, see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 **ARM instances won't work.** Starsector ships its own x86_64 JRE (`jre_linux/`) and native LWJGL libraries. Running on ARM (AWS Graviton, etc.) would require replacing the JRE and native libraries — not practical.
 

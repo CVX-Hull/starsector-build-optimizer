@@ -6,6 +6,14 @@ last-validated: 2026-04-19
 
 # Phase 6 — Deferred audit findings (2026-04-19)
 
+> **V1 invalidation note (2026-05-10):** This report was authored before
+> the V2 combat-harness loadout fix (commit `dc71e3b`). Internal-sim
+> magnitudes cited herein reflect the V1-confounded measurement context.
+> See [2026-05-10-v1-loadout-bug-invalidation.md](2026-05-10-v1-loadout-bug-invalidation.md)
+> for the master invalidation index. The deferred-audit / action-item
+> *content* of this report remains valid; only its empirical references
+> are pending V2 re-validation.
+
 Retrospective capture of audit items identified during the post-sampler-benchmark-abort sweep on 2026-04-19 but **not fixed in that session**. Each entry states the exact location, the theoretical failure mode, whether it has been observed in practice, the proposed fix, and the rationale for deferring.
 
 A future Phase 6 hardening pass (or the Phase 7.5 reliability work) should triage these before any campaign that scales past the current production envelope (~96 workers × 2 matchup_slots_per_worker = 192 concurrent matchup slots). If a campaign starts hitting one of these, the entry below has enough context to pick up.
