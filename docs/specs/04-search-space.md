@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Search Space Specification
 
 Per-hull search space builder. Defined in `src/starsector_optimizer/search_space.py`.

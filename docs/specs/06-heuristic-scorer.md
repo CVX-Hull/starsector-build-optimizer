@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Heuristic Scorer Specification
 
 Static build quality metrics. Defined in `src/starsector_optimizer/scorer.py`.

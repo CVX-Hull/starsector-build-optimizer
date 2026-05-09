@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Repair Operator Specification
 
 Constraint enforcement — the boundary between optimizer-space and domain-space. Defined in `src/starsector_optimizer/repair.py`.

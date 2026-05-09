@@ -1,3 +1,9 @@
+---
+type: report
+status: shipped
+last-validated: 2026-04-19
+---
+
 # Pre-Phase-7-prep relaunch checklist (2026-04-19)
 
 Action items that must land before the next Phase 7 prep cloud campaign.

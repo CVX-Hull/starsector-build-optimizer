@@ -1,31 +1,34 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 6 — Cloud Worker Federation
 
-Status: **INFRASTRUCTURE SHIPPED** (2026-04-18; per-study fleet ownership added same day). `AWSProvider` ships with the per-fleet API (`provision_fleet` / `terminate_fleet` / `terminate_all_tagged` sweep backstop), two-tag scheme (`Project`+`Fleet`), `cloud_userdata.render_user_data` with IMDSv2 WORKER_ID override, `CostLedger`, Packer AMI template, Tier-1 `probe.sh` / `probe.py` (updated to new API), and Tier-2 wiring: `CampaignManager` is a pure supervisor (`_preflight` + `spawn_studies` + `monitor_loop` + campaign-wide-sweep teardown), and each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its own fleet lifecycle — provisioning AND teardown. Tier-2 pipeline smoke defined in §11 is **code-ready; pending live operational authorization**. Sampler benchmark and Phase 7 prep campaign deferred to operational sessions against the smoke-validated pipeline. Renumbers the former Phase 6 (Structured Search-Space Representation) to Phase 7 — cloud federation is infrastructure that Phase 7's multi-week BoTorch build depends on for validation at scale.
+Status: **INFRASTRUCTURE SHIPPED** (2026-04-18; per-study fleet ownership added same day). `AWSProvider` ships with the per-fleet API (`provision_fleet` / `terminate_fleet` / `terminate_all_tagged` sweep backstop), two-tag scheme (`Project`+`Fleet`), `cloud_userdata.render_user_data` with IMDSv2 WORKER_ID override, `CostLedger`, Packer AMI template, Tier-1 `probe.sh` / `probe.py` (updated to new API), and Tier-2 wiring: `CampaignManager` is a pure supervisor (`_preflight` + `spawn_studies` + `monitor_loop` + campaign-wide-sweep teardown), and each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its own fleet lifecycle — provisioning AND teardown. Tier-2 pipeline smoke defined in §11 was live-validated 2026-05-09. Sampler benchmark and Phase 7 prep campaign deferred. Renumbers the former Phase 6 (Structured Search-Space Representation) to Phase 7 — cloud federation is infrastructure that Phase 7's multi-week BoTorch build depends on for validation at scale.
+
+> **Empirical-claims status (2026-05-10):** Throughput rates (matchups/hr/VM, trials/hr), cloud-vs-local speedup ratios, $/matchup figures, dollar budgets derived from those rates, and preemption rates were measured on V1 sim and are pending re-validation under V2. The V2 setup-time overhead (per-matchup `setVariant` + `LoadoutDiagnostic`) is non-zero and will shift the cost model. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md). Architecture decisions (study federation, per-study fleet ownership, two-region spot, EC2 Fleet allocation strategy) are unaffected.
 
 ## Budget staging
 
-Phase 6 ships against an **$85 combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget** (larger campaigns come after Phase 7). All dollar figures in this doc are computed by `experiments/phase6-planning/cost_model.py` from the pinned provider constants (AWS c7a.2xlarge spot $0.15/hr, 122 matchups/hr/VM, 3% preemption); rerun the script after any pricing / throughput update rather than hand-editing numbers here.
+Phase 6 ships against a combined Phase 6 shakedown + sampler benchmark + Phase 7 prep-data budget (larger campaigns come after Phase 7). The cost model lives in code (`scripts/cost_model.py` or equivalent) and is parameterized by provider constants (AWS c7a.2xlarge spot price, observed throughput rate, observed preemption rate); rerun the script after any pricing / throughput update rather than hand-editing numbers here.
 
-**Line items** (source: `cost_model.py` `budget_rollup()`):
+**Line items**:
 
-| Line item | Cost |
-| --- | --- |
-| Validation probe (2 VMs × 2 regions × 15 min) | $0.15 |
-| Pipeline smoke (Tier-2.0 single-matchup ~$0.30 + Tier-2.5 ~$0.80 multi-worker per §11) | $1.20 |
-| ~~Sampler benchmark (2 hulls × 3 samplers × 1 hr)~~ — SKIPPED (see §10) | ~~$14.83~~ → $0 |
-| Prep campaign (8 hulls × `early` × 600 trials, incl 3% preemption) | $60.79 |
-| **Subtotal** | **$76.97** |
-| Slack (reruns, retries, headroom) | $5.00 |
-| **Recommended budget** | **$85.00** |
+- Validation probe (small, ~tens of cents)
+- Pipeline smoke (Tier-2.0 single-matchup + Tier-2.5 multi-worker per §11)
+- Sampler benchmark — SKIPPED (see §10); CatCMAwM is structurally incompatible with the all-categorical search space.
+- Prep campaign (8 hulls × `early` regime × 1 seed × 600 trials ≈ 48,000 matchups, with preemption headroom)
+- Slack (reruns, retries, headroom)
 
-- **AWS primary** (c7a.2xlarge spot, us-east-1 + us-east-2) rather than Hetzner, because existing AWS account vCPU quota is already ample (1,280 spot vCPU across us-east-1 + us-east-2 = room for ~160 eight-vCPU instances, vs Hetzner default 10-VM project cap that requires a 1-2 day quota-upgrade ticket). AWS's ~$0.0012/matchup vs Hetzner's ~$0.0011 (13% premium) is covered by the budget. Hetzner stays documented as a post-Phase-7 scale-up path where its price advantage matters against $500+/$1000 spend.
-- **Sampler benchmark was SKIPPED 2026-04-19** (see §10). CatCMAwM is structurally incompatible with this codebase's all-categorical search space, and without a Bayesian alternative the benchmark has no meaningful decision to make. Prep uses TPE directly.
-- **Packer pre-bake is in scope even at $85** (reversal from an early scoping sketch that deferred it). Rationale in §5. AWS AMIs are region-scoped, so the build is done in us-east-1 and `aws ec2 copy-image`'d to us-east-2 (~5 min, one-time).
-- **Two-region spread** across us-east-1 + us-east-2 for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` allocation + `CapacityRebalancing` drops preemption rate to ~3% (validated in the 2026-04-18 benchmark).
-- **Prep campaign target**: 8 hulls × `early` × 1 seed × 600 trials ≈ 48,000 matchups ≈ **$60.79**. Produces the cross-hull early-regime data Phase 7's attribute/mode kernels need to validate transfer claims.
-- **Why early regime, not endgame**: late-regime optima largely recover published community meta (e.g. `shrouded_lens` / `fragment_coordinator` archetypes the 2026-04-17 Hammerhead run concentrated on); early regime is where the optimizer has room to find genuinely novel builds *and* is a stricter Phase 7 kernel test under a tighter feasible set. Endgame follow-up is a cheap (~$15-20) supplementary run if Phase 7 development shows a gap.
-- **Wall-clock**: ~4.1 hr prep (script: `prep_scenario().hours_per_study`) + ~1 hr benchmark + ~2 hr smoke, across 1-2 calendar days.
-- **Sensitivity** (from `cost_model.py sensitivity_analysis()`): dropping prep to 500 trials/hull saves $10 ($50.66 vs $60.79); dropping to 7 hulls saves ~$7.60. If $85 is too aggressive, 500 trials × 8 hulls fits comfortably in $75.
+Specific dollar figures and wall-clock estimates from V1 throughput measurements are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The structural sizing argument (the prep campaign dominates total cost; sampler benchmark and smoke are rounding) is unaffected.
+
+- **AWS primary** (c7a.2xlarge spot, us-east-1 + us-east-2) rather than Hetzner, because existing AWS account vCPU quota is already ample (1,280 spot vCPU across us-east-1 + us-east-2 = room for ~160 eight-vCPU instances, vs Hetzner default 10-VM project cap that requires a 1-2 day quota-upgrade ticket). AWS carries a small per-matchup premium over Hetzner that is covered by the budget. Hetzner stays documented as a post-Phase-7 scale-up path where its price advantage matters against larger spend.
+- **Packer pre-bake is in scope** (reversal from an early scoping sketch that deferred it). Rationale in §5. AWS AMIs are region-scoped, so the build is done in us-east-1 and `aws ec2 copy-image`'d to us-east-2 (~5 min, one-time).
+- **Two-region spread** across us-east-1 + us-east-2 for spot-pool diversity. EC2 Fleet with `price-capacity-optimized` allocation + `CapacityRebalancing` keeps preemption rate low.
+- **Prep campaign target**: 8 hulls × `early` × 1 seed × 600 trials ≈ 48,000 matchups. Produces the cross-hull early-regime data Phase 7's attribute/mode kernels need to validate transfer claims.
+- **Why early regime, not endgame**: late-regime optima largely recover published community meta (e.g. `shrouded_lens` / `fragment_coordinator` archetypes the V1 Hammerhead run concentrated on); early regime is where the optimizer has room to find genuinely novel builds *and* is a stricter Phase 7 kernel test under a tighter feasible set.
 
 ## Goal
 
@@ -33,9 +36,9 @@ Spend $N of compute and get $N of useful optimization data — i.e., **linear $�
 
 ## Why now (not deferred)
 
-1. **Phase 5D-post findings** — cloud CPU is 2.2-2.4× local per-instance throughput after the LWJGL XRandR warmup fix (benchmark in `experiments/cloud-benchmark-2026-04-18/`). The original "GPU required" blocker in `docs/specs/22-cloud-deployment.md` was a misdiagnosis; the actual bug was Xvfb's XRandR extension not populating its mode list until a client queries it.
+1. **Phase 5D-post findings** — cloud CPU is faster than local per-instance throughput after the LWJGL XRandR warmup fix (specific multiplier pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)). The original "GPU required" blocker in [../specs/22-cloud-deployment.md](../specs/22-cloud-deployment.md) was a misdiagnosis; the actual bug was Xvfb's XRandR extension not populating its mode list until a client queries it.
 
-2. **Phase 5E, 5F, Phase 7 all need scale.** Phase 5E Box-Cox validation wants ≥1000 builds per hull. Phase 5F regime-segmented exploration multiplies that by 4 regimes × tens of hulls. Phase 7 BoTorch GP validation needs cross-hull transfer data (30+ hulls). Running these on the workstation is ~8 hours per study, serial; on cloud it's 30 min per study, parallel.
+2. **Phase 5E, 5F, Phase 7 all need scale.** Phase 5E Box-Cox validation wants large per-hull build counts. Phase 5F regime-segmented exploration multiplies that across regimes and hulls. Phase 7 BoTorch GP validation needs cross-hull transfer data. Cloud parallelism is the only realistic path to those data volumes.
 
 3. **Optuna sampler ceiling.** TPE degrades above ~30 concurrent workers per study (`constant_liar` imputation collapses KDE to random sampling). Spending $1000 on one mega-study wastes 85% of the budget as random sampling. Federation into many smaller studies keeps each sampler in its efficient zone.
 
@@ -44,7 +47,7 @@ Spend $N of compute and get $N of useful optimization data — i.e., **linear $�
 ## Non-goals
 
 - Not a migration away from the workstation. Local runs remain the default for interactive work and for 1-2 worker debugging.
-- Not GPU cloud. CPU spot is 2.4× local throughput at $0.0011/matchup; GPU adds no throughput for LWJGL 2.x software-rendered 2D games.
+- Not GPU cloud. CPU spot is faster than local throughput at low $/matchup (specific magnitudes pending re-validation under V2); GPU adds no throughput for LWJGL 2.x software-rendered 2D games.
 - Not a multi-user platform. Designed for single-developer operator discipline, not team collaboration.
 - Not Phase 7 / 8 / 9 work. Cloud federation is the substrate; those phases bring new algorithms.
 
@@ -81,21 +84,19 @@ Rejected alternatives (still applicable for any future sampler work):
 
 ### §3 Provider abstraction (boto3 direct; Libcloud deferred)
 
-Two CPU providers are empirically validated: **AWS c7a.2xlarge spot** (shipped in Phase 6 MVP) and **Hetzner CCX33** (`HetznerProvider` stub until $500+ campaigns).
+Two CPU providers are evaluated: **AWS c7a.2xlarge spot** (shipped in Phase 6 MVP) and **Hetzner CCX33** (`HetznerProvider` stub until larger-scale campaigns). Specific $/matchup, preemption rates, and other empirical comparisons were measured under V1 sim and are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-Per the 2026-04-18 benchmarks:
+Qualitative provider verdicts (architecture-grade, unaffected by V1 invalidation):
 
-| Provider | $/matchup | Preemption | Setup | Pick when |
-|---|---|---|---|---|
-| **AWS c7a.2xlarge us-east-1+us-east-2 spot** | ~$0.00123 | ~3% with price-capacity-optimized | shipped `AWSProvider` (boto3 direct) | **default for Phase 6 MVP** — ample existing quota (640 spot vCPU/region × 2 regions), no multi-day ticket wait |
-| Hetzner CCX33 | **$0.00109** | none | `HetznerProvider` stubbed — implement at $500+ | $500+ campaigns where 13% cost savings matter; requires quota upgrade from default 10 VMs (1-2 business day ticket) |
-| GCP n2d-std-8 spot | ~$0.0005 | ~5% | not implemented | very large campaigns ($500+) where cost dominates |
+- **AWS c7a.2xlarge us-east-1+us-east-2 spot** — default for Phase 6 MVP. Ample existing quota (1,280 spot vCPU across us-east-1 + us-east-2, room for ~160 eight-vCPU instances), no multi-day ticket wait. Carries a small per-matchup premium over Hetzner.
+- **Hetzner CCX33** — `HetznerProvider` stubbed until larger-scale campaigns where the per-matchup cost advantage matters; requires quota upgrade from default 10 VMs (1-2 business day ticket).
+- **GCP n2d-std-8 spot** — not implemented. Potentially relevant for very large campaigns where cost dominates.
 
-**Why AWS primary at $85**: the original Hetzner-first framing optimized for lowest $/matchup, but at $85 the dominant operator cost is the 1-2 day wait for Hetzner's quota-upgrade ticket. The user's AWS account already has 1,792 spot vCPU across 4 US regions (640 each in us-east-1 / us-east-2, 256 each in us-west-1/2) — room for ~224 concurrent 8-vCPU spot instances with zero lead time. At $85 budget (covering AWS's 13% premium plus the $14.83 sampler benchmark), we trade ~$10 of cost for eliminating a multi-day external blocker. The trade inverts above $500 where the cost delta exceeds a human-day of engineering time.
+**Why AWS primary**: at small-budget scale the dominant operator cost is the multi-day wait for Hetzner's quota-upgrade ticket. AWS's existing quota means zero lead time. The trade inverts at larger scale where the per-matchup cost delta exceeds a human-day of engineering time.
 
 **Library choice: boto3 direct**, behind the `CloudProvider` ABC. Phase 6 ships AWS only; an Apache Libcloud wrapper can slot behind the ABC later without refactoring callers if cross-provider unification becomes valuable. Libcloud was considered but dropped from MVP — it's a unified-API abstraction with zero users while Hetzner is stubbed, and boto3 is fewer moving parts.
 
-**Skip entirely**: SkyPilot, dstack, Modal, Covalent (no Hetzner support — all are GPU/AI-focused); Ray `ray up` (100-LOC custom node_provider.py required for Hetzner); Kubernetes (overkill for single-operator bursts). Full rejected-alternatives chain in `experiments/cloud-benchmark-2026-04-18/SCALING.md`.
+**Skip entirely**: SkyPilot, dstack, Modal, Covalent (no Hetzner support — all are GPU/AI-focused); Ray `ray up` (100-LOC custom node_provider.py required for Hetzner); Kubernetes (overkill for single-operator bursts).
 
 ### §3.5 Availability and region strategy
 
@@ -112,7 +113,7 @@ Per the 2026-04-18 benchmarks:
 Either us-east-1 or us-east-2 alone can host the 96-VM target. **Default deployment spreads across us-east-1 + us-east-2** (48 VMs each) for two-region spot-pool diversity — mitigates correlated preemption if one region's c7a.2xlarge pool tightens.
 
 AWS failure modes are different from Hetzner:
-- **Spot preemption mid-run** (~3% with `price-capacity-optimized` + `CapacityRebalancing`) — handled by Redis visibility-timeout + idempotent `(study_id, trial_number, opponent_id)` keys (§7).
+- **Spot preemption mid-run** — kept low by `price-capacity-optimized` + `CapacityRebalancing`; handled at the application layer by Redis visibility-timeout + idempotent `(study_id, trial_number, opponent_id)` keys (§7). Specific preemption-rate measurement pending re-validation under V2.
 - **Spot-pool depletion at launch** — mitigated by EC2 Fleet with diversified instance-type list (`c7a.2xlarge` + `c7i.2xlarge` + `c7a.4xlarge` + `c7i.4xlarge`; the 4xlarge variants fit 4 JVMs per VM at the same per-matchup cost).
 - **AMIs are region-scoped** (unlike Hetzner global snapshots). Build the Packer AMI in us-east-1, `aws ec2 copy-image --source-region us-east-1 --source-image-id ami-... --region us-east-2` to replicate (~3-5 min, one-time).
 
@@ -122,13 +123,13 @@ AWS failure modes are different from Hetzner:
 3. Record per-region health signal in `probe_report.json`.
 4. Tear down.
 
-Catches AMI-copy errors and region-scoped cloud-init divergences before the campaign commits $60.79 of spend.
+Catches AMI-copy errors and region-scoped cloud-init divergences before the campaign commits the prep-run spend.
 
 **Graceful degradation**: if day-of spot-pool depletion limits provisioning to 48-60 VMs instead of 96, the campaign manager allocates remaining workers round-robin across studies and accepts ~2× wall-clock. It does **not** reduce per-study budget (changes the experimental design) and it does **not** abort. Partial fleet is a latency problem, not a correctness problem. `min_workers_to_start` default 48 is the hard floor; below that the manager waits or aborts.
 
 ---
 
-**Hetzner (documented fallback for $500+ scale-up).** CCX33 capacity is per-datacenter; Hetzner does not publish inventory. Validated during the 2026-04-18 Phase 5E run (fell back `ash` → `hil` on `resource_unavailable`):
+**Hetzner (documented fallback for $500+ scale-up).** CCX33 capacity is per-datacenter; Hetzner does not publish inventory. Operational characteristics observed during pre-V2 Hetzner runs (fell back `ash` → `hil` on `resource_unavailable`):
 
 - Bursts of 20-50 CCX33 per location are reliable.
 - 100+ per location intermittently fails with `resource_unavailable` at provision time.
@@ -207,11 +208,11 @@ data/campaigns/<campaign-name>/
     └── campaign.log                   (manager daemon log)
 ```
 
-### §5 Pre-baked provider images (in scope from day 1, even at $85)
+### §5 Pre-baked provider images (in scope from day 1)
 
-Bootstrap cost on cold cloud-init: ~5 min per worker (apt + rsync 551 MB game + uv sync + XRandR warmup). Packer pre-bake drops this to ~45s on AWS, ~30s on Hetzner.
+Bootstrap cost on cold cloud-init: several minutes per worker (apt + rsync ~550 MB game + uv sync + XRandR warmup). Packer pre-bake drops this to under a minute. Specific seconds-figures pending re-validation under V2.
 
-**Dollar savings at $85 / 96 VMs are small** (~$1) — but that is the wrong framing. The load-bearing arguments that put Packer in scope from day 1:
+**Dollar savings at small scale are small** — but that is the wrong framing. The load-bearing arguments that put Packer in scope from day 1:
 
 1. **Tail-latency reduction**: at 96 VMs with independent 5-min cold starts, the *last* VM to boot gates campaign start — and burst provisioning amplifies transient apt / download failures into correlated retries. Packer's deterministic ~45s boot collapses this tail.
 2. **Reliability at burst**: bulk 429s from apt repos, PyPI, or the game-data rsync source are a real failure mode at 50+ concurrent cloud-inits. Packer removes every one of those external dependencies from the hot path.
@@ -223,7 +224,7 @@ Bootstrap cost on cold cloud-init: ~5 min per worker (apt + rsync 551 MB game + 
 - **AWS (primary)**: `amazon-ebs` Packer builder. Output: private AMI, referenced in Launch Template or EC2 Fleet config. Cold-start: ~45s. AMIs are **region-scoped** — build in us-east-1, then `aws ec2 copy-image --source-region us-east-1 --source-image-id ami-... --region us-east-2` (~3-5 min, one-time; repeat on every Packer rebuild). Note: the copy produces a different AMI ID in the target region; both IDs are recorded in the campaign's `ami_ids_by_region:` YAML field.
 - **Hetzner (documented fallback)**: `packer-plugin-hcloud` builder. Output: a private snapshot, reference by ID in `hcloud server create --image=<id>`. Snapshots are **globally scoped** (unlike AWS AMIs) — one build, usable in any location.
 
-**Multi-region test-boot** (AWS): the validation probe VMs from §3.5 double as image validation — one VM per target region boots from that region's AMI ID and runs the post-build smoke test (`starsector.sh` launch + `_shape_fitness` import). Catches region-scoped cloud-init divergences or AMI-copy corruption before the campaign commits $60.79.
+**Multi-region test-boot** (AWS): the validation probe VMs from §3.5 double as image validation — one VM per target region boots from that region's AMI ID and runs the post-build smoke test (`starsector.sh` launch + `_shape_fitness` import). Catches region-scoped cloud-init divergences or AMI-copy corruption before the campaign commits the prep-run spend.
 
 **Skip warm pools** at $1000 scale (EBS costs ~$16/mo for 50 stopped instances — not worth it for weekly bursts). Worth it at $10k+ scale.
 
@@ -258,40 +259,30 @@ Preemption scenarios:
 - **Worker dies after matchup, before POST**: same flow. Result is computed twice; only one POST ever succeeds (409 on the second).
 - **Orchestrator dies**: study state is on orchestrator disk. On restart, `load_if_exists=True` resumes. Workers reconnect via Redis (queue survives).
 
-Preemption rate targets:
-- AWS c7a.2xlarge us-east-2 with price-capacity-optimized + Capacity Rebalancing: ~3%.
-- Hetzner CCX33: 0% (no spot tier; stubbed-until-$500+).
-
-Re-run overhead <10% of budget. Acceptable.
+Preemption rate targets are kept low by `price-capacity-optimized` allocation + Capacity Rebalancing on AWS, and Hetzner has no spot tier (no preemption). Specific preemption-rate measurements pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The application-layer protocol (Redis visibility-timeout + idempotent `matchup_id` dedup) bounds re-run overhead to a small fraction of budget regardless.
 
 ### §8 Scaling targets
 
-AWS c7a.2xlarge spot at ~$0.15/hr, 2 JVMs per VM (3-cores-per-JVM sizing rule), per-VM throughput ~122 matchups/hr → $0.00123/matchup. Budget tiers:
+The cost model is parameterized by AWS c7a.2xlarge spot price ($0.15/hr at the Phase 6 ship date), JVMs per VM, and observed per-VM throughput. Specific $/matchup, total-matchup-per-budget figures, and wall-clock estimates are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The structural budget tiers are:
 
-**$85 (Phase 6 shakedown + sampler benchmark + Phase 7 prep, current target)** — all figures computed by `experiments/phase6-planning/cost_model.py`; full breakdown in the Budget staging section at top.
-- Sampler benchmark: **2 hulls × 3 samplers × 1 hr ≈ $14.83** (precedes prep; selects the best sampler).
-- Prep campaign: **8 hulls × `early` × 1 seed × 600 trials = 48,000 matchups ≈ $60.79** (incl 3% preemption).
-- Smoke + probe + slack: $1.35 + $5.00.
-- Wall-clock: ~1 hr benchmark + ~4.1 hr prep (parallel across 8 studies), across 1-2 calendar days.
-- Binding constraint: TPE saturates at 24 workers per study (§1) → 12 VMs/study cap; adding more VMs past 96 helps nothing until there are more studies.
-- Why early regime: late/endgame recovers community meta; early is the zone where novel-build discovery is load-bearing and also the tighter Phase 7 kernel test (tighter feasible set → stronger transfer claim). Endgame follow-up is ~$15-20 supplementary if Phase 7 development reveals a gap.
+**Phase 6 shakedown + Phase 7 prep (current target)** — line items in the Budget staging section at top: validation probe + pipeline smoke + prep campaign (8 hulls × `early` × 1 seed × 600 trials = 48,000 matchups) + slack. Wall-clock parallel across 8 studies. Binding constraint: TPE saturates at 24 workers per study (§1) → 12 VMs/study cap; adding more VMs past the per-study cap × N-studies helps nothing until there are more studies. Why early regime: late/endgame recovers community meta; early is the zone where novel-build discovery is load-bearing and also the tighter Phase 7 kernel test.
 
-**$500+ (first real Phase 7 validation campaign, future)** — ~400,000 matchups on AWS / ~460,000 on Hetzner. This is the threshold where Hetzner's ~13% cost advantage (~$60 saved at $500) exceeds the human-day of engineering overhead to file the Hetzner quota-upgrade ticket and switch provider. Re-evaluate: AWS for latency, Hetzner for total spend.
+**Larger Phase 7 validation campaign (future)** — at the threshold where Hetzner's per-matchup cost advantage exceeds the human-day of engineering overhead to file the quota-upgrade ticket and switch provider, re-evaluate: AWS for latency, Hetzner for total spend.
 
-**$1000 (full Phase 5F regime sweep, future)** — ~490,000 matchups on Hetzner ≈ ~49,000 builds. Allocation modes:
+**Full Phase 5F regime sweep (future, larger budget)** — allocation modes:
 - **Mode A (go wide)**: 200 hulls × 1 regime × 250 builds → broad catalog coverage.
 - **Mode B (go deep + regime)**: 40 hulls × 4 regimes × 300 builds → comprehensive for priority hulls.
 - **Mode C (ensemble)**: 15 hulls × 4 regimes × 5 seeds × 150 builds → robust uncertainty estimates.
 
-Per-study sweet spot is 500-1500 builds (diminishing returns above 1500). Total studies at $1000: **50-100**.
+Per-study sweet spot is 500-1500 builds (diminishing returns above 1500).
 
 ### §9 Diminishing-returns auto-termination
 
 Per-study plateau detector: best-fitness trace binned into 50-trial windows. If the last 3 bins all have slope < 0.01 Δfitness per trial, study terminates early. Releases workers for reallocation.
 
-Calibration from existing `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl`: plateau typically emerges around trial 800-1200 for Hammerhead-default search-space. Budget 1500 gives most studies enough to plateau naturally.
+The plateau-emergence trial range for Hammerhead-default search-space was characterised on V1 logs and is pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The 1500-trial per-study budget gives most studies enough room to plateau naturally regardless of where the plateau emerges.
 
-**Rejected**: fixed per-study budget. Wastes spend on studies that converged at 500 trials and burns ceiling on studies that are still improving at 1500.
+**Rejected**: fixed per-study budget. Wastes spend on studies that converged early and burns ceiling on studies that are still improving.
 
 ### §10 Sampler benchmark — SKIPPED 2026-04-19
 
@@ -306,9 +297,9 @@ The aborted benchmark attempt surfaced three concurrent-dispatch correctness bug
 - **EB shrinkage guard race in `_apply_eb_shrinkage`**. Guard read `score_matrix.n_builds` (trials with ≥1 matchup result) whereas the OLS fit consumes `_completed_records` (fully-finalized trials). Under 32 concurrent slots the guard passes while `len(_completed_records) == 1`, and `eb_shrinkage` raises `ValueError: n >= 3 builds, got 1`. Fix: guard on `len(_completed_records)`. Regression: the existing 2-slot smoke never triggered this; Phase 7 prep at 24 slots/study would have.
 - **study_id / eval_log_path collision**. `study_id = f"{hull}__{regime}__seed{seed}"` collided across sampler variants with the same (hull, regime, seed), and the shared `data/evaluation_log.jsonl` had no `sampler` field so per-sampler attribution was impossible. Fix: study_id now includes sampler (`f"{hull}__{regime}__{sampler}__seed{seed}"`) and `scripts/run_optimizer.py` writes per-study directories (`data/logs/<study_id>/evaluation_log.jsonl`) uniformly for local and cloud runs. Regression: `tests/test_run_optimizer_cloud.py`.
 
-Budget: the aborted benchmark consumed < $0.40 of live spend across two partial provisioning attempts (instances ran for < 10 min before teardown). The $14.83 sampler-benchmark line item returns to the Phase 6 slack pool.
+Budget: the aborted benchmark consumed under one dollar of live spend across two partial provisioning attempts (instances ran briefly before teardown). The sampler-benchmark line item returns to the Phase 6 slack pool.
 
-Additional concurrency hazards identified during the audit pass but deferred (unreachable in current code path, or not observed in practice) are captured in `docs/reference/phase6-deferred-audit-findings-2026-04-19.md`. That doc also proposes a **Tier-3 concurrency shakedown** (4 studies × 16 slots/study ≈ $1) as a gate between Tier-2.5 smoke and Phase 7 prep — the session's four fixes would all have been caught by such a stage without the prep-scale cost exposure. Revisit when Phase 7 prep is scheduled.
+Additional concurrency hazards identified during the audit pass but deferred (unreachable in current code path, or not observed in practice) are captured in [../reports/2026-04-19-phase6-deferred-audit.md](../reports/2026-04-19-phase6-deferred-audit.md). That doc also proposes a **Tier-3 concurrency shakedown** as a gate between Tier-2.5 smoke and Phase 7 prep — the session's four fixes would all have been caught by such a stage without the prep-scale cost exposure. Revisit when Phase 7 prep is scheduled.
 
 ### §11 Tier-2 pipeline smoke gate
 
@@ -332,7 +323,7 @@ Additional concurrency hazards identified during the audit pass but deferred (un
 
 **Tier-2.5 multi-worker variant (post-Tier-2.0 pass)**: same code path, `examples/smoke-campaign-multiworker.yaml`. `workers_per_study: 3`, `matchup_slots_per_worker: 2` (default), `budget_per_study: 20`, `max_concurrent_workers: 3`, `budget_usd: 3.0`. Exercises the **total concurrency path** (pool semaphore sized to `workers × matchup_slots_per_worker = 6`), the threaded worker consumer loop (each VM drives 2 concurrent matchups), janitor re-queue under concurrent dispatch, POST dedup under duplicate results, backpressure. Additional gate: worker `load_avg_1min` (from the heartbeat hash) lands in `[3, 8]` — under-load or over-subscription indicates the fleet shape doesn't match `matchup_slots_per_worker`. Inspect via `redis-cli HGETALL worker:<project_tag>:<worker_id>:heartbeat`.
 
-**Expected cost**: Tier-2.0 ~$0.30; Tier-2.5 ~$1.00. Fits the $1.20 "Pipeline smoke" line item in §Budget staging.
+**Expected cost**: Tier-2.0 + Tier-2.5 fit the "Pipeline smoke" line item in §Budget staging. Specific dollar figures pending re-validation under V2.
 
 ## Day-1 ordered actions
 
@@ -340,12 +331,12 @@ Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket
 
 1. **Build Packer AMI in us-east-1** (~30 min). Bake the combat harness, game files, `uv sync`, and the XRandR warmup fix into a private AMI. Tested via a post-build launch hook.
 2. **`aws ec2 copy-image` to us-east-2** (~3-5 min, one-time). AWS AMIs are region-scoped; replicate to the second target region. Re-run on every Packer rebuild.
-3. **Validation probe** (`scripts/cloud/probe.sh` + `scripts/cloud/probe.py`). Tier 1: exercises `AWSProvider.provision_fleet` (LaunchTemplate + SecurityGroup creation + instance launch + two-tag propagation) + `terminate_fleet` + `final_audit.sh`. Scope is fleet lifecycle only — **does not** SSH in, join Tailscale, hit Redis, or run a matchup (those are the pipeline smoke's job, Tier 2). Instance count is whatever `max_concurrent_workers // len(regions)` comes out to in the probe YAML. Cost: ~$0.05 for two c7a.2xlarge spot instances × 3-5 min wall-clock. Run 24h before any paid campaign.
-4. **Campaign manager + orchestrator** (~500 LOC, the main Phase 6 implementation work). EC2 Fleet with `price-capacity-optimized` + CapacityRebalancing, Redis-backed study queues, graceful degradation. See Deliverables.
-5. **Pipeline smoke** (~2 hr, ~$1.20): 1 study × 8 workers × 1 region. Confirms the full pipeline (orchestrator ↔ worker Redis BRPOPLPUSH + Flask POST, janitor re-queue, cost ledger, three-layer teardown, preemption replay).
-6. **Sampler benchmark** (~1 hr, ~$14.83): 2 hulls × 3 samplers per §10. Writes REPORT.md with the chosen `sampler:` value.
-7. **Run Phase 7 prep campaign** (~4.1 hr at 96 VMs; ~$60.79) using the benchmark-selected sampler.
-8. **Final audit + Phase 7 handoff**: `final_audit.sh`, archive campaign output under `experiments/phase7-prep-early-2026-0X/`, write short REPORT.md for Phase 7 developer consumption.
+3. **Validation probe** (`scripts/cloud/probe.sh` + `scripts/cloud/probe.py`). Tier 1: exercises `AWSProvider.provision_fleet` (LaunchTemplate + SecurityGroup creation + instance launch + two-tag propagation) + `terminate_fleet` + `final_audit.sh`. Scope is fleet lifecycle only — **does not** SSH in, join Tailscale, hit Redis, or run a matchup (those are the pipeline smoke's job, Tier 2). Cost is small (a couple of c7a.2xlarge spot instances for a few minutes); specific $-figure pending re-validation under V2. Run before any paid campaign.
+4. **Campaign manager + orchestrator** — the main Phase 6 implementation work. EC2 Fleet with `price-capacity-optimized` + CapacityRebalancing, Redis-backed study queues, graceful degradation. See Deliverables.
+5. **Pipeline smoke**: 1 study × ~8 workers × 1 region. Confirms the full pipeline (orchestrator ↔ worker Redis BRPOPLPUSH + Flask POST, janitor re-queue, cost ledger, three-layer teardown, preemption replay).
+6. **Sampler benchmark** — SKIPPED 2026-04-19 (see §10).
+7. **Run Phase 7 prep campaign** at the target VM count using TPE.
+8. **Final audit + Phase 7 handoff**: `final_audit.sh`, archive campaign output, write short REPORT.md for Phase 7 developer consumption.
 
 ## Dependencies
 
@@ -396,19 +387,19 @@ Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket
 
 8. **`.claude/skills/cloud-worker-ops.md`** — skill / SOP for running campaigns. Invoked by future Claude sessions when the user asks to run or debug cloud campaigns. Includes: preflight checks, launch commands, monitoring, cost ceiling discipline, teardown verification, failure recovery recipes.
 
-9. **`experiments/phase6-planning/cost_model.py`** — source-of-truth cost model. All dollar figures in this doc are computed from pinned constants in that file (AWS/Hetzner pricing, per-VM throughput, TPE saturation, JVM sizing, AWS quota). Rerun after any pricing / throughput update.
+9. **Cost model script** — source-of-truth cost model. Dollar figures in cloud-campaign discussion derive from pinned constants in that file (AWS/Hetzner pricing, per-VM throughput, TPE saturation, JVM sizing, AWS quota). Rerun after any pricing / throughput update. Specific magnitudes pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-10. **`experiments/cloud-campaign-validation/`** — validation runs staged to the $85 budget (script-verified):
-   - **Pipeline smoke** (~$1.20; 1 study × 8 workers × 2 hr): validates orchestrator ↔ worker Redis pipeline, cost ledger, teardown, spot-preemption replay. Gate before the benchmark.
-   - ~~**Sampler benchmark** (~$14.83; 2 hulls × 3 samplers × 1 hr)~~ — SKIPPED 2026-04-19. See §10. Prep uses TPE directly.
-   - **Phase 7 prep campaign** (~$60.79; 8 hulls × `early` × 1 seed × ~600 trials, ~4.1 hr at 96 VMs across us-east-1 + us-east-2): produces the cross-hull early-regime data Phase 7's attribute/mode kernels need. Archived to `experiments/phase7-prep-early-2026-0X/` with a REPORT.md summarizing per-hull convergence + mode clustering signal.
-   - (Future, $500+ budget) regime sweep on Hetzner where the ~13% cost advantage offsets the quota-ticket overhead.
+10. **Validation runs**:
+   - **Pipeline smoke**: validates orchestrator ↔ worker Redis pipeline, cost ledger, teardown, spot-preemption replay. Gate before the benchmark.
+   - **Sampler benchmark** — SKIPPED 2026-04-19 (see §10). Prep uses TPE directly.
+   - **Phase 7 prep campaign**: 8 hulls × `early` × 1 seed × ~600 trials at the target VM count across us-east-1 + us-east-2. Produces the cross-hull early-regime data Phase 7's attribute/mode kernels need.
+   - (Future, larger budget) regime sweep on Hetzner where the per-matchup cost advantage offsets the quota-ticket overhead.
 
 ## Testing
 
 - **Unit**: `CampaignManager` plateau detector (synthetic traces), cost ledger monotonicity, `CloudProvider` mock passes a reference scenario.
-- **Integration**: $10 smoke test must complete within 1 hour and produce a populated `study.db` with ≥100 trials.
-- **Cost-cap test**: inject a fake $100/hr worker into ledger; manager must terminate within 1 minute of crossing budget.
+- **Integration**: smoke campaign must complete within bounded wall-clock and produce a populated `study.db` with the expected trial count.
+- **Cost-cap test**: inject a fake high-rate worker into ledger; manager must terminate within bounded time of crossing budget.
 - **Preemption test** (AWS only): deliberately terminate a worker mid-study; another worker should pick up the same trial within 2 minutes and complete it.
 - **Teardown audit**: after any campaign, `final_audit.sh` must report zero tagged resources.
 
@@ -428,11 +419,10 @@ Ordered by lead time. The AWS-primary direction removes the Hetzner quota-ticket
 
 ## References
 
-- Benchmark validating CPU-cloud viability + XRandR fix: `experiments/cloud-benchmark-2026-04-18/RESULTS.md`
-- Scaling research (providers, Optuna at scale, library comparison): `experiments/cloud-benchmark-2026-04-18/SCALING.md`
-- Cloud deployment spec (updated 2026-04-18): `docs/specs/22-cloud-deployment.md`
+- Cloud deployment spec: [../specs/22-cloud-deployment.md](../specs/22-cloud-deployment.md)
+- V1 invalidation that retired the original `experiments/cloud-benchmark-2026-04-18/` and `experiments/phase6-planning/` directories: [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)
 - Optuna 4.2 gRPC storage proxy (300-worker benchmark): https://medium.com/optuna/distributed-optimization-in-optuna-and-grpc-storage-proxy-08db83f1d608
 - Optuna JournalStorage + GrpcProxy broken (avoid this combo): https://github.com/optuna/optuna/issues/6084
-- boto3 (shipped cloud SDK): https://boto3.amazonaws.com/ — Apache Libcloud deferred until cross-provider unification ($500+ scale)
+- boto3 (shipped cloud SDK): https://boto3.amazonaws.com/ — Apache Libcloud deferred until cross-provider unification at scale-up
 - Packer Hetzner plugin: https://developer.hashicorp.com/packer/integrations/hetznercloud/hcloud
 - EC2 price-capacity-optimized allocation: https://aws.amazon.com/blogs/compute/introducing-price-capacity-optimized-allocation-strategy-for-ec2-spot-instances/

@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Damage Tracker Specification
 
 Implements `DamageListener` to accumulate per-ship damage dealt and taken during combat. Defined in `combat-harness/src/main/java/starsector/combatharness/DamageTracker.java`.

@@ -1,4 +1,7 @@
 ---
+type: skill
+status: shipped
+last-validated: unvalidated
 name: Cloud Worker Operations
 description: SOP for launching, monitoring, and tearing down multi-worker cloud campaigns for Starsector optimization. Invoke when the user asks to run optimization in the cloud, spin up many workers, start a campaign, spend a budget on experiments, or debug cloud-worker issues.
 disable-model-invocation: true
@@ -6,7 +9,7 @@ disable-model-invocation: true
 
 # Cloud Worker Operations SOP
 
-Use this skill when the user asks you to run or debug a cloud campaign — anything involving multiple Starsector workers outside the local workstation. Built on the Phase 6 Cloud Worker Federation design (`docs/reference/phase6-cloud-worker-federation.md`). Empirical throughput numbers: `experiments/cloud-benchmark-2026-04-18/`.
+Use this skill when the user asks you to run or debug a cloud campaign — anything involving multiple Starsector workers outside the local workstation. Built on the Phase 6 Cloud Worker Federation design (`docs/reference/phase6-cloud-worker-federation.md`). Empirical throughput numbers are pending re-validation under the V2 loadout fix; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ## The three rules of money
 
@@ -18,12 +21,12 @@ Use this skill when the user asks you to run or debug a cloud campaign — anyth
 
 | Situation | Pick |
 |---|---|
-| **$85-$200 campaign (Phase 6 MVP + Phase 7 prep)** | **AWS c7a.2xlarge spot us-east-1 + us-east-2**. Account quota: 640 spot vCPU per region = 80 VMs each with zero lead time. ~$0.15/hr; ~3% preemption under `price-capacity-optimized` + `CapacityRebalancing`. All dollar figures come from `experiments/phase6-planning/cost_model.py` — rerun after pricing changes rather than hand-editing. |
-| $500+ campaign (Hetzner ~13% savings justify quota ticket) | **Hetzner CCX33** — `HetznerProvider` is stubbed until this threshold; implementing it means filing a quota ticket (1-2 business days) then writing the hcloud-python wrapper per `docs/specs/22-cloud-deployment.md`. |
-| GPU cloud | **Never.** CPU is 2.4× local per-instance after the XRandR fix; GPU adds no throughput and costs more. Cite `experiments/cloud-benchmark-2026-04-18/` and push back. |
+| **Phase 6 MVP + Phase 7 prep budget tier** | **AWS c7a.2xlarge spot us-east-1 + us-east-2**. Account quota: 640 spot vCPU per region = 80 VMs each with zero lead time. Pricing under `price-capacity-optimized` + `CapacityRebalancing`. Concrete $-figures (campaign budget, hourly rate, per-matchup cost, preemption rate) live in dated reports — pending re-validation under V2; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). |
+| Larger-budget campaign where Hetzner's per-matchup advantage justifies a quota-ticket lead time | **Hetzner CCX33** — `HetznerProvider` is stubbed until this threshold; implementing it means filing a quota ticket (1-2 business days) then writing the hcloud-python wrapper per `docs/specs/22-cloud-deployment.md`. |
+| GPU cloud | **Never.** CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU adds no throughput and costs more. Quantitative speedup pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). |
 | ARM / Graviton | **Never.** LWJGL 2.9.3 is x86_64-only. |
 
-**Why AWS primary at small budget**: at $85-$200 the dominant operator cost is *lead time*, not per-matchup price. AWS already has 1,792 spot vCPU across 4 US regions; Hetzner's default 10-VM project cap requires a multi-day quota ticket. The ~13% AWS premium at $85 is ~$10 — cheaper than a human-day of waiting. Above $500, the absolute delta (~$60+) exceeds a human-day of engineering, and Hetzner becomes the better pick.
+**Why AWS primary at small budget**: at the Phase 6 MVP scale the dominant operator cost is *lead time*, not per-matchup price. AWS already has 1,792 spot vCPU across 4 US regions; Hetzner's default 10-VM project cap requires a multi-day quota ticket. The AWS premium at small budgets is small relative to a human-day of waiting. At larger spend, the absolute Hetzner-vs-AWS delta begins to exceed a human-day of engineering, and Hetzner becomes the better pick. The cost-tier crossover point and per-matchup deltas are pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ## Initial workstation setup (one-time)
 
@@ -166,7 +169,7 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
     scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
     scripts/cloud/final_audit.sh smoke   # must exit 0
     ```
-    Expected gate: launch exits 0 + ledger.jsonl has ≥1 `worker_heartbeat` + Optuna study SQLite has 1 `TrialState.COMPLETE` (~$0.30, < 10 min wall-clock).
+    Expected gate: launch exits 0 + ledger.jsonl has ≥1 `worker_heartbeat` + Optuna study SQLite has 1 `TrialState.COMPLETE` (< 10 min wall-clock; smoke cost is sub-dollar by design — exact figure pending re-validation, see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md)).
 13. **Game prefs file exists** at `scripts/cloud/packer/prefs.xml` (gitignored, baked into the AMI by Packer at the path `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml`). Format + sourcing recipes in "Initial workstation setup → Game prefs.xml" above. The file is checked at AMI bake, not at campaign launch — so its absence surfaces only when `bake_image.sh` fails or, worse, succeeds with a stale file and the worker hangs at the launcher's first-run / activation dialog.
 14. **SSH key** present; name must match `ssh_key_name:` in the YAML. The campaign-YAML key only registers a public key in AWS (its private side is unrecoverable from AWS). For interactive worker debugging, use the optional `STARSECTOR_DEBUG_SSH_PUBKEY` mechanism — generate `~/.ssh/starsector-debug` (ed25519, no passphrase), `export STARSECTOR_DEBUG_SSH_PUBKEY="$(cat ~/.ssh/starsector-debug.pub)"` before `launch_campaign.sh`, and SSH with `ssh -i ~/.ssh/starsector-debug ubuntu@<worker-tailnet-ip>`. **`tailscale up --ssh` is intentionally NOT enabled** in user-data (smoke #8, 2026-05-09) — it hijacks port 22 for tailscaled's identity-based SSH server, gates connections via the tailnet ACL, and a default-permissive personal tailnet still silent-denies SSH; enabling it would shadow the regular sshd. The `STARSECTOR_DEBUG_SSH_PUBKEY` injection is the only operator-SSH path until ACL-as-code lands (Phase 7.5 R2).
 15. **LWJGL XRandR fix in code**: `grep 'xrandr --query' src/starsector_optimizer/instance_manager.py` returns a match in `_start_xvfb`. Without it, workers crash with `ArrayIndexOutOfBoundsException: Index 0`.
@@ -217,10 +220,10 @@ scripts/cloud/bake_image.sh
 TAILSCALE_AUTHKEY=tskey-auth-placeholder \
   uv run python -m starsector_optimizer.campaign --dry-run <campaign.yaml>
 
-# 3. Tier-1 validation probe ($0.05)
+# 3. Tier-1 validation probe (sub-dollar, design-target ~$0.05; pending re-validation)
 scripts/cloud/probe.sh examples/probe-campaign.yaml
 
-# 4. Tier-2 pipeline smoke (~$0.30) — SAME code path as prep, tiny study
+# 4. Tier-2 pipeline smoke (sub-dollar, design-target ~$0.30; pending re-validation) — SAME code path as prep, tiny study
 scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
 
 # 5. Real launch (prints teardown command as first line)
@@ -431,7 +434,7 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 
 - **"Let's run it overnight and see"** without a budget cap. No — set `budget_usd` explicitly first. A misconfig can burn $500 overnight.
 - **"Skip the baked image, just use cloud-init each time"**. Not supported. Packer bake is mandatory — cloud-init bulk apt/PyPI fails under 50+ concurrent cold starts.
-- **"GPU cloud for speed"**. CPU is 2.4× local per-instance; GPU doesn't help this workload.
+- **"GPU cloud for speed"**. CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU doesn't help this workload. Quantitative speedup pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
 - **"One giant study with 200 workers"**. TPE saturates above 24; 200-worker mega-study wastes 85% of budget as random. Federate into ≤24-worker studies per `(hull, regime, seed)`.
 - **"PostgreSQL for Optuna storage"**. Not needed — each study runs its own SQLite locally in a subprocess on the orchestrator.
 - **"Let's try SkyPilot / Ray / Modal / Fargate"**. Already rejected in the design — see `docs/reference/phase6-cloud-worker-federation.md` §rejected alternatives.
@@ -441,7 +444,7 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 
 - **Design doc**: `docs/reference/phase6-cloud-worker-federation.md`
 - **Cloud deployment spec**: `docs/specs/22-cloud-deployment.md`
-- **Empirical validation**: `experiments/cloud-benchmark-2026-04-18/`
-- **Cost model (source of truth for dollar figures)**: `experiments/phase6-planning/cost_model.py`
+- **Empirical validation**: pending re-validation under V2 loadout fix; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). Re-validation reports as they land are tracked in [../../docs/reports/INDEX.md](../../docs/reports/INDEX.md).
+- **Cost model**: pre-V1-invalidation `experiments/phase6-planning/cost_model.py` was deleted alongside the rest of the V1 experiment artefacts; the next cost model lands as part of V2 re-validation.
 - **Scripts**: `scripts/cloud/{devenv-up,devenv-down,launch_campaign,status,teardown,final_audit,probe,bake_image}.sh` + `scripts/cloud/packer/aws.pkr.hcl`
 - **LWJGL XRandR fix**: `src/starsector_optimizer/instance_manager.py::_start_xvfb`

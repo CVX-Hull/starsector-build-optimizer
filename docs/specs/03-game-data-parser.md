@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Game Data Parser Specification
 
 Parses Starsector game data files into model objects. Defined in `src/starsector_optimizer/parser.py`.

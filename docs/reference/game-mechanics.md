@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Starsector Combat Mechanics and Ship Fitting
 
 This document covers every aspect of Starsector's combat system relevant to build optimization. Understanding these mechanics is essential for designing the heuristic scorer, interpreting simulation results, and defining meaningful behavior descriptors for quality-diversity search.

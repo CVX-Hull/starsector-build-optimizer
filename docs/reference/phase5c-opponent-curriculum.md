@@ -1,20 +1,28 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 5C — Opponent Curriculum
 
-> **Status**: Shipped in `src/starsector_optimizer/optimizer.py` and `src/starsector_optimizer/deconfounding.py`. Current design documented in `docs/specs/24-optimizer.md` and `docs/specs/28-deconfounding.md`.
+> **Status**: Shipped in `src/starsector_optimizer/optimizer.py` and `src/starsector_optimizer/deconfounding.py`. Current design documented in [../specs/24-optimizer.md](../specs/24-optimizer.md) and [../specs/28-deconfounding.md](../specs/28-deconfounding.md).
+>
+> **Empirical-claims status (2026-05-10):** All overnight Hammerhead measurements in this document (pruning rates, ρ values, percent-concentration on rare-faction hullmods) are pending re-validation under V2. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Design rationale and rejected-alternative chain are unaffected.
 
 Design and research log for how opponent subsets are selected per trial in the Starsector ship-build optimizer. The shipped design is **anchor-first ordering + incumbent overlap + fixed pre-burn-in opponent set**, backed by TWFE decomposition (Phase 5A). This document records the research trail and the alternatives considered and rejected.
 
-Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline; Phase 5A handles fitness aggregation (TWFE decomposition), Phase 5B handles pruning (WilcoxonPruner + ASHA), Phase 5C (this doc) handles *which opponents each trial faces*, Phase 5D replaces the scalar A2 control variate with EB shrinkage of α̂ toward a heuristic-predicted prior, Phase 5E revises the fitness-shaping post-processor. See `docs/reference/implementation-roadmap.md` for the full phase status.
+Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline; Phase 5A handles fitness aggregation (TWFE decomposition), Phase 5B handles pruning (WilcoxonPruner + ASHA), Phase 5C (this doc) handles *which opponents each trial faces*, Phase 5D replaces the scalar A2 control variate with EB shrinkage of α̂ toward a heuristic-predicted prior, Phase 5E revises the fitness-shaping post-processor. See [implementation-roadmap.md](implementation-roadmap.md) for the full phase status.
 
 ---
 
 ## 1. Problem
 
-At ~10 active opponents per trial against a pool of ~50, random selection produced three measurable pathologies in the first Hammerhead overnight run (63 trials, `experiments/hammerhead-overnight-2026-04-13/`):
+At ~10 active opponents per trial against a pool of ~50, random selection produced three pathologies observed qualitatively in the first Hammerhead overnight run (the experiment directory is documented in [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md); specific counts and rates are pending re-validation):
 
-1. **Pool bias**: alphabetical selection concentrated active opponents on freighters and light carriers, ignoring the combat destroyers the optimizer most needed to train against. Only 10/54 destroyer variants seen.
+1. **Pool bias**: alphabetical selection concentrated active opponents on freighters and light carriers, ignoring the combat destroyers the optimizer most needed to train against.
 2. **Equal opponent weighting**: beating a trivial freighter contributed the same raw score as beating a peer combat destroyer, making cross-build comparability poor.
-3. **Poor pruning signal**: random opponent ordering left the WilcoxonPruner starved of discriminative paired-comparison data until late rungs. Pruning rate 11%.
+3. **Poor pruning signal**: random opponent ordering left the WilcoxonPruner starved of discriminative paired-comparison data until late rungs.
 
 The goal of Phase 5C is to produce opponent subsets that (a) support TWFE identification of build quality α and opponent difficulty β, (b) give the Wilcoxon pruner stable step IDs for paired comparison, and (c) concentrate evaluation budget on informative matchups — without encoding a human prior about what "informative" means.
 
@@ -40,9 +48,9 @@ Total set size is bounded by `active_opponents` in `OptimizerConfig`.
 
 Phase 5C does not itself produce a fitness score; it decides which cells `(build_i, opponent_j)` get observed. TWFE decomposition (Phase 5A, `deconfounding.py:twfe_decompose`) then estimates build quality α from the accumulated `score_matrix`, with opponent difficulty β absorbed as a fixed effect. The curriculum's job is to give TWFE a well-connected observation graph — which is exactly what the three invariants achieve.
 
-Validated effects (from `experiments/hammerhead-twfe-2026-04-13/`, 900 trials, 2026-04-17):
-- Pruning rate rose from 11% baseline to 15% (moderate gain; bounded by Wilcoxon's requirement of paired data).
-- Cross-subset comparability: TWFE α identifies the true ranking better than z-scored mean fitness in simulation (`ρ ≈ 0.775` vs `0.525`, see `experiments/phase5b-curriculum-simulation/`).
+Validated effects (qualitative, magnitudes pending re-validation under V2 — see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)):
+- Pruning rate rises modestly above the random-selection baseline (bounded by Wilcoxon's requirement of paired data).
+- Cross-subset comparability: TWFE α identifies the true ranking better than z-scored mean fitness in synthetic simulation.
 - Stable Wilcoxon step IDs confirmed by trace analysis of the intermediate-value table in the study DB.
 
 ---
@@ -68,7 +76,7 @@ For the TWFE-deconfounding research that is the estimator *downstream* of 5C's o
 
 **What it was.** Maintain running Elo / TrueSkill ratings for each opponent; weight per-matchup fitness by a softmax of opponent Elo (low temperature → hard opponents dominate).
 
-**Why rejected.** Simulation (`experiments/phase5b-curriculum-simulation/curriculum_simulation.py`) showed Elo correlation with true opponent difficulty is `ρ ≈ 0.024` when build quality is non-stationary — the dominant regime in Bayesian optimisation, where later trials are systematically better. The opponent rating absorbs the improving-build trend and stops tracking actual difficulty. TWFE's β captures opponent difficulty unconditional on build improvement, with `ρ ≈ 0.96` in the same simulation. Elo-based weighting would have actively fought the TPE loop.
+**Why rejected.** Synthetic simulation (the curriculum-simulation experiment directory is referenced in [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)) showed Elo correlation with true opponent difficulty is near-zero when build quality is non-stationary — the dominant regime in Bayesian optimisation, where later trials are systematically better. The opponent rating absorbs the improving-build trend and stops tracking actual difficulty. TWFE's β captures opponent difficulty unconditional on build improvement, with high correlation in the same simulation. Elo-based weighting would have actively fought the TPE loop. Specific ρ magnitudes pending re-validation under V2.
 
 **Bitter-lesson verdict.** Elo itself is not hand-tuned, but using it to weight fitness requires choosing a *temperature*, which is. TWFE β avoids the temperature knob entirely.
 
@@ -96,9 +104,9 @@ For the TWFE-deconfounding research that is the estimator *downstream* of 5C's o
 
 ### 4.5 Hand-curated hullmod blacklist (filter "no_drop" / "codex_unlockable" tags) — REJECTED
 
-**What it was.** The 2026-04-17 Hammerhead run revealed 89% of top builds exploited rare-faction hullmods (`shrouded_lens`, `fragment_coordinator`, `neural_integrator`) that carry CSV tags indicating they're supposed to be unobtainable in normal play. A one-line filter in `search_space.py:get_eligible_hullmods` would remove them.
+**What it was.** The 2026-04-17 Hammerhead run revealed that a large fraction of top builds exploited rare-faction hullmods (`shrouded_lens`, `fragment_coordinator`, `neural_integrator`) that carry CSV tags indicating they're supposed to be unobtainable in normal play. A one-line filter in `search_space.py:get_eligible_hullmods` would remove them.
 
-**Why rejected.** A *silent, hard-coded* filter encodes the claim "these hullmods are unintended" into the search space — a Sutton-style human-knowledge injection. The roadmap offers two non-silent follow-ups instead: **Phase 5F** (regime-segmented optimization — user explicitly opts into a progression regime; `search_space.py` masks components per the chosen regime; framed as CMDP feasibility alignment rather than a designer-intent claim — see `phase5f-regime-segmented-optimization.md` §4.6 for why this is distinct from the rejection here), and **Phase 5G** (adversarial opponent curriculum via PSRO / main-exploiter loop — let the opponent pool grow until adversarial signal exposes the exploits).
+**Why rejected.** A *silent, hard-coded* filter encodes the claim "these hullmods are unintended" into the search space — a Sutton-style human-knowledge injection. The roadmap offers two non-silent follow-ups instead: **Phase 5F** (regime-segmented optimization — user explicitly opts into a progression regime; `search_space.py` masks components per the chosen regime; framed as CMDP feasibility alignment rather than a designer-intent claim — see [phase5f-regime-segmented-optimization.md](phase5f-regime-segmented-optimization.md) §4.6 for why this is distinct from the rejection here), and **Phase 5G** (adversarial opponent curriculum via PSRO / main-exploiter loop — let the opponent pool grow until adversarial signal exposes the exploits). Specific concentration percentages pending re-validation under V2.
 
 ---
 
@@ -117,9 +125,9 @@ For the TWFE-deconfounding research that is the estimator *downstream* of 5C's o
 
 ## 6. See also
 
-- `docs/reference/phase5a-deconfounding-theory.md` — TWFE decomposition theory (6-field literature synthesis).
-- `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research.
-- `docs/reference/phase5d-covariate-adjustment.md` — EB shrinkage of α̂ toward a heuristic prior (replaces the rejected per-frame Java approach; and itself replaces an earlier rejected CUPED/FWL/PDS design, see §4.5 of that doc).
-- `docs/reference/phase5e-shape-revision.md` — A3 rank-shape revision (Box-Cox replaces top-quartile clamp).
-- `docs/reference/implementation-roadmap.md` — phase overview and status for all Phase 5 sub-phases.
-- `docs/specs/24-optimizer.md`, `docs/specs/28-deconfounding.md` — implemented specs.
+- [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) — TWFE decomposition theory (6-field literature synthesis).
+- [phase5-signal-quality.md](phase5-signal-quality.md) — original Phase 5A/5B foundational research.
+- [phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md) — EB shrinkage of α̂ toward a heuristic prior (replaces the rejected per-frame Java approach; and itself replaces an earlier rejected CUPED/FWL/PDS design, see §4.5 of that doc).
+- [phase5e-shape-revision.md](phase5e-shape-revision.md) — A3 rank-shape revision (Box-Cox replaces top-quartile clamp).
+- [implementation-roadmap.md](implementation-roadmap.md) — phase overview and status for all Phase 5 sub-phases.
+- [../specs/24-optimizer.md](../specs/24-optimizer.md), [../specs/28-deconfounding.md](../specs/28-deconfounding.md) — implemented specs.

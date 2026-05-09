@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Cloud Deployment Specification
 
 Phase 6 Cloud Worker Federation. Runs bulk combat simulation on AWS spot VMs while the workstation keeps every Optuna Study local. Defined in `src/starsector_optimizer/campaign.py`, `cloud_provider.py`, `cloud_worker_pool.py`, `worker_agent.py`, and `scripts/cloud/`.
@@ -491,15 +497,7 @@ The original "GPU required" conclusion from 2026-04-12 was a misdiagnosis: Stars
 
 **The fix** (in `instance_manager.py::_start_xvfb`): after waiting for the Xvfb socket, run `xrandr --query` once as a client to warm the XRandR extension. This makes LWJGL's enumeration succeed. Requires `x11-xserver-utils` baked into the AMI.
 
-**Benchmarks (2026-04-18, `experiments/cloud-benchmark-2026-04-18/`):**
-
-| Provider | Instance | Spot $/hr | Matchups/hr/inst | vs local (27/hr/inst) |
-|---|---|---|---|---|
-| Local workstation | 12-core, RTX 4090 | $0 | 27 | 1× baseline |
-| AWS c7i.2xlarge | 8 vCPU Intel SPR, us-east-1 | $0.158 | **64** | 2.4× |
-| Hetzner CCX33 | 8 vCPU AMD Milan, Ashburn VA | $0.13 | **~63** | 2.3× |
-
-Both CPU cloud paths match or exceed local per-instance throughput at negligible cost. GPU instances are not required.
+**Per-instance cloud-vs-local throughput**: pending re-validation under V2 loadout fix; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Design-target threshold is ≥ 2× local per-instance to justify the AWS premium at small budgets — re-validation must clear that floor before the next paid Phase 7 prep launch. GPU instances are not required.
 
 ## Lessons Learned (2026-04-12 Hetzner prototype)
 
@@ -519,7 +517,7 @@ scripts/cloud/
 ├── packer/
 │   └── aws.pkr.hcl               # AMI template (us-east-1 build)
 ├── bake_image.sh                 # packer build + aws ec2 copy-image us-east-2
-├── probe.sh                      # $0.15 validation: 2 spot VMs, boot-test, teardown
+├── probe.sh                      # Tier-1 validation: 2 spot VMs, boot-test, teardown (sub-dollar; see reports/INDEX.md)
 ├── launch_campaign.sh            # wraps `uv run python -m starsector_optimizer.campaign <yaml>`
 ├── status.sh                     # tail ledger, print per-study best-fitness + trial counts
 ├── teardown.sh                   # emergency tag-based terminate (instances/SGs/volumes) — campaign-scoped (Project=starsector-<campaign>)

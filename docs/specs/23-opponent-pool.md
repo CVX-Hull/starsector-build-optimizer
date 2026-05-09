@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Opponent Pool Specification
 
 Defines diverse opponent sets per hull size class for robust fitness evaluation. Defined in `src/starsector_optimizer/opponent_pool.py`.

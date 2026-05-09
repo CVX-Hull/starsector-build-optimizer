@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Throughput Estimator Specification
 
 Computes wall-clock time and cost estimates for combat simulation campaigns. Used for capacity planning before launching Phase 3 instance manager.
@@ -33,18 +39,25 @@ Computed from actual game data via `build_search_space()`:
 | `sims_per_hull` | 1000 | Combat evaluations per hull (after heuristic screening) |
 | `num_hulls` | 50 | Combat-relevant hulls to optimize |
 
-### Cloud Pricing (CPU-only, validated 2026-04-18)
+### Cloud pricing (CPU-only)
 
-CPU spot instances are fully viable. The 2026-04-12 "GPU required" conclusion was a misdiagnosis of an LWJGL 2.x XRandR bug fixed in `instance_manager.py::_start_xvfb` by warming the XRandR extension with `xrandr --query` after Xvfb's socket is ready. See spec 22 for the full root cause narrative. GPU instances are not required and are not part of the Phase 6 design.
+CPU spot instances are fully viable. The 2026-04-12 "GPU required" conclusion was a misdiagnosis of an LWJGL 2.x XRandR bug fixed in `instance_manager.py::_start_xvfb` by warming the XRandR extension with `xrandr --query` after Xvfb's socket is ready. See spec 22 for the full root-cause narrative. GPU instances are not required and are not part of the Phase 6 design.
 
-| Provider | $/hr (spot) | vCPUs | RAM | Instances (2 JVMs @ ≤3 vCPU each) |
-|----------|-------------|-------|-----|------------------------------------|
-| AWS c7a.2xlarge | $0.15 | 8 AMD Genoa | 16 GB | 2 |
-| AWS c7i.2xlarge | $0.158 | 8 Intel SPR | 16 GB | 2 |
-| AWS c7a.4xlarge / c7i.4xlarge | ~$0.27 | 16 | 32 GB | 5 |
-| Hetzner CCX33 | $0.13 | 8 AMD Milan | 32 GB | 2 (no preemption tier; deferred per spec 22) |
+Per-instance throughput, hourly $-rates, and the per-matchup rate are operationally load-bearing but treated as measurement-grade — they live in dated reports rather than inline here. The estimator consumes them via the symbolic constants below; the spec defines the contract, not the values.
 
-Throughput validated at 64 matchups/hr/instance on c7i.2xlarge vs 27/hr/instance on the 12-core workstation — 2.4× per-instance uplift at ~$0.001/matchup. See `experiments/cloud-benchmark-2026-04-18/` and `experiments/phase6-planning/cost_model.py` for the pinned dollar figures.
+| Symbol | Where the value comes from |
+|---|---|
+| `MATCHUPS_PER_HR_DEFAULT` | Pending re-validation under V2 loadout fix; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). |
+| `SPOT_RATE_USD_PER_HR` (per `(provider, instance_type)`) | Pending re-validation under V2 loadout fix; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). |
+
+Provider sizing (which instance shapes the project supports, independent of measured throughput):
+
+| Provider | vCPUs | RAM | Instances (2 JVMs @ ≤3 vCPU each) |
+|----------|-------|-----|------------------------------------|
+| AWS c7a.2xlarge | 8 AMD Genoa | 16 GB | 2 |
+| AWS c7i.2xlarge | 8 Intel SPR | 16 GB | 2 |
+| AWS c7a.4xlarge / c7i.4xlarge | 16 | 32 GB | 5 |
+| Hetzner CCX33 | 8 AMD Milan | 32 GB | 2 (no preemption tier; deferred per spec 22) |
 
 ## Computed Outputs
 

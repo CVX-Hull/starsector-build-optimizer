@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Optimization Methods — Detailed Technical Guide
 
 This document covers each optimization method in depth: how it works, when to use it, implementation details, and performance expectations.

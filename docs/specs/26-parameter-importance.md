@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Parameter Importance Specification
 
 Identifies which search space parameters most influence fitness, enabling dimensionality reduction via fixed parameters. Defined in `src/starsector_optimizer/importance.py`.

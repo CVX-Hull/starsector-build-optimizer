@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Technical Debt
 
 Pre-existing issues found by post-implementation audit agents. Address when touching the relevant code.

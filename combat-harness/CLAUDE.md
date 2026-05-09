@@ -1,6 +1,12 @@
+---
+type: always-loaded
+status: shipped
+last-validated: 2026-05-10
+---
+
 # Combat Harness Mod
 
-Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports results as JSON.
+Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports results as JSON. The deployed ship loadout uses the V2 placeholder-then-swap path (`addToFleet` stock variant → `FleetMember.setVariant` pre-deployment) — V1's mid-combat `variant.clear()` + `addWeapon()` mutated the variant data structure but failed to propagate to the deployed `WeaponAPI` instances. See [../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md) for the full V1 invalidation report.
 
 ## Commands
 

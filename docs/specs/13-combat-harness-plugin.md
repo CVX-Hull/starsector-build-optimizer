@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Combat Harness Plugin Specification
 
 Single-matchup-per-mission state machine that runs one AI-vs-AI combat, writes results, and ends the mission. Defined in `combat-harness/src/main/java/starsector/combatharness/CombatHarnessPlugin.java`.

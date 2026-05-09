@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Variant Generator Specification
 
 Build → .variant JSON generation. Defined in `src/starsector_optimizer/variant.py`.

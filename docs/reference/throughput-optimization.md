@@ -1,6 +1,14 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Throughput Optimization — Research Findings and Recommended Approach
 
 Maximizing combat simulation throughput through persistent game sessions, programmatic variant creation, intelligent batch scheduling, and cloud scaling. This document is self-contained — it explains the current architecture, identifies bottlenecks, presents research findings, and recommends a phased implementation plan.
+
+> **Empirical-claims status (2026-05-10):** All throughput tables (trials/hr, matchups/hr/VM, instance utilization percentages, time-per-hull figures, the 384/554/305/753 trials/hr comparison, the 2.2-2.4× cloud-vs-local speedup) were measured on V1 sim and are pending re-validation under V2. The V2 setup-time overhead (per-matchup `setVariant` + `LoadoutDiagnostic`) shifts the matchup wall-clock; specific numbers must be re-measured. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Phase plans, architecture, mixed-build-batching design, and bitter-lesson rationale are unaffected.
 
 ---
 
@@ -39,42 +47,30 @@ Symlinks to shared game files (~20GB read-only), real directories for `saves/`, 
 
 ### Current Timing Breakdown
 
-| Phase | Duration | Notes |
-|-------|----------|-------|
-| JVM startup + asset loading | ~15-20s | Class loading, graphics, ship/weapon data |
-| Launcher GUI + xdotool click | ~5-10s | Swing window detection + click |
-| Title screen stabilization | ~2s | TitleScreenPlugin waits 120 frames |
-| Menu navigation (Robot clicks) | ~5s | Missions → scroll → Arena → Play Mission |
-| Mission setup | ~1s | MissionDefinition + first spawn |
-| **Total startup overhead** | **~25-35s** | Steps 2-6, repeated every batch |
-| Combat per matchup | ~10s | Wall-clock at 3x speed |
-| Combat per batch (6 matchups) | ~60s | One build × 5 opponents |
-| **Total per batch** | **~85-95s** | 35s startup + 60s combat |
-| **Startup overhead fraction** | **~37%** | 35 / 95 of wall-clock time |
+The qualitative phase breakdown of a batch:
+
+- **JVM startup + asset loading** — class loading, graphics, ship/weapon data.
+- **Launcher GUI + xdotool click** — Swing window detection + click.
+- **Title screen stabilization** — TitleScreenPlugin frame-count wait.
+- **Menu navigation** — Robot clicks: Missions → scroll → Arena → Play Mission.
+- **Mission setup** — MissionDefinition + first spawn.
+- **Combat per matchup** — wall-clock at the configured time multiplier.
+
+Specific seconds-per-phase figures and the resulting startup-overhead fraction are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ### Current Throughput (async parallel dispatch)
 
-Measured on wolf hull, 10 trials, 5 active opponents (2026-04-12):
-
-| Instances | Wall time | Sim-only time | Sim speedup | Efficiency |
-|-----------|-----------|---------------|-------------|------------|
-| 1 | 5m07s | 272s | 1.0x | — |
-| 2 | 3m34s | 182s | 1.49x | 75% |
-| 4 | 2m52s | 139s | 1.96x | 49% |
-
-Instance dispatch is perfectly balanced (equal matchups per instance). Sub-linear scaling at 4 instances is due to limited queue depth with 10 trials — at most 2-3 builds in queue simultaneously. Larger budgets (200+ trials) keep the queue fuller, improving efficiency toward 3-4x.
-
-Previous serial design (batch `evaluate()`) used only 1 of 4 instances: 210 trials in 14 hours (~15 trials/hour). Async dispatch expected to deliver ~40-60 trials/hour with 4 instances.
+Async parallel dispatch with `LocalInstancePool` produces near-linear instance scaling at moderate trial counts; sub-linear scaling at higher instance counts arises from limited queue depth at small trial budgets. Specific wall-times, sim speedups, and trials/hr figures are pending re-validation under V2.
 
 ---
 
 ## 2. Bottleneck Analysis
 
-### Bottleneck 1: Game Restart Per Batch (37% overhead)
+### Bottleneck 1: Game Restart Per Batch
 
 Each game instance persists across matchups via the mission restart cycle. After each matchup, `endCombat()` returns to the title screen, and TitleScreenPlugin auto-navigates to a fresh mission when Python writes the next queue. The coordinator dispatches the next matchup immediately via `run_matchup()`. A clean restart (`clean_restart_matchups=200`) is forced periodically to prevent memory accumulation.
 
-**Mission restart overhead is ~5-8s per matchup** (Robot dismisses results + TitleScreenPlugin navigation). The game stays running; only the mission restarts. File I/O overhead (queue write + poll) is ~ms, negligible vs 10-120s combat time.
+Mission restart overhead is small (Robot dismisses results + TitleScreenPlugin navigation); the game stays running and only the mission restarts. File I/O overhead is negligible vs combat wall-clock. Specific seconds-figures pending re-validation under V2.
 
 ### Bottleneck 2: Variant File I/O
 
@@ -185,13 +181,11 @@ Each instance evaluates one build, running opponents sequentially. After each, P
 
 - Pro: No startup overhead for pruned opponents
 - Con: When pruned early, instance sits idle until next game restart
-- Throughput: ~554 trials/hr (+44% vs current)
 
 **Option B — Single-matchup scheduling:**
 Each game launch evaluates exactly 1 matchup. Maximum pruning granularity.
 
-- Con: 35s startup + 10s combat = 78% overhead — **worse than current**
-- Throughput: ~305 trials/hr (-21%)
+- Con: startup overhead per matchup dominates combat wall-clock — **worse than current**
 - **Rejected.**
 
 **Option C — Mixed-build batching (recommended):**
@@ -200,18 +194,11 @@ Each game launch gets a batch of matchups from **different builds at different s
 - Python maintains a priority queue of `(trial, build, next_opponent_index)`
 - ASHA rung-priority: builds closer to completion are scheduled first, remaining slots filled with new builds at rung 0
 - When a build is pruned, its slots are immediately filled with other work
-- Instance utilization stays at ~90%+ because there's always a mix of work available
+- Instance utilization stays high because there's always a mix of work available
 
 The existing Java harness already supports this — `CombatHarnessPlugin` processes `MatchupQueue` entries agnostically. The `matchup_id` field routes results back to the correct trial in Python.
 
-**Throughput comparison (8 instances, 50% pruned after opponent 1):**
-
-| Strategy | Trials/hr | Instance Utilization | Java Changes |
-|----------|-----------|---------------------|--------------|
-| Current (all opponents per build) | ~384 | ~63% | — |
-| Instance-local sequential (A) | ~554 | ~52% | Medium |
-| Single-matchup scheduling (B) | ~305 | ~29% | None |
-| **Mixed-build batching (C)** | **~753** | **~90%** | **None** |
+Specific trials/hr and instance-utilization comparison numbers across the three options are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The structural ranking — Mixed-build batching dominates Instance-local sequential dominates Single-matchup scheduling — is design-grade and unaffected.
 
 **Optuna integration:** The ask-tell pattern supports this directly. Use `MedianPruner` (not HyperbandPruner — only 5 steps are too few for Hyperband's bracket structure):
 
@@ -238,7 +225,7 @@ else:
 
 **Key findings:**
 
-**GPU required for cloud.** Local Xvfb instances benefit from the host GPU for OpenGL rendering (LWJGL uses the system's OpenGL driver even through Xvfb). Cloud VMs without GPUs fall back to Mesa/llvmpipe software rendering, which makes the game run ~10-50x slower — combat that takes 30s locally takes minutes on a CPU-only cloud VM. Tested 2026-04-12: Hetzner CCX33 (no GPU) produced only 26s of game-time in 120s wall-clock. GPU cloud instances (e.g., AWS g4dn with T4) would work but cost 3-10x more than CPU instances.
+**GPU was originally believed to be required for cloud.** This was a misdiagnosis. The actual blocker was Xvfb's XRandR extension not populating its mode list until a client queries it; once `x11-xserver-utils` is installed and the warmup `xrandr --query` runs, LWJGL's headless OpenGL works on CPU-only cloud VMs at workable throughput. See [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md) for the live design. The original Hetzner CCX33 "26s of game-time in 120s wall-clock" measurement preceded the warmup fix.
 
 **ARM instances won't work.** Starsector ships its own x86_64 JRE (`jre_linux/`) and native LWJGL libraries. Running on ARM (AWS Graviton, etc.) would require replacing the JRE and native libraries — not practical.
 
@@ -256,16 +243,7 @@ else:
 | No display server | No | LWJGL requires a display context. |
 | VirtualGL + GPU | Required for cloud | Needed if cloud VMs lack local GPU. Software rendering is too slow. |
 
-**Cloud cost estimates (per single-hull optimization run, ~1500 matchups):**
-
-| Scale | Instances | VMs (c7i.2xlarge) | Spot Cost | Wall Time |
-|-------|-----------|-------------------|-----------|-----------|
-| Local (current) | 8 | — | $0 | 3.5 hr |
-| Small cloud | 16 | 4 | ~$1.70 | 1.75 hr |
-| Medium cloud | 32 | 7 | ~$3.00 | ~50 min |
-| Large cloud | 64 | 13 | ~$5.50 | ~25 min |
-
-These assume current throughput. With persistent sessions + mixed batching, times drop by 2-3x further.
+Cloud cost estimates per single-hull optimization run scale linearly with VM count up to TPE's per-study saturation point (see [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md) §1). Specific dollar figures and wall-times are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 **Game AI research patterns:** OpenAI Five (Dota 2) and AlphaStar (StarCraft II) both used CPU-only game simulation at massive scale, but both games have native headless modes. For games without headless support, Xvfb + Docker is the standard approach (also used in browser testing, CI/CD, and game bots).
 
@@ -326,7 +304,7 @@ INIT → SETUP → FIGHTING → DONE → endCombat() → Robot dismisses results
 4. Robot clicks Continue (963,892) and high score OK (1119,611) to dismiss results screen
 5. `TitleScreenPlugin` detects queue → `MenuNavigator.navigateToMission()` → fresh `MissionDefinition` cycle
 
-**Overhead:** ~5-8s per matchup restart (Robot clicks + menu loading) vs ~25-35s for full game restart. The game stays running between matchups; only the mission restarts.
+**Overhead:** mission restart is much faster than full game restart (Robot clicks + menu loading; game stays running). Specific seconds-figures pending re-validation under V2.
 
 **Instance manager integration:** Python writes the new queue file to `saves/common/`. TitleScreenPlugin (fresh instance on each title screen) polls for the queue file and auto-navigates when it appears. No timing constraint — TitleScreenPlugin polls every frame indefinitely until a queue is found.
 
@@ -378,27 +356,14 @@ COPY optimizer/ /opt/optimizer/
 
 ## 5. Expected Impact
 
-### Per-Phase Improvements
+### Per-Phase Improvements (qualitative)
 
-| Metric | Current | +Phase T1 | +Phase T2 | +Phase T3 | +Phase T4 (32 inst) |
-|--------|---------|-----------|-----------|-----------|---------------------|
-| Startup overhead | 37% | 37% | ~2% | ~2% | ~2% |
-| Variant I/O | Per-build writes | **None** | None | None | None |
-| Matchups per build | 5.0 (fixed) | 5.0 | 5.0 | **~2.7** (pruning) | ~2.7 |
-| Instance utilization | ~63% | ~63% | **~95%** | **~90%** | ~90% |
-| Trials/hr (8 inst) | ~384 | ~400 | **~600** | **~1200** | — |
-| Trials/hr (32 inst) | — | — | — | — | **~5000** |
-| Time per hull | 3.5 hr | 3.3 hr | 2.2 hr | **1.1 hr** | **~15 min** |
+- **Phase T1** removes per-build variant file I/O entirely.
+- **Phase T2** collapses startup overhead by keeping the game running across matchups (mission restart instead of process restart).
+- **Phase T3** brings mixed-build batching and pruning, dropping average matchups per build below the per-build opponent count and keeping instance utilization high under pruning.
+- **Phase T4** scales linearly via cloud instance count up to the per-study saturation point (see [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md) §1).
 
-### Throughput Math
-
-**Current:** 8 instances × (3600s / (35s startup + 60s combat)) × 1 build/batch = ~384 builds/hr
-
-**With Phase T2 (persistent session):** 8 instances × (3600s / (0s startup + 60s combat)) × 1 build/batch ≈ 480 builds/hr. Actual throughput higher because batches can be larger without restart penalty.
-
-**With Phase T3 (mixed batching + pruning):** Average 2.7 matchups per build (50% pruned after opponent 1). Each instance runs ~6 matchups per batch in ~60s. 8 instances × (3600/60) × 6 matchups / 2.7 matchups/build ≈ 1067 builds/hr. With pipeline overlap and minimal startup: ~1200 builds/hr.
-
-**With Phase T4 (32 instances):** Linear scaling: ~1200 × (32/8) = ~4800 builds/hr.
+Specific per-phase trials/hr, instance utilization percentages, startup-overhead fractions, and time-per-hull figures are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The structural ordering — each phase strictly improves throughput on top of the prior — is unaffected.
 
 ---
 
@@ -459,10 +424,10 @@ Before full implementation, two tests should be run:
 - `constant_liar=True` — handles concurrent pending trials in mixed-build batching
 
 ### Cloud / Headless Rendering
-- Mesa/LLVMpipe — CPU software rendering for OpenGL. **Too slow for Starsector** (tested: ~10-50x slower than GPU). Only viable for CI tests, not production simulation.
-- Xvfb — virtual framebuffer, standard approach for headless X11 applications. Works well with host GPU for hardware OpenGL acceleration.
+- Mesa/LLVMpipe — CPU software rendering for OpenGL. The original "too slow for Starsector" verdict was a misdiagnosis fixed by the Xvfb XRandR warmup; see [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md).
+- Xvfb — virtual framebuffer, standard approach for headless X11 applications. Works on CPU-only cloud VMs after the XRandR warmup.
 - `utensils/docker-opengl` — Docker base image for Mesa + LLVMpipe + Xvfb
-- AWS g4dn family (T4 GPU) — needed for cloud deployment, ~$0.16-0.25/hr spot. CPU-only instances (c7i, Hetzner CCX) are too slow for rendering.
+- AWS g4dn family (T4 GPU) — not needed; CPU-only c7a / c7i instances work for headless Starsector.
 
 ### Game AI Infrastructure Patterns
 - OpenAI Five (Dota 2) — 128K CPU cores, native headless mode

@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Combat Protocol Specification
 
 Defines the contract between the Python optimizer and the Java combat harness mod. Communication is filesystem-based via `<starsector>/saves/common/`, using the game's SettingsAPI. The game appends `.data` to all filenames — Python must write files with the `.data` extension.

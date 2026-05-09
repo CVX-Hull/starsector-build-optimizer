@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Matchup Queue Specification
 
 Container for a batch of matchup configs. Reads a JSON array from `saves/common/` via SettingsAPI. Defined in `combat-harness/src/main/java/starsector/combatharness/MatchupQueue.java`.

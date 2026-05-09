@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Optimization Theory for the Ship Build Problem
 
 A first-principles analysis of why our problem is hard and what theory says about the best approaches.

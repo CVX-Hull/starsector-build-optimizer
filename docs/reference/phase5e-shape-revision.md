@@ -1,27 +1,34 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 5E — A3 Shape Revision
 
-> **Status**: Implemented 2026-04-18. Ceiling collapsed 50× and top-5 identification lifted 14× on the 2026-04-18 synthetic re-validation under Phase 5D. Original simulation validation in `experiments/signal-quality-2026-04-17/`; post-5D re-validation in `experiments/signal-quality-5d-2026-04-18/`.
+> **Status**: Implemented 2026-04-18. Original validation showed ceiling collapse and top-k overlap improvements on V1 synthetic re-validation; specific magnitudes are pending re-validation under V2. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md).
+>
+> **Empirical-claims status (2026-05-10):** Every numeric strategy table (the 11-strategy validation grid in §3.1, the 7-strategy 5D-revalidation grid in §3.4, the calibration sweep) used V1 sim data. Theory (Box-Cox monotonicity preserves Spearman ρ; ceiling-saturation mechanism), and the ranking of strategies (Box-Cox dominates the rank-shape baseline; Tobit and CFS underperform in the validated regime) are design-grade and unaffected.
 
-Findings from the 900-trial Hammerhead TWFE run (`experiments/hammerhead-twfe-2026-04-13/`, 2026-04-17) that motivate a revision to the A3 fitness-shaping step of the Phase 5A signal-quality pipeline.
+Findings from the V1 Hammerhead TWFE run that motivate a revision to the A3 fitness-shaping step of the Phase 5A signal-quality pipeline.
 
-Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer. The shipped pipeline is A1 TWFE decomposition → A2 single-channel control variate → A3 rank-shape-with-top-quartile-clamp. Phase 5E replaces A3. Phase 5D (`docs/reference/phase5d-covariate-adjustment.md`) separately replaces A2 with empirical-Bayes shrinkage of α̂ toward a heuristic-predicted regression prior; 5D and 5E are orthogonal and compose (5E reads α̂_EBT from 5D). See `docs/reference/implementation-roadmap.md` for the full Phase 5 overview and `docs/reference/phase5a-deconfounding-theory.md` for the TWFE foundation this doc builds on.
+Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer. The shipped pipeline is A1 TWFE decomposition → A2 single-channel control variate → A3 rank-shape-with-top-quartile-clamp. Phase 5E replaces A3. Phase 5D ([phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md)) separately replaces A2 with empirical-Bayes shrinkage of α̂ toward a heuristic-predicted regression prior; 5D and 5E are orthogonal and compose (5E reads α̂_EBT from 5D). See [implementation-roadmap.md](implementation-roadmap.md) for the full Phase 5 overview and [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) for the TWFE foundation this doc builds on.
 
 ---
 
 ## 1. What went wrong on the Hammerhead run
 
-The optimizer ran 900 trials against the 10-active-opponent pool with:
-- A1: TWFE additive decomposition (`deconfounding.py`) — *working correctly*
+The V1 Hammerhead optimizer run against the 10-active-opponent pool exhibited three qualitative pathologies (specific counts and percentages pending re-validation under V2 — see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)):
+
+- A1: TWFE additive decomposition — *working correctly*
 - A2: control variate on TWFE α — *working correctly*
 - A3: quantile rank with top-quartile clamp at 1.0 — **the problem**
 
-Three pathologies emerged, quantified from `experiments/hammerhead-twfe-2026-04-13/evaluation_log.jsonl` (368 completed trials after fresh-run cutoff):
-
 | Pathology | Observation |
 |---|---|
-| **Exploit-cluster convergence** | 280/313 (89%) of completed builds share at least one of `shrouded_lens`, `shrouded_mantle`, `fragment_coordinator`, `neural_integrator` — hullmods whose in-game acquisition requires specific endgame faction content. These add passive AoE damage and damage-recoil effects independent of flux state, so builds running `vents=0, caps=1` still achieve full wins. |
-| **A3 ceiling saturation** | 7/313 builds map to `fitness = 1.000` with raw TWFE α ranging only 0.48–0.82 (theoretical max 1.5). The top-quartile clamp destroys any gradient among the top 25%. |
-| **Opponent pool ceiling** | Peer Hammerhead variants can force timeouts but not kills (e.g. `hammerhead_Support`: 0/31 player wins, all timeouts). The stronger an exploit build, the more opponents saturate at `hp_differential ≈ 1.0`, so raw matchup scores censor at the fitness tier boundary. |
+| **Exploit-cluster convergence** | The large majority of completed builds share at least one of `shrouded_lens`, `shrouded_mantle`, `fragment_coordinator`, `neural_integrator` — hullmods whose in-game acquisition requires specific endgame faction content. These add passive AoE damage and damage-recoil effects independent of flux state, so builds running `vents=0, caps=1` still achieve full wins. |
+| **A3 ceiling saturation** | A non-trivial subset of builds map to `fitness = 1.000` despite raw TWFE α spanning a much narrower range than the theoretical max. The top-quartile clamp destroys any gradient among the top 25%. |
+| **Opponent pool ceiling** | Peer Hammerhead variants can force timeouts but not kills. The stronger an exploit build, the more opponents saturate at `hp_differential ≈ 1.0`, so raw matchup scores censor at the fitness tier boundary. |
 
 Bottom line: **the A3 rank shape discards precisely the gradient the TPE sampler needs to distinguish the exploit-cluster winners from one another**. A1 and A2 are not the bottleneck.
 
@@ -31,7 +38,7 @@ The obvious patch is "filter out hullmods whose CSV tags include `no_drop`, `no_
 
 > Methods leveraging computation scale better than methods leveraging human knowledge.
 
-The bitter-lesson framing rejects a *silent hard-coded filter* of rare-faction hullmods. Two distinct, non-silent follow-ups are on the roadmap: **Phase 5F** (regime-segmented optimization — user explicitly opts into a progression tier; `search_space.py` masks components per the user's chosen regime; framed as CMDP feasibility alignment rather than human-knowledge injection — see `phase5f-regime-segmented-optimization.md` §2.1 and §4.6 for why this is not a bitter-lesson violation), and **Phase 5G** (adversarial opponent curriculum — grow the opponent pool until the signal itself exposes exploits; research continues in §2.1 below).
+The bitter-lesson framing rejects a *silent hard-coded filter* of rare-faction hullmods. Two distinct, non-silent follow-ups are on the roadmap: **Phase 5F** (regime-segmented optimization — user explicitly opts into a progression tier; `search_space.py` masks components per the user's chosen regime; framed as CMDP feasibility alignment rather than human-knowledge injection — see [phase5f-regime-segmented-optimization.md](phase5f-regime-segmented-optimization.md) §2.1 and §4.6 for why this is not a bitter-lesson violation), and **Phase 5G** (adversarial opponent curriculum — grow the opponent pool until the signal itself exposes exploits; research continues in §2.1 below).
 
 ---
 
@@ -70,90 +77,48 @@ Attacks the **exploit-cluster convergence** by replacing scalar ranking with per
 
 ## 3. Simulation validation
 
-`experiments/signal-quality-2026-04-17/signal_validation.py` (~600 lines) extends the proven `experiments/phase5b-curriculum-simulation/` harness with:
+The Phase 5E validation harness extended the curriculum-simulation framework with a generative model calibrated to Hammerhead-shaped statistics, run across hundreds of builds × tens of opponents × multiple seeds. Four metrics were tracked: Spearman ρ vs true quality, Spearman ρ on raw α before shape step, within-exploit-cluster spread ρ, and A3 ceiling fraction.
 
-- Generative model matching observed Hammerhead statistics: 90% exploit cluster with within-cluster sub-gradient `N(0.8, 0.3)`, ceiling clip at ±1.2 (11.6% of cells censored, calibrated to reproduce the 25% A3 saturation observed in baseline).
-- 300 builds × 50 opponents × 10 active-per-trial × 20 random seeds.
-- Four metrics: Spearman ρ vs true quality, Spearman ρ on raw α before shape step, within-exploit-cluster spread ρ, and A3 ceiling fraction (predicted fitness ≥ 0.99).
+### 3.1 Strategy ranking (qualitative)
 
-### 3.1 Results — eleven strategies
+Eleven strategies were compared. The qualitative ranking — design-grade and unaffected by V1 invalidation:
 
-Final table (see `experiments/signal-quality-2026-04-17/REPORT.md` for full details, including paired Wilcoxon tests):
+- **D (TWFE + Box-Cox A3)** dominates the rank-shape baseline on every metric, with the largest gain in ceiling fraction (the metric Box-Cox is designed to fix) and a smaller but positive gain in ρ vs truth.
+- **H (CAT Fisher-info opponent selection)** is orthogonal to D — it changes *which* matchups we observe, not *how* we aggregate them — and produces a comparable independent gain.
+- **J (D + H combined)** is the best overall, with marginal gain over D alone smaller than D's gain over baseline.
+- **CFS (B)** *collapsed* in this regime: with the validated opponent-pool composition, CFS re-weighting concentrates almost all weight on a handful of hard opponents and noise dominates. A regime mismatch, not a bug.
+- **EM-Tobit (C, I, K)** improved raw α modestly but the imputation variance approximately cancelled the bias correction at the validated censoring rate (Amemiya 1984 MSE-gain condition not met). Becomes decisive at higher censoring rates.
+- **Main-exploiter loop (G)** targets RPS-adversarial failure modes which the synthetic generative model does not reproduce (the exploit feature is a flat global uplift, not a counterable strategy). Still potentially valuable against the real opponent-pool ceiling.
 
-| Strategy | ρ vs truth | ρ α vs truth | Exploit-spread ρ | Ceiling % |
-|---|---|---|---|---|
-| A — Baseline (production TWFE + rank shape) | 0.401 ± 0.072 | 0.411 | 0.308 | 25.3% |
-| B — CFS-weighted TWFE | −0.013 ± 0.054 | 0.000 | −0.009 | 25.3% |
-| C — EM-Tobit TWFE | 0.463 ± 0.041 | 0.465 | 0.371 | 25.3% |
-| **D — TWFE + Box-Cox A3** | **0.471 ± 0.057** | **0.471** | **0.382** | **0.4%** |
-| E — TWFE + Dominated Novelty A3 | 0.419 ± 0.045 | n/a | 0.335 | 12.4% |
-| F — B + C + E combined | 0.419 ± 0.064 | 0.457 | 0.336 | 12.4% |
-| G — AlphaStar main-exploiter loop | 0.416 ± 0.085 | 0.419 | 0.320 | 25.3% |
-| H — CAT Fisher-info opponent selection | **0.499 ± 0.071** | **0.506** | **0.412** | 25.3% |
-| I — Tobit α → Box-Cox | 0.463 ± 0.048 | 0.463 | 0.377 | 0.4% |
-| J — Box-Cox + CAT | **0.485 ± 0.076** | 0.485 | 0.395 | 0.4% |
-| K — Tobit + Box-Cox + CAT | 0.472 ± 0.081 | 0.472 | 0.383 | 0.4% |
+Specific Δρ values, ceiling fractions, and significance levels are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-### 3.2 Key deltas and conclusions
+### 3.2 Why Box-Cox dominates structurally
 
-**Box-Cox A3 (D) is the biggest single win.** Δρ vs baseline = +0.070 (p = 0.0001); ceiling saturation collapses from 25.3% → 0.4% (a 63× reduction). It's a monotone transform that introduces no ties, so Spearman ρ on the α stage is preserved exactly while the top quartile is no longer clamped.
-
-**CAT Fisher-info opponent selection (H) is orthogonal and also helps.** Δρ = +0.098 (p = 0.048). It changes *which* matchups we observe, not *how* we aggregate them. It composes with D (J = D + H shows Δρ = +0.084 vs baseline) but the marginal over D alone is not significant at n = 20.
-
-**Tobit, CFS, and the main-exploiter loop under-performed in the validated regime, for explicable reasons:**
-- **CFS (B)** *collapsed catastrophically* (Δρ = −0.42) because with only ~5 hard opponents in a 50-opponent pool and 10 active per trial, the CFS re-weighting sets hard-opponent weights ≈ 1.0 vs trivial weights ≈ 0.013; a handful of high-variance matchups dominate α and noise wins. Not a bug in CFS; a regime mismatch. Would likely succeed at 100+ hard opponents or 50+ active-per-trial.
-- **EM-Tobit (C, I, K)** produced a modestly better raw α (ρ_α_truth 0.411 → 0.465) but the imputation variance approximately cancels the bias correction. Amemiya (1984) MSE-gain condition not met at 11.6% censoring. Would become decisive at ≥30% censoring (e.g. if the fitness ceiling were tightened).
-- **Main-exploiter loop (G)** targets the RPS-adversarial failure mode, which the synthetic generative model does not reproduce (the exploit feature is a flat global uplift, not a counterable strategy). Still valuable for the real opponent-pool ceiling but we have no simulation evidence either way.
+Box-Cox is a *monotone transform* with no ties, so Spearman ρ on the α stage is preserved exactly while the top quartile is no longer clamped at 1.0. The ρ-vs-truth gain over the rank-shape baseline is small by design (both are monotone); the *mechanical* gain — replacing top-quartile ties with a continuous gradient TPE's `l(x)` can act on — is the actual deliverable.
 
 ### 3.3 The methodological diagnostic
 
 The simulation introduced a `ρ_α_truth` metric — Spearman ρ on the raw α *before* any A3 shape step. This isolates the estimator contribution (A1) from the post-processor contribution (A3):
 
-- Baseline A has ρ_α_truth = 0.411 and ρ_truth = 0.401. The 0.010 gap is the A3 rank-shape destroying information via top-quartile ties.
-- Box-Cox D has ρ_α_truth = 0.471 and ρ_truth = 0.471. The A3 step preserves information exactly.
+- Baseline A has ρ_α_truth slightly above ρ_truth — the gap is the A3 rank-shape destroying information via top-quartile ties.
+- Box-Cox D has ρ_α_truth equal to ρ_truth — the A3 step preserves information exactly.
 
-This diagnostic proves that on the Hammerhead regime the bottleneck is A3, not A1.
+This diagnostic proves that on the Hammerhead regime the bottleneck was A3, not A1. The gap-size measurement is V1-derived and pending re-validation; the structural diagnostic (Box-Cox preserves rank information; rank-shape-with-clamp does not) is paradigm-level.
 
 ### 3.4 Post-5D revalidation — 2026-04-18
 
-Phase 5D shipped on 2026-04-18 (EB shrinkage + triple-goal at A2′). The 5E decision needed to be re-validated against the new baseline. `experiments/signal-quality-5d-2026-04-18/signal_validation_5d.py` layered 5D's EB step into the harness and re-ran seven strategies: A0 (pre-5D baseline), A (5D + rank), D (5D + Box-Cox), H (CAT + 5D + rank), I (Tobit + 5D + Box-Cox), J (CAT + 5D + Box-Cox), K (full stack).
+Phase 5D shipped on 2026-04-18 (EB shrinkage + triple-goal at A2′). The 5E decision was re-validated against the new baseline by layering 5D's EB step into the harness and re-running seven strategies: A0 (pre-5D baseline), A (5D + rank), D (5D + Box-Cox), H (CAT + 5D + rank), I (Tobit + 5D + Box-Cox), J (CAT + 5D + Box-Cox), K (full stack).
 
-Headline metrics (300 builds × 50 opponents × 10 active × 20 seeds, empirical censoring 10.6%):
+Qualitative ranking re-confirmed:
 
-| Strategy | ρ vs truth | Exploit-spread ρ | Ceiling % | Top-5 | Top-10 | Top-25 |
-|---|---|---|---|---|---|---|
-| A0: pre-5D (TWFE+rank) | 0.463 ± 0.050 | 0.368 | 25.3% | 0.05 | 0.09 | 0.18 |
-| A: 5D + rank (baseline) | 0.737 ± 0.030 | 0.683 | 25.3% | 0.03 | 0.07 | 0.24 |
-| D: 5D + Box-Cox | 0.743 ± 0.031 | 0.689 | 0.3% | 0.43 | 0.46 | 0.46 |
-| H: CAT + 5D + rank | 0.744 ± 0.036 | 0.692 | 25.3% | 0.07 | 0.11 | 0.27 |
-| I: Tobit + 5D + Box-Cox | 0.656 ± 0.051 | 0.588 | 0.4% | 0.29 | 0.34 | 0.39 |
-| J: CAT + 5D + Box-Cox | 0.751 ± 0.041 | 0.700 | 0.4% | 0.43 | 0.40 | 0.46 |
-| K: CAT + Tobit + 5D + Box-Cox | 0.655 ± 0.065 | 0.586 | 0.4% | 0.30 | 0.31 | 0.39 |
+- **A (5D + rank)** produces the dominant ρ gain over A0 (5D itself is the heavy lift).
+- **D (5D + Box-Cox) vs A**: ρ delta is near-zero by design (both monotone post-EB). The win is mechanical — ceiling fraction collapses and top-k overlap improves substantially.
+- **J (CAT + 5D + Box-Cox)**: small but positive marginal gain over D from the CAT observation-side change.
+- **I / K (Tobit variants)**: regress because σ̂_i² is computed from OLS residuals inside the EB step but Tobit produces a different α̂ distribution, so the EB step shrinks Tobit α̂ in the wrong direction. Not a production concern (we never ship Tobit).
 
-Key paired Wilcoxon results:
+A calibration sweep across 4 regimes of covariate-noise multiplier confirmed that **Box-Cox's A3 effect is invariant across the covariate-strength range** — the A3 transform sits downstream of α̂_EBT and doesn't care how strong the α̂ is. This is the structural argument for shipping Box-Cox: its mechanical win does not depend on a particular calibration of the upstream EB prior.
 
-- **A (5D) vs A0 (pre-5D): Δρ = +0.273, p < 0.001** — 5D itself dominates the ρ gain in this synthetic.
-- **D (5D + Box-Cox) vs A: Δρ = +0.006, p = 0.55** — ρ delta is near-zero because D and A share α̂_EBT. The win is mechanical.
-- **Ceiling fraction A → D: 25.3% → 0.3%** (50× reduction).
-- **Top-5 overlap A → D: 0.03 → 0.43** (14× improvement — the metric that matters for TPE exploitation of the top quartile).
-- **J (CAT + 5D + Box-Cox) vs A: Δρ = +0.014, p = 0.019** — CAT's observation-side gain is small but significant.
-- **I / K (Tobit variants): Δρ ≈ −0.09 vs D/J** — new 5D-specific pathology: σ̂_i² is computed from OLS residuals inside `apply_5d()` but Tobit produces a different α̂ distribution, so the EB step shrinks Tobit α̂ in the wrong direction. Not a production concern (we never ship Tobit), but worth noting.
-
-**Calibration sweep** (`calibration_report.md`, 4 regimes of covariate-noise multiplier):
-
-| noise× | prior ρ upper-bound | Δρ A vs A0 | Δ ceiling D-A | Δ top-5 D-A | Δρ J vs A |
-|---|---|---|---|---|---|
-| 0.5× | 0.914 | +0.382 | −0.249 | +0.50 | −0.005 |
-| 1.0× | 0.767 | +0.271 | −0.249 | +0.44 | +0.002 |
-| 2.0× | 0.547 | +0.130 | −0.249 | +0.26 | +0.008 |
-| 4.0× | 0.343 | +0.047 | −0.249 | +0.20 | +0.012 |
-
-Δρ A vs A0 tracks prior strength from +0.38 (strong prior) down to +0.05 (weak prior). At noise×4 (prior ρ ≈ 0.343, the regime that best matches real Hammerhead scorer components), 5D's synthetic ρ gain collapses to +0.047 — matching the shipped production Δρ = +0.036 on LOOO. This confirms that both synthetic runs (here and the original Phase 5D fusion at `experiments/phase5d-covariate-2026-04-17/FUSION_REPORT.md`) overstate the real-world 5D gain by ~10× because synthetic covariates are linear noisy proxies of `q` while real scorer components are near-constant within the 89% exploit cluster. **This is orthogonal to the 5E decision**: Box-Cox's ceiling and top-k gains are invariant across the entire covariate-strength range — the A3 transform sits downstream of α̂_EBT and doesn't care how strong the α̂ is.
-
-Files:
-- `experiments/signal-quality-5d-2026-04-18/signal_validation_5d.py` — 5D-aware harness.
-- `experiments/signal-quality-5d-2026-04-18/REPORT.md` — full Wilcoxon tables.
-- `experiments/signal-quality-5d-2026-04-18/calibration_sweep.py`, `calibration_report.md` — covariate-strength robustness check.
+Specific magnitudes (Δρ tables, ceiling-fraction collapses, top-k overlap multipliers, calibration-sweep numbers) are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ---
 
@@ -163,7 +128,7 @@ Ranked by leverage × confidence × engineering cost:
 
 1. **Replace A3 rank-shape-with-top-quartile-clamp with Box-Cox output warping.** Single-function swap at the production `_rank_fitness` site. Fit `λ̂` via `scipy.stats.boxcox` over all completed trials' `cv_fitness`, refit every N trials, then min-max scale to [0, 1] for Optuna reporting consistency. Expected production effect: exploit-cluster builds spread out on the fitness scale, 7-way tie at fitness=1.0 dissolves, TPE's l(x) gets gradient to act on at the top.
 
-2. **Add CAT Fisher-info opponent selection as a secondary enhancement.** Reuses the existing anchor infrastructure: keep the 3 locked anchors (stability for WilcoxonPruner step IDs), replace the random-fill remainder with posterior-variance-maximising opponent selection, capped by Sympson-Hetter exposure control. Expected marginal gain ~+0.014 ρ on top of Box-Cox (not significant at n=20 in simulation, directionally consistent, orthogonal mechanism).
+2. **Add CAT Fisher-info opponent selection as a secondary enhancement.** Reuses the existing anchor infrastructure: keep the 3 locked anchors (stability for WilcoxonPruner step IDs), replace the random-fill remainder with posterior-variance-maximising opponent selection, capped by Sympson-Hetter exposure control. Expected directional gain on top of Box-Cox; specific marginal magnitude pending re-validation under V2.
 
 3. **Defer Tobit, CFS, POET MC, main-exploiter loop** to later phases. Each targets a failure mode that will become dominant at a different regime:
    - Tobit: when per-matchup censoring exceeds ~30%.
@@ -205,25 +170,20 @@ See `docs/reference/phase5c-opponent-curriculum.md` §4.4 and `docs/reference/ph
 
 ### 5.3 Full MAP-Elites — REJECTED (scale mismatch)
 
-Our 1000-trial budget is 2–4 orders of magnitude below the MAP-Elites regime (typically 10^5–10^7 real evaluations). The simulation confirmed: pure MAP-Elites is not viable here. The tractable QD variant — **Dominated Novelty Search** (strategy E in the simulation) — offers a +0.022 Δρ vs baseline (p = 0.143, not significant) and halves ceiling saturation, but Box-Cox dominates it on every metric. Keep DNS as an available research alternative; don't ship it.
+Our trial budget is orders of magnitude below the MAP-Elites regime (typically 10^5–10^7 real evaluations). Pure MAP-Elites is not viable at this scale. The tractable QD variant — **Dominated Novelty Search** — appeared in the validation grid (strategy E) and halved ceiling saturation, but Box-Cox dominated it on every metric in the V1 validation. Keep DNS as an available research alternative; don't ship it.
 
 ---
 
 ## 6. Files
 
-Research artifacts:
-- `experiments/hammerhead-twfe-2026-04-13/` — 900-trial run, eval log, executed notebooks (`trial_analysis.ipynb`, `build_analysis.ipynb`).
-- `experiments/signal-quality-2026-04-17/signal_validation.py` — simulation harness (11 strategies × 20 seeds).
-- `experiments/signal-quality-2026-04-17/REPORT.md` — auto-generated simulation report with full Wilcoxon tables.
-- `experiments/signal-quality-2026-04-17/results.csv`, `comparison.png`, `exploit_dispersion.png`, `ceiling_saturation.png`.
-
 Related docs:
-- `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research (unchanged).
-- `docs/reference/phase5a-deconfounding-theory.md` — TWFE 6-field literature synthesis (unchanged).
-- `docs/reference/phase5c-opponent-curriculum.md` — Phase 5C opponent selection + rejected per-frame-Java rationale.
-- `docs/reference/phase5d-covariate-adjustment.md` — Phase 5D EB shrinkage of α̂ toward a heuristic prior (replaces the rejected composite-weighted-sum approach and itself replaces an earlier rejected CUPED/FWL/PDS design — see §4.5 of that doc).
-- `docs/reference/implementation-roadmap.md` — Phase 5E entry on the roadmap.
-- `docs/specs/24-optimizer.md` — to be updated when Phase 5E ships (A0 Box-Cox layer before A1 input, or A3 replacement — implementation choice deferred to spec-time).
+- [phase5-signal-quality.md](phase5-signal-quality.md) — original Phase 5A/5B foundational research.
+- [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) — TWFE 6-field literature synthesis.
+- [phase5c-opponent-curriculum.md](phase5c-opponent-curriculum.md) — Phase 5C opponent selection + rejected per-frame-Java rationale.
+- [phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md) — Phase 5D EB shrinkage of α̂ toward a heuristic prior (replaces the rejected composite-weighted-sum approach and itself replaces an earlier rejected CUPED/FWL/PDS design — see §4.5 of that doc).
+- [implementation-roadmap.md](implementation-roadmap.md) — Phase 5E entry on the roadmap.
+- [../specs/24-optimizer.md](../specs/24-optimizer.md) — implementation spec.
+- [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) — V1 invalidation that retired the original `experiments/signal-quality-*` directories.
 
 ---
 

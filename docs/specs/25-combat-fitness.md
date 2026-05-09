@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Combat Fitness Specification
 
 Hierarchical composite fitness score using hull-fraction-based game ground truth. Replaces damage-ratio heuristics with two metrics derived directly from the game's win/loss conditions. Defined in `src/starsector_optimizer/combat_fitness.py`.

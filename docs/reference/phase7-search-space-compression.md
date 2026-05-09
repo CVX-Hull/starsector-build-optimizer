@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 6 — Structured Search-Space Representation
 
 > **Status**: PLANNED. Research complete (2026-04-17). Targets the combinatorial-explosion vs expensive-evaluation bottleneck by replacing the Optuna TPE surrogate (CatCMAwM removed 2026-04-19; see spec 24) with a custom BoTorch-based Gaussian Process whose kernel composes sparse-axis-aligned priors on hullmod booleans, transformed-overlap categoricals and attribute-Matérn on weapons, Matérn on slot coordinates, opponent-context features on small-slot posteriors, gated-sentinel for conditional slots, and ICM-style per-item and per-slot residuals. Warmed by a BOCA-style 30-trial random-forest importance pilot and biased (but not locked) by πBO decay-weighted priors over nine community-stable role archetypes. No shipped code yet.

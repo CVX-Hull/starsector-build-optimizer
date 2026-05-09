@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Variant Builder Specification
 
 Java utility for in-memory variant construction from build specifications. Defined in `combat-harness/src/main/java/starsector/combatharness/VariantBuilder.java`.

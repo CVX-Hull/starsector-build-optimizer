@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Mod Skeleton Specification
 
 Starsector mod entry point, mission definition, and global plugins. Defined in:

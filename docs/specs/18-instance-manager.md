@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Instance Manager Specification
 
 Manages N parallel Starsector game instances for batch combat evaluation on a single machine. Defined in `src/starsector_optimizer/instance_manager.py`. Implements the `EvaluatorPool` ABC from `src/starsector_optimizer/evaluator_pool.py`.

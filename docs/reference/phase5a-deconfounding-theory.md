@@ -1,6 +1,14 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 5A — Deconfounding Theory (TWFE Foundation)
 
-> **Status**: Research synthesis. The design it produced (TWFE decomposition) is shipped in `src/starsector_optimizer/deconfounding.py` and specified in `docs/specs/28-deconfounding.md`.
+> **Status**: Research synthesis. The design it produced (TWFE decomposition) is shipped in `src/starsector_optimizer/deconfounding.py` and specified in [../specs/28-deconfounding.md](../specs/28-deconfounding.md).
+>
+> **Empirical-claims status (2026-05-10):** Synthetic-sim numbers in §2 ("Validation from simulation") were derived from a generative model whose parameters were fit to V1 Hammerhead data; pending re-validation under V2. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Theory and reference citations are unaffected.
 
 Research synthesis from 6 independent literature surveys (IRT/adaptive testing, game rating systems, causal inference, bandits/active learning, sports analytics, coevolutionary algorithms) addressing two core problems:
 
@@ -73,11 +81,7 @@ Newton-Raphson per entity, exploiting block-tridiagonal Hessian structure for bu
 
 ### Validation from simulation
 
-Our simulation showed:
-- Raw Elo: ρ(Elo, true difficulty) = 0.024 with improving builds (confounded)
-- With static builds: ρ = 0.95 (deconfounded)
-
-WHR should recover the static-build performance even with improving builds, because the Wiener process absorbs the trend.
+The synthetic-sim experiment that motivated WHR adoption showed strong confounding under raw Elo when builds improve over time, and clean recovery under WHR's Wiener-process build prior + static opponent prior. Specific ρ values are pending re-validation under V2 (the synthetic generative model was fit to V1 Hammerhead data); see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The theoretical claim — that WHR's asymmetric prior structure absorbs build improvement into α and leaves β as a clean difficulty estimate — is design-grade and unaffected.
 
 ---
 
@@ -158,9 +162,9 @@ With ε = 0.1 and 7 adaptive slots per build, ~0.7 opponents are randomly select
 
 ## 5. Opponent Weighting: Not Elo, but Model-Derived
 
-### Why raw Elo fails (confirmed by simulation)
+### Why raw Elo fails
 
-Our simulation showed ρ(Elo, true difficulty) = 0.024 with improving builds. The confounding mechanism: as builds improve, all opponents' Elo drops, destroying the difficulty signal. This matches the IRT "Bolsinova variance inflation" warning — adaptive testing + dual parameter estimation creates systematic bias.
+The confounding mechanism: as builds improve, all opponents' Elo drops, destroying the difficulty signal. This matches the IRT "Bolsinova variance inflation" warning — adaptive testing + dual parameter estimation creates systematic bias. The corresponding synthetic-sim ρ measurements are pending re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The theoretical mechanism is design-grade and stands.
 
 ### Better alternatives (ranked by simplicity)
 
@@ -322,4 +326,4 @@ All computational overhead is negligible compared to the 5-minute combat simulat
 
 ## A2 — superseded by Phase 5D (2026-04-18)
 
-The original Phase 5A A2 stage — a scalar control variate `α̂_i − β̂_cv · (h_i − h̄)` using only `composite_score` — was replaced in Phase 5D by empirical-Bayes shrinkage over a 7-dim pre-matchup covariate vector (fusion paradigm: α̂_TWFE and γ̂ᵀX are treated as noisy measurements of the same latent α and combined by Bayes rule, never subtracted). The A1 TWFE theory in this document is unchanged. See `docs/reference/phase5d-covariate-adjustment.md` for the fusion derivation and `docs/specs/28-deconfounding.md` §EB Shrinkage (A2′) for the normative spec.
+The original Phase 5A A2 stage — a scalar control variate `α̂_i − β̂_cv · (h_i − h̄)` using only `composite_score` — was replaced in Phase 5D by empirical-Bayes shrinkage over a multi-dim pre-matchup covariate vector (fusion paradigm: α̂_TWFE and γ̂ᵀX are treated as noisy measurements of the same latent α and combined by Bayes rule, never subtracted). The A1 TWFE theory in this document is unchanged. See [phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md) for the fusion derivation and [../specs/28-deconfounding.md](../specs/28-deconfounding.md) §EB Shrinkage (A2′) for the normative spec.

@@ -1,12 +1,20 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 5D — Empirical-Bayes Shrinkage of TWFE α̂ Toward a Heuristic-Derived Prior
 
-> **Status**: Implemented 2026-04-18. Ship gate cleared at Δρ=+0.036 vs A0 / +0.057 vs A on LOOO Hammerhead 2026-04-17. See §5 below for implementation notes + file-placement corrections relative to §3.1.
+> **Status**: Implemented 2026-04-18. Original ship gate was a Δρ improvement on V1 LOOO Hammerhead data; that measurement is suspect under the V1 loadout bug. Re-validation of the design threshold (Δρ ≥ +0.02 vs A0 and vs A) is pending under V2 — see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md). See §5 below for implementation notes + file-placement corrections relative to §3.1.
+>
+> **Empirical-claims status (2026-05-10):** All Δρ values, ρ tables, the synthetic feature-count sweep, the variance audit on the Hammerhead corpus, and the §7 TTK-signal investigation use V1 sim data. Theory, design rationale, and rejected-alternative chain (especially §4.5's refutation of the conditioning paradigm — the closed-form `ρ(α̂_CUPED, α) = √(1 − R)` derivation is paradigm-level and unaffected) are unchanged.
 
 Design for using the auxiliary per-build signals (heuristic composite score and 13 scorer components) already produced by the Python data layer to improve the TWFE fitness estimate. The shipped pipeline (`combat_fitness.py` → `deconfounding.py` A1 → `optimizer.py` A2/A3) uses the `composite_score` only as a scalar control variate at A2; the other 12 scorer components are ignored. This doc specifies a bitter-lesson-compliant extension that **fuses** (`α̂_TWFE`, `heuristic`, `scorer components`) as multiple noisy measurements of the same latent build quality α via empirical-Bayes shrinkage toward a regression-predicted prior mean.
 
-Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline. A1 (TWFE decomposition) → A2 (control-variate adjustment) → A3 (rank shaping) are the three stages; Phase 5D replaces A2, Phase 5E replaces A3. Both are orthogonal and compose cleanly. See `docs/reference/implementation-roadmap.md` for phase overview and `docs/reference/phase5a-deconfounding-theory.md` for the TWFE foundation.
+Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline. A1 (TWFE decomposition) → A2 (control-variate adjustment) → A3 (rank shaping) are the three stages; Phase 5D replaces A2, Phase 5E replaces A3. Both are orthogonal and compose cleanly. See [implementation-roadmap.md](implementation-roadmap.md) for phase overview and [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) for the TWFE foundation.
 
-**Design history.** An earlier version of this doc (2026-04-13 through 2026-04-17) specified a *conditioning*-paradigm design — multivariate CUPED / FWL / post-double-selection lasso — treating the heuristic and scorer components as covariates to partial out of the outcome Y_ij. Synthetic validation (20 seeds, p<0.0001) and a real-data ship-gate on the 2026-04-17 Hammerhead run (368 builds × 54 opponents, LOOO across 5 anchor probes) showed that paradigm is categorically wrong for this setting — the Δρ vs plain TWFE was **−0.35 synthetic and −0.13 real**. See §4.5 for the rejection, and `experiments/phase5d-covariate-2026-04-17/REPORT.md` for the full refutation. The current doc describes the fusion-paradigm replacement that passed the same ship-gate at Δρ = +0.036 on real Hammerhead data.
+**Design history.** An earlier version of this doc (2026-04-13 through 2026-04-17) specified a *conditioning*-paradigm design — multivariate CUPED / FWL / post-double-selection lasso — treating the heuristic and scorer components as covariates to partial out of the outcome Y_ij. Synthetic validation and a real-data ship-gate on the 2026-04-17 Hammerhead run showed that paradigm is categorically wrong for this setting (Δρ vs plain TWFE was strongly negative). See §4.5 for the rejection. The current doc describes the fusion-paradigm replacement that was designed to clear the same ship-gate. Original-magnitude Δρ values are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ---
 
@@ -151,47 +159,39 @@ The same two-level Gaussian model appears under different names across six field
 
 All seven are mathematically identical: α_i ~ N(γᵀX_i, τ²), α̂_i | α_i ~ N(α_i, σ_i²), posterior by Bayes rule. The convergence across independent fields is the best available evidence that this is the right formulation for "rate many things with sparse data plus side info."
 
-For the formal derivation of why this beats CUPED — specifically the derivation ρ(α̂_CUPED, α) = √(1 − R) where R is the heuristic's reliability — see `experiments/phase5d-covariate-2026-04-17/FUSION_REPORT.md` §4.
+For the formal derivation of why this beats CUPED — specifically the derivation `ρ(α̂_CUPED, α) = √(1 − R)` where R is the heuristic's reliability — see §4.5 below.
 
-### 2.7 Feature selection — the 8-feature ship set
+### 2.7 Feature selection — the 7-feature ship set
 
 #### Dataset-size budget context
 
-Measured from `experiments/hammerhead-twfe-2026-04-13/optimizer.log` (4 parallel instances, WilcoxonPruner + ASHA): ~27 completed trials per hour. Realistic dataset sizes:
-
-| Run duration | Expected N (non-pruned builds) |
-|---|---:|
-| 8h overnight | ~215 |
-| 24h full day | ~650 |
-| 72h multi-day | ~1950 |
-
-The Hammerhead 2026-04-17 run (N = 313 non-pruned builds) sits in the middle of this range. The feature-count design must be safe at N ≈ 200 and beneficial up to N ≈ 1000.
+The feature-count design targets safety at N ≈ 200 and beneficial behaviour up to N ≈ 1000, where N is the number of non-pruned builds in a run. Specific throughput rates and dataset sizes from V1 runs are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 #### Feature-count × dataset-size sweep
 
-A synthetic sweep (504 cells = 6 seeds × {200, 368, 900} N × {0,1,2,4,8,13,20} useful features × {0,2,6,12} noise features) at `experiments/phase5d-covariate-2026-04-17/feature_count_sweep.py` mapped Δρ(HN − A0) as a function of `(p_useful, p_noise, N)`. Headline findings:
+A synthetic sweep mapped Δρ(EB − A0) as a function of `(p_useful, p_noise, N)`. Headline qualitative findings (specific Δρ magnitudes pending re-validation):
 
-- **Diminishing returns at p_useful ≈ 8.** Marginal Δρ from the 9th–13th feature is +0.03 total; beyond p = 13 the curve is flat-to-declining at realistic N.
-- **Pure noise X is mildly harmful (≤ 0.03 Δρ), not catastrophic.** The τ² floor (0.05 · Var(α̂)) prevents OLS over-fit of γ̂ from collapsing the prior.
-- **p/N overfit kicks in above p/N ≈ 0.08.** At N = 200, `p_total = 32` halves the gain vs the p = 13 peak. At N = 900 no penalty up to p = 32.
-- **Ship gate (Δρ ≥ +0.02) clears in 72/84 cells.** All 12 failing cells had p_useful = 0.
+- **Diminishing returns** appear at p_useful around 8. Beyond that range the curve is flat-to-declining at realistic N.
+- **Pure noise X is mildly harmful, not catastrophic.** The τ² floor (0.05 · Var(α̂)) prevents OLS over-fit of γ̂ from collapsing the prior.
+- **p/N overfit** kicks in above roughly p/N ≈ 0.08.
+- **Ship gate clears** in the large majority of (p_useful, p_noise, N) cells; failing cells were all p_useful = 0.
 
-Full report: `experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md`.
+#### Variance audit against the Hammerhead run
 
-#### Variance audit against the 2026-04-17 Hammerhead run
+Before finalizing the feature list, candidate engine-computed and Python-raw features were cross-checked against their empirical variance on the per-hull Hammerhead log. Several plausible candidates from first principles turned out to have near-zero variance in per-hull runs:
 
-Before finalizing the feature list, candidate engine-computed and Python-raw features were cross-checked against their empirical variance on the 313-build Hammerhead log. Several plausible candidates from first principles turned out to have near-zero variance in per-hull runs:
+| Candidate feature | Modifying hullmods in our Python model | Variance verdict |
+|---|---|---|
+| `eff_max_flux` | flux_capacitors (raw 0–20) + any flux mods | **HIGH** ✓ |
+| `eff_flux_dissipation` | flux_vents (raw 0–20) + safetyoverrides | **HIGH** ✓ |
+| `eff_armor_rating` | heavyarmor, shield_shunt, assault_package | **MODERATE** ✓ |
+| `eff_hull_hp` | reinforcedhull, assault_package partial | **LOW–MODERATE** ✗ |
+| `eff_max_speed` | safetyoverrides only | **NEAR-ZERO** ✗ |
+| `eff_shield_damage_mult` | hardenedshieldemitter only | **NEAR-ZERO** ✗ |
 
-| Candidate feature | Modifying hullmods in our Python model | Usage in Hammerhead run | Variance verdict |
-|---|---|---:|---|
-| `eff_max_flux` | flux_capacitors (raw 0–20) + any flux mods | capacitors always varying | **HIGH** ✓ |
-| `eff_flux_dissipation` | flux_vents (raw 0–20) + safetyoverrides | vents always varying | **HIGH** ✓ |
-| `eff_armor_rating` | heavyarmor (1 build), shield_shunt (32), assault_package (85) | 10–27% modified | **MODERATE** ✓ |
-| `eff_hull_hp` | reinforcedhull (8 builds), assault_package partial | 3–27% modified | **LOW–MODERATE** ✗ |
-| `eff_max_speed` | safetyoverrides (1 build) | 0.3% | **NEAR-ZERO** ✗ |
-| `eff_shield_damage_mult` | hardenedshieldemitter (10 builds) | 3.2% | **NEAR-ZERO** ✗ |
+Specific usage percentages from V1 logs are pending re-validation under V2 (see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)); the variance ranking is design-grade based on hullmod-population logic.
 
-`eff_max_speed` and `eff_shield_damage_mult` are defensible *in theory* (speed governs engagement-range control, shield efficiency is a 2.5× multiplier on shield EHP in cross-hull runs), but **within a per-hull run** they are effectively hull-constants. `eff_hull_hp` sits on the margin — the Reinforced-Bulkheads binary + Assault-Package partial bonus probably yields ±20–30% spread, borderline informative — but the low-confidence variance argues for dropping in the initial ship set. All three can return if the design generalizes to cross-hull aggregation.
+`eff_max_speed` and `eff_shield_damage_mult` are defensible *in theory* (speed governs engagement-range control, shield efficiency multiplies shield EHP in cross-hull runs), but **within a per-hull run** they are effectively hull-constants. `eff_hull_hp` sits on the margin — Reinforced-Bulkheads + Assault-Package partial bonus yields some spread, borderline informative — but the low-confidence variance argues for dropping in the initial ship set. All three can return if the design generalizes to cross-hull aggregation.
 
 The three surviving engine features — `eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating` — each have well-established continuous variance from raw build primitives (capacitors, vents) plus the scattered effects of the exploit-cluster hullmods (shrouded_lens, escort_package, neural_integrator, assault_package). The Java engine's authoritative hullmod-effect computation captures these cleanly; our Python `compute_effective_stats` would miss the 50+ unmodeled hullmods' contributions.
 
@@ -234,21 +234,13 @@ Coverage of information axes: flux-cap (1), flux-sustain (2), armor-defense (3),
 
 #### Expected Δρ at p = 7
 
-Interpolating from `FEATURE_COUNT_REPORT.md` between p = 4 (+0.28) and p = 8 (+0.32):
-
-| N | Expected Δρ(HN − A0) at p = 7, p_noise = 0 |
-|---|---:|
-| 200 | ≈ +0.32 |
-| 368 | ≈ +0.31 |
-| 900 | ≈ +0.34 |
-
-All clear the +0.02 ship gate by ≥ 15×.
+The feature-count sweep projected positive Δρ(EB − A0) at p = 7 across the targeted N range. Specific magnitudes are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 #### When to revisit
 
 - **Add back `eff_hull_hp`, `eff_max_speed`, `eff_shield_damage_mult`** for cross-hull aggregate runs where they regain real variance. Per-hull runs remain at p = 7.
 - **Add `mean_damage_per_shot`** (DPS-weighted) only if ship-gate is tight post-validation and armor-penetration burst matters empirically — this is mild theory injection and is a last resort.
-- **Drop to p = 6** (remove `kinetic_dps_fraction`) only if production runs routinely land at N < 150. Not expected given current throughput.
+- **Drop to p = 6** (remove `kinetic_dps_fraction`) only if production runs routinely land at small N.
 
 ---
 
@@ -292,13 +284,13 @@ No new Python runtime dependencies. `scipy.linalg.lstsq` + NumPy is sufficient. 
 
 ### 3.3 Ship gate
 
-Phase 5D is gated on **leave-one-opponent-out** rank correlation against the 2026-04-17 Hammerhead log, with the top-5 most-sampled anchor opponents as probes:
+Phase 5D is gated on **leave-one-opponent-out** rank correlation against a per-hull log, with the top-5 most-sampled anchor opponents as probes:
 
 - Fit A0, A, A2' (new EB) on the log minus probe opponent.
-- Measure Spearman ρ between the refit α̂ and the probe's raw `hp_differential` across all 313 non-pruned builds.
+- Measure Spearman ρ between the refit α̂ and the probe's raw `hp_differential` across all non-pruned builds.
 - Require **Δρ(EB − A0) ≥ +0.02 AND Δρ(EB − A) ≥ +0.02** — both relative to plain TWFE *and* relative to the shipped scalar CV. Strict improvement on both required; the shipped A2 itself is not a safe floor (see §4.5).
 
-Observed gate values in fusion validation (5-probe mean, 200-bootstrap CI): A0 = 0.280, A = 0.259, EB = 0.316, EBT = 0.316. Both Δρ margins ≥ +0.028.
+Observed gate values from V1 fusion validation are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md).
 
 ---
 
@@ -340,28 +332,17 @@ Y_ij = α_i + β_j + γᵀ X_ij + ε_ij       (multivariate OLS, not EB shrinkag
 
 with `γ` estimated by three-block alternating projection (Frisch-Waugh-Lovell 1933), automatic column selection via Belloni-Chernozhukov-Hansen post-double-selection lasso (2014, arXiv:1201.0220), and an optional ICP invariance safety net (Peters-Bühlmann-Meinshausen 2016).
 
-**Why rejected — empirical refutation.** Full synthetic sweep (20 seeds, 368 builds × 54 opponents matched to Hammerhead characteristics) and real-data ship-gate on the 2026-04-17 Hammerhead evaluation log (313 non-pruned builds × 54 opponents, LOOO across 5 anchor probes) showed:
-
-| Estimator | Synthetic ρ(α̂, truth) | Hammerhead LOOO ρ |
-|---|---|---|
-| Plain TWFE (A0, baseline) | 0.407 | 0.280 |
-| Shipped scalar CV (A) | 0.347 (p<0.0001 worse than A0) | 0.259 |
-| CUPED multi-covariate (rejected 5D.v1) | 0.055 (p<0.0001 worse than A0) | 0.118 |
-| CUPED + PDS lasso | 0.055 (identical — PDS kept all cols) | 0.118 |
-| CUPED + PDS + ICP | 0.077 (marginal rescue) | 0.118 |
-| **EB shrinkage (new 5D)** | **0.744** | **0.316** |
-
-Ship gate was +0.02; the conditioning paradigm missed it by −0.14. Full writeup in `experiments/phase5d-covariate-2026-04-17/REPORT.md`.
+**Why rejected — empirical refutation.** A synthetic sweep and a real-data ship-gate on the V1 Hammerhead evaluation log both showed the conditioning paradigm fails the ship gate by a wide margin. Specific Δρ magnitudes are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The qualitative result — conditioning paradigm catastrophically below the ship gate, fusion paradigm comfortably above it — is structural and confirmed by the closed-form derivation below.
 
 **Why rejected — causal diagnosis.** The conditioning paradigm treats `X` as an exogenous covariate of the outcome Y and partials it out. This is valid when X is correlated with *noise* in Y (CUPED's A/B-testing use case, where pre-period user metrics are correlated with user-specific noise but orthogonal to treatment randomization). It is invalid when X is correlated with *the estimand*. Here X is correlated with α itself (the scorer components are predictive signals of combat quality) — Cinelli, Forney & Pearl 2022 arXiv:2106.10314 name this "Case 8: proxy of the treatment," a bad-control pattern. Conditioning on a noisy measurement of the estimand biases the coefficient on the estimand and, in the between-build projection, removes the signal α̂ shares with X.
 
-Closed-form derivation (see `FUSION_REPORT.md` §4): in the scalar-h case, if `h_i = c₀ + c₁ α_i + ν_i` and `R = c₁² Var(α) / (c₁² Var(α) + σ_ν²)` is h's reliability as a measurement of α, then after CUPED adjustment
+Closed-form derivation: in the scalar-h case, if `h_i = c₀ + c₁ α_i + ν_i` and `R = c₁² Var(α) / (c₁² Var(α) + σ_ν²)` is h's reliability as a measurement of α, then after CUPED adjustment
 
 ```
 ρ(α̂_CUPED, α) = √(1 − R)
 ```
 
-compared to ρ(α̂, α) = 1 for plain TWFE. The more useful the heuristic, the more CUPED damages the rank correlation. At observed R ≈ 0.2 on our data, plain TWFE beats CUPED by factor √(1 − R) = 0.89 — matching the empirical ratio 0.85 in the simulation.
+compared to ρ(α̂, α) = 1 for plain TWFE. The more useful the heuristic, the more CUPED damages the rank correlation. This derivation is paradigm-level and unaffected by the V1 invalidation — the structural result holds regardless of the specific h reliability observed empirically.
 
 **Philosophical resolution.** The bad-control fix and the correct design share the same auxiliary data and the same general hygiene concerns (Stage-1 timing filter, rejection of human-designed weights), but differ in the *mathematical operation* applied to the data. The conditioning paradigm subtracts `γ̂ᵀ X` from Y; the fusion paradigm averages `α̂` with `γ̂ᵀ X` by relative precision. That sign flip is the entire difference.
 
@@ -378,7 +359,7 @@ Citations kept in this section for historical completeness; they do not guide th
 
 **What it was.** Treat `(α̂_TWFE, h, scorer_1, ..., scorer_13)` as 14 noisy indicators of a single latent factor α and estimate factor scores by ML (Jöreskog 1967 `Psychometrika` 32:443; Bollen 1989 *Structural Equations with Latent Variables*).
 
-**Why rejected.** CFA dominated synthetic (ρ = 0.806, best overall) but failed the ship gate on real Hammerhead (ρ = 0.135, Δρ = −0.145 vs A0). The one-factor assumption — that every indicator is a rescaled noisy measurement of the same underlying α — is approximately correct in the synthetic generative model but violated in real data, where scorer components measure genuinely different aspects of a build (kinetic-DPS vs shield-eHP vs flux-efficiency are not one-dimensional). The EB shrinkage in §2.1 makes a strictly weaker structural assumption (`α_i = γᵀ X_i + residual`, no factor structure on X) and is robust to indicator heterogeneity.
+**Why rejected.** CFA performed strongly on synthetic data but failed the ship gate on real Hammerhead. The one-factor assumption — that every indicator is a rescaled noisy measurement of the same underlying α — is approximately correct in the synthetic generative model but violated in real data, where scorer components measure genuinely different aspects of a build (kinetic-DPS vs shield-eHP vs flux-efficiency are not one-dimensional). The EB shrinkage in §2.1 makes a strictly weaker structural assumption (`α_i = γᵀ X_i + residual`, no factor structure on X) and is robust to indicator heterogeneity. Specific synthetic-vs-real Δρ magnitudes pending re-validation under V2.
 
 A multi-factor CFA with k > 1 latent factors might recover performance, but at that point the simplicity advantage over §2 vanishes and the closed-form OLS prior suffices.
 
@@ -390,15 +371,15 @@ A multi-factor CFA with k > 1 latent factors might recover performance, but at t
 α̂_IV_i = (α̂_i/σ̂_i² + ĥ_i/σ̂_h²) / (1/σ̂_i² + 1/σ̂_h²),   ĥ_i = γ̂ᵀ X_i
 ```
 
-Passes the ship gate (Δρ = +0.028 vs A0 on Hammerhead) but is systematically weaker than §2 EB (Δρ = +0.036). The difference: IV does not separate τ² (between-build variance around the prior) from `σ̂_h²` (OLS fit quality). When the OLS fit over-explains α̂ in small samples, IV under-weights the data. The EB method-of-moments τ̂² estimator corrects this — at the cost of a slightly more complex recipe.
+Passes the V1 ship gate but is systematically weaker than §2 EB. The difference: IV does not separate τ² (between-build variance around the prior) from `σ̂_h²` (OLS fit quality). When the OLS fit over-explains α̂ in small samples, IV under-weights the data. The EB method-of-moments τ̂² estimator corrects this — at the cost of a slightly more complex recipe. Specific magnitudes pending re-validation under V2.
 
-Kept as a reference implementation in `experiments/phase5d-covariate-2026-04-17/phase5d_fusion_validation.py::estimator_IV_inverse_variance` and a fallback if diagnostic evidence shows the MoM τ̂² estimate is unstable in production.
+Kept as a reference fallback if diagnostic evidence shows the MoM τ̂² estimate is unstable in production.
 
 ### 4.8 EB with PDS-selected prior regression — CLOSE ALTERNATIVE
 
-**What it was.** Apply post-double-selection lasso (Belloni-Chernozhukov-Hansen 2014) *inside the prior regression* to select a subset of the 16 columns before forming `γ̂ᵀ X_i`.
+**What it was.** Apply post-double-selection lasso (Belloni-Chernozhukov-Hansen 2014) *inside the prior regression* to select a subset of the columns before forming `γ̂ᵀ X_i`.
 
-**Why not currently used.** At N = 313 builds × 16 columns, PDS retained **all 16 columns** in both synthetic and real replays — providing identical α̂_EB as §2 without selection, at ~200× the wall time (LassoCV CV cost). Retain as a no-op default; promote only if the covariate pool grows past ~50 columns.
+**Why not currently used.** PDS retained essentially all columns in both synthetic and real replays at the explored covariate counts — providing identical α̂_EB as §2 without selection, at ~200× the wall time (LassoCV cross-validation cost). Retain as a no-op default; promote only if the covariate pool grows substantially.
 
 ---
 
@@ -439,18 +420,15 @@ Kept as a reference implementation in `experiments/phase5d-covariate-2026-04-17/
 
 ## 6. See also
 
-- `docs/reference/phase5a-deconfounding-theory.md` — TWFE decomposition theory (six-field literature synthesis).
-- `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B foundational research.
-- `docs/reference/phase5c-opponent-curriculum.md` — opponent-selection design (anchor-first + incumbent-overlap).
-- `docs/reference/phase5e-shape-revision.md` — A3 rank-shape revision (Box-Cox).
-- `docs/reference/implementation-roadmap.md` — phase overview and status.
-- `docs/specs/28-deconfounding.md` — implementation spec (to be extended when 5D ships).
-- `experiments/phase5d-covariate-2026-04-17/REPORT.md` — refutation of the conditioning-paradigm v1 design.
-- `experiments/phase5d-covariate-2026-04-17/FUSION_REPORT.md` — validation of the fusion-paradigm v2 design (this doc).
-- `experiments/phase5d-covariate-2026-04-17/FEATURE_COUNT_REPORT.md` — feature-count × dataset-size sweep backing the §2.7 selection of the 8-feature set.
-- `experiments/phase5d-covariate-2026-04-17/feature_count_sweep.py` — reproducible harness for the sweep.
-- `src/starsector_optimizer/deconfounding.py`, `src/starsector_optimizer/optimizer.py`, `src/starsector_optimizer/result_parser.py` — production Python code to modify.
-- `combat-harness/src/main/java/starsector/combatharness/CombatHarnessPlugin.java`, `ResultWriter.java` — production Java code to modify for the `setup_stats` emit.
+- [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) — TWFE decomposition theory (six-field literature synthesis).
+- [phase5-signal-quality.md](phase5-signal-quality.md) — original Phase 5A/5B foundational research.
+- [phase5c-opponent-curriculum.md](phase5c-opponent-curriculum.md) — opponent-selection design (anchor-first + incumbent-overlap).
+- [phase5e-shape-revision.md](phase5e-shape-revision.md) — A3 rank-shape revision (Box-Cox).
+- [implementation-roadmap.md](implementation-roadmap.md) — phase overview and status.
+- [../specs/28-deconfounding.md](../specs/28-deconfounding.md) — implementation spec.
+- [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) — the V1 loadout-bug invalidation that retired the original `experiments/phase5d-covariate-2026-04-17/` directory.
+- `src/starsector_optimizer/deconfounding.py`, `src/starsector_optimizer/optimizer.py`, `src/starsector_optimizer/result_parser.py` — production Python code.
+- `combat-harness/src/main/java/starsector/combatharness/CombatHarnessPlugin.java`, `ResultWriter.java` — production Java code for the `setup_stats` emit.
 
 ---
 
@@ -491,99 +469,70 @@ The original plan called for always-emit with `Float.NaN` signaling failed reads
 
 `MutableShipStatsAPI.getFluxCapacity()` (NOT `getMaxFlux()` — this method does not exist) and `MutableShipStatsAPI.getArmorBonus().computeEffective(hullSpec.getArmorRating())` were confirmed via `javap -cp game/starsector/starfarer.api.jar …` on 2026-04-18. The `StatBonus.computeEffective(float base)` accessor applies flat + percent + mult bonuses to the base hull-spec rating; this is the canonical way to read effective armor, superseding the original plan's grid-sum approach (which would have read current damage state rather than rated armor).
 
-### Replay-gate finding (2026-04-18): p=7 + Python-fallback does NOT clear the +0.02 gate
+### Replay-gate finding (2026-04-18) — pending re-validation under V2
 
-Running `experiments/phase5d-covariate-2026-04-17/ship_gate_replay.py` against the consolidated 2026-04-13 Hammerhead log (485 non-pruned builds × 55 opponents) through the SHIPPED production code:
+The pre-5D Hammerhead log replay through the shipped production code at p=7 with Python-fallback for the engine-stat columns showed a Δρ smaller than the synthetic sweep projection. The gap is attributable to two structural effects (both unaffected by the V1 invalidation):
 
-| Estimator | Mean ρ vs LOOO probe (4 anchors) | Δρ vs A0 | Δρ vs A |
-|---|---:|---:|---:|
-| A0 (plain TWFE) | +0.271 | — | — |
-| A (shipped scalar CV) | +0.257 | | — |
-| **EB (p=7, Python fallback)** | **+0.277** | **+0.006** | **+0.020** |
-| **EBT (p=7, Python fallback)** | **+0.277** | **+0.006** | **+0.020** |
+1. **Python fallback** for the 3 engine-stat columns: pre-5D logs lack `setup_stats`, so `_build_covariate_vector` falls back to `ScorerResult.effective_stats.{flux_capacity, flux_dissipation, armor_rating}`. These values miss the contributions of the ~50 hullmods our Python model does not track and are therefore less informative than Java-authoritative `MutableShipStats` reads.
+2. **Information overlap in real data**: synthetic sweep features carry independent signal by construction. Real-data features (e.g. `composite_score`, `engagement_range`) overlap, so each additional column adds less than the sweep projects.
 
-Gate is **NOT** cleared at p=7 on this log. For comparison, the reference `phase5d_fusion_validation.py::hammerhead_replay` at **p=16** (full 13-scorer + 3 build-structure extras) on the same 485-build log clears the gate:
+**Implication**: the ship gate is expected to clear only after a production run collects authoritative Java `engine_stats`. Specific Δρ numbers from the V1 replay (and from the synthetic sweep projection) are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md).
 
-| Estimator | Mean ρ | Δρ vs A0 | Δρ vs A |
-|---|---:|---:|---:|
-| A0 | +0.271 | — | — |
-| A | +0.257 | | — |
-| **HN (p=16)** | **+0.300** | **+0.028** | **+0.042** |
-| **EBT (p=16)** | **+0.300** | **+0.028** | **+0.042** |
-
-Two differences between the replay and the original §2.7 p=7 projection of Δρ ≈ +0.31:
-
-1. **Python fallback** for the 3 engine-stat columns (no `setup_stats` in the pre-5D log; `_build_covariate_vector` falls back to `ScorerResult.effective_stats.{flux_capacity, flux_dissipation, armor_rating}`). These values are less informative than Java-authoritative `MutableShipStats` reads because they miss the ~50 hullmod effects that our Python model does not track. The +0.02 gap between p=16 (+0.028) and p=7 Python-fallback (+0.006) is almost entirely attributable to this.
-2. The synthetic sweep projected Δρ at p=7 assumed each feature carried full informative signal. Real-data features (especially `composite_score`, `engagement_range`) overlap in information content — adding more does not add proportional signal. This is also why p=16 beats p=7 only by +0.022 rather than the larger gap implied by linear extrapolation of the sweep.
-
-**Implication**: the +0.02 ship gate is expected to clear only after a production run collects authoritative Java `engine_stats`. The pre-5D-log replay is a lower bound. The implementation is correct; the empirical validation has to come from a fresh overnight run with the deployed mod.
-
-**What to do next**: deploy Phase 5D and run an overnight Hammerhead campaign. The first ~200 trials will exercise the Python fallback (and should match or slightly exceed the replay numbers); subsequent trials with `engine_stats` populated should progressively close the gap toward the p=16 reference.
+**What to do next**: re-run the Hammerhead overnight campaign under V2 with the deployed mod. Early trials exercise the Python fallback; later trials with `engine_stats` populated close the gap.
 
 ---
 
 ## 7. TTK-signal investigation (2026-04-18)
 
-**Status**: benchmarked; conclusions Hammerhead-only (single-hull), pending live cross-hull validation. Not shipped. Artifacts in `experiments/phase5d-ttk-signal-2026-04-18/`.
+**Status**: benchmarked under V1; conclusions are pending re-validation under V2. Not shipped. The investigation is preserved here for design rationale and the rejected-alternative chain; specific Δρ tables are stripped because they were measured against V1 sim runs. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ### 7.1 Question
 
-Should `duration_seconds` (combat time, right-censored at the 300 s harness timeout) enter the EB prior as an 8th covariate — either raw, as a pre-battle projection `log(effective_hp / total_dps)`, or as a Weibull-AFT residual — or alternatively be added as a lexicographic ε-tiebreaker inside `Y_ij`?
+Should `duration_seconds` (combat time, right-censored at the harness timeout) enter the EB prior as an 8th covariate — either raw, as a pre-battle projection `log(effective_hp / total_dps)`, or as a Weibull-AFT residual — or alternatively be added as a lexicographic ε-tiebreaker inside `Y_ij`?
 
-### 7.2 Literature triangulation (9 agents, tool-verified)
+### 7.2 Literature triangulation
 
-- **Empirical** (internal eval log exploration): matchup-level `ρ(duration, fitness) = −0.72`, within-wins `−0.51`, bimodal distribution (21.5% quick kills < 50 s, 36.8% grinds 150–300 s, 15.5% clipped timeouts).
-- **Causal inference** (Cinelli-Forney-Pearl 2022 Model 17; Rosenbaum 1984; Montgomery-Nyhan-Torres 2018): raw duration is a *descendant of Y* — the canonical "bad control" pattern that wrecked 5D v1. Placebo test (Eggers-Tuñón 2024, AJPS doi 10.1111/ajps.12818) confirms contamination at both n=485 (p=0.032) and n=56 (p=10⁻⁷).
-- **Survival analysis** (Cragg 1971 hurdle; Atem et al. 2017 censored covariates; Collett AFT residuals): informative right-censoring at 300 s requires hurdle or AFT-residualization; naive substitution is biased.
-- **Empirical Bayes methodology** (Morris 1983 self-correction; Riley et al. 2019 min-n rules): τ̂²-floor + ridge auto-regularization make p=7→p=8 safe at n ≥ 80; the hazard is noisy-covariate attenuation (Armstrong-Kline-Sun 2025), not degrees-of-freedom.
-- **Multi-objective literature** (Miettinen 1999; Cococcioni-Pappalardo-Sergeyev 2018; SSCAIT/AIIDE tournament precedent): lexicographic (outcome ≫ duration) is the formally correct framing if "duration matters infinitesimally less than outcome." Weighted sum has known non-convex-front pathologies; multi-objective BO (qEHVI) costs 4–6 weeks of rework.
+- **Causal inference** (Cinelli-Forney-Pearl 2022 Model 17; Rosenbaum 1984; Montgomery-Nyhan-Torres 2018): raw duration is a *descendant of Y* — the canonical "bad control" pattern that wrecked 5D v1. Placebo testing follows Eggers-Tuñón 2024 (AJPS doi 10.1111/ajps.12818).
+- **Survival analysis** (Cragg 1971 hurdle; Atem et al. 2017 censored covariates; Collett AFT residuals): informative right-censoring at the timeout requires hurdle or AFT-residualization; naive substitution is biased.
+- **Empirical Bayes methodology** (Morris 1983 self-correction; Riley et al. 2019 min-n rules): τ̂²-floor + ridge auto-regularization make moderate covariate growth safe; the hazard is noisy-covariate attenuation (Armstrong-Kline-Sun 2025), not degrees-of-freedom.
+- **Multi-objective literature** (Miettinen 1999; Cococcioni-Pappalardo-Sergeyev 2018; SSCAIT/AIIDE tournament precedent): lexicographic (outcome ≫ duration) is the formally correct framing if "duration matters infinitesimally less than outcome." Weighted sum has known non-convex-front pathologies; multi-objective BO (qEHVI) is a major rework.
 - **Game-AI precedent** (OpenAI Five, AlphaStar, FTW, DareFightingICE): time enters via the RL discount factor γ, not as a reward term. Blizzard/Riot treat TTK as a *diagnostic*, not a *target*. Lanchester square law argues for TTK as an attrition quality but breaks for alpha-strike regimes.
-- **Starsector mechanics** (PPT + 0.25 %/s CR decay + "hard fought" recoup + fleet-scale amortization): TTK carries real *campaign-layer* value the sim cannot otherwise see. Hammerhead specifically is a quick-kill/burst/SO-brawler archetype (AAF + SO variants), so its TTK is an especially good α-mediator; attrition-oriented hulls (HEF Paragon, armor-tank Onslaught) may not share this property.
+- **Starsector mechanics** (PPT + CR decay + "hard fought" recoup + fleet-scale amortization): TTK carries real *campaign-layer* value the sim cannot otherwise see. Hammerhead is a quick-kill/burst/SO-brawler archetype, so its TTK is an especially good α-mediator; attrition-oriented hulls (HEF Paragon, armor-tank Onslaught) may not share this property.
 
-### 7.3 Empirical benchmark — two regimes, opposite conclusions
+### 7.3 Empirical benchmark — qualitative
 
-LOOO Δρ over 10 anchor probes, 200 bootstraps, all against the *same* shipped `eb_shrinkage` + `triple_goal_rank` end-to-end code.
+The V1 benchmark showed two regimes with opposite conclusions:
 
-| Log | n | opps/build | Δρ(EB8_dur − EB7) | Paired-bootstrap CI | Sig |
-|---|---:|---:|---:|---|---|
-| `hammerhead-twfe-2026-04-13` (calibration, sparse) | 485 | ~6 | +0.004 | [−0.003, +0.010] | NS |
-| `hammerhead-overnight-2026-04-13` (production-like, dense) | 56 | 10 | **+0.136** | [+0.079, +0.194] | **sig** |
+- **Calibration (sparse, large-N)**: EB7 saturates the available pre-battle signal; the 8th-covariate family lands inside the noise band.
+- **Production-like (dense, smaller-N per build)**: EB shrinkage has room for an additional informative covariate; duration and its derivatives deliver significant lift.
 
-At n=485, EB7 saturates the available pre-battle signal and the 8th-covariate family lands inside a ±0.01 Δρ noise band. At n=56 (the production-run regime), EB shrinkage has room for an additional informative covariate and duration / TTK / AFT residual all deliver significant lift.
+Specific Δρ values pending re-validation under V2.
 
-### 7.4 Synthetic multi-hull stress test (162 scenarios)
+### 7.4 Synthetic multi-hull stress test
 
-Grid: n ∈ {100, 250, 500}, k ∈ {10, 30}, SNR ∈ {0.3, 1, 3}, R²(X7→α) ∈ {0.2, 0.5, 0.8}, duration_regime ∈ {clean, collider, mediator}. 10 reps per cell. Metric: Δρ(α̂, α_true).
-
-| regime | EB7 | EB8_dur | EB8_ttk | EB9_ttk_dur |
-|---|---:|---:|---:|---:|
-| clean (duration ⊥ α) | 0.004 | 0.004 | 0.004 | 0.004 |
-| collider (dur = g(α, Y) + ε) | 0.004 | 0.014 | 0.004 | 0.014 |
-| mediator (dur = f(α) + ε) | 0.004 | 0.025 | 0.004 | 0.025 |
-
-Duration helps across the full (n, SNR, R²) grid **only in non-null regimes**. The null "clean" regime produces at most 0.002 Δρ loss — the bad-control hazard predicted by Case-17 theory does not catastrophically materialize in this EB setup because build-mean aggregation over ~7–10 matchups shrinks the per-matchup ε-noise component ~√N×, leaving the α-mediator signal dominant.
+A regime grid (clean / collider / mediator duration generation × N × SNR × R²) showed duration helps across the (N, SNR, R²) grid **only in non-null regimes**. The null "clean" regime produces minimal Δρ loss — the bad-control hazard predicted by Case-17 theory does not catastrophically materialize in this EB setup because build-mean aggregation over many matchups shrinks the per-matchup ε-noise component, leaving the α-mediator signal dominant. Specific Δρ values pending re-validation under V2.
 
 ### 7.5 Lexicographic ε-tiebreaker — uniformly negative
 
-At ε ∈ {0.001, 0.01, 0.1}, on both real logs and all estimators, `Y_new = Y − ε·(duration/300)` loses 0.005–0.12 Δρ vs ε=0. The tiebreaker does not compose with EB shrinkage when `hp_differential` is already a continuous score with no hard-tier structure to break. **Rejected.**
+`Y_new = Y − ε·(duration/timeout)` lost Δρ vs ε=0 across all explored ε, both real logs, and all estimators in the V1 benchmark. The tiebreaker does not compose with EB shrinkage when `hp_differential` is already a continuous score with no hard-tier structure to break. **Rejected.**
 
 ### 7.6 Implications for the 5D-as-shipped p=7 set
 
-1. The single-hull data disagree across regimes, so the shipped p=7 choice is *neither validated nor refuted* by this investigation. On the calibration log (n=485) p=7 is saturating; on the overnight log (n=56) p=7 is the weaker starting point and p=8 would help.
+1. The single-hull data disagreed across regimes, so the shipped p=7 choice is *neither validated nor refuted* by this investigation. On the calibration log p=7 was saturating; on the overnight log p=7 was the weaker starting point and p=8 would have helped.
 2. The §4.5 rejection of the conditioning-paradigm v1 still holds: v1 used covariates that were *transformations of the scorer* (i.e., scorer-component-derived Y-descendants), which is a strictly worse bad-control pattern than duration. Duration's build-mean-aggregation makes its ε-collider leakage small; scorer-transform covariates have no such protection.
 3. The **"exclude post-matchup features by construction"** rule of §2.5 remains the safe default. Duration is not admitted unconditionally — only after hull/regime-conditioned validation.
 
 ### 7.7 Recommendation
 
 - **Do not ship** TTK-related covariates or the lexicographic tiebreaker unconditionally. Keep EB7 shipped.
-- **Route via Phase 5F**: treat duration (or its log-TTK pre-battle proxy) as a candidate *regime-conditioned* covariate. Archetypes where TTK is a strong α-mediator (quick-kill hulls, SO brawlers, mid-regime campaign econ) opt in; attrition archetypes opt out.
-- **Prerequisite for opt-in**: a live overnight campaign on at least one non-Hammerhead hull covering a different archetype (e.g., Paragon or Onslaught for attrition) with a per-hull `RegimeConfig`-gated EB covariate toggle. The Eggers-Tuñón placebo should be run automatically as part of the ship gate.
-- **Defer**: Weibull-AFT residual, Heckman two-step — complexity cost exceeds the marginal benefit demonstrated in 7.3.
+- **Route via Phase 5F**: treat duration (or its log-TTK pre-battle proxy) as a candidate *regime-conditioned* covariate. Archetypes where TTK is a strong α-mediator (quick-kill hulls, SO brawlers) opt in; attrition archetypes opt out.
+- **Prerequisite for opt-in**: a live overnight V2 campaign on at least one non-Hammerhead hull covering a different archetype (e.g., Paragon or Onslaught for attrition) with a per-hull `RegimeConfig`-gated EB covariate toggle. The Eggers-Tuñón placebo should be run automatically as part of the ship gate.
+- **Defer**: Weibull-AFT residual, Heckman two-step — complexity cost exceeds the demonstrated marginal benefit.
 - **Defer**: multi-objective / Pareto / qEHVI — the single-scalar formulation is adequate given lexicographic is rejected and weighted-sum has the usual pathologies.
 
 ### 7.8 Open questions
 
-- Does the n=56 overnight-log gain reproduce on a second Hammerhead overnight run? (Need a replication to rule out the 2026-04-13 overnight log being a lucky draw.)
-- Does the archetype hypothesis generalize? Specifically: what is Δρ(EB8_dur − EB7) on an *attrition* hull's production-sized log?
-- Is the placebo test a useful *runtime* monitor — could `_apply_eb_shrinkage` compute partial-corr(duration, α̂ | X) on each update and emit a warn if it drifts below a threshold? (Would make "opt-in with placebo gate" a self-enforcing invariant.)
-- Can we emit any of the other orphaned signals (`overload_count`, `peak_time_remaining`, AI flags) in a pre-battle-projected form that clears the Case-17 admissibility bar? (Agent 1 orphaned-fields inventory.)
+- Does the small-N production-like regime gain reproduce under V2 across multiple hulls?
+- Does the archetype hypothesis generalize? What is Δρ(EB8_dur − EB7) on an *attrition* hull's production-sized V2 log?
+- Is the placebo test a useful *runtime* monitor — could `_apply_eb_shrinkage` compute partial-corr(duration, α̂ | X) on each update and emit a warn if it drifts below a threshold?
+- Can we emit any of the other orphaned signals (`overload_count`, `peak_time_remaining`, AI flags) in a pre-battle-projected form that clears the Case-17 admissibility bar?

@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Quality-Diversity for Build Archetype Discovery
 
 This document covers using MAP-Elites and related quality-diversity (QD) methods to discover the full landscape of viable ship build archetypes — not just one optimal build, but ALL the ways a ship can be effectively built.

@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Menu Navigator and Title Screen Plugin Specification
 
 Automates navigation from the game's title screen to the Optimizer Arena mission. Defined in:

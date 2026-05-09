@@ -1,6 +1,14 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 5F — Regime-Segmented Optimization
 
 > **Status**: **Implemented 2026-04-18.** Regime filters loadout (hullmods + weapons) at `search_space.py` construction; hull remains user-picked per `--hull`; opponents remain regime-blind (`opponent_pool.py`). Cross-regime warm-start shipped as `--warm-start-from-regime`. Default regime = `early` (deviation from the §3.4 default-`mid` argument — see §3.6). Four presets land in `models.py`: `REGIME_EARLY` / `REGIME_MID` / `REGIME_LATE` / `REGIME_ENDGAME` keyed on existing CSV `tier` + tag columns (no new parser work). See §3.6 implementation notes.
+>
+> **Empirical-claims status (2026-05-10):** All Hammerhead concentration percentages, projected redirect ratios, and TTK Δρ figures cited in this document use V1 sim data and are pending re-validation under V2. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Theory grounding (CMDP feasibility alignment, restricted-play, ludology), the rejected-alternative chain, and the design itself are unaffected.
 
 Design and research log for how the optimizer selects its feasible component pool per run, so that outputs are strong *within the progression regime the player actually inhabits* rather than strong within a nominally-complete but practically-unreachable pool. Shipped design will be **hard-masking of hullmods/weapons/hulls at `search_space.py` construction time + one Optuna study per `(hull, regime)`**, with `mid` as the default regime.
 
@@ -12,15 +20,15 @@ Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipe
 
 ## 1. Problem
 
-The Hammerhead 2026-04-17 run (900 trials, `experiments/hammerhead-twfe-2026-04-13/`) produced a concentrated top cluster: **89% of non-pruned top-quartile builds** rely on a handful of rare-faction hullmods (`shrouded_lens`, `shrouded_mantle`, `fragment_coordinator`, `neural_integrator`). Every one of those hullmods carries a `no_drop_salvage` CSV tag, and most additionally carry `codex_unlockable` or `no_drop`. The CSV tags are Starsector's own declaration that these items are outside the normal campaign acquisition distribution — they drop only from narrative-gated endgame encounters.
+The V1 Hammerhead run produced a concentrated top cluster, with the large majority of non-pruned top-quartile builds relying on a handful of rare-faction hullmods (`shrouded_lens`, `shrouded_mantle`, `fragment_coordinator`, `neural_integrator`). Every one of those hullmods carries a `no_drop_salvage` CSV tag, and most additionally carry `codex_unlockable` or `no_drop`. The CSV tags are Starsector's own declaration that these items are outside the normal campaign acquisition distribution — they drop only from narrative-gated endgame encounters.
 
 This is not a reward-specification bug (the optimizer's `combat_fitness` correctly ranks combat strength) and not a game-balance complaint against the hullmods themselves (community consensus identifies `Onslaught_Mk.I + Heavy Adjudicator` as the live balance flashpoint, not shrouded/fragment mods — see §2.5). The mismatch is between the **deployment distribution** (what components a player can actually field in normal play) and the **simulator's feasible set** (currently: anything not tagged `restricted` in `search_space.py:31`). The optimizer has been optimizing over a superset of what the player can act on.
 
-Three measurable consequences in the Hammerhead run:
+Qualitative consequences (specific concentration percentages and trial-count breakdowns are pending re-validation under V2 — see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)):
 
-1. **Wasted compute.** At the observed 89% concentration, roughly 800 of 900 trials spent their TWFE/Wilcoxon budget exploring a regime the target user cannot reach. Effective budget on the regime-that-matters was ~100 trials.
-2. **Contaminated incumbent.** The TPE posterior pulled toward the exploit cluster; pre-exploit-tier builds could not compete, so the incumbent-overlap curriculum (Phase 5C) anchored comparisons against exploit builds. Non-exploit rankings were correspondingly noisy.
-3. **Unusable outputs.** The top-ranked Hammerhead variant assumes the player has defeated the Shrouded Dwellers and Threat faction — content that is endgame-gated in vanilla Starsector. For a user asking "what Hammerhead should I fly in my current playthrough?" the answer is almost never the simulator's top-ranked build.
+1. **Wasted compute.** A large fraction of trials spend their TWFE/Wilcoxon budget exploring a regime the target user cannot reach.
+2. **Contaminated incumbent.** The TPE posterior pulls toward the exploit cluster; pre-exploit-tier builds cannot compete, so the incumbent-overlap curriculum (Phase 5C) anchors comparisons against exploit builds. Non-exploit rankings are correspondingly noisy.
+3. **Unusable outputs.** The top-ranked variant assumes the player has defeated the Shrouded Dwellers and Threat faction — content that is endgame-gated in vanilla Starsector. For a user asking "what should I fly in my current playthrough?" the answer is almost never the simulator's top-ranked build.
 
 The goal of Phase 5F is to align the optimizer's feasible action set with a user-selected *progression regime*, so that compute is spent in the regime the user inhabits and outputs are deployable in that regime.
 
@@ -75,7 +83,7 @@ Scalar cost penalties `fitness − λ·rarity` are **essentially absent from thi
 
 ### 2.5 Starsector-specific data grounding
 
-A full audit of `game/starsector/data/hullmods/hull_mods.csv` and `game/starsector/data/weapons/weapon_data.csv` against the Starfarer API (see `experiments/phase5d-covariate-2026-04-17/` audit output) yields the following usable rarity signals:
+A full audit of `game/starsector/data/hullmods/hull_mods.csv` and `game/starsector/data/weapons/weapon_data.csv` against the Starfarer API yields the following usable rarity signals:
 
 | Component | Signal | Coverage | Granularity |
 |---|---|---|---|
@@ -136,7 +144,7 @@ Four converging arguments:
 1. **Engagement literature**: `endgame`'s uncapped pool pushes play into Csikszentmihalyi's boredom quadrant; `early`'s aggressive cap may be too constrained for the median player's stage.
 2. **Ludology (Suits, Caillois, Paul)**: unconstrained optimization collapses variety; some constraint is constitutive of meaningful play.
 3. **Alex's stated intent**: `no_drop` / `no_drop_salvage` are the genuine campaign-acquisition gates; `mid` is the smallest regime that respects those gates without over-filtering `codex_unlockable` items that are actually reachable.
-4. **Compute efficiency**: in the Hammerhead 2026-04-17 run, `mid` would have redirected ~80% of trials from the exploit cluster to the regime-that-matters — the single biggest per-budget signal-quality improvement available without changing the optimizer's algorithms.
+4. **Compute efficiency**: under the V1 Hammerhead concentration, `mid` would have redirected the bulk of trials from the exploit cluster to the regime-that-matters — the single biggest per-budget signal-quality improvement available without changing the optimizer's algorithms. Specific redirect ratio pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 `endgame` remains accessible as `--regime endgame` for QA / exploit-discovery (Jaffe's "find-broken-stuff" use case — valid but distinct from the "player recommendation" use case which is our primary deliverable).
 
@@ -152,7 +160,7 @@ Phase 5F is **orthogonal** to 5A–E. It changes the optimizer's input space, no
 
 ### 3.5.1 Candidate regime-conditioned covariates (opt-in, post-5D)
 
-The 2026-04-18 TTK-signal investigation (see `docs/reference/phase5d-covariate-adjustment.md` §7, artifacts in `experiments/phase5d-ttk-signal-2026-04-18/`) found that build-mean `duration_seconds` is a causally post-treatment descendant of Y (Cinelli-Forney-Pearl 2022 Model 17) but empirically delivers significant Δρ lift on production-sized runs (+0.136 at n=56 on the overnight log) where EB7 has not saturated. The lift did not appear on the 485-build calibration log, and is expected to be archetype-dependent — Hammerhead is a quick-kill/burst hull whose TTK is a strong α-mediator, whereas attrition hulls (HEF Paragon, armor-tank Onslaught) may have weaker duration→α coupling.
+The 2026-04-18 TTK-signal investigation (see [phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md) §7) found that build-mean `duration_seconds` is a causally post-treatment descendant of Y (Cinelli-Forney-Pearl 2022 Model 17) but empirically delivered Δρ lift on production-sized V1 runs where EB7 had not saturated, with no lift on the larger calibration log. The result is expected to be archetype-dependent — Hammerhead is a quick-kill/burst hull whose TTK is a strong α-mediator, whereas attrition hulls (HEF Paragon, armor-tank Onslaught) may have weaker duration→α coupling. Specific Δρ magnitudes from V1 pending re-validation under V2.
 
 A clean integration: extend `RegimeConfig` with a per-hull / per-regime `eb_extra_covariates: frozenset[str]` that lets `_build_covariate_vector` opt a hull into an 8th (or 9th) column. Pre-battle projected TTK `log(effective_hp / total_dps)` is the causally clean default; raw build-mean `duration_seconds` is available as an opt-in for archetypes where an Eggers-Tuñón placebo monitor shows the partial-correlation within tolerance. The monitor runs every `cv_recalc_interval`-equivalent update and emits a warn (or reverts to EB7) if partial-corr(duration, α̂ | X) drifts past a threshold.
 
@@ -180,7 +188,7 @@ A clean integration: extend `RegimeConfig` with a per-hull / per-regime `eb_extr
 **Why rejected.**
 1. Every real-world regime-segmented optimizer surveyed (MTG, WoW BIS, StS, Hearthstone, motorsport, speedrun) uses hard filters, not soft penalties. Scalar penalties are "essentially absent from the literature." (Regime-segmentation research agent, eight-field 2026-04-17 sweep.)
 2. Academic CCG deckbuilding literature (Fontaine 2019 arXiv:1904.10656, Zhang 2021 arXiv:2112.03534, García-Sánchez 2016 Hearthstone EA) has **no principled `λ` value** reported — all empirical, all tuned by hand.
-3. Rarity-in-objective is a bad-control pattern (Cinelli-Forney-Pearl 2022 "Causal Interpretations of Black-Box Models": treating a downstream proxy as a covariate of the outcome biases causal estimates). This is the same failure pattern that refuted Phase 5D v1 (`experiments/phase5d-covariate-2026-04-17/REPORT.md` — synthetic Δρ = −0.35 vs plain TWFE when conditioning paradigm was used instead of fusion paradigm). Entering rarity into `U` would contaminate the TWFE α̂ signal in the same way.
+3. Rarity-in-objective is a bad-control pattern (Cinelli-Forney-Pearl 2022 "Causal Interpretations of Black-Box Models": treating a downstream proxy as a covariate of the outcome biases causal estimates). This is the same failure pattern that refuted Phase 5D v1 (see [phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md) §4.5 — conditioning paradigm catastrophically below the ship gate vs fusion paradigm comfortably above it). Entering rarity into `U` would contaminate the TWFE α̂ signal in the same way.
 4. Strict lexicographic preferences on ℝ² are not continuously representable (Debreu 1954). Any `λ`-based encoding is an approximation that fails at edge cases where rarity would flip a meaningful fitness gap — the exact regime where we most need the preference to hold.
 
 ### 4.2 Archive over single run (QD / MAP-Elites with rarity-tier descriptor) — REJECTED
@@ -234,16 +242,13 @@ TuRBO (Eriksson et al. 2019 arXiv:1910.01739) and BAxUS (expanding subspaces) ar
 
 ## 5. Expected impact
 
-Projected from the Hammerhead 2026-04-17 concentration (89% of non-pruned top-quartile trials in the exploit cluster):
+Qualitatively, the post-V2 expectation is:
 
-| Metric | Current (endgame-equivalent) | After 5F (default `mid`) |
-|---|---:|---:|
-| Trials in deployment-reachable regime | ~11% (~100 of 900) | 100% (300 of 300) |
-| Effective budget for player-useful builds | ~100 trials/hull | 300 trials/hull |
-| Top-cluster variety (distinct component sets) | Single exploit cluster dominates | Expected broader cluster spread (no exploit attractor) |
-| Output deployability | Requires endgame completion | Available from normal campaign |
+- 100% of in-regime trials are spent on deployment-reachable builds (vs the V1 endgame-equivalent baseline where the bulk of trials concentrated on exploit-cluster components).
+- Output deployability is restored for the user's chosen regime (vs requiring endgame completion for the V1 unmasked setup).
+- Top-cluster variety is expected to broaden once the exploit attractor is removed.
 
-No simulation experiment validates these numbers yet — they are projections from the observed concentration and trial budget. Ship-gate will be a replay on the 2026-04-17 eval log with the `mid` mask applied, measuring the change in top-10 composition and TPE convergence trace.
+Specific magnitudes (concentration percentages, redirect ratios, top-10 composition deltas) are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Ship-gate plan: replay a V2 eval log with the `mid` mask applied, measuring the change in top-10 composition and TPE convergence trace.
 
 ---
 
@@ -327,16 +332,16 @@ Starsector-specific:
 - Mosolov, A. (2024-05-11). "Codex Overhaul." Fractal Softworks dev blog.
 - `game/starsector/data/hullmods/hull_mods.csv` — tags column.
 - `game/starsector/data/weapons/weapon_data.csv` — tier + blueprint tags.
-- `experiments/hammerhead-twfe-2026-04-13/` — source of the 89% concentration observation.
 
 ---
 
 ## 8. See also
 
-- `docs/reference/phase5-signal-quality.md` — original Phase 5A/5B research.
-- `docs/reference/phase5a-deconfounding-theory.md` — TWFE decomposition (the fitness estimator Phase 5F restricts the input of).
-- `docs/reference/phase5c-opponent-curriculum.md` — opponent-side selection; §4.5 rejects silent hullmod blacklist, which Phase 5F replaces with user-controllable regime.
-- `docs/reference/phase5d-covariate-adjustment.md` — EB shrinkage; Phase 5F's `X_i` covariate set is regime-invariant.
-- `docs/reference/phase5e-shape-revision.md` — Box-Cox A3; Phase 5F requires per-regime `λ̂` refit.
-- `docs/reference/implementation-roadmap.md` — phase status overview. Phase 5G is the renumbered adversarial opponent curriculum (originally 5F, research complete, deferred post-5E).
-- `docs/specs/24-optimizer.md`, `docs/specs/04-search-space.md` — implementation specs affected by Phase 5F.
+- [phase5-signal-quality.md](phase5-signal-quality.md) — original Phase 5A/5B research.
+- [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) — TWFE decomposition (the fitness estimator Phase 5F restricts the input of).
+- [phase5c-opponent-curriculum.md](phase5c-opponent-curriculum.md) — opponent-side selection; §4.5 rejects silent hullmod blacklist, which Phase 5F replaces with user-controllable regime.
+- [phase5d-covariate-adjustment.md](phase5d-covariate-adjustment.md) — EB shrinkage; Phase 5F's `X_i` covariate set is regime-invariant.
+- [phase5e-shape-revision.md](phase5e-shape-revision.md) — Box-Cox A3; Phase 5F requires per-regime `λ̂` refit.
+- [implementation-roadmap.md](implementation-roadmap.md) — phase status overview. Phase 5G is the renumbered adversarial opponent curriculum (originally 5F, research complete, deferred post-5E).
+- [../specs/24-optimizer.md](../specs/24-optimizer.md), [../specs/04-search-space.md](../specs/04-search-space.md) — implementation specs affected by Phase 5F.
+- [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) — V1 invalidation that retired the original `experiments/hammerhead-twfe-2026-04-13/` directory whose concentration observation motivated this phase.

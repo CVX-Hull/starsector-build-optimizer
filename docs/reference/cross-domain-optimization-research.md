@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Cross-Domain Optimization Research
 
 How other fields solve the same structural problem we face: high-dimensional mixed discrete optimization with expensive black-box evaluation and sparse rewards.

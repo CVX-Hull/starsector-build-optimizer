@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Data Models Specification
 
 Core dataclasses and enums used by all modules. Defined in `src/starsector_optimizer/models.py`.

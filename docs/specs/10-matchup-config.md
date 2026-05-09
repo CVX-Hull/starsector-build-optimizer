@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Matchup Config Specification
 
 Java POJO for a single matchup configuration. Defined in `combat-harness/src/main/java/starsector/combatharness/MatchupConfig.java`.

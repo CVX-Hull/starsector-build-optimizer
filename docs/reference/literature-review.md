@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Literature Review
 
 Comprehensive survey of 40+ papers organized by topic. Each entry includes the key contribution, relevance assessment, and ArXiv ID where available.

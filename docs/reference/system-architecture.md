@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # System Architecture
 
 Complete design for the Starsector Ship Build Optimizer system, covering all components from game integration to optimizer output.

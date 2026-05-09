@@ -1,3 +1,9 @@
+---
+type: report
+status: shipped
+last-validated: 2026-04-19
+---
+
 # Phase 6 — Deferred audit findings (2026-04-19)
 
 Retrospective capture of audit items identified during the post-sampler-benchmark-abort sweep on 2026-04-19 but **not fixed in that session**. Each entry states the exact location, the theoretical failure mode, whether it has been observed in practice, the proposed fix, and the rationale for deferring.

@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Result Parser Specification
 
 Parses combat result JSON (written by the Java harness) into Python dataclasses, and writes matchup queue JSON for the Java harness to consume. Defined in `src/starsector_optimizer/result_parser.py`.

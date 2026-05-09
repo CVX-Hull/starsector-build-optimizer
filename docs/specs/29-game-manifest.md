@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Game Manifest Specification
 
 Authoritative source of Starsector game rules for Python. Defined in

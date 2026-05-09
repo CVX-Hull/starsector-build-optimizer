@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Formal Problem Formulation
 
 This document defines the ship build optimization problem in formal mathematical terms, characterizes the search space, and analyzes the constraint structure.

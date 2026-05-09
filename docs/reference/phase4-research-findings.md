@@ -1,6 +1,14 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 4 Research Findings
 
 Consolidates all research conducted before Phase 4 implementation. Captures the reasoning behind key design decisions so future work can understand WHY, not just WHAT.
+
+> **Empirical-claims status (2026-05-10):** The 203-trial Eagle experiment (§8) and the per-opponent signal-quality numbers were measured under V1 sim (and indeed under an earlier V0 retreat-bug sim noted in the original text). All Δρ, Cohen's d, win-rate, and trial-count percentages are pending re-validation under V2. Theory, sampler comparison, and design rationale are unaffected. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ---
 
@@ -173,21 +181,14 @@ TabPFN v2 (Nature 2024) degrades with >10 unique categories per feature. Our wea
 
 ## 6. Budget Analysis
 
-### Per Hull ($30 total budget)
+A per-hull budget table — wall-clock and $-figures derived from V1 throughput rates — is pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). The structural breakdown is:
 
-| Stage | Sims | Wall-clock (8 inst) | Cost |
-|---|---|---|---|
-| Heuristic screening (50K builds) | 0 | ~10s | $0 |
-| Warm-start (50 builds × 5 opponents) | 250 | ~50min | ~$3 |
-| BO exploration (150 builds × ~3 opponents avg with WilcoxonPruner) | ~450 | ~1.5h | ~$5 |
-| Racing (10 builds × 5 opponents × 5 replays) | 250 | ~50min | ~$3 |
-| **Total per hull** | **~950** | **~3.5h** | **~$11** |
+- Heuristic screening (a large random batch, milliseconds compute) → near-zero cost.
+- Warm-start: ~50 builds × 5 opponents.
+- BO exploration: ~150 builds with WilcoxonPruner reducing average opponents per build.
+- Racing: top builds re-evaluated with replays.
 
-**With $30**: Optimize 2-3 hulls fully, or 5+ hulls with reduced racing.
-
-### Cloud Provider
-
-Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76 compute. Total cost dominated by machine setup time, not compute.
+Phase 6 cloud federation supersedes this single-machine budget model entirely; see [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md).
 
 ---
 
@@ -208,41 +209,34 @@ Hetzner CCX43: $0.22/hr, 8 instances. 8 instance-hours per hull × $0.22 = $1.76
 ## 8. Eagle 200-Trial Experiment Findings
 
 ### Setup
-- 203 evaluations of Eagle hull against 6 cruiser opponents (dominator_Assault, dominator_XIV_Elite, aurora_Assault, heron_Attack, doom_Strike, eagle_Assault)
+- ~200 evaluations of Eagle hull against 6 cruiser opponents (dominator_Assault, dominator_XIV_Elite, aurora_Assault, heron_Attack, doom_Strike, eagle_Assault)
 - 4 parallel Starsector instances via Xvfb, batch size 4
 - TPE sampler with 500 warm-start builds, 300s timeout
-- Total wall clock: 4.3 hours, throughput: 47.6 trials/hour
 
-### Key Findings
+> **Note:** This experiment was already invalidated *before* the V1 loadout bug by an earlier combat harness retreat bug (`spawnFleetMember()` caused ships to retreat). All numbers in this section were qualitative directional findings that motivated Phase 5 signal-quality research; specific win-rate, timeout-rate, ρ, and Cohen's d values are pending re-validation under V2 (the V1 fixes did not address the loadout-propagation issue documented in [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)).
 
-**Timeout waste:** 30% of matchups (363/1218) hit the 300s timeout, consuming 56% of total combat time (30.2h out of 53.6h). Symmetric stalemates (both sides at near-zero HP loss rates due to shield/flux equilibrium) were the primary cause.
+### Key qualitative findings (pending re-validation)
 
-**heron_Attack is noise:** 74% timeout rate with near-zero HP differential (0.0% player wins, 0.0% player losses). The Eagle cannot engage a kiting carrier in 1v1. Removed from CRUISER opponent pool.
-
-**Timeout strategy benchmark:** Replaying the evaluation log under different timeout strategies, a 200s flat cap saves **22.5% of combat time** at rho=0.958 Spearman rank correlation. Shorter timeouts corrupt rankings. Between-trial pruning via WilcoxonPruner (dropping bad builds after 2-3 opponents) is a more effective budget-saving strategy than mid-fight timeout manipulation.
-
-**Note:** The 203-trial Eagle experiment data was invalidated by a combat harness bug (`spawnFleetMember()` caused ships to retreat). The qualitative findings above likely hold directionally but need re-validation with the fixed single-matchup-per-mission harness.
+- **Timeout waste:** A substantial fraction of matchups hit the 300s timeout, with symmetric stalemates (both sides at near-zero HP loss rates due to shield/flux equilibrium) the primary cause.
+- **heron_Attack is noise:** very high timeout rate with near-zero HP differential. The Eagle cannot engage a kiting carrier in 1v1. Removed from CRUISER opponent pool.
+- **Timeout strategy benchmark:** Replaying the evaluation log under different timeout strategies showed a 200s flat cap saves combat time at acceptable Spearman rank correlation. Shorter timeouts corrupt rankings. Between-trial pruning via WilcoxonPruner is a more effective budget-saving strategy than mid-fight timeout manipulation.
 
 ### Actions Taken
 - Timeout strategy analysis informed between-trial pruning approach
 - Removed `heron_Attack` from CRUISER `DEFAULT_OPPONENT_POOL` (spec 23)
-- Added CatCMAwM as first-class sampler option via `--sampler catcma` (spec 24)
+- Added CatCMAwM as a first-class sampler option (later removed 2026-04-19 as incompatible with the all-categorical search space; see [../specs/24-optimizer.md](../specs/24-optimizer.md))
 - Added parameter importance analysis via fANOVA and `--fix-params` support (spec 26)
 
 ### Signal Quality Analysis (Phase 5 Research Input)
 
-Post-experiment analysis of the 203-trial evaluation log revealed several noise characteristics that motivated Phase 5 signal quality research:
+Post-experiment qualitative analysis revealed several noise characteristics that motivated Phase 5 signal quality research:
 
-**Per-opponent signal quality:**
-- dominator_XIV_Elite has **negative correlation** with overall fitness (ρ = -0.225) — builds that do well against it tend to do worse overall
-- doom_Strike has the highest within-outcome variance (TIMEOUT: std = 0.547)
-- Inter-opponent correlations are near-zero (ρ = 0.0–0.2) — orthogonal but noisy
+- **Per-opponent signal quality:** some opponents had *negative* correlation with overall fitness (builds that do well against them tend to do worse overall); some opponents had high within-outcome variance.
+- **Inter-opponent correlations:** near-zero — orthogonal but noisy.
+- **Effect size:** large Cohen's d between best build and median (the optimizer finds real signal), but very low win rate, so the optimizer navigates "shades of losing" — fitness differences within the TIMEOUT margin tier.
+- **Leave-one-out opponent analysis:** dropping the negatively-correlated opponent improves rank correlation; dropping the highest-variance opponent hurts most.
 
-**Effect size:** Cohen's d = 3.30 between best build and median. The optimizer finds real signal, but the 0.4% win rate means it navigates "shades of losing" — fitness differences within the TIMEOUT margin tier.
-
-**Leave-one-out opponent analysis:** Dropping dominator_XIV_Elite *improves* rank correlation with full fitness (0.578). Dropping doom_Strike hurts most (0.355).
-
-These findings drove the Phase 5 research into opponent normalization, multi-fidelity evaluation (Hyperband over opponents), multi-objective decomposition, and curriculum learning. See `docs/reference/phase5-signal-quality.md` for the full Phase 5 research and recommendations.
+These findings drove the Phase 5 research into opponent normalization, multi-fidelity evaluation (Hyperband over opponents), multi-objective decomposition, and curriculum learning. See [phase5-signal-quality.md](phase5-signal-quality.md) for the full Phase 5 research and recommendations. Specific magnitudes are pending re-validation under V2.
 
 ---
 
@@ -285,29 +279,11 @@ These findings drove the Phase 5 research into opponent normalization, multi-fid
 
 ## 8. Cloud Deployment and Study Persistence
 
-### Hetzner Cloud (CCX33 is the sweet spot)
-
-| Machine | vCPUs | RAM | Game Instances | Cost/hr |
-|---------|-------|-----|----------------|---------|
-| CCX33 | 8 | 32GB | 8 | ~$0.11 |
-| CCX43 | 16 | 64GB | 16 | ~$0.22 |
-
-CCX33 is sufficient: Starsector is single-threaded per instance, Xvfb is near-zero CPU. 8 instances on 8 vCPUs works. Game directory is only **361MB** (not the 2GB earlier estimated), so rsync to cloud takes ~5-10 seconds.
-
-**Multi-machine is strictly better than bigger machine:** 3 × CCX33 (24 instances, $0.33/hr) gives 3x the throughput for less than 1 × CCX53 (32 instances, $0.40/hr). Each machine runs independent hulls, no coordination overhead.
-
-**Setup time: ~2 minutes per machine** (parallel). Cloud-init installs Xvfb/xdotool/libs, rsync sends game + optimizer + prefs.xml, `uv sync` installs Python deps.
+> **Note:** The Phase-4-era cloud sketch (Hetzner CCX33 single-machine workflow) is superseded by the Phase 6 cloud federation architecture. See [phase6-cloud-worker-federation.md](phase6-cloud-worker-federation.md) and [../specs/22-cloud-deployment.md](../specs/22-cloud-deployment.md) for the live design. This section is preserved for historical context; the per-instance cost figures and machine-class comparisons date from Phase 4 and do not reflect current AWS-on-c7a deployment.
 
 ### Optuna Study Persistence
 
 **TPESampler is stateless by design.** Verified in source code: `sample_relative()` and `sample_independent()` reconstruct everything from `study._get_trials()` on every call. No cached model, no internal state. Transferring the SQLite file preserves all "knowledge."
-
-**Local → Cloud workflow:**
-1. Local: `study = optuna.create_study(storage="sqlite:///study.db")`
-2. Add heuristic warm-start trials + small sim validation
-3. `scp study.db cloud:/opt/optimizer/`
-4. Cloud: `study = optuna.load_study(storage="sqlite:///study.db")` → heavy sim
-5. `scp study.db` back to local for analysis
 
 **constant_liar works correctly after transfer.** It operates on RUNNING trials — after transfer, all trials are COMPLETE or FAILED. Clean up any zombie RUNNING trials before resuming.
 

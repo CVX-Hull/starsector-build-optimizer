@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Starsector Game Data Reference
 
 File formats, locations, schemas, and parsing notes for all game data files relevant to build optimization.

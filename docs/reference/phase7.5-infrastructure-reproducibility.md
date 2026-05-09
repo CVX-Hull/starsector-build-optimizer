@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 7.5: Infrastructure & Reproducibility
 
 Deferred until after Phase 7 ships. Designed to reduce the operational tax of running experiments — both for the current author and for anyone who later wants to reproduce a result — without changing the algorithmic surface.

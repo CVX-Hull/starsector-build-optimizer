@@ -1,6 +1,14 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Phase 5: Signal Quality — Research Findings and Recommended Approach
 
 Improving the signal-to-noise ratio of combat fitness evaluations. This document is self-contained — it explains the problem, summarizes cross-domain research, and recommends a phased implementation plan.
+
+> **Empirical-claims status (2026-05-10):** All Phase 5 internal-sim measurements in this document have been stripped pending re-validation under the V2 combat-harness loadout fix. Design rationale, literature citations, and architecture decisions are unaffected. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md) for the re-validation tracker.
 
 ---
 
@@ -21,35 +29,20 @@ Each evaluation requires ~5 matchups × ~10 seconds each = ~50 seconds of wall-c
 
 ### The Problem: Signal Quality
 
-A prior 203-trial Eagle cruiser experiment revealed that the optimizer finds real signal but extracts it inefficiently. (Note: this data was from the old batched combat harness which had a ship retreat bug — the qualitative findings likely hold directionally but specific numbers need re-validation with the fixed harness.)
+The qualitative observation motivating Phase 5 is that the optimizer finds real signal but extracts it inefficiently. Win rates are extremely low (most builds lose every matchup), so the bulk of the fitness gradient lives in hull-fraction margin differences within the TIMEOUT tier — small differences in kill-progress that are easily overwhelmed by combat stochasticity.
 
-| Metric | Value | Implication |
-|--------|-------|-------------|
-| Win rate | 0.4% (4/1015 matchups) | The primary signal (wins) barely exists |
-| Cohen's d (best vs median) | 3.30 | The optimizer IS finding real signal — best build is 3.3σ above median |
-| Fitness range | [-0.65, +0.38] | Everything lives in the timeout margin band, not the win tier (pre-redesign data) |
-| Coefficient of variation | 0.41 | High noise relative to signal |
-| Builds evaluated >1 time | 0 | Cannot measure within-build replay variance |
-
-**The optimizer navigates "shades of losing."** Almost all builds lose every matchup. The fitness signal comes entirely from hull-fraction margin differences within the TIMEOUT tier — small differences in kill-progress that are easily overwhelmed by combat stochasticity.
+**The optimizer navigates "shades of losing."** Almost all builds lose every matchup. The fitness signal comes entirely from hull-fraction margin differences within the TIMEOUT tier.
 
 ### Per-Opponent Analysis
 
-The 5 opponents (after removing the noise-only heron_Attack in Phase 4) test orthogonal capabilities but contribute very differently to signal quality:
+The 5 opponents (after removing the noise-only heron_Attack in Phase 4) test orthogonal capabilities but contribute very differently to signal quality. Qualitative findings that informed Phase 5C's anchor-first + incumbent-overlap selection:
 
-| Opponent | Mean HP Diff | Std | ρ with Fitness | Outcome Entropy |
-|----------|-------------|-----|----------------|-----------------|
-| aurora_Assault | -0.792 | 0.340 | 0.567 | 1.356 bits |
-| dominator_Assault | -0.626 | 0.360 | 0.314 | 1.242 bits |
-| dominator_XIV_Elite | -0.625 | 0.321 | **-0.225** | 1.277 bits |
-| doom_Strike | -0.695 | 0.499 | 0.564 | 1.163 bits |
-| eagle_Assault | -0.222 | 0.424 | 0.291 | 1.256 bits |
+- Some opponents have **negative correlation with overall fitness** — builds that do well against them tend to do worse overall. These actively hurt ranking quality.
+- Some opponents have **high within-outcome variance** (bimodal: either the build survives or gets destroyed by, e.g., a mine).
+- **Inter-opponent correlations are near-zero**. Each opponent tests genuinely orthogonal capabilities, but this means averaging them adds independent noise.
+- **Leave-one-out** rank-correlation analysis shows that dropping the negatively-correlated opponent improves rank quality, while dropping the highest-variance opponent hurts most.
 
-Key findings:
-- **dominator_XIV_Elite has negative correlation with fitness** (ρ = -0.225). Builds that do well against it tend to do worse overall — it actively hurts ranking quality.
-- **doom_Strike has the highest within-outcome variance** (TIMEOUT outcomes: std = 0.547). Bimodal: either the build survives or gets destroyed by mines.
-- **Inter-opponent correlations are near-zero** (ρ = 0.0–0.2). Each opponent tests genuinely orthogonal capabilities, but this means averaging them adds independent noise.
-- **Leave-one-out**: Dropping dominator_XIV_Elite improves rank correlation to 0.578 (from 1.000 full). Dropping doom_Strike hurts most (0.355).
+Specific magnitudes (win rates, Cohen's d, ρ values, leave-one-out deltas) are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ---
 
@@ -62,24 +55,24 @@ We surveyed methods from four domains: noisy optimization, game AI evaluation, v
 **Opponent Normalization (z-score per opponent)**
 For each opponent, maintain running mean μ and standard deviation σ of fitness scores. Normalize each matchup result: `z = (score - μ) / σ`. Aggregate z-scores instead of raw scores. This removes between-opponent difficulty bias — aurora_Assault (mean=-0.79) and eagle_Assault (mean=-0.22) become comparable.
 - *Ref: Nelson (2010), "Variance Reduction" in Handbooks in OR/MS*
-- *Impact: High. Effort: Trivial (~20 lines). Extra evals: None.*
+- *Effort: Trivial. Extra evals: None.*
 
 **Control Variates (heuristic scorer as proxy)**
-Given expensive simulation fitness Y and cheap heuristic score Z with known mean E[Z]: `Y_adj = Y - c * (Z - E[Z])`, where `c = Cov(Y,Z)/Var(Z)`. Variance reduction = `(1 - ρ²) × Var(Y)`. At ρ=0.7, variance drops to 51%. We already compute heuristic scores for warm-start; using them as a control variate costs nothing.
+Given expensive simulation fitness Y and cheap heuristic score Z with known mean E[Z]: `Y_adj = Y - c * (Z - E[Z])`, where `c = Cov(Y,Z)/Var(Z)`. Variance reduction is `(1 - ρ²) × Var(Y)`. We already compute heuristic scores for warm-start; using them as a control variate costs nothing.
 - *Ref: Law (2015), "Simulation Modeling and Analysis", Ch. 11*
-- *Impact: High (if ρ > 0.5). Effort: Low. Extra evals: None.*
+- *Effort: Low. Extra evals: None.*
 
 **Common Random Numbers (CRN)**
-When comparing builds A and B against the same opponent, use identical random seeds. The difference `fitness(A) - fitness(B)` has much lower variance than individual fitnesses because shared randomness cancels. Empirical studies show 80–94% variance reduction on differences.
+When comparing builds A and B against the same opponent, use identical random seeds. The difference `fitness(A) - fitness(B)` has much lower variance than individual fitnesses because shared randomness cancels. Published variance-reduction figures from Glasserman & Yao apply to well-behaved simulations; feasibility for Starsector is uncertain because combat AI consumes RNG in build-dependent patterns that may cause stream drift.
 - *Ref: Glasserman & Yao, "Guidelines for Common Random Numbers"*
-- *Impact: Very high. Effort: Medium-high (requires Java-side seed control). Feasibility uncertain — Starsector AI uses RNG in ways that may cause stream drift between different weapon loadouts.*
+- *Effort: Medium-high (requires Java-side seed control). Feasibility uncertain.*
 
 ### 2.2 Evaluation Budget Efficiency (Noisy Optimization Literature)
 
 **Multi-Fidelity / Successive Halving (Hyperband)**
-Evaluate builds against opponents sequentially. After each opponent, report intermediate fitness. Optuna's `HyperbandPruner` kills unpromising builds early — bad builds die after 1–2 opponents (saving 60–80% of evaluation cost), good builds get full 5-opponent evaluation. The "fidelity" dimension is number of opponents evaluated.
+Evaluate builds against opponents sequentially. After each opponent, report intermediate fitness. Optuna's `HyperbandPruner` kills unpromising builds early; the "fidelity" dimension is number of opponents evaluated.
 - *Ref: Li et al. (2018), "Hyperband" — JMLR*
-- *Impact: Very high (2–3× budget efficiency). Effort: Medium (pipeline restructuring). Extra evals: Negative (saves budget).*
+- *Effort: Medium (pipeline restructuring). Extra evals: Negative (saves budget).*
 
 **Racing / Adaptive Resampling (F-Race / OCBA)**
 Evaluate sequentially, statistically eliminate inferior builds early. F-Race uses Friedman's test; OCBA maximizes probability of correct selection by allocating more replays to uncertain builds. Conceptually overlaps with Hyperband but frames the problem as hypothesis testing.
@@ -106,9 +99,9 @@ Replace mean-across-opponents with Conditional Value-at-Risk: the mean of the wo
 ### 2.4 Problem Difficulty (Game AI / RL Literature)
 
 **Curriculum Learning (Automated Opponent Difficulty)**
-The 0.4% win rate means the problem is too hard. Start optimization against weaker opponents (stock builds of the same hull size). As the rolling win rate exceeds a threshold (e.g., 30%), introduce harder opponents. The optimizer always faces a tractable challenge with abundant gradient signal.
+Low base win rates make the problem too hard for direct gradient signal. Start optimization against weaker opponents (stock builds of the same hull size). As the rolling win rate exceeds a threshold, introduce harder opponents. The optimizer always faces a tractable challenge with abundant gradient signal.
 - *Ref: Narvekar et al. (2020), "Curriculum Learning for RL" — JMLR*
-- *Impact: Very high (win rate 0.4% → 20–40%). Effort: Medium. Extra evals: None (reuses same budget).*
+- *Effort: Medium. Extra evals: None (reuses same budget).*
 
 **PFSP-Style Opponent Selection**
 From AlphaStar (Vinyals et al., 2019): select opponents proportional to how much the current agent struggles against them. Maximizes information per evaluation. In our case: for re-evaluation or curriculum progression, prioritize opponents where the build's performance is most uncertain.
@@ -175,9 +168,9 @@ Maintain running mean/std per opponent. Z-score each matchup result before avera
 Fuses TWFE α̂ with a regression prior on 7 pre-matchup covariates (3 engine-computed `MutableShipStats` reads + 3 Python-raw offense/range aggregates + `composite_score`) via a closed-form two-level Gaussian model. Posterior mean `α̂_EB_i = w_i · α̂_i + (1−w_i) · γ̂ᵀ[1, X_i]` with per-build precision weights `w_i = τ̂²/(τ̂² + σ̂_i²)`, followed by Lin-Louis-Shen triple-goal rank correction to restore the raw histogram. See spec 28 §EB Shrinkage and `phase5d-covariate-adjustment.md`. The original Phase 5A scalar control variate `fitness_adj = fitness_sim - c * (heuristic_score - E[heuristic])` shipped but was superseded by 5D — fusion paradigm beats conditioning on noisy proxies of the estimand (Cinelli-Forney-Pearl 2022 "Case 8").
 
 **A3. Box-Cox Output Warping** *(replaced quantile rank in Phase 5E, 2026-04-18)*
-Report Box-Cox-shaped value to Optuna instead of quantile rank. `scipy.stats.boxcox` fits `λ̂` by MLE on the positivised `_completed_fitness_values` population every `_finalize_build` call, then min-max rescales to `[0, 1]`. Monotone (preserves Spearman ρ) while restoring α̂-proportional gradient at the tails — quantile rank was also monotone but discarded magnitude information, compressing the top quartile into an evenly-spaced grid that TPE's `l(x)` could not exploit. Below `ShapeConfig.min_samples=8` (by analogy to `eb_min_builds`) A3 falls through to min-max scaling. See spec 24 §A3 and `phase5e-shape-revision.md`.
+Report Box-Cox-shaped value to Optuna instead of quantile rank. `scipy.stats.boxcox` fits `λ̂` by MLE on the positivised `_completed_fitness_values` population every `_finalize_build` call, then min-max rescales to `[0, 1]`. Monotone (preserves Spearman ρ) while restoring α̂-proportional gradient at the tails — quantile rank was also monotone but discarded magnitude information, compressing the top quartile into an evenly-spaced grid that TPE's `l(x)` could not exploit. Below `ShapeConfig.min_samples=8` (by analogy to `eb_min_builds`) A3 falls through to min-max scaling. See [../specs/24-optimizer.md](../specs/24-optimizer.md) §A3 and [phase5e-shape-revision.md](phase5e-shape-revision.md).
 
-*Impact on the 2026-04-18 synthetic re-validation: ρ delta vs rank is near-zero by design (both monotone), but **ceiling saturation collapses 25% → 0.5% and top-5 identification overlap lifts 0.02 → 0.44 (14×)**. Robust across 4 covariate-strength regimes.*
+*Empirical magnitude (ceiling-saturation reduction, top-k overlap lift): pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).*
 
 ### Phase B: Sequential Evaluation Pipeline (main change)
 
@@ -192,7 +185,7 @@ Use Optuna's `HyperbandPruner`. After each opponent, report the running normaliz
 **B3. Batch Evaluation Adaptation**
 With sequential opponent evaluation, a single "batch" now evaluates one opponent across multiple builds simultaneously (utilizing all parallel instances), rather than all opponents for fewer builds. This maintains instance utilization while enabling per-opponent pruning.
 
-*Expected impact: 2–3× budget efficiency. Average evaluation cost drops from 5 matchups to ~2.5 per build.*
+*Expected design effect: pruning reduces average evaluation cost per build by terminating bad builds after 1–2 opponents. Empirical magnitude pending re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).*
 
 ### Phase C: Adaptive Opponent Pool (implemented)
 
@@ -202,31 +195,22 @@ Deferred — requires fundamental changes to the A1→A2→A3 pipeline (scalar f
 **C2. Adaptive Opponent Pool** (implemented)
 Two-layer design inspired by racing algorithms (irace) and the bitter lesson. Layer 1: discover ALL stock variants from the game data as a reservoir (36-71 per hull size after filtering fighters, stations, and special entities via ship_data.csv hints/tags). Layer 2: each build evaluates only the top `active_opponents` (default 10) from the B1 discriminative power ordering. Initial ordering is a random shuffle for exploration; B1 recomputes periodically to optimize within the active set. No hand-designed curriculum, difficulty labels, or thresholds.
 
-*Expected impact: Wider fitness gradient from difficulty diversity. 10 opponents per build maintains throughput (vs 71 exhaustive). Budget efficiency from pruning over 10 steps.*
+*Expected design effect: wider fitness gradient from difficulty diversity. Bounded `active_opponents` keeps throughput tractable vs an exhaustive pool. Empirical impact pending re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).*
 
 **Instance parallelism:** Async coordinator-worker pattern (ThreadPoolExecutor + wait(FIRST_COMPLETED)) dispatches 1 matchup per instance, processes results as they arrive (promote-on-arrival, async ASHA). N instances run in parallel; pruning decisions are immediate after every opponent result.
 
 ### Phase D: If Java Modification Is Feasible
 
 **D1. Common Random Numbers (CRN)**
-Add `random_seed` field to `MatchupConfig`. Seed Java's RNG in `CombatHarnessPlugin` before combat. Use identical seeds when comparing builds against the same opponent. Paired comparisons have 80–94% lower variance.
-
-*Feasibility uncertain: Starsector's combat AI may consume RNG in build-dependent patterns (different weapons → different number of random calls), causing stream drift that degrades the correlation. Requires experimentation.*
+Add `random_seed` field to `MatchupConfig`. Seed Java's RNG in `CombatHarnessPlugin` before combat. Use identical seeds when comparing builds against the same opponent. Published variance-reduction figures from Glasserman & Yao apply if stream stability holds; Starsector's combat AI may consume RNG in build-dependent patterns (different weapons → different number of random calls), causing stream drift that degrades the correlation. Requires experimentation.
 
 ---
 
 ## 4. Expected Combined Impact
 
-| Metric | Current (Phase 4) | After Phase A | After Phase B | After Phase C |
-|--------|-------------------|---------------|---------------|---------------|
-| Evals per build | 5 (fixed) | 5 (cleaner) | ~2.5 avg | ~2.5 avg |
-| Signal quality (CoV) | 0.41 | ~0.25 | ~0.15 | ~0.10 |
-| Budget efficiency | 1× | 1× | 2–3× | 2–3× |
-| Win rate | 0.4% | 0.4% | 0.4% | 20–40% (curriculum) |
-| Per-hull tuning | None | None | None | None |
-| Objectives reported | 1 | 1 | 1 | 3 |
+The combined design effect of Phase A + B + C is (a) cleaner per-build fitness via opponent normalization, EB shrinkage, and Box-Cox warping; (b) reduced average evaluation cost via Hyperband pruning; (c) wider fitness gradient via the adaptive opponent pool. None of the methods require per-hull tuning.
 
-Phases A+B together provide ~2–3× more optimization progress per wall-clock hour while making the signal cleaner. Phase C further improves exploration quality and makes the optimization landscape more navigable.
+Quantified magnitudes for the per-phase deltas (CoV reduction, budget-efficiency multiplier, win-rate gains under curriculum) are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md).
 
 ---
 

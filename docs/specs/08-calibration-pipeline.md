@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Calibration Pipeline Specification
 
 Random build generation and feature extraction. Defined in `src/starsector_optimizer/calibration.py`.

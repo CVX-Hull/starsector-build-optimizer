@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Result Writer Specification
 
 Constructs result JSON from tracked ship data and writes batch results via SettingsAPI. Defined in `combat-harness/src/main/java/starsector/combatharness/ResultWriter.java`.

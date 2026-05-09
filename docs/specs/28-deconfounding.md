@@ -1,3 +1,9 @@
+---
+type: spec
+status: shipped
+last-validated: unvalidated
+---
+
 # Deconfounding Specification
 
 Two-stage build quality estimation:
@@ -37,7 +43,7 @@ Y_ij = α_i + β_j + ε_ij
 
 Where α_i is build quality (what we want), β_j is opponent difficulty (nuisance), and ε_ij is residual noise. Estimation via alternating projection on the sparse observation matrix recovers schedule-adjusted build quality α_i that is comparable across different opponent subsets.
 
-Synthetic simulation showed TWFE increases rank correlation with true build quality from ρ = 0.525 (z-score mean baseline) to ρ = 0.775 (+48%, p < 0.001).
+TWFE is designed to materially increase rank correlation with true build quality vs. a z-score-mean baseline. Quantitative effect size is pending re-validation under V2 loadout fix; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ## Classes
 
@@ -259,12 +265,12 @@ The returned `_EBDiagnostics` (or `None` on either fallback path) is written to 
 
 ## Design Rationale
 
-**Why TWFE over raw Elo?** Standard Elo is confounded by non-stationary build quality — simulation showed ρ(Elo, true difficulty) = 0.024 with improving builds. TWFE treats builds as independent observations and opponents as fixed effects, naturally handling the non-stationarity.
+**Why TWFE over raw Elo?** Standard Elo is confounded by non-stationary build quality — under improving builds the rating system attributes the improvement to opponents getting easier, collapsing rank correlation with true difficulty. TWFE treats builds as independent observations and opponents as fixed effects, naturally handling the non-stationarity. Quantitative effect size pending re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-**Why trimmed mean over minimax?** Minimax (worst-case opponent) is too conservative in games with RPS dynamics — it penalizes builds for one bad matchup. Trimmed mean drops the worst 1-2 matchups, balancing robustness and discrimination. Simulation showed trimmed TWFE (ρ = 0.811) outperforms z-score minimax.
+**Why trimmed mean over minimax?** Minimax (worst-case opponent) is too conservative in games with RPS dynamics — it penalizes builds for one bad matchup. Trimmed mean drops the worst 1-2 matchups, balancing robustness and discrimination. Quantitative effect size pending re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-**Why alternating projection over full matrix factorization (ALS)?** The additive model (rank 1 with known structure) has a closed-form iterative solution that converges in ~20 iterations. Full rank-r ALS is more powerful but adds complexity for marginal gain — simulation showed ALS imputation at ρ = 0.726 vs TWFE at ρ = 0.775. The additive assumption is well-validated by the literature convergence across 6 fields.
+**Why alternating projection over full matrix factorization (ALS)?** The additive model (rank 1 with known structure) has a closed-form iterative solution that converges in ~20 iterations. Full rank-r ALS is more powerful but adds complexity for marginal gain — the additive assumption is well-validated by the literature convergence across 6 fields. Quantitative effect size pending re-validation; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-**Why EB shrinkage (A2′) over the shipped scalar control variate (A2)?** The shipped A2 used only the scalar `composite_score` as a single covariate and applied a subtractive correction `α̂_i − β̂·(h_i − h̄)`. An earlier v1 design attempted to generalize this to multivariate conditioning (CUPED / FWL / PDS lasso on 13 scorer components) and failed catastrophically: synthetic Δρ = −0.35 vs plain TWFE (Cinelli-Forney-Pearl 2022 "Case 8" bad-control pattern — the scorer components are noisy *proxies of the estimand* α, not orthogonal covariates of Y). EB shrinkage reframes the problem as **fusion**: α̂_TWFE and γ̂ᵀX are treated as two noisy measurements of the same latent α and combined by precision weighting (Bayes rule), never subtracted. Validated at Δρ = +0.036 vs plain TWFE / +0.057 vs shipped A2 on LOOO Hammerhead 2026-04-17. See `docs/reference/phase5d-covariate-adjustment.md` for the full derivation.
+**Why EB shrinkage (A2′) over the shipped scalar control variate (A2)?** The shipped A2 used only the scalar `composite_score` as a single covariate and applied a subtractive correction `α̂_i − β̂·(h_i − h̄)`. An earlier v1 design attempted to generalize this to multivariate conditioning (CUPED / FWL / PDS lasso on 13 scorer components) and failed catastrophically by theory: it is a Cinelli-Forney-Pearl 2022 "Case 8" bad-control pattern — the scorer components are noisy *proxies of the estimand* α, not orthogonal covariates of Y. EB shrinkage reframes the problem as **fusion**: α̂_TWFE and γ̂ᵀX are treated as two noisy measurements of the same latent α and combined by precision weighting (Bayes rule), never subtracted. Quantitative effect size pending re-validation under V2 loadout fix; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Full derivation in `docs/reference/phase5d-covariate-adjustment.md`.
 
 **Why triple-goal rank correction?** Pure EB posterior means suffer regression-to-mean compression at the tails (Louis 1984). Since Optuna TPE's acquisition reads the posterior as a magnitude, compression dulls exploitation. Triple-goal (Lin, Louis & Shen 1999) preserves the improved rank ordering but substitutes the empirical α̂ histogram, restoring the exploitation signal with zero Spearman-ρ cost.

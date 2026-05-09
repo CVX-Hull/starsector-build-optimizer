@@ -1,3 +1,9 @@
+---
+type: reference
+status: shipped
+last-validated: unvalidated
+---
+
 # Multi-Fidelity Evaluation Strategy
 
 This document covers the two-tier evaluation pipeline, surrogate model design, noise handling, and adaptive replication strategies.
