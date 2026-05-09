@@ -23,7 +23,7 @@
     "max_capacitors_per_ship": 30,
     "max_logistics_hullmods": 2,
     "max_vents_per_ship": 30,
-    "mod_commit_sha": "5ceb8fd2f20e33984f5cacc2ccd7676145908b21",
+    "mod_commit_sha": "dc71e3bb30692968bffa27a5bbaa2b6be95ea7c3",
     "shield_damage_mult_by_type": {
       "ENERGY": 1,
       "FRAGMENTATION": 0.25,

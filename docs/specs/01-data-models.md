@@ -215,7 +215,7 @@ class MatchupConfig:
     player_builds: tuple[BuildSpec, ...]   # optimizer-generated build specs
     enemy_variants: tuple[str, ...]        # stock variant IDs
     time_limit_seconds: float = 300.0
-    time_mult: float = 3.0
+    time_mult: float = 5.0
     map_width: float = 24000.0
     map_height: float = 18000.0
     debug_dumps_enabled: bool = False

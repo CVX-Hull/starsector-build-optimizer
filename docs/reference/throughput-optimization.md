@@ -299,7 +299,7 @@ Modify the combat harness to accept build specifications as JSON fields within t
 }],
 "enemy_variants": ["dominator_Assault"],
 "time_limit_seconds": 180,
-"time_mult": 3.0
+"time_mult": 5.0
 }
 ```
 

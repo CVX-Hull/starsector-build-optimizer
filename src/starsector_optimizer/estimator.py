@@ -44,7 +44,11 @@ class HullSpaceStats:
 
 @dataclass(frozen=True)
 class SimulationParams:
-    time_mult: float = 3.0
+    # Match MatchupConfig default — both default to the engine 5.0x ceiling so
+    # estimator predictions reflect the wall-clock the campaign will actually
+    # see. Demo presets in `_run_demo_grid` still use 3.0 explicitly to
+    # contrast with 5.0.
+    time_mult: float = 5.0
     game_time_limit_seconds: float = 180.0
     startup_seconds: float = 35.0
     batch_size: int = 50

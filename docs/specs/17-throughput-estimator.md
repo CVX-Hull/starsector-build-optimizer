@@ -20,7 +20,7 @@ Computed from actual game data via `build_search_space()`:
 
 | Parameter | Default | Range | Notes |
 |-----------|---------|-------|-------|
-| `time_mult` | 3.0 | 1.0-5.0 | Game speed multiplier |
+| `time_mult` | 5.0 | 1.0-5.0 | Game speed multiplier (default = clamp ceiling) |
 | `game_time_limit_seconds` | 180 | 60-300 | Per-matchup game-time limit |
 | `startup_seconds` | 35.0 | — | Game launch + menu navigation |
 | `batch_size` | 50 | 1-200 | Matchups per game instance launch |

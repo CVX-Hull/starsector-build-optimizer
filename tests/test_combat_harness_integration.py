@@ -66,7 +66,7 @@ class TestQueueGeneration:
             enemy_variants=("dominator_Assault",),
         )
         assert mc.time_limit_seconds == 300.0
-        assert mc.time_mult == 3.0
+        assert mc.time_mult == 5.0
 
     def test_deploy_queue_file(self, game_data, manifest):
         """Write queue file to saves/common/ with .data extension."""

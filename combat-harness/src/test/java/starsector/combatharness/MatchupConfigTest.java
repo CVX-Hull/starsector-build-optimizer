@@ -60,7 +60,7 @@ class MatchupConfigTest {
 
         assertEquals("eval_001", config.matchupId);
         assertEquals(300.0f, config.timeLimitSeconds, 0.01f);
-        assertEquals(3.0f, config.timeMult, 0.01f);
+        assertEquals(5.0f, config.timeMult, 0.01f);
         assertEquals(24000.0f, config.mapWidth, 0.01f);
         assertEquals(18000.0f, config.mapHeight, 0.01f);
     }

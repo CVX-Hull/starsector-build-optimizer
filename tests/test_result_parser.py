@@ -208,7 +208,7 @@ class TestWriteQueueFile:
         assert data[0]["player_builds"][0]["flux_capacitors"] == 10
         assert data[0]["enemy_variants"] == ["dominator_Assault"]
         assert data[0]["time_limit_seconds"] == 300.0
-        assert data[0]["time_mult"] == 3.0
+        assert data[0]["time_mult"] == 5.0
 
     def test_multiple_matchups(self, tmp_path):
         matchups = [

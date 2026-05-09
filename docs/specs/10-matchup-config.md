@@ -12,7 +12,7 @@ Used within `MatchupQueue` (see spec 15) — the queue file contains an array of
 | `playerBuilds` | `BuildSpec[]` | `player_builds` | yes | — |
 | `enemyVariants` | `String[]` | `enemy_variants` | yes | — |
 | `timeLimitSeconds` | `float` | `time_limit_seconds` | no | `300.0f` |
-| `timeMult` | `float` | `time_mult` | no | `3.0f` |
+| `timeMult` | `float` | `time_mult` | no | `5.0f` (clamp ceiling — engine breaks above 5x) |
 | `mapWidth` | `float` | `map_width` | no | `24000.0f` |
 | `mapHeight` | `float` | `map_height` | no | `18000.0f` |
 

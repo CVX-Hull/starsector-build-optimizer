@@ -75,7 +75,7 @@ Global.getSettings().fileExistsInCommon("combat_harness_queue.json");
 - `combat_harness_done` signals completion; Python polls for this, not results
 - The plugin never modifies combat (no damage modification, no custom AI)
 - Single matchup per mission — `endCombat()` + Robot dismiss + TitleScreenPlugin restart between matchups
-- All config values have sane defaults (time_mult=3, time_limit=300, map=24000x18000)
+- All config values have sane defaults (time_mult=5, time_limit=300, map=24000x18000); 5x is the engine clamp ceiling — physics/collision integration breaks above 5x.
 - MissionDefinition gracefully handles missing queue (shows error in briefing)
 
 ## Pitfalls Encountered

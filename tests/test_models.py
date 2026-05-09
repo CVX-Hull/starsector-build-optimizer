@@ -461,7 +461,7 @@ class TestMatchupConfig:
         )
         assert mc.matchup_id == "eval_001"
         assert mc.time_limit_seconds == 300.0
-        assert mc.time_mult == 3.0
+        assert mc.time_mult == 5.0
         assert mc.map_width == 24000.0
         assert mc.map_height == 18000.0
 

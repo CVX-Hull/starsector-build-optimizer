@@ -65,7 +65,7 @@ All filenames use a flat `combat_harness_` prefix (subdirectories don't work wit
         ],
         "enemy_variants": ["dominator_Assault"],
         "time_limit_seconds": 180,
-        "time_mult": 3.0,
+        "time_mult": 5.0,
         "map_width": 24000,
         "map_height": 18000
     }

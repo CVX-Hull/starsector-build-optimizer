@@ -410,7 +410,11 @@ class MatchupConfig:
     player_builds: tuple[BuildSpec, ...]
     enemy_variants: tuple[str, ...]
     time_limit_seconds: float = 300.0
-    time_mult: float = 3.0
+    # 5.0x is the engine ceiling per `.claude/skills/starsector-modding.md` — above
+    # this, physics/collision integration breaks down. Default to the ceiling so
+    # smoke + prep runs maximize wall-clock throughput; downstream callers can
+    # still override per-matchup. Validated end-to-end via the loadout AB test.
+    time_mult: float = 5.0
     map_width: float = 24000.0
     map_height: float = 18000.0
     debug_dumps_enabled: bool = False

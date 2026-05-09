@@ -74,7 +74,10 @@ public class MatchupConfig {
             throw new IllegalArgumentException("time_limit_seconds must be > 0");
         }
 
-        float timeMult = (float) json.optDouble("time_mult", 3.0);
+        // Default 5.0 = the engine clamp ceiling (above this, physics/collision
+        // integration breaks). Maximizes wall-clock throughput by default; the
+        // Math.max/min still guards against malformed queue payloads.
+        float timeMult = (float) json.optDouble("time_mult", 5.0);
         timeMult = Math.max(1.0f, Math.min(5.0f, timeMult));
 
         float mapWidth = (float) json.optDouble("map_width", 24000.0);
