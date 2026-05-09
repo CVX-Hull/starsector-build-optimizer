@@ -12,11 +12,47 @@ sys.path.insert(0, "src")
 from pathlib import Path
 
 from starsector_optimizer.game_manifest import GameManifest
-from starsector_optimizer.models import REGIME_PRESETS
+from starsector_optimizer.models import (
+    EBShrinkageConfig, REGIME_PRESETS, ShapeConfig, TWFEConfig,
+)
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.opponent_pool import discover_opponent_pool, get_opponents
 from starsector_optimizer.optimizer import OptimizerConfig, optimize_hull
+
+
+# Wave-1 ablation env-var overrides — operator-level knobs for the
+# C0a/C0b/C1/C2/C3 ablation matrix (docs/reports/2026-05-10-validation-plan.md
+# §3.1). Not a CLI surface because campaign.py spawns run_optimizer.py via
+# subprocess.Popen; env vars inherit through Popen automatically while CLI
+# args would require StudyConfig + campaign.py wire-through. Unset → use the
+# OptimizerConfig defaults; set → override the matching frozen-dataclass field.
+_ABLATION_ENV_VARS = (
+    "STARSECTOR_EB_MIN_BUILDS",      # C0a/C0b: set to sim_budget+1 to disable EB
+    "STARSECTOR_SHAPE_MIN_SAMPLES",  # C1: set to sim_budget+1 to disable Box-Cox A3
+    "STARSECTOR_TWFE_TRIM_WORST",    # C0a: set to 0 to disable scalar-CV trimming
+    "STARSECTOR_WARM_START_N",       # C3: set to 50 to enable heuristic warm-start
+)
+
+
+def _resolve_ablation_overrides() -> dict[str, object]:
+    """Read ablation env vars; return a kwargs dict for OptimizerConfig.
+
+    Env-var values are parsed as int. Unset vars don't appear in the dict
+    so the OptimizerConfig dataclass uses its declared default. Logs a one-
+    line "ablation overrides" summary when any var is set, so the JSONL +
+    operator log carry a record of which cell ran.
+    """
+    overrides: dict[str, object] = {}
+    if (v := os.environ.get("STARSECTOR_EB_MIN_BUILDS")) is not None:
+        overrides["eb"] = EBShrinkageConfig(eb_min_builds=int(v))
+    if (v := os.environ.get("STARSECTOR_SHAPE_MIN_SAMPLES")) is not None:
+        overrides["shape"] = ShapeConfig(min_samples=int(v))
+    if (v := os.environ.get("STARSECTOR_TWFE_TRIM_WORST")) is not None:
+        overrides["twfe"] = TWFEConfig(trim_worst=int(v))
+    if (v := os.environ.get("STARSECTOR_WARM_START_N")) is not None:
+        overrides["warm_start_n"] = int(v)
+    return overrides
 
 
 def _install_signal_handlers() -> None:
@@ -165,6 +201,14 @@ def main():
     eval_log_dir.mkdir(parents=True, exist_ok=True)
     eval_log_path = eval_log_dir / "evaluation_log.jsonl"
 
+    ablation_overrides = _resolve_ablation_overrides()
+    if ablation_overrides:
+        # Single line to the operator + JSONL trail so analysis can attribute
+        # every JSONL row to the cell that produced it.
+        summary = ", ".join(
+            f"{k}={getattr(v, '__dict__', v)}" for k, v in ablation_overrides.items()
+        )
+        logging.getLogger("ablation").info("ablation overrides: %s", summary)
     config = OptimizerConfig(
         sim_budget=args.sim_budget,
         sampler=args.sampler,
@@ -174,6 +218,7 @@ def main():
         eval_log_path=eval_log_path,
         regime=REGIME_PRESETS[args.regime],
         warm_start_from_regime=args.warm_start_from_regime,
+        **ablation_overrides,
     )
 
     if args.heuristic_only:
