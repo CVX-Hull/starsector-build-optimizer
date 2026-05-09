@@ -54,6 +54,12 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
     private static final int WAITING_TIMEOUT_FRAMES = 3600;
     private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
+    /** Maximum frames `doSetup` will defer waiting for the expected
+     *  player variant to appear in `engine.getShips()`. At ~60 fps that's
+     *  10 wall-seconds — plenty for the engine's deployment screen to
+     *  resolve, conservative enough to fail loud if the spec ships
+     *  genuinely never arrive (mod regression or fleet-add failure). */
+    private static final int SETUP_VARIANT_WAIT_FRAMES = 600;
     private static final float MAX_APPROACH_TIME = 30f;
 
     // Commit G: PROBE_RUN replaced by PROBE_ITERATE (two-phase:
@@ -73,6 +79,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private float matchupStartTime;
     private boolean contactMade = false;
     private int waitingFrameCount = 0;
+    private int setupVariantWaitFrames = 0;
     // Phase 5D — engine-computed player SETUP stats, populated in doSetup()
     private float currentEffMaxFlux = Float.NaN;
     private float currentEffFluxDissipation = Float.NaN;
@@ -498,6 +505,64 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private void doSetup() {
         currentConfig = queue.get(0);  // Single matchup per mission
+
+        // Match deployed player ships by spec.variantId. The naive
+        // "every owner==0 ship in engine.getShips()" path was caught
+        // returning ships from a *prior* mission cycle's combat under
+        // multi-worker JVM reuse — see the Wave-0-step-4 forensics in
+        // docs/reports/2026-05-09-wave0-validation.md. Symptom:
+        // doSetup ran with `currentConfig.matchupId` correctly pointing
+        // at the new matchup, but `engine.getShips()` returned stale
+        // ShipAPIs whose variant_id matched a previously-evaluated
+        // trial. Filter by variant_id so doSetup only collects the
+        // ships MissionDefinition actually deployed for the current
+        // spec; defer the rest of setup to next frame if they're not
+        // yet visible (engine deployment-screen race).
+        java.util.Set<String> expectedVariantIds = new java.util.HashSet<String>();
+        for (MatchupConfig.BuildSpec spec : currentConfig.playerBuilds) {
+            expectedVariantIds.add(spec.variantId);
+        }
+        java.util.List<ShipAPI> matchedPlayerShips = new java.util.ArrayList<ShipAPI>();
+        java.util.List<ShipAPI> allEnemyShips = new java.util.ArrayList<ShipAPI>();
+        int staleOwnerZero = 0;
+        for (ShipAPI ship : engine.getShips()) {
+            if (ship.isFighter()) continue;
+            int owner = ship.getOwner();
+            if (owner == 0) {
+                ShipVariantAPI v = ship.getVariant();
+                String vid = (v == null) ? null : safeShipVariantId(v);
+                if (vid != null && expectedVariantIds.contains(vid)) {
+                    matchedPlayerShips.add(ship);
+                } else {
+                    staleOwnerZero++;
+                }
+            } else if (owner == 1) {
+                allEnemyShips.add(ship);
+            }
+        }
+        if (matchedPlayerShips.size() < currentConfig.playerBuilds.length) {
+            // Stale or pre-deployment state. Defer one frame; the engine's
+            // deployment screen will eventually swap the new spec ships in.
+            setupVariantWaitFrames++;
+            if (setupVariantWaitFrames == 1 || setupVariantWaitFrames % 60 == 0) {
+                log.info("[V2_SETUP_DEFER] matchup=" + currentConfig.matchupId
+                        + " expected=" + expectedVariantIds
+                        + " matched=" + matchedPlayerShips.size()
+                        + "/" + currentConfig.playerBuilds.length
+                        + " stale_owner0=" + staleOwnerZero
+                        + " wait_frames=" + setupVariantWaitFrames);
+            }
+            if (setupVariantWaitFrames > SETUP_VARIANT_WAIT_FRAMES) {
+                log.error("[V2_SETUP_TIMEOUT] matchup=" + currentConfig.matchupId
+                        + " never saw expected variant ids " + expectedVariantIds
+                        + " in engine.getShips() after "
+                        + SETUP_VARIANT_WAIT_FRAMES + " frames; aborting matchup.");
+                state = State.DONE;
+            }
+            return;
+        }
+        setupVariantWaitFrames = 0;
+
         log.info("Matchup: " + currentConfig.matchupId
                 + " (time_mult=" + currentConfig.timeMult
                 + ", time_limit=" + currentConfig.timeLimitSeconds + "s)");
@@ -507,14 +572,10 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         currentTracker = new DamageTracker();
         engine.getListenerManager().addListener(currentTracker);
 
-        // Collect ships deployed by MissionDefinition (addFleetMember/addToFleet — proper CR/AI)
         playerShips.clear();
         enemyShips.clear();
-        for (ShipAPI ship : engine.getShips()) {
-            if (ship.isFighter()) continue;
-            if (ship.getOwner() == 0) playerShips.add(ship);
-            else if (ship.getOwner() == 1) enemyShips.add(ship);
-        }
+        playerShips.addAll(matchedPlayerShips);
+        enemyShips.addAll(allEnemyShips);
 
         // Force per-ship CR + clear any auto-set retreat. MissionDefinition's
         // V2 setup path sets `member.getRepairTracker().setCR(spec.cr)` on
