@@ -15,6 +15,7 @@ from .models import (
     CombatResult,
     DamageBreakdown,
     EngineStats,
+    LoadoutDiagnostic,
     MatchupConfig,
     ShipCombatResult,
 )
@@ -73,6 +74,36 @@ def _parse_setup_stats(data: dict) -> EngineStats | None:
     return EngineStats(*values)
 
 
+def _parse_loadout_diagnostic_entry(entry: dict) -> LoadoutDiagnostic:
+    """Fail-loud parse of one per-player-ship diagnostic block.
+
+    Every field is required; KeyError/TypeError/ValueError propagate as schema
+    violations so a malformed Java emission halts the run rather than silently
+    feeding the optimizer un-verifiable data.
+    """
+    return LoadoutDiagnostic(
+        fleet_member_id=entry["fleet_member_id"],
+        spec_weapons=dict(entry["spec_weapons"]),
+        live_weapons=dict(entry["live_weapons"]),
+        spec_hullmods=tuple(entry["spec_hullmods"]),
+        live_hullmods=tuple(entry["live_hullmods"]),
+        spec_flux_vents=int(entry["spec_flux_vents"]),
+        live_flux_vents=int(entry["live_flux_vents"]),
+        spec_flux_capacitors=int(entry["spec_flux_capacitors"]),
+        live_flux_capacitors=int(entry["live_flux_capacitors"]),
+        weapons_match=bool(entry["weapons_match"]),
+        hullmods_match=bool(entry["hullmods_match"]),
+        flux_vents_match=bool(entry["flux_vents_match"]),
+        flux_capacitors_match=bool(entry["flux_capacitors_match"]),
+    )
+
+
+def _parse_loadout_diagnostic(data: dict) -> tuple[LoadoutDiagnostic, ...]:
+    """Required-present parse — Java mod always emits the player array."""
+    block = data["loadout_diagnostic"]
+    return tuple(_parse_loadout_diagnostic_entry(e) for e in block["player"])
+
+
 def parse_combat_result(data: dict) -> CombatResult:
     """Parse a single result dict from Java JSON into CombatResult."""
     return CombatResult(
@@ -85,6 +116,7 @@ def parse_combat_result(data: dict) -> CombatResult:
         enemy_ships_destroyed=data["aggregate"]["enemy_ships_destroyed"],
         player_ships_retreated=data["aggregate"]["player_ships_retreated"],
         enemy_ships_retreated=data["aggregate"]["enemy_ships_retreated"],
+        player_loadout_diagnostics=_parse_loadout_diagnostic(data),
         engine_stats=_parse_setup_stats(data),
     )
 

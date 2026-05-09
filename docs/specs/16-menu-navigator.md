@@ -66,18 +66,14 @@ private static final int CONTINUE_X = 963, CONTINUE_Y = 892;
 private static final int HIGH_SCORE_OK_X = 1119, HIGH_SCORE_OK_Y = 611;
 ```
 
-**Launcher button** (handled by Python instance manager via xdotool, NOT Robot):
-```
-Launcher "Play Starsector" button: (297, 255)
-```
-The launcher is Java Swing — xdotool synthetic events work. The game itself is LWJGL — only Robot works.
+**Launcher button** (handled by Python instance manager via `xdotool windowfocus` + `xdotool mousemove`/`click 1` at a coordinate parsed from `getwindowgeometry`, NOT Robot, NOT static mouse coordinates): the Swing launcher's "Play Starsector" button is clicked at `(X + W * 0.5, Y + H * 0.7)` where geometry is queried per-dispatch from the live launcher window. `windowfocus` is preferred over `windowactivate` because Xvfb has no window manager and the `_NET_ACTIVE_WINDOW` EWMH atom is unset. A `key Return` is also dispatched as a belt-and-suspenders fallback (XTest, no `--window`, so Java's XSendEvent filter doesn't drop it). The game itself is LWJGL — only Robot works.
 
-**Re-calibration for new game versions or display setups:**
+**Re-calibration for new game versions or display setups:** in-game coordinates only. The launcher click is window-relative (geometry parsed every dispatch) and requires no recalibration as long as `legacyLauncher=true` and the Play button stays roughly at center-horizontal, lower-third. If a future game version reshuffles the launcher layout, retune `InstanceConfig.launcher_play_button_{x,y}_fraction` from the dispatched coordinates logged in `<work_dir>/launcher_dispatch.log`. For in-game button coordinates:
 1. Start Xvfb at 1920x1080: `Xvfb :100 -screen 0 1920x1080x24 -nolisten tcp`
-2. Launch game on `:100`, click Play Starsector via xdotool
+2. Launch game on `:100`, advance through launcher
 3. Screenshot: `DISPLAY=:100 import -window root /tmp/screenshot.png`
 4. Open in an image viewer with coordinate display, annotate button centers
-5. Update coordinates in `MenuNavigator.java` and instance manager
+5. Update coordinates in `MenuNavigator.java`
 
 ## TitleScreenPlugin
 

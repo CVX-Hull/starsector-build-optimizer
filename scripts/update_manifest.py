@@ -173,42 +173,111 @@ def _start_game(work_dir: Path, display_num: int) -> tuple[subprocess.Popen, Pat
     return proc, log_path
 
 
-_LAUNCHER_PLAY_X = 297  # "Play Starsector" button, calibrated for 1920x1080
-_LAUNCHER_PLAY_Y = 255
 _LAUNCHER_CLICK_SETTLE_SECONDS = 0.3
+# Single-source the Play-button position fractions from the production
+# InstanceConfig defaults — keeps the manifest dump and the production
+# launcher dispatch in lockstep across version updates.
+from starsector_optimizer.instance_manager import InstanceConfig as _InstanceConfig
+_LAUNCHER_PLAY_X_FRACTION: float = _InstanceConfig.__dataclass_fields__[
+    "launcher_play_button_x_fraction"
+].default
+_LAUNCHER_PLAY_Y_FRACTION: float = _InstanceConfig.__dataclass_fields__[
+    "launcher_play_button_y_fraction"
+].default
 
 
-def _click_launcher(display_num: int, launcher_timeout: float = 30.0) -> None:
-    """Click the Starsector launcher's "Play Starsector" button via xdotool.
+def _click_launcher(
+    display_num: int,
+    launcher_timeout: float = 30.0,
+    *,
+    dispatch_log: Path | None = None,
+) -> None:
+    """Activate the Starsector launcher window and press Enter.
 
-    Mirrors `instance_manager._click_launcher`: poll for any window named
-    "Starsector", then move mouse to the hardcoded button coordinates
-    and click. Coordinates calibrated for 1920x1080 Xvfb.
+    Mirrors `instance_manager._click_launcher`: poll for the launcher window,
+    capture its WID, activate, then send Return — Swing's default focused
+    button is "Play Starsector", so Enter advances. Window-relative dispatch
+    is robust to the 597x373 launcher being centered on 1920x1080 Xvfb.
+
+    `dispatch_log`: optional path to mirror every xdotool call's exit /
+    stdout / stderr. Aligns with the per-instance trace shipped via worker
+    heartbeat in cloud runs.
     """
     env = {**os.environ, "DISPLAY": f":{display_num}"}
-    deadline = time.monotonic() + launcher_timeout
-    while time.monotonic() < deadline:
-        result = subprocess.run(
-            ["xdotool", "search", "--name", "Starsector"],
+
+    def _trace(line: str) -> None:
+        if dispatch_log is None:
+            return
+        ts = time.strftime("%H:%M:%S", time.localtime())
+        with open(dispatch_log, "a", encoding="utf-8") as fh:
+            fh.write(f"{ts} {line}\n")
+
+    def _xdotool(*args: str, label: str) -> subprocess.CompletedProcess:
+        cp = subprocess.run(
+            ["xdotool", *args],
             env=env, capture_output=True, text=True, timeout=5,
         )
-        if result.stdout.strip():
+        _trace(
+            f"{label}: xdotool {' '.join(args)} → exit={cp.returncode} "
+            f"stdout={cp.stdout.strip()!r} stderr={cp.stderr.strip()!r}"
+        )
+        return cp
+
+    _trace(f"_click_launcher start display=:{display_num} timeout={launcher_timeout}s")
+    deadline = time.monotonic() + launcher_timeout
+    wid: str | None = None
+    poll_idx = 0
+    while time.monotonic() < deadline:
+        cp = _xdotool("search", "--name", "Starsector", label=f"poll[{poll_idx}] search")
+        first_line = cp.stdout.strip().splitlines()[:1]
+        if first_line:
+            wid = first_line[0].strip()
             break
+        poll_idx += 1
         time.sleep(0.5)
-    else:
+    if wid is None:
+        _trace(f"FAILED: launcher window did not appear within {launcher_timeout}s")
         raise RuntimeError(f"Launcher window did not appear within {launcher_timeout}s")
 
+    for label, args in (
+        ("name", ("getwindowname", wid)),
+        ("geom", ("getwindowgeometry", "--shell", wid)),
+        ("focus_before", ("getwindowfocus",)),
+    ):
+        try:
+            _xdotool(*args, label=f"probe[{label}]")
+        except Exception:
+            continue
+
+    # See instance_manager._click_launcher for the why: Xvfb has no WM, so
+    # windowactivate (EWMH) fails; XSendEvent gets filtered by Java AWT;
+    # XTest Return doesn't reach the Play button because AWT FocusManager
+    # didn't focus it. The reliable path is a coordinate-based mouse click
+    # at the Play button's location, computed from the launcher's geometry.
+    geom_cp = _xdotool("getwindowgeometry", "--shell", wid, label="geom_for_click")
+    coords: dict[str, int] = {}
+    for line in geom_cp.stdout.splitlines():
+        line = line.strip()
+        if "=" in line:
+            k, _, v = line.partition("=")
+            try:
+                coords[k.strip()] = int(v.strip())
+            except ValueError:
+                continue
+    if not all(k in coords for k in ("X", "Y", "WIDTH", "HEIGHT")):
+        raise RuntimeError(f"Incomplete launcher geometry parse: {coords}")
+    click_x = coords["X"] + int(coords["WIDTH"] * _LAUNCHER_PLAY_X_FRACTION)
+    click_y = coords["Y"] + int(coords["HEIGHT"] * _LAUNCHER_PLAY_Y_FRACTION)
+
     time.sleep(_LAUNCHER_CLICK_SETTLE_SECONDS)
-    subprocess.run(
-        ["xdotool", "mousemove", str(_LAUNCHER_PLAY_X), str(_LAUNCHER_PLAY_Y)],
-        env=env, check=False, timeout=5,
-    )
+    _xdotool("windowmap", wid, label="windowmap")
+    _xdotool("windowfocus", wid, label="windowfocus")
     time.sleep(_LAUNCHER_CLICK_SETTLE_SECONDS)
-    subprocess.run(
-        ["xdotool", "click", "1"],
-        env=env, check=False, timeout=5,
-    )
-    logger.info("Clicked launcher Play button")
+    _xdotool("mousemove", str(click_x), str(click_y), label="mousemove_play")
+    _xdotool("click", "1", label="click_play")
+    time.sleep(_LAUNCHER_CLICK_SETTLE_SECONDS)
+    _xdotool("key", "Return", label="key_Return_fallback")
+    logger.info("Clicked launcher window %s at (%d, %d)", wid, click_x, click_y)
 
 
 def _kill_process(proc: subprocess.Popen | None, label: str) -> None:
@@ -245,7 +314,7 @@ def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
         logger.info("Game launched, log=%s", log_path)
 
         # The launcher window appears first; click through it.
-        _click_launcher(display_num)
+        _click_launcher(display_num, dispatch_log=work_dir / "launcher_dispatch.log")
 
         def _all_parts_present() -> bool:
             # Done sentinel is written LAST by the Java side, so its

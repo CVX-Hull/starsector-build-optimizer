@@ -9,6 +9,7 @@ import com.fs.starfarer.api.combat.ShipHullSpecAPI;
 import com.fs.starfarer.api.combat.ShipHullSpecAPI.ShipTypeHints;
 import com.fs.starfarer.api.combat.ShipVariantAPI;
 import com.fs.starfarer.api.combat.ViewportAPI;
+import com.fs.starfarer.api.combat.WeaponAPI;
 import com.fs.starfarer.api.fleet.FleetMemberAPI;
 import com.fs.starfarer.api.fleet.FleetMemberType;
 import com.fs.starfarer.api.input.InputEventAPI;
@@ -16,11 +17,14 @@ import com.fs.starfarer.api.loading.HullModSpecAPI;
 import com.fs.starfarer.api.mission.FleetSide;
 
 import org.json.JSONArray;
+import org.json.JSONException;
+import org.json.JSONObject;
 import org.lwjgl.util.vector.Vector2f;
 
 import org.apache.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.HashMap;
@@ -78,6 +82,11 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private float currentEffHullHpPct = Float.NaN;
     private float currentBallisticRangeBonus = Float.NaN;
     private float currentShieldDamageTakenMult = Float.NaN;
+    // Per-player-ship loadout-swap diagnostic, captured at end of doSetup().
+    // Required-present in the result JSON — verifies the in-place variant
+    // mutation actually took effect on the deployed ShipAPI. Cleared at the
+    // start of every doSetup() so a stale entry can't leak across matchups.
+    private JSONArray currentLoadoutDiagnosticPlayer = new JSONArray();
     private int frameCount = 0;
 
     @Override
@@ -501,7 +510,11 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             else if (ship.getOwner() == 1) enemyShips.add(ship);
         }
 
-        // Swap player ship loadout to the real build spec
+        // Swap player ship loadout to the real build spec, then verify each
+        // ship's live state against the spec. The verification block is
+        // required-present in the result JSON; the orchestrator fail-loud
+        // refuses any matchup whose swap silently dropped weapons / hullmods.
+        currentLoadoutDiagnosticPlayer = new JSONArray();
         for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
             ShipAPI ship = playerShips.get(i);
             MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
@@ -523,6 +536,29 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             log.info("  Swapped loadout: " + spec.variantId
                     + " weapons=" + spec.weaponAssignments.size()
                     + " mods=" + spec.hullmods.length);
+
+            try {
+                JSONObject diag = buildLoadoutDiagnostic(ship, spec);
+                currentLoadoutDiagnosticPlayer.put(diag);
+                log.info("[LOADOUT_DBG] matchup=" + currentConfig.matchupId
+                        + " ship=" + diag.optString("fleet_member_id", "?")
+                        + " weapons_match=" + diag.optBoolean("weapons_match", false)
+                        + " hullmods_match=" + diag.optBoolean("hullmods_match", false)
+                        + " flux_vents_match=" + diag.optBoolean("flux_vents_match", false)
+                        + " flux_capacitors_match=" + diag.optBoolean("flux_capacitors_match", false));
+                if (!diag.optBoolean("weapons_match", false)
+                        || !diag.optBoolean("hullmods_match", false)) {
+                    log.warn("[LOADOUT_DBG] mismatch detail: spec_weapons="
+                            + diag.opt("spec_weapons") + " live_weapons="
+                            + diag.opt("live_weapons") + " spec_hullmods="
+                            + diag.opt("spec_hullmods") + " live_hullmods="
+                            + diag.opt("live_hullmods"));
+                }
+            } catch (JSONException je) {
+                log.error("[LOADOUT_DBG] failed to build diagnostic for "
+                        + spec.variantId, je);
+                throw new RuntimeException(je);
+            }
         }
 
         // Phase 5D + Phase-7-prep — read engine-computed player SETUP stats
@@ -631,7 +667,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                         currentEffMaxFlux, currentEffFluxDissipation,
                         currentEffArmorRating,
                         currentEffHullHpPct, currentBallisticRangeBonus,
-                        currentShieldDamageTakenMult));
+                        currentShieldDamageTakenMult,
+                        currentLoadoutDiagnosticPlayer));
                 ResultWriter.writeAllResults(results);
                 ResultWriter.writeDoneSignal();
                 log.info("Matchup " + currentConfig.matchupId
@@ -703,6 +740,114 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             total += s.getHullLevel();
         }
         return total / ships.size();
+    }
+
+    /** Build the per-player-ship loadout-swap diagnostic JSON. Captures the
+     *  spec's intent vs the live ship's actual state immediately after the
+     *  in-place variant mutation. The Python orchestrator fail-loud refuses
+     *  any matchup whose `weapons_match` or `hullmods_match` is false — this
+     *  is the only way the system catches a silent swap regression.
+     *
+     *  Why this matters: weapons are physical WeaponAPI instances bound at
+     *  ship-deployment time, and hullmods apply their effects via
+     *  HullModEffect.applyEffects*ShipCreation. Mutating `ship.getVariant()`
+     *  AFTER the ship has been deployed by addToFleet() is not guaranteed
+     *  to back-propagate to either layer. Flux vents/caps DO propagate
+     *  because they're read live from MutableShipStatsAPI — that's the
+     *  asymmetry that hides the bug from the existing setup_stats block. */
+    private JSONObject buildLoadoutDiagnostic(ShipAPI ship,
+                                              MatchupConfig.BuildSpec spec) throws JSONException {
+        JSONObject diag = new JSONObject();
+        diag.put("fleet_member_id", ship.getFleetMemberId() != null
+                ? ship.getFleetMemberId() : spec.variantId);
+
+        // Spec side — what the optimizer asked for.
+        JSONObject specWeapons = new JSONObject();
+        for (Map.Entry<String, String> e : spec.weaponAssignments.entrySet()) {
+            specWeapons.put(e.getKey(), e.getValue());
+        }
+        diag.put("spec_weapons", specWeapons);
+        JSONArray specHullmods = new JSONArray();
+        for (String mod : spec.hullmods) specHullmods.put(mod);
+        diag.put("spec_hullmods", specHullmods);
+        diag.put("spec_flux_vents", spec.fluxVents);
+        diag.put("spec_flux_capacitors", spec.fluxCapacitors);
+
+        // Live side — what's actually on the deployed ship right now. Read
+        // `getAllWeapons()` directly (these are the physical mounted weapons,
+        // not the variant's view of them) and `getNonBuiltInHullmods()` so
+        // the comparison ignores hull-permanent built-ins.
+        JSONObject liveWeapons = new JSONObject();
+        try {
+            List<WeaponAPI> mounted = ship.getAllWeapons();
+            if (mounted != null) {
+                for (WeaponAPI w : mounted) {
+                    if (w == null) continue;
+                    if (w.getSlot() == null) continue;
+                    String slotId = w.getSlot().getId();
+                    String weapId = w.getId();
+                    if (slotId != null && weapId != null) {
+                        liveWeapons.put(slotId, weapId);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            log.warn("[LOADOUT_DBG] getAllWeapons() failed for "
+                    + spec.variantId + ": " + t);
+        }
+        diag.put("live_weapons", liveWeapons);
+
+        JSONArray liveHullmods = new JSONArray();
+        ShipVariantAPI v = ship.getVariant();
+        int liveVents = 0, liveCaps = 0;
+        if (v != null) {
+            try {
+                Collection<String> nonBuiltIn = v.getNonBuiltInHullmods();
+                if (nonBuiltIn != null) {
+                    List<String> sorted = new ArrayList<String>(nonBuiltIn);
+                    Collections.sort(sorted);
+                    for (String mod : sorted) liveHullmods.put(mod);
+                }
+            } catch (Throwable t) {
+                log.warn("[LOADOUT_DBG] getNonBuiltInHullmods() failed: " + t);
+            }
+            try { liveVents = v.getNumFluxVents(); } catch (Throwable ignored) {}
+            try { liveCaps = v.getNumFluxCapacitors(); } catch (Throwable ignored) {}
+        }
+        diag.put("live_hullmods", liveHullmods);
+        diag.put("live_flux_vents", liveVents);
+        diag.put("live_flux_capacitors", liveCaps);
+
+        // Match booleans — semantic comparisons. Weapons compare as maps
+        // (slot → weapon); hullmods compare as sets (order doesn't matter,
+        // duplicates would already be illegal at the variant API level).
+        diag.put("weapons_match", weaponMapsEqual(specWeapons, liveWeapons));
+        diag.put("hullmods_match", hullmodSetsEqual(specHullmods, liveHullmods));
+        diag.put("flux_vents_match", spec.fluxVents == liveVents);
+        diag.put("flux_capacitors_match", spec.fluxCapacitors == liveCaps);
+        return diag;
+    }
+
+    private static boolean weaponMapsEqual(JSONObject a, JSONObject b) {
+        if (a.length() != b.length()) return false;
+        Iterator<String> keys = a.keys();
+        while (keys.hasNext()) {
+            String k = keys.next();
+            if (!b.has(k)) return false;
+            String av = a.optString(k, "__NULL_A__");
+            String bv = b.optString(k, "__NULL_B__");
+            if (!av.equals(bv)) return false;
+        }
+        return true;
+    }
+
+    private static boolean hullmodSetsEqual(JSONArray a, JSONArray b) {
+        if (a.length() != b.length()) return false;
+        Set<String> as = new HashSet<String>();
+        Set<String> bs = new HashSet<String>();
+        for (int i = 0; i < a.length(); i++) as.add(a.optString(i, ""));
+        for (int i = 0; i < b.length(); i++) bs.add(b.optString(i, ""));
+        return as.equals(bs);
     }
 
     private void updateCamera() {

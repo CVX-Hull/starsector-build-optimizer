@@ -203,9 +203,9 @@ When building search spaces for optimization, filter out:
 ## Instance Orchestration (Phase 3+)
 
 ### Launcher vs Game Window
-- **Launcher** = Java Swing window (597x373). `xdotool` synthetic events work on Swing.
+- **Launcher** = Java Swing window (597x373) **only when `legacyLauncher=true` in `data/config/settings.json`**. With Starsector's default `legacyLauncher=false`, the launcher is the LWJGL `GLLauncher` (fullscreen, sized to the display). `xdotool` synthetic events work on the Swing launcher *if you use the right primitives*; they do NOT work on the GLLauncher. `instance_manager._click_launcher` advances the Swing launcher via `xdotool windowmap <wid>` + `xdotool windowfocus <wid>` + `xdotool key Return` — the Swing launcher's default focused button is "Play Starsector", so Enter activates it. **Two non-obvious traps that trip the obvious approaches** (verified empirically by smoke #10 launcher_dispatch.log, 2026-05-09): (a) `xdotool windowactivate --sync` requires the EWMH `_NET_ACTIVE_WINDOW` atom which only a window manager sets; under bare Xvfb it returns `Your windowmanager claims not to support _NET_ACTIVE_WINDOW`. Use `windowfocus` (XSetInputFocus) instead — pure X core, no WM dependency. (b) `xdotool key --window <wid> Return` dispatches via XSendEvent which sets `send_event=True`; Java AWT filters such events as a synthetic-event-injection hardening, so the launcher never sees the key. Drop `--window` so xdotool falls back to XTest, which produces real-looking keystrokes Java accepts. Without `legacyLauncher=true` baked into the AMI, the worker JVM hangs at the launcher screen indefinitely (load_avg ≈ 0.3, no `Combat Harness` mod-init lines, matchup queue never read).
 - **Game** = LWJGL/OpenGL window. `xdotool` does NOT work on LWJGL windows — clicks don't register. Only `java.awt.Robot` (from inside the JVM) works for in-game UI interaction.
-- Instance manager clicks launcher via xdotool, then TitleScreenPlugin/MenuNavigator handle game navigation via Robot.
+- Instance manager advances launcher via xdotool, then TitleScreenPlugin/MenuNavigator handle game navigation via Robot.
 
 ### Ship Spawning — `spawnFleetMember()` Retreat Bug
 - `spawnFleetMember()` mid-combat ALWAYS sets `directRetreat=true` on the spawned ship at a level below the public API.
@@ -233,10 +233,10 @@ When building search spaces for optimization, filter out:
 - `mods/` copied per instance (68KB). `enabled_mods.json` needs to exist per instance.
 
 ### Game Activation
-- Stored in `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (user-global, NOT per-game-directory).
-- The `serial` entry in prefs.xml contains the license key.
+- Stored in `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` on Linux (Java FileSystemPreferences disk format), `~/Library/Preferences/com.fs.starfarer.plist` on macOS (NSUserDefaults), and `HKEY_CURRENT_USER\Software\JavaSoft\Prefs\com\fs\starfarer` on Windows. User-global, NOT per-game-directory.
 - All instances on same machine share activation automatically.
-- For cloud: copy prefs.xml to the same path on the remote machine — transfers activation without interactive activation.
+- The Linux disk format is the bare leaf-node `<map>`, NOT the full `<preferences><root>...</root></preferences>` export tree. Five entries are load-bearing for headless launch: `serial` (the license), `firstGameRun=false` (skips first-run setup dialog), `resolution=1920x1080` + `fullscreen=false` (skips display-config dialog), `sound=false` (matches the headless-OpenAL workaround). Without `firstGameRun=false` the launcher hangs at the first-run dialog and the worker's `LocalInstancePool.run_matchup` blocks indefinitely.
+- For cloud: bake into the AMI at `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml` via `scripts/cloud/packer/prefs.xml` (gitignored). Sourcing recipes for Linux/macOS/Windows in `.claude/skills/cloud-worker-ops.md` § "Initial workstation setup → Game prefs.xml".
 
 ### Headless/Cloud Requirements
 - **GPU required**: LWJGL rendering through Xvfb needs a real GPU driver. Software rendering (Mesa/llvmpipe) on CPU-only VMs is ~10-50x slower — unusable.

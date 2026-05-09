@@ -248,6 +248,65 @@ class TestHeartbeat:
         assert fake_redis.exists(f"worker:starsector-smokeA:{worker_config.worker_id}:heartbeat")
         assert fake_redis.exists(f"worker:starsector-smokeB:{worker_config.worker_id}:heartbeat")
 
+    def test_heartbeat_includes_game_log_tail(
+        self, worker_config, fake_redis, tmp_path, monkeypatch,
+    ):
+        """game_log_tail is the only orchestrator-visible window into a hung
+        worker JVM (smoke worker SGs grant zero ingress; tailscale ssh is
+        unreliable from userspace-mode workstations). Verify the heartbeat
+        carries it and that it tails the actual on-disk file.
+        """
+        import starsector_optimizer.worker_agent as wa
+        # Synthesize a fake instance-root layout matching the production
+        # /tmp/starsector-instances/instance_NNN/game_stdout.log path.
+        inst_dir = tmp_path / "instance_000"
+        inst_dir.mkdir()
+        log = inst_dir / "game_stdout.log"
+        log.write_text("INFO marker line A\nINFO marker line B\n")
+        monkeypatch.setattr(
+            wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log")
+        )
+        wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id)
+        key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
+        hb = fake_redis.hgetall(key)
+        normalized = {
+            (k.decode() if isinstance(k, bytes) else k):
+            (v.decode() if isinstance(v, bytes) else v)
+            for k, v in hb.items()
+        }
+        assert "game_log_tail" in normalized
+        assert "INFO marker line A" in normalized["game_log_tail"]
+        assert "INFO marker line B" in normalized["game_log_tail"]
+
+    def test_read_game_log_tails_caps_per_instance_size(self, tmp_path, monkeypatch):
+        """A pathologically large game_stdout.log must NOT blow up the
+        heartbeat hash. The function caps each instance's tail at
+        _GAME_LOG_TAIL_BYTES_PER_INSTANCE bytes."""
+        import starsector_optimizer.worker_agent as wa
+        inst_dir = tmp_path / "instance_000"
+        inst_dir.mkdir()
+        log = inst_dir / "game_stdout.log"
+        # 200 KB of a junk pattern + one tail-only marker the test asserts on.
+        log.write_text("X" * (200 * 1024) + "\nTAIL_MARKER\n")
+        monkeypatch.setattr(
+            wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log")
+        )
+        result = wa._read_game_log_tails()
+        assert "TAIL_MARKER" in result
+        # The full log was 200 KB; the per-instance cap is 32 KB plus the
+        # short header line — so the result must be far below 200 KB.
+        assert len(result) < 50 * 1024
+
+    def test_read_game_log_tails_handles_missing_file(self, tmp_path, monkeypatch):
+        """No instance dirs at all is a valid early-boot state — function
+        must return a sentinel string, not raise."""
+        import starsector_optimizer.worker_agent as wa
+        monkeypatch.setattr(
+            wa, "_GAME_LOG_GLOB", str(tmp_path / "no_match_*" / "game_stdout.log")
+        )
+        result = wa._read_game_log_tails()
+        assert "no logs at glob" in result
+
     def test_heartbeat_payload_includes_region_and_instance_type(
         self, worker_config, fake_redis,
     ):
@@ -352,6 +411,7 @@ class TestConsumerConcurrency:
                 player_ships=(), enemy_ships=(),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=(),
                 engine_stats=None,
             )
         pool = MagicMock()

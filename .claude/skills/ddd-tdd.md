@@ -48,6 +48,7 @@ Make the tests pass:
 2. **Verify after each module** — `uv run pytest tests/test_<module>.py -v` after each implementation step, not just at the end
 3. **No partial implementations** — every plan item is DONE or DEFERRED, never "partially done"
 4. **If scope grows**, stop and re-plan with the user
+5. **Engineering principles apply throughout** — `CLAUDE.md` § "Engineering Principles": principled over expedient, address issues at root cause. Test failures are diagnostic signal — investigate, don't skip. Issues observed in touched files but unrelated to the immediate task are addressed in scope (boy-scout rule) or surfaced to the user with a proposed fix; never quietly TODO'd.
 
 ## Step 4: Verification
 

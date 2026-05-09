@@ -361,16 +361,17 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
 
 ### Cloud-init UserData
 
-`src/starsector_optimizer/cloud_userdata.py::render_user_data(worker_config, tailscale_authkey) -> str` emits a bash payload that:
+`src/starsector_optimizer/cloud_userdata.py::render_user_data(worker_config, *, tailscale_authkey, debug_ssh_pubkey="") -> str` emits a bash payload that:
 
 1. `set -euo pipefail` + `umask 077` so every file created by the script is owner-read-only and any command failure halts the script before `systemctl start`.
-2. `tailscale up --authkey-stdin --advertise-tags=tag:starsector-worker --accept-dns=false <<EOF`. The authkey is piped via stdin, **never** argv — `/proc/<pid>/cmdline` is world-readable on Linux by default, so any `--authkey=<value>` form would leak the secret to every local user during boot.
-3. Writes `/etc/starsector-worker.env` via a quoted heredoc with every `WorkerConfig` field mapped to `STARSECTOR_WORKER_<FIELD>` (every field in `dataclasses.fields(WorkerConfig)`, including the placeholder `worker_id=""`). Owner is `root:root`; mode `0600` is inherited from `umask 077`.
-4. `chown root:root /etc/starsector-worker.env`.
-5. **IMDSv2 WORKER_ID override block** (inserted between `chown` and `systemctl daemon-reload`; see §Worker ID resolution below). Fetches the live EC2 instance ID, overwrites the placeholder line in the env file. If IMDS is unreachable, `curl --fail` + `set -euo pipefail` halts the script BEFORE `systemctl start` — the worker never boots with `worker_id=""`.
-6. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
+2. `tailscale up --auth-key=file:"$TS_AUTHKEY_FILE" --advertise-tags=tag:starsector-worker --accept-dns=false`. The authkey is written to a 0600 tmpfile (owner-only via `umask 077`), passed by path, then `shred -u`'d. Modern Tailscale CLI no longer supports `--authkey-stdin`; `--auth-key=file:` is the equivalent argv-free mechanism — only the path appears on `/proc/<pid>/cmdline`. **`--ssh` is intentionally not passed** (smoke #8 2026-05-09): it hijacks port 22 on the worker for tailscaled's identity-based SSH server, gates connections via the tailnet ACL, and a default-permissive personal tailnet still silent-denies SSH — so enabling it would shadow the regular sshd and prevent any operator access. Operator SSH instead goes through the optional debug-pubkey injection path described below.
+3. **(Optional) Debug SSH pubkey injection.** If `debug_ssh_pubkey` is non-empty (whitespace-stripped), appends the pubkey to `/home/ubuntu/.ssh/authorized_keys` (mode 0600, owner `ubuntu:ubuntu`) so the operator can `ssh -i <matching-private-key> ubuntu@<worker-tailnet-ip>` into a hung worker. The pubkey is the only operator-SSH path in the absence of Tailscale ACL configuration. Empty string skips the block entirely. Caller side: `cloud_runner.run_cloud_study` reads `STARSECTOR_DEBUG_SSH_PUBKEY` from `os.environ` and threads it through; production runs leave the env var unset.
+4. Writes `/etc/starsector-worker.env` via a quoted heredoc with every `WorkerConfig` field mapped to `STARSECTOR_WORKER_<FIELD>` (every field in `dataclasses.fields(WorkerConfig)`, including the placeholder `worker_id=""`). Owner is `root:root`; mode `0600` is inherited from `umask 077`.
+5. `chown root:root /etc/starsector-worker.env`.
+6. **IMDSv2 WORKER_ID override block** (inserted between `chown` and `systemctl daemon-reload`; see §Worker ID resolution below). Fetches the live EC2 instance ID, overwrites the placeholder line in the env file. If IMDS is unreachable, `curl --fail` + `set -euo pipefail` halts the script BEFORE `systemctl start` — the worker never boots with `worker_id=""`.
+7. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
 
-The renderer is a pure function — takes a frozen `WorkerConfig` + a string authkey, returns a string. No I/O. Lives in its own module (not `cloud_provider.py`) so providers other than AWS can reuse it.
+The renderer is a pure function — takes a frozen `WorkerConfig` + a string authkey + an optional debug pubkey, returns a string. No I/O. Lives in its own module (not `cloud_provider.py`) so providers other than AWS can reuse it.
 
 ### Worker ID resolution (IMDSv2)
 
@@ -397,7 +398,7 @@ Each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its 
 
 1. `_require_env` reads `STARSECTOR_WORKSTATION_TAILNET_IP`, `STARSECTOR_BEARER_TOKEN`, `STARSECTOR_TAILSCALE_AUTHKEY`, `STARSECTOR_PROJECT_TAG` — raises `ValueError` with remediation pointer if any missing.
 2. Constructs `WorkerConfig` with per-study bearer token (already in env), tailnet-based `redis_host` + `http_endpoint`, `worker_id=""` placeholder.
-3. Renders UserData via `render_user_data(worker_cfg, tailscale_authkey=authkey)`.
+3. Renders UserData via `render_user_data(worker_cfg, tailscale_authkey=authkey, debug_ssh_pubkey=os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip())`.
 4. Calls `provider.provision_fleet(fleet_name=study_id, project_tag=project_tag, ...)`.
 5. Enters `with CloudWorkerPool(...) as pool:` — Flask listener + janitor threads start.
 6. Runs Optuna study (`optimize_hull` loop).
@@ -449,7 +450,7 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 - `x11-xserver-utils` (for `xrandr --query` warmup; see below)
 - `xvfb`, `xdotool`, OpenJDK
 - Tailscale client
-- `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (game activation)
+- `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (game activation; sourced from operator's `scripts/cloud/packer/prefs.xml`, gitignored — must contain at minimum `serial`, `firstGameRun=false`, `resolution=1920x1080`, `fullscreen=false`, `sound=false`)
 
 **Cloud-init injects** (never baked — these are per-campaign secrets and identifiers):
 - Tailscale auth key (from `CampaignConfig.tailscale_authkey_secret`)
@@ -502,7 +503,9 @@ Both CPU cloud paths match or exceed local per-instance throughput at negligible
 3. **OpenAL error blocks the launcher.** Missing audio produces a modal dialog that prevents the "Play Starsector" click from working. Fix: install `libopenal1` + null ALSA config.
 4. **rsync without `--delete` leaves stale files.** If a different game version was previously synced, leftover files (e.g., `jre_linux/lib/ext/`) cause JRE startup failures. The Packer AMI avoids this by baking one pinned game version.
 5. **Game bundles its own JRE.** Installing system Java is unnecessary and a system `JAVA_HOME` can interfere with the bundled JRE's module path.
-6. **Game activation via prefs.xml works.** Copying `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (contains `serial` key) transfers activation to new machines. The Packer AMI bakes this file — the activation travels with the image.
+6. **Game activation via prefs.xml works** — but `serial` alone is insufficient. The Linux disk format is the bare leaf-node `<map>` (Java FileSystemPreferences format, NOT the `<preferences><root>` export tree), and the launcher gates startup on `firstGameRun=false` (skips the first-run setup dialog) and reads `resolution`/`fullscreen` to skip the display-config dialog. With only `serial` set, the worker's JVM hangs at the launcher's first-run dialog — `LocalInstancePool.run_matchup` then blocks until `result_timeout_seconds` and the entire campaign times out wholesale. The five entries (`serial`, `firstGameRun=false`, `resolution=1920x1080`, `fullscreen=false`, `sound=false`) are baked at `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml`. macOS operators (where Java uses NSUserDefaults) extract these values from `~/Library/Preferences/com.fs.starfarer.plist` via `plutil -p`. Sourcing recipes per OS in `.claude/skills/cloud-worker-ops.md` § "Initial workstation setup → Game prefs.xml".
+7. **AWS auth via dedicated IAM user, not Q login_session / SSO snapshot.** boto3 (used by `CampaignManager`, `AWSProvider`, `cloud_runner`) doesn't understand Amazon Q's `login_session` config and ad-hoc `aws configure export-credentials --format env` snapshots expire at the SSO session boundary (typically 1 hour) — long campaigns blow up mid-run with `RuntimeError: Credentials were refreshed, but the refreshed credentials are still expired`. Working setup: a dedicated IAM user (`starsector-optimizer`) with managed policy `arn:aws:iam::aws:policy/AmazonEC2FullAccess`, persisted in `~/.aws/credentials` under the `[starsector]` profile, surfaced via `AWS_PROFILE=starsector` in the repo `.env`. boto3 auto-refreshes from the credentials file and multi-hour campaigns survive without operator intervention. `EC2FullAccess` is the right scope: campaign needs `ec2:CreateFleet/RunInstances/CreateLaunchTemplate/CreateSecurityGroup/...`, Packer needs `ec2:RegisterImage/CopyImage/CreateTags/...`, ledger tick needs `ec2:DescribeSpotPriceHistory`. Setup recipe in `.claude/skills/cloud-worker-ops.md` § "Initial workstation setup → AWS profile".
+8. **`legacyLauncher=true` is load-bearing for cloud workers, and the Swing launcher is advanced via X-core `windowfocus` + a coordinate-based mouse click computed from `xdotool getwindowgeometry`.** Starsector ships with `data/config/settings.json` setting `legacyLauncher=false`, which selects the LWJGL `com.fs.starfarer.launcher.opengl.GLLauncher` (fullscreen, sized to the Xvfb display). LWJGL ignores xdotool synthetic events entirely, so the only launcher path that works under Xvfb is the Swing launcher (`legacyLauncher=true`). `instance_manager._click_launcher` polls for the Swing launcher window via `xdotool search --name Starsector`, captures the WID + geometry, then dispatches `windowmap` → `windowfocus` → `mousemove (X + W*0.5, Y + H*0.7)` → `click 1` → `key Return` (belt-and-suspenders). **Three non-obvious traps under bare Xvfb,** each verified by `launcher_dispatch.log` on 2026-05-09: (a) `xdotool windowactivate` requires the EWMH `_NET_ACTIVE_WINDOW` atom which only a window manager sets, so it fails with `Your windowmanager claims not to support _NET_ACTIVE_WINDOW`; `windowfocus` (XSetInputFocus) is the WM-free equivalent (smoke #10). (b) `xdotool key --window <wid>` dispatches via XSendEvent which sets `send_event=True`; Java AWT filters such events as a synthetic-event-injection hardening, so the launcher never sees the key. Dropping `--window` falls back to XTest which produces real-looking keystrokes Java accepts (smoke #10). (c) The Play JButton is not AWT default-focused, so Return alone hits the JFrame and goes nowhere; a coordinate click bypasses the focus chain entirely (smoke #11). The click coordinate is parsed dynamically from `getwindowgeometry --shell <wid>` rather than hardcoded — handles the launcher's centered-on-Xvfb placement and is robust to Xvfb-size changes. The fractions `(0.5, 0.7)` live in `InstanceConfig.launcher_play_button_{x,y}_fraction` so future game-version layout shifts can be retuned without code edits.
 
 ## Scripts
 
@@ -514,8 +517,12 @@ scripts/cloud/
 ├── probe.sh                      # $0.15 validation: 2 spot VMs, boot-test, teardown
 ├── launch_campaign.sh            # wraps `uv run python -m starsector_optimizer.campaign <yaml>`
 ├── status.sh                     # tail ledger, print per-study best-fitness + trial counts
-├── teardown.sh                   # emergency tag-based terminate across all 4 US regions
-└── final_audit.sh                # zero-leak verifier; exits 0 clean, 1 on any leaked resource
+├── teardown.sh                   # emergency tag-based terminate (instances/SGs/volumes) — campaign-scoped (Project=starsector-<campaign>)
+├── final_audit.sh                # zero-leak verifier (instances/SGs/volumes) — campaign-scoped, exits 0 clean / 1 on any leak
+├── audit_amis.sh                 # cross-campaign AMI/snapshot inventory (Project=starsector); flags YAML-unreferenced as cleanup candidates
+├── cleanup_amis.sh               # deregister AMIs + delete snapshots; dry-run by default, --apply to commit, --force to override YAML-reference guard
+├── devenv-up.sh                  # rootless workstation: userspace tailscaled + redis-server + tailscale serve TCP proxies
+└── devenv-down.sh                # tear down rootless workstation
 ```
 
 Every launch script prints its teardown command as its first line of output. `final_audit.sh` is the mandatory end-of-session check per `.claude/skills/cloud-worker-ops.md`.

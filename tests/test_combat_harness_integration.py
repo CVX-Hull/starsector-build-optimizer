@@ -149,6 +149,23 @@ class TestBatchResultParsing:
                 "player_ships_retreated": 0,
                 "enemy_ships_retreated": 0,
             },
+            "loadout_diagnostic": {
+                "player": [{
+                    "fleet_member_id": "uuid-1",
+                    "spec_weapons": {},
+                    "live_weapons": {},
+                    "spec_hullmods": [],
+                    "live_hullmods": [],
+                    "spec_flux_vents": 0,
+                    "live_flux_vents": 0,
+                    "spec_flux_capacitors": 0,
+                    "live_flux_capacitors": 0,
+                    "weapons_match": True,
+                    "hullmods_match": True,
+                    "flux_vents_match": True,
+                    "flux_capacitors_match": True,
+                }],
+            },
         },
     ]
 

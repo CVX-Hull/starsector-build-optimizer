@@ -39,7 +39,17 @@ Review the plan text for:
 - [ ] Does the plan end with a full test suite run?
 - [ ] Does the plan include grep-based checks for stale references?
 
-## Phase 3: Design Invariants (self-review)
+## Phase 3: Engineering Principles (self-review)
+
+Validate against `CLAUDE.md` § "Engineering Principles":
+
+- [ ] **Principled over expedient**: every shortcut in the plan has explicit justification — otherwise the principled form is taken. If the plan picks a small fix where a larger one is the principled fix, both are named and the user is asked which to take.
+- [ ] **No deferred-issue residue**: every issue surfaced by the plan (existing TODOs the plan won't fix, suspect code in touched modules, known-flaky tests, dormant code paths) is either fixed in scope, or explicitly listed in the plan's DEFERRED section with user approval.
+- [ ] **No new TODO/FIXME/XXX/HACK introduced** outside of explicitly user-approved deferred items.
+- [ ] **No new test skips, type-ignores, lint suppressions, or swallowed exceptions** unless the plan calls them out with reason.
+- [ ] **No tests weakened** to accommodate the plan — if tests need to change, the change is justified by the spec, not by implementation convenience.
+
+## Phase 4: Design Invariants (self-review)
 
 Validate against `CLAUDE.md` § "Design Principles" and § "Design Invariants":
 
@@ -51,7 +61,7 @@ Validate against `CLAUDE.md` § "Design Principles" and § "Design Invariants":
 - [ ] **Game data verification**: Does the plan verify game facts against actual files?
 - [ ] **Repair boundary**: Does optimizer-space → domain-space conversion go through `repair_build()`?
 
-## Phase 4: Independent Sub-Agent Audits
+## Phase 5: Independent Sub-Agent Audits
 
 Launch **3 sub-agents in parallel**. Each is an independent auditor — provide only the plan path and reference material. Do not hint at expected findings.
 
@@ -63,13 +73,13 @@ Launch **3 sub-agents in parallel**. Each is an independent auditor — provide 
 
 > "You are an independent spec auditor. Read the implementation plan at `{plan_path}`. Read every spec doc in `docs/specs/` referenced in the plan. Compare the plan against those specs requirement by requirement. Report anything the plan gets wrong, anything the plan omits that the spec requires, anything the plan adds that the spec doesn't call for, and any contradiction. Quote the relevant spec sections. Use your own judgment — do not assume the plan is correct."
 
-### Sub-Agent C: Design Invariants
+### Sub-Agent C: Engineering & Design Invariants
 
-> "You are an independent design auditor. Read the implementation plan at `{plan_path}`. Read `CLAUDE.md` for design principles and invariants. Evaluate the plan against every applicable invariant. Report any violation or risk. Use your own judgment about which invariants apply — do not assume the plan is correct."
+> "You are an independent design auditor. Read the implementation plan at `{plan_path}`. Read `CLAUDE.md` for engineering principles, design principles, and design invariants. Evaluate the plan against every applicable invariant — including the global engineering invariants ('principled over expedient', 'address issues, don't paper over them'). Specifically flag: shortcuts taken without explicit justification, deferrals that aren't called out as explicit DEFERRED items with user-approval rationale, new TODO/FIXME/skip/type-ignore/lint-suppression introductions, and tests being weakened to fit the implementation. Report any violation or risk. Use your own judgment about which invariants apply — do not assume the plan is correct."
 
 ## Execution
 
-1. Run Phases 1-3 yourself (checklist self-review).
-2. Launch all 3 sub-agents for Phase 4 in a **single message** (parallel execution).
+1. Run Phases 1-4 yourself (checklist self-review).
+2. Launch all 3 sub-agents for Phase 5 in a **single message** (parallel execution).
 3. Review all sub-agent findings. Fix every valid finding in the plan.
 4. Only call ExitPlanMode after all findings are resolved.

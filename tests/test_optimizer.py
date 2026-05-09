@@ -23,6 +23,7 @@ from starsector_optimizer.optimizer import (
     validate_build_spec,
     warm_start,
 )
+from tests.conftest import make_pass_diagnostic
 
 
 # --- Fixtures ---
@@ -362,6 +363,7 @@ class TestOptimizeHullIntegration:
                 player_ships=(player_ship,), enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
                     eff_max_flux=12000.0, eff_flux_dissipation=800.0,
                     eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
@@ -605,6 +607,7 @@ class TestStagedEvaluator:
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
                     eff_max_flux=12000.0, eff_flux_dissipation=800.0,
                     eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
@@ -1204,6 +1207,7 @@ class TestParallelDispatch:
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
                     eff_max_flux=12000.0, eff_flux_dissipation=800.0,
                     eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
@@ -1474,6 +1478,7 @@ class TestStagedEvaluatorEBIntegration:
                 player_ships=(player_ship,), enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=default_es,
             )
 
@@ -1587,6 +1592,7 @@ class TestEvalLogAuditFields:
                 player_ships=(player_ship,), enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=default_es,
             )
 
@@ -1753,6 +1759,7 @@ class TestEvalLogAuditFields:
                 player_ships_destroyed=0 if player_hf > 0.5 else 1,
                 enemy_ships_destroyed=1 if player_hf > 0.5 else 0,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=default_es,
             )
 
@@ -2060,6 +2067,7 @@ class TestShapeFitness:
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=es,
             )
 
@@ -2188,6 +2196,7 @@ class TestRegimeStudyIsolation:
                 player_ships=(player_ship,), enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0, enemy_ships_destroyed=1,
                 player_ships_retreated=0, enemy_ships_retreated=0,
+                player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
                     eff_max_flux=12000.0, eff_flux_dissipation=800.0,
                     eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,

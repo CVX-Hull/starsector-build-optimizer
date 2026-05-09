@@ -53,9 +53,9 @@ Launch **3 independent sub-agents in parallel** (single message, 3 Agent tool ca
 
 > "You are an independent code auditor. Read the plan file at `{plan_path}`. Read every file listed in the plan's Files table. Verify each plan step was implemented correctly by reading the actual code. Report what matches, what diverges, what's missing, and what was added beyond the plan. Use your own judgment — do not assume the implementation is correct."
 
-### Sub-Agent B: Design Invariant Audit
+### Sub-Agent B: Engineering & Design Invariant Audit
 
-> "You are an independent design auditor. Read the implementation files changed in this session. Read `CLAUDE.md` for design principles and invariants. Evaluate the implementation against every applicable invariant: frozen dataclasses, no magic numbers, config dataclasses, single source of truth, game data verification, forward compatibility, repair boundary. Check that `should_stop()` return values are handled correctly downstream (read `instance_manager.py`). Report any violation or risk."
+> "You are an independent design auditor. Read the implementation files changed in this session. Read `CLAUDE.md` for engineering principles, design principles, and design invariants. Evaluate the implementation against every applicable invariant: (engineering) principled-over-expedient choices, no papered-over issues, no new TODO/FIXME/skip/type-ignore/lint-suppression deferrals without explicit user approval, no swallowed exceptions, no tests weakened to make failures pass; (design) frozen dataclasses, no magic numbers, config dataclasses, single source of truth, game data verification, forward compatibility, repair boundary. Check that `should_stop()` return values are handled correctly downstream (read `instance_manager.py`). For each issue found, judge whether the implementation chose the principled fix or an expedient shortcut. Report any violation or risk."
 
 ### Sub-Agent C: Spec Alignment Audit
 
@@ -65,8 +65,10 @@ Launch **3 independent sub-agents in parallel** (single message, 3 Agent tool ca
 
 ## No Deferring During Implementation
 
-Every item in an approved plan must be completed fully. The plan is the deferral mechanism — items not in the plan are deferred to a future phase. Items IN the plan are committed scope.
+Every item in an approved plan must be completed fully. The plan is the deferral mechanism — items not in the plan are deferred to a future phase. Items IN the plan are committed scope. This is the implementation-time corollary of `CLAUDE.md` § "Engineering Principles" rule 2 (address issues, don't paper over them).
 
 - **Do not partially implement plan items.** No "easy part now, rest later", no TODO comments.
 - **If an item is larger than expected**, stop and re-plan with the user.
 - **Check completeness before marking tasks done.**
+- **Issues discovered mid-implementation that aren't in the plan**: address them in scope if they're in code already being touched (boy-scout rule), or surface them to the user with a proposed fix and ask before deferring. Don't quietly add a TODO.
+- **Test failures are signal, not noise.** Investigate root cause; never `pytest.skip` or weaken an assertion to make a failure pass without explicit user approval.

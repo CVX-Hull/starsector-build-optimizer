@@ -43,12 +43,22 @@ def render_user_data(
     worker_config: WorkerConfig,
     *,
     tailscale_authkey: str,
+    debug_ssh_pubkey: str = "",
 ) -> str:
     """Produce the cloud-init bash script for a real worker boot.
 
     Every WorkerConfig field becomes a STARSECTOR_WORKER_<FIELD> env var.
     `worker_id` at render time is a placeholder; IMDSv2 overwrites it
     before `systemctl start` so the worker never boots with an empty ID.
+
+    `debug_ssh_pubkey`: optional ssh-ed25519/rsa pubkey line. If non-empty,
+    the script appends it to /home/ubuntu/.ssh/authorized_keys so the
+    operator can `ssh -i <matching-private-key> ubuntu@<worker-tailnet-ip>`
+    when a worker hangs. Pass empty string for production runs to keep the
+    blast radius minimal. **This is the only operator-SSH path** — Tailscale
+    SSH (`--ssh` on `tailscale up`) was tried smoke #8 2026-05-09 and removed
+    because it hijacks port 22 and gates via the tailnet ACL (default
+    personal tailnets silent-deny for SSH).
     """
     env_lines: list[str] = []
     for f in dataclasses.fields(worker_config):
@@ -58,6 +68,23 @@ def render_user_data(
         )
     env_body = "\n".join(env_lines)
 
+    if debug_ssh_pubkey.strip():
+        # Heredoc body so newlines/special chars in the pubkey survive
+        # cloud-init's bash without shell interpretation. The pubkey is
+        # public material — no umask/shred dance required, but we still
+        # 0600 the authorized_keys to match Ubuntu's ssh expectations.
+        debug_pubkey_block = f"""
+# --- Debug SSH pubkey injection (operator-controlled) ---
+install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh
+cat >>/home/ubuntu/.ssh/authorized_keys <<'STARSECTOR_DEBUG_PUBKEY_EOF'
+{debug_ssh_pubkey.strip()}
+STARSECTOR_DEBUG_PUBKEY_EOF
+chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys
+chmod 0600 /home/ubuntu/.ssh/authorized_keys
+"""
+    else:
+        debug_pubkey_block = ""
+
     script = f"""#!/bin/bash
 set -euo pipefail
 umask 077
@@ -66,6 +93,13 @@ umask 077
 # Write authkey to a 0600 tmpfile (via the umask 077 above), pass by path,
 # then shred. `--auth-key=file:<path>` keeps the raw key off argv — the
 # only thing in /proc/<pid>/cmdline is the path.
+# `--ssh` is intentionally NOT passed: Tailscale SSH hijacks port 22 and
+# gates connections via the tailnet ACL; on a default-permissive personal
+# tailnet the ACL still has no `ssh` clause, so connection attempts are
+# silently dropped (cloud-init prints `Tailscale SSH enabled, but access
+# controls don't allow anyone to access this device`). Operator SSH is
+# the `debug_ssh_pubkey` injection block below — keys land in
+# /home/ubuntu/.ssh/authorized_keys and the regular sshd answers port 22.
 TS_AUTHKEY_FILE=$(mktemp)
 cat >"$TS_AUTHKEY_FILE" <<'TS_AUTHKEY_EOF'
 {tailscale_authkey}
@@ -74,6 +108,7 @@ tailscale up --auth-key=file:"$TS_AUTHKEY_FILE" \\
     --advertise-tags=tag:starsector-worker \\
     --accept-dns=false
 shred -u "$TS_AUTHKEY_FILE"
+{debug_pubkey_block}
 
 # --- Environment file for the worker service (0600 via umask) ---
 cat >{_ENV_FILE} <<'STARSECTOR_WORKER_ENV_EOF'

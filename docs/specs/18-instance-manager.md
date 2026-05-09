@@ -47,9 +47,9 @@ Frozen dataclass configuring the instance pool.
 | `process_kill_timeout_seconds` | `float` | 5.0 | Timeout for process termination and xdotool commands |
 | `launcher_timeout_seconds` | `float` | 30.0 | Max wait for launcher window to appear |
 | `launcher_poll_interval_seconds` | `float` | 0.5 | Poll interval for launcher window search |
-| `launcher_click_settle_seconds` | `float` | 0.3 | Settle time before/after clicking launcher |
-| `launcher_x` | `int` | 297 | "Play Starsector" button X coordinate (calibrated for 1920x1080) |
-| `launcher_y` | `int` | 255 | "Play Starsector" button Y coordinate (calibrated for 1920x1080) |
+| `launcher_click_settle_seconds` | `float` | 0.3 | Settle time between windowfocus, mouse click, and Return-fallback dispatches |
+| `launcher_play_button_x_fraction` | `float` | 0.5 | Play button x position as fraction of launcher width (0.5 = center) |
+| `launcher_play_button_y_fraction` | `float` | 0.7 | Play button y position as fraction of launcher height (0.7 = lower-third) |
 | `clean_restart_matchups` | `int` | 200 | Force full game restart after N total matchups per instance (prevents memory accumulation) |
 
 ### `InstanceState`
@@ -247,15 +247,27 @@ Stored in `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (user-global). All ins
 
 ## Launcher Click
 
-The game has a launcher (Java Swing) before the actual game loads. The instance manager clicks "Play Starsector" using `xdotool` (which works on Swing windows, unlike LWJGL). After the game loads, TitleScreenPlugin + MenuNavigator (java.awt.Robot) handle in-game navigation.
+The game has a launcher (Java Swing, when `legacyLauncher=true` in `data/config/settings.json`) before the actual game loads. The instance manager polls for the Swing launcher window via `xdotool search --name Starsector`, captures its window ID and geometry via `xdotool getwindowgeometry --shell <wid>`, then dispatches: `xdotool windowmap <wid>` → `xdotool windowfocus <wid>` → `xdotool mousemove <abs_x> <abs_y>` → `xdotool click 1` → `xdotool key Return` (belt-and-suspenders). The click coordinate is computed from the parsed geometry as `(X + W * launcher_play_button_x_fraction, Y + H * launcher_play_button_y_fraction)`. After the game loads, TitleScreenPlugin + MenuNavigator (java.awt.Robot) handle in-game navigation.
 
-**Launcher polling:** Instead of a fixed sleep, poll for the launcher window:
+**Three non-obvious traps under bare Xvfb (no window manager), each surfaced by `<work_dir>/launcher_dispatch.log` evidence on 2026-05-09:**
+
+1. `xdotool windowactivate --sync` requires the EWMH `_NET_ACTIVE_WINDOW` atom which only a window manager sets. Under bare Xvfb it returns `Your windowmanager claims not to support _NET_ACTIVE_WINDOW`. `windowfocus` (XSetInputFocus) is the WM-free equivalent. (Smoke #10.)
+2. `xdotool key --window <wid>` dispatches via XSendEvent, which sets `send_event=True` on the X event. Java AWT filters such events as a synthetic-event-injection hardening, so the key never reaches the focused widget. Dropping `--window` makes xdotool fall back to XTest, which produces real-looking keystrokes Java accepts. (Smoke #10.)
+3. The Play button is **not** AWT default-focused. Even after `windowfocus + XTest Return`, the launcher didn't advance — Java's FocusManager hadn't placed focus on the Play JButton, so KeyEvents hit the JFrame and went nowhere. The fix is a coordinate-based mouse click (computed from the launcher's dynamic geometry) which sidesteps the focus question entirely. (Smoke #11.)
+
+Coordinate-based clicks are robust to launcher position changes (the geometry is parsed every dispatch — no Xvfb-size assumption) but assume the Play button stays roughly at the center-horizontal, lower-third of the window. Future game version updates that move the Play button substantially may need the `launcher_play_button_*_fraction` defaults retuned, or a follow-up image-processing approach (template match / OCR) to discover the button location dynamically. `launcher_dispatch.log` and `getwindowgeometry` records make either retune cheap to drive from real evidence.
+
+`_click_launcher` writes every xdotool call's exit code, stdout, and stderr to `<work_dir>/launcher_dispatch.log`. The worker heartbeat ships the contents back to the orchestrator via the existing `instance_*/*.log` glob — the only diagnostic window when SSH ingress is locked down.
+
+**Launcher polling:**
 ```python
-for _ in range(30):  # up to 15 seconds
+for _ in range(max_polls):
     result = subprocess.run(["xdotool", "search", "--name", "Starsector"], ...)
-    if result.stdout.strip():
+    first_line = result.stdout.strip().splitlines()[:1]
+    if first_line:
+        wid = first_line[0].strip()
         break
-    time.sleep(0.5)
+    time.sleep(launcher_poll_interval_seconds)
 ```
 
 ## Per-Instance Game Logging

@@ -45,9 +45,9 @@ max_concurrent_workers: 1
 min_workers_to_start: 1
 partial_fleet_policy: abort
 
-# AMI from 2026-04-19 bake (post-mod_commit_sha wiring fix).
+# AMI from 2026-05-09 re-bake #10 (launcher click → windowmap+windowfocus + coord click at (X+W/2, Y+H*7/10) parsed from getwindowgeometry; Return as belt-and-suspenders).
 ami_ids_by_region:
-  us-east-1: ami-0a9cb6be884488352
+  us-east-1: ami-0b89617b369149ff7
 
 ssh_key_name: starsector-probe
 

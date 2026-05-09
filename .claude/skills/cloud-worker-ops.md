@@ -25,6 +25,78 @@ Use this skill when the user asks you to run or debug a cloud campaign — anyth
 
 **Why AWS primary at small budget**: at $85-$200 the dominant operator cost is *lead time*, not per-matchup price. AWS already has 1,792 spot vCPU across 4 US regions; Hetzner's default 10-VM project cap requires a multi-day quota ticket. The ~13% AWS premium at $85 is ~$10 — cheaper than a human-day of waiting. Above $500, the absolute delta (~$60+) exceeds a human-day of engineering, and Hetzner becomes the better pick.
 
+## Initial workstation setup (one-time)
+
+Skip this section if `aws sts get-caller-identity` already returns `Arn=...:user/starsector-optimizer` AND `scripts/cloud/packer/prefs.xml` already exists. Otherwise these are the one-time bootstraps every fork has to do before the cloud workflow works.
+
+### AWS profile
+
+`boto3` (used by `CampaignManager`, `AWSProvider`, `cloud_runner`) needs static credentials it can find via the standard chain. Two AWS auth flavors that **don't** work here without extra ceremony: (1) Amazon Q's `login_session` — AWS CLI understands it but boto3 doesn't, and (2) ad-hoc `aws configure export-credentials --format env` snapshots — they expire mid-run because the underlying SSO session times out at 1 hour, blowing up long campaigns at the boundary.
+
+Working setup: a dedicated IAM user with EC2-only permissions, persisted in `~/.aws/credentials` under a non-default profile, surfaced via `AWS_PROFILE` in the repo `.env`. boto3 auto-refreshes from the credentials file, so multi-hour campaigns survive without operator intervention.
+
+```bash
+# One-time, from a shell that already has working AWS auth (root keys, SSO, etc.)
+aws iam create-user --user-name starsector-optimizer \
+    --tags Key=Project,Value=starsector
+aws iam attach-user-policy --user-name starsector-optimizer \
+    --policy-arn arn:aws:iam::aws:policy/AmazonEC2FullAccess
+
+# Generate access key into a temp file (never display the values)
+aws iam create-access-key --user-name starsector-optimizer \
+    > /tmp/starsector_key.json
+chmod 600 /tmp/starsector_key.json
+
+# Append a [starsector] profile to ~/.aws/credentials (preserves any [default])
+test -f ~/.aws/credentials || touch ~/.aws/credentials
+chmod 600 ~/.aws/credentials
+jq -r '"\n[starsector]\naws_access_key_id = " + .AccessKey.AccessKeyId
+       + "\naws_secret_access_key = " + .AccessKey.SecretAccessKey
+       + "\nregion = us-east-1"' /tmp/starsector_key.json >> ~/.aws/credentials
+
+# Wipe the file — keys are now persisted in the credentials file only
+rm -P /tmp/starsector_key.json 2>/dev/null || rm -f /tmp/starsector_key.json
+
+# Tell the project to use the profile (campaign launch sources .env)
+echo "AWS_PROFILE=starsector" >> .env
+
+# Verify
+AWS_PROFILE=starsector uv run python -c "import boto3; print(boto3.client('sts').get_caller_identity()['Arn'])"
+# → arn:aws:iam::<acct>:user/starsector-optimizer
+```
+
+**Why these specific choices**:
+- **Dedicated IAM user (vs. root keys)**: standard AWS hygiene; the keys live only on operator laptops and have no path to billing / IAM / other accounts.
+- **`AmazonEC2FullAccess`**: the campaign needs `ec2:CreateFleet/RunInstances/CreateLaunchTemplate/CreateSecurityGroup/...`, Packer needs `ec2:RegisterImage/CopyImage/CreateTags/...`, and the ledger tick needs `ec2:DescribeSpotPriceHistory`. Tighter scoping is possible but adds maintenance load when AWS adds APIs.
+- **Non-default profile + `AWS_PROFILE` in `.env`**: lets the workstation's existing `[default]` profile (often Amazon Q login_session, IAM Identity Center, etc.) keep working for unrelated AWS work.
+
+### Game prefs.xml
+
+The Packer `provisioner "file"` copies `scripts/cloud/packer/prefs.xml` (gitignored) into the AMI at `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml`. Java reads that file via `FileSystemPreferences` at game-launch time, and Starsector reads `serial` to satisfy the activation check. Without it, the launcher's first-run / activation dialog blocks the game indefinitely; the worker's `LocalInstancePool.run_matchup` then hangs on `pool.run_matchup` until `result_timeout_seconds` and the campaign times out wholesale.
+
+**Format on Linux** (the FileSystemPreferences disk format — bare leaf-node, `<map>` only, NOT the full `<preferences><root>...` export tree):
+
+```xml
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE map SYSTEM "http://java.sun.com/dtd/preferences.dtd">
+<map MAP_XML_VERSION="1.0">
+  <entry key="serial" value="XXXXX-XXXXX-XXXXX-XXXXX"/>
+  <entry key="firstGameRun" value="false"/>
+  <entry key="resolution" value="1920x1080"/>
+  <entry key="fullscreen" value="false"/>
+  <entry key="sound" value="false"/>
+</map>
+```
+
+The five entries are all required — `serial` alone is insufficient because Starsector's launcher gates startup on `firstGameRun=false` (the first-run setup dialog) and reads `resolution` / `fullscreen` to skip the display-config dialog. `sound=false` matches the headless-OpenAL workaround already baked into the AMI.
+
+**Sourcing the file**:
+- **Already activated on Linux** — copy directly: `cp ~/.java/.userPrefs/com/fs/starfarer/prefs.xml scripts/cloud/packer/prefs.xml`.
+- **Activated on macOS** — Java on macOS uses NSUserDefaults, not FileSystemPreferences. The activated state lives at `~/Library/Preferences/com.fs.starfarer.plist`. Extract entries via `plutil -p ~/Library/Preferences/com.fs.starfarer.plist`, transcribe `serial` / `firstGameRun` / `resolution` / `fullscreen` / `sound` into the XML format above.
+- **Activated on Windows** — registry path `HKEY_CURRENT_USER\Software\JavaSoft\Prefs\com\fs\starfarer`; transcribe the same five values.
+
+The file is gitignored at `scripts/cloud/packer/prefs.xml` and bakes into the AMI on next `bake_image.sh`.
+
 ## Preflight checklist (before launching ANY cloud worker)
 
 Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-runs checks 3 (Tailscale up), 4 (Redis on tailnet), 11 (AWS credentials), and 6 (authkey syntax) in-process before it spawns anything; this checklist is the operator-side verification — items 1/2/5/7/8/9/10/12/13/14/15/16 are operator-only.
@@ -87,7 +159,7 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
     ```bash
     scripts/cloud/probe.sh <campaign.yaml>
     ```
-11. **Provider credentials alive**: `aws sts get-caller-identity` returns `UserId`.
+11. **Provider credentials alive**: `AWS_PROFILE=starsector aws sts get-caller-identity` returns `Arn=...:user/starsector-optimizer`. If the user check fails, redo "Initial workstation setup → AWS profile" above. boto3 reads from `[starsector]` in `~/.aws/credentials`; the campaign launches via `set -a; source .env; set +a` which exports `AWS_PROFILE=starsector` into the orchestrator subprocess env.
 12. **Tier-2 pipeline smoke passed within last 30 days** (first real paid campaign gate):
     ```bash
     export TAILSCALE_AUTHKEY=tskey-auth-...
@@ -95,10 +167,11 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
     scripts/cloud/final_audit.sh smoke   # must exit 0
     ```
     Expected gate: launch exits 0 + ledger.jsonl has ≥1 `worker_heartbeat` + Optuna study SQLite has 1 `TrialState.COMPLETE` (~$0.30, < 10 min wall-clock).
-13. **Game prefs file exists** at `~/.java/.userPrefs/com/fs/starfarer/prefs.xml`. Bake it into the AMI via Packer; the Packer template references the host-side path.
-14. **SSH key** present; name must match `ssh_key_name:` in the YAML.
+13. **Game prefs file exists** at `scripts/cloud/packer/prefs.xml` (gitignored, baked into the AMI by Packer at the path `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml`). Format + sourcing recipes in "Initial workstation setup → Game prefs.xml" above. The file is checked at AMI bake, not at campaign launch — so its absence surfaces only when `bake_image.sh` fails or, worse, succeeds with a stale file and the worker hangs at the launcher's first-run / activation dialog.
+14. **SSH key** present; name must match `ssh_key_name:` in the YAML. The campaign-YAML key only registers a public key in AWS (its private side is unrecoverable from AWS). For interactive worker debugging, use the optional `STARSECTOR_DEBUG_SSH_PUBKEY` mechanism instead — generate `~/.ssh/starsector-debug` (ed25519, no passphrase), `export STARSECTOR_DEBUG_SSH_PUBKEY="$(cat ~/.ssh/starsector-debug.pub)"` before `launch_campaign.sh`, and SSH with `ssh -i ~/.ssh/starsector-debug ubuntu@<worker-tailnet-ip>`. `tailscale up --ssh` is also enabled in user-data, so `tailscale ssh ubuntu@<worker-tailnet-ip>` works whenever the tailnet ACL permits.
 15. **LWJGL XRandR fix in code**: `grep 'xrandr --query' src/starsector_optimizer/instance_manager.py` returns a match in `_start_xvfb`. Without it, workers crash with `ArrayIndexOutOfBoundsException: Index 0`.
 16. **`x11-xserver-utils` baked into the AMI**: check `scripts/cloud/packer/aws.pkr.hcl` contains `x11-xserver-utils` in the apt list.
+17. **`legacyLauncher=true` in `game/starsector/data/config/settings.json`**: the worker advances the launcher via `xdotool windowmap <wid> && xdotool windowfocus <wid> && xdotool key Return`, which only works against the **Swing** launcher whose default focused button is "Play Starsector". `windowfocus` (XSetInputFocus) sidesteps `windowactivate`'s EWMH `_NET_ACTIVE_WINDOW` requirement that fails under Xvfb-no-WM, and `xdotool key` *without* `--window` dispatches via XTest (real keystroke) rather than XSendEvent (which Java AWT filters as `send_event=True` for security). With Starsector's default `legacyLauncher=false`, the LWJGL `GLLauncher` runs fullscreen and ignores xdotool synthetic key/click events entirely — the JVM hangs on the launcher screen forever. Verify with `grep '"legacyLauncher"' game/starsector/data/config/settings.json` returns `true`. Re-bake the AMI after flipping.
 
 ## Dev environment (rootless)
 
@@ -294,6 +367,30 @@ aws ec2 describe-images --owners self --region us-east-1 --image-ids <us-east-1 
 aws ec2 describe-images --owners self --region us-east-2 --image-ids <us-east-2 ami>
 ```
 Both must show `State: available`. If only one, re-run `scripts/cloud/bake_image.sh` — it bakes once in us-east-1 then copies to us-east-2 automatically.
+
+## AMI / snapshot lifecycle (separate from per-campaign teardown)
+
+`final_audit.sh` and `teardown.sh` are **campaign-scoped** — they look for `Project=starsector-<campaign>` tags on instances, SGs, and volumes. They do **not** touch AMIs and EBS snapshots, which carry the cross-campaign `Project=starsector` tag and persist across operator sessions. AMI storage isn't free (~$0.05/GB/month per snapshot, ~12 GB per worker AMI ≈ $0.60/AMI/month), so periodically reclaim space:
+
+```bash
+# Read-only inventory across all 4 US regions; flags AMIs not referenced
+# by any examples/*.yaml as cleanup candidates.
+scripts/cloud/audit_amis.sh
+
+# Dry-run: shows what would be deleted, makes no changes.
+scripts/cloud/cleanup_amis.sh ami-XXXX [ami-YYYY ...]
+
+# Apply: deregister AMI + delete its underlying snapshot(s) per region.
+scripts/cloud/cleanup_amis.sh --apply ami-XXXX [ami-YYYY ...]
+
+# Override the YAML-reference safety guard (only if you've already
+# updated the YAMLs and want to delete the previously-pointed-to AMI):
+scripts/cloud/cleanup_amis.sh --apply --force ami-XXXX
+```
+
+`cleanup_amis.sh` enforces four safety guards: ownership (must be in caller's account), tag (`Project=starsector` only — refuses untagged or wrong-project AMIs), YAML-reference check (refuses to delete AMIs still referenced by `examples/*.yaml`, override with `--force`), and dry-run-by-default (must pass `--apply` to actually delete).
+
+Every re-bake should be followed by an audit + cleanup of the previous bake's AMIs once the new ones are wired into YAMLs. Skipping leaves storage cost accruing on stale images.
 
 ## Teardown discipline
 

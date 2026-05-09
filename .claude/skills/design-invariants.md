@@ -6,9 +6,21 @@ disable-model-invocation: true
 
 # Design Invariants Checklist
 
-Verify these invariants against the current changes. Every applicable item must be checked during implementation review. Source: `CLAUDE.md` § "Design Principles" and § "Design Invariants".
+Verify these invariants against the current changes. Every applicable item must be checked during implementation review. Source: `CLAUDE.md` § "Engineering Principles", § "Design Principles", and § "Design Invariants".
 
 ---
+
+## Engineering Principles (global)
+
+Source: `CLAUDE.md` § "Engineering Principles". These apply to every change, not just architectural ones.
+
+- [ ] **Principled over expedient**: every shortcut in this change has explicit user justification — otherwise the principled form was taken
+- [ ] **Root-cause fixes only**: every observed problem in touched code has been root-cause-fixed in this change, OR explicitly raised to the user with a proposed fix and deferred with explicit consent
+- [ ] **No new TODO/FIXME/XXX/HACK comments** introduced as deferral mechanisms (TODOs are acceptable only when listed in the plan's DEFERRED section with user approval)
+- [ ] **No new `pytest.skip` / `@pytest.mark.skip` / `# type: ignore` / lint suppressions** without an explicit user-approved reason in code or PR description
+- [ ] **No swallowed exceptions** (bare `except:` or `except Exception: pass`) added to silence problems
+- [ ] **No tests weakened** to make a failure pass — root cause was investigated instead
+- [ ] **Boy-scout fixes applied**: issues observed in touched files but unrelated to the immediate task were addressed in the same change, or surfaced to the user
 
 ## Domain Models
 - [ ] All domain dataclasses are `@dataclass(frozen=True)` — `Build`, `EffectiveStats`, `ScorerResult`, `CombatFitnessConfig`, `TWFEConfig`, `ImportanceResult`, `OpponentPool`, `MatchupConfig`, `Heartbeat`, etc.
@@ -82,4 +94,10 @@ python -c "from starsector_optimizer.MODULE import SYMBOL"
 # Check frozen dataclasses
 grep -B1 "class NewDataclass" src/starsector_optimizer/models.py
 # Should show @dataclass(frozen=True) above each
+
+# Engineering principles — scan changed files for deferral patterns
+git diff --name-only HEAD | xargs grep -nE "(TODO|FIXME|XXX|HACK)" 2>/dev/null
+git diff --name-only HEAD | xargs grep -nE "(pytest\.skip|@pytest\.mark\.skip|# type: ignore|# noqa|# pragma)" 2>/dev/null
+git diff --name-only HEAD | xargs grep -nE "except[^:]*:\s*pass" 2>/dev/null
+# Each hit must have user-approved justification or be removed
 ```

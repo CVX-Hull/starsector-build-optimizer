@@ -127,8 +127,20 @@ def run_cloud_study(
         matchup_slots_per_worker=campaign.matchup_slots_per_worker,
         # worker_id intentionally defaulted (""); IMDSv2 overrides at VM boot.
     )
+    # Optional debug SSH access. Operator generates an ED25519 keypair on
+    # the workstation, exports the pubkey here, and SSHes into a hung worker
+    # with the matching private key. This is the *primary* operator-SSH
+    # path: Tailscale SSH (`--ssh` on `tailscale up`) was tried smoke #8
+    # 2026-05-09 and rejected — tailscaled hijacks port 22 and gates via
+    # the tailnet ACL, which a default-permissive personal tailnet still
+    # leaves silent-deny for SSH. See test_tailscale_ssh_NOT_enabled.
+    # Empty string = no debug pubkey injected; production runs should
+    # leave it unset.
+    debug_ssh_pubkey = os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip()
     user_data = render_user_data(
-        worker_cfg, tailscale_authkey=tailscale_authkey,
+        worker_cfg,
+        tailscale_authkey=tailscale_authkey,
+        debug_ssh_pubkey=debug_ssh_pubkey,
     )
 
     provider = AWSProvider(regions=campaign.regions)

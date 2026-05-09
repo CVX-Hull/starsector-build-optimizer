@@ -7,7 +7,17 @@
 #
 # Usage:
 #   export TAILSCALE_AUTHKEY=tskey-auth-...     # if campaign YAML references ${TAILSCALE_AUTHKEY}
+#   export STARSECTOR_DEBUG_SSH_PUBKEY="$(cat ~/.ssh/starsector-debug.pub)"  # optional
 #   scripts/cloud/launch_campaign.sh <campaign.yaml>
+#
+# Worker debug access (when launcher / mid-game hangs need diagnosis):
+#   If STARSECTOR_DEBUG_SSH_PUBKEY is exported, cloud_userdata appends the
+#   pubkey to /home/ubuntu/.ssh/authorized_keys at boot. SSH with the
+#   matching private key:
+#       ssh -i ~/.ssh/starsector-debug ubuntu@<worker-tailnet-ip>
+#   (Tailscale SSH was tried smoke #8 2026-05-09 — `tailscale up --ssh`
+#   hijacks port 22 and gates via the tailnet ACL which silent-denies on
+#   default personal tailnets. We use plain sshd + key-injection instead.)
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"

@@ -32,7 +32,8 @@ public class ResultWriter {
                                                  float effArmorRating,
                                                  float effHullHpPct,
                                                  float ballisticRangeBonus,
-                                                 float shieldDamageTakenMult)
+                                                 float shieldDamageTakenMult,
+                                                 JSONArray loadoutDiagnosticPlayer)
             throws JSONException {
         JSONArray playerArr = new JSONArray();
         JSONArray enemyArr = new JSONArray();
@@ -84,6 +85,14 @@ public class ResultWriter {
                     buildSetupStatsJSON(effMaxFlux, effFluxDissipation, effArmorRating,
                             effHullHpPct, ballisticRangeBonus, shieldDamageTakenMult));
         }
+        // Required-present per docs/specs/19 (no Java-side fallback): the
+        // Python orchestrator's parse_combat_result raises KeyError when this
+        // block is missing. Always emit, even if the array is empty (e.g.
+        // matchup with zero player ships — degenerate but legal config).
+        JSONObject loadoutDiag = new JSONObject();
+        loadoutDiag.put("player",
+                loadoutDiagnosticPlayer != null ? loadoutDiagnosticPlayer : new JSONArray());
+        result.put("loadout_diagnostic", loadoutDiag);
         return result;
     }
 

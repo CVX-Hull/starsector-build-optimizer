@@ -22,6 +22,7 @@ import logging
 import math
 import random as _random
 import shutil
+import sys
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -174,10 +175,13 @@ def preflight_check(
                 f"Check opponent pool variant IDs."
             )
 
-    # Xvfb and xdotool installed
-    for tool in ("Xvfb", "xdotool"):
-        if shutil.which(tool) is None:
-            raise ValueError(f"'{tool}' not found on PATH. Install it first.")
+    # Xvfb and xdotool installed (Linux-only — local sim requires X11; on
+    # other platforms LocalInstancePool will fail at setup() with a clearer
+    # error if anyone actually tries to launch it).
+    if sys.platform.startswith("linux"):
+        for tool in ("Xvfb", "xdotool"):
+            if shutil.which(tool) is None:
+                raise ValueError(f"'{tool}' not found on PATH. Install it first.")
 
     logger.info("Preflight check passed for %s (%d opponents)", hull_id, len(opponents))
 

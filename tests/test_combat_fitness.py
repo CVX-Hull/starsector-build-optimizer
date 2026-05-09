@@ -52,6 +52,7 @@ def _result(
         player_ships = (_ship(),)
     if enemy_ships is None:
         enemy_ships = (_ship(hull_fraction=0.0, destroyed=True),)
+    from tests.conftest import make_pass_diagnostic
     return CombatResult(
         matchup_id="test_001",
         winner=winner,
@@ -62,6 +63,7 @@ def _result(
         enemy_ships_destroyed=sum(1 for s in enemy_ships if s.destroyed),
         player_ships_retreated=0,
         enemy_ships_retreated=0,
+        player_loadout_diagnostics=make_pass_diagnostic(len(player_ships)),
     )
 
 

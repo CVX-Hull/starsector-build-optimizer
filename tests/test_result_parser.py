@@ -35,6 +35,22 @@ SAMPLE_SHIP_RESULT = {
     "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 12900.0, "overload_count": 2},
 }
 
+SAMPLE_LOADOUT_DIAGNOSTIC_PLAYER0 = {
+    "fleet_member_id": "uuid-1",
+    "spec_weapons": {"WS 001": "heavymauler"},
+    "live_weapons": {"WS 001": "heavymauler"},
+    "spec_hullmods": ["heavyarmor"],
+    "live_hullmods": ["heavyarmor"],
+    "spec_flux_vents": 5,
+    "live_flux_vents": 5,
+    "spec_flux_capacitors": 5,
+    "live_flux_capacitors": 5,
+    "weapons_match": True,
+    "hullmods_match": True,
+    "flux_vents_match": True,
+    "flux_capacitors_match": True,
+}
+
 SAMPLE_RESULT = {
     "matchup_id": "eval_001",
     "winner": "ENEMY",
@@ -64,6 +80,9 @@ SAMPLE_RESULT = {
         "enemy_ships_destroyed": 0,
         "player_ships_retreated": 0,
         "enemy_ships_retreated": 0,
+    },
+    "loadout_diagnostic": {
+        "player": [SAMPLE_LOADOUT_DIAGNOSTIC_PLAYER0],
     },
 }
 
@@ -315,3 +334,61 @@ class TestParseSetupStats:
         with pytest.warns(UserWarning, match="NaN"):
             result = parse_combat_result(data)
         assert result.engine_stats is None
+
+
+class TestParseLoadoutDiagnostic:
+    """Required-present diagnostic block from CombatHarnessPlugin's
+    in-place variant swap. Fail-loud on absence/malformation — no backward
+    compat for results lacking this field."""
+
+    def test_populated_player_array(self):
+        result = parse_combat_result(SAMPLE_RESULT)
+        assert len(result.player_loadout_diagnostics) == 1
+        d = result.player_loadout_diagnostics[0]
+        assert d.fleet_member_id == "uuid-1"
+        assert d.weapons_match is True
+        assert d.hullmods_match is True
+        assert d.flux_vents_match is True
+        assert d.flux_capacitors_match is True
+        assert d.spec_weapons == {"WS 001": "heavymauler"}
+        assert d.spec_hullmods == ("heavyarmor",)
+
+    def test_propagates_mismatch_booleans(self):
+        """When the swap drops weapons but flux took, we get false/false/true/true."""
+        data = dict(SAMPLE_RESULT)
+        data["loadout_diagnostic"] = {
+            "player": [{
+                **SAMPLE_LOADOUT_DIAGNOSTIC_PLAYER0,
+                "live_weapons": {},
+                "live_hullmods": [],
+                "weapons_match": False,
+                "hullmods_match": False,
+            }],
+        }
+        result = parse_combat_result(data)
+        d = result.player_loadout_diagnostics[0]
+        assert d.weapons_match is False
+        assert d.hullmods_match is False
+        assert d.flux_vents_match is True
+        assert d.flux_capacitors_match is True
+
+    def test_missing_block_raises(self):
+        """No backward compat: result lacking loadout_diagnostic must fail-loud."""
+        data = dict(SAMPLE_RESULT)
+        del data["loadout_diagnostic"]
+        with pytest.raises(KeyError):
+            parse_combat_result(data)
+
+    def test_missing_player_array_raises(self):
+        data = dict(SAMPLE_RESULT)
+        data["loadout_diagnostic"] = {}
+        with pytest.raises(KeyError):
+            parse_combat_result(data)
+
+    def test_empty_player_array_ok(self):
+        """Empty array is valid (matchup with zero player builds is a degenerate
+        but legal config — test that parsing accepts it)."""
+        data = dict(SAMPLE_RESULT)
+        data["loadout_diagnostic"] = {"player": []}
+        result = parse_combat_result(data)
+        assert result.player_loadout_diagnostics == ()

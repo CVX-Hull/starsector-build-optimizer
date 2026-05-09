@@ -416,6 +416,7 @@ class TestCombatResult:
             damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
             overload_count=0,
         )
+        from tests.conftest import make_pass_diagnostic
         cr = CombatResult(
             matchup_id="eval_001",
             winner="PLAYER",
@@ -426,6 +427,7 @@ class TestCombatResult:
             enemy_ships_destroyed=1,
             player_ships_retreated=0,
             enemy_ships_retreated=0,
+            player_loadout_diagnostics=make_pass_diagnostic(1),
         )
         assert cr.matchup_id == "eval_001"
         assert cr.winner == "PLAYER"
@@ -439,6 +441,7 @@ class TestCombatResult:
             player_ships=(), enemy_ships=(),
             player_ships_destroyed=0, enemy_ships_destroyed=0,
             player_ships_retreated=0, enemy_ships_retreated=0,
+            player_loadout_diagnostics=(),
         )
         with pytest.raises(AttributeError):
             cr.winner = "ENEMY"

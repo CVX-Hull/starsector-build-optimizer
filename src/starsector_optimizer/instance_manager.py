@@ -79,8 +79,13 @@ class InstanceConfig:
     launcher_timeout_seconds: float = 30.0
     launcher_poll_interval_seconds: float = 0.5
     launcher_click_settle_seconds: float = 0.3
-    launcher_x: int = 297  # "Play Starsector" button, calibrated for 1920x1080
-    launcher_y: int = 255
+    # Play-button position WITHIN the launcher window, expressed as fractions
+    # of the window's width and height. Smoke #12 confirmed (0.5, 0.7) hits
+    # the Play button on Starsector 0.98a-RC8's 597×373 Swing launcher.
+    # Future game versions may shift the layout — see launcher_dispatch.log
+    # in the worker heartbeat to verify the click landed on the button.
+    launcher_play_button_x_fraction: float = 0.5
+    launcher_play_button_y_fraction: float = 0.7
     clean_restart_matchups: int = 200  # force full game restart after N total matchups
 
 
@@ -463,44 +468,188 @@ class LocalInstancePool(EvaluatorPool):
         self._click_launcher(inst)
 
     def _click_launcher(self, inst: GameInstance) -> None:
-        """Click 'Play Starsector' on the launcher using xdotool search polling."""
+        """Coordinate-click the Play button to advance the launcher.
+
+        Three X-server / Java AWT quirks have to be defeated under bare Xvfb;
+        all are documented from launcher_dispatch.log evidence:
+
+        1. **Xvfb runs without a window manager.** `xdotool windowactivate`
+           requires the EWMH `_NET_ACTIVE_WINDOW` atom which only a WM sets,
+           so it errors out (`Your windowmanager claims not to support
+           _NET_ACTIVE_WINDOW`). `windowfocus` (XSetInputFocus) is the WM-
+           free equivalent. (Smoke #10, 2026-05-09.)
+
+        2. **Java AWT filters XSendEvent.** `xdotool key --window <wid>`
+           dispatches via XSendEvent which sets `send_event=True`; Java AWT
+           silently drops such events as synthetic-event-injection defense.
+           `xdotool key Return` (no `--window`) falls back to the XTest
+           extension which produces real-looking keystrokes Java accepts.
+           (Smoke #10, 2026-05-09.)
+
+        3. **The Play button isn't AWT default-focused.** Even after
+           windowfocus + XTest Return, the launcher didn't advance — Java's
+           FocusManager hadn't placed focus on the Play JButton, so KeyEvents
+           hit the JFrame and went nowhere. `getwindowfocus` showed an
+           AWT-internal proxy window (id 2097182) with X focus before our
+           intervention, distinct from the JFrame (id 2097156).
+           (Smoke #11, 2026-05-09.)
+
+        The working dispatch is a coordinate-based mouse click computed from
+        the launcher's geometry — sidesteps focus entirely. The Play button
+        is centered horizontally and ~70% down the launcher's 597x373 frame.
+        Geometry is parsed from `xdotool getwindowgeometry --shell <wid>`
+        which outputs `X=…\\nY=…\\nWIDTH=…\\nHEIGHT=…` regardless of WM.
+
+        Every xdotool invocation (including pre/post-state probes) is logged
+        to `<work_dir>/launcher_dispatch.log` so the worker heartbeat glob
+        ships the trace back to the orchestrator.
+        """
         display = f":{inst.display_num}"
         env = {**os.environ, "DISPLAY": display}
         launcher_timeout = self._config.launcher_timeout_seconds
         poll_interval = self._config.launcher_poll_interval_seconds
         max_polls = int(launcher_timeout / poll_interval)
+        kill_timeout = self._config.process_kill_timeout_seconds
+        dispatch_log = inst.work_dir / "launcher_dispatch.log"
 
-        # Poll for launcher window
-        for _ in range(max_polls):
+        # Fast-fail on missing xdotool. The polling loop's `except Exception:
+        # pass` would otherwise swallow FileNotFoundError 60× before the
+        # watchdog catches a launch_timeout — caller would see "launcher did
+        # not appear" instead of the actual root cause. Linux-only worker by
+        # design (LocalInstancePool spec); we just want the right error.
+        if shutil.which("xdotool") is None:
+            logger.error(
+                "Instance %d: xdotool not found on PATH; cannot dispatch "
+                "launcher click. Re-bake the AMI with the xdotool apt package.",
+                inst.instance_id,
+            )
+            return
+
+        def _trace(line: str) -> None:
+            ts = time.strftime("%H:%M:%S", time.localtime())
+            with open(dispatch_log, "a", encoding="utf-8") as fh:
+                fh.write(f"{ts} {line}\n")
+
+        def _xdotool(*args: str, label: str) -> subprocess.CompletedProcess:
             try:
-                result = subprocess.run(
-                    ["xdotool", "search", "--name", "Starsector"],
-                    env=env, timeout=self._config.process_kill_timeout_seconds,
+                cp = subprocess.run(
+                    ["xdotool", *args],
+                    env=env, timeout=kill_timeout,
                     capture_output=True, text=True,
                 )
-                if result.stdout.strip():
+            except Exception as exc:
+                _trace(f"{label}: xdotool {' '.join(args)!r} raised: {exc!r}")
+                raise
+            stdout = cp.stdout.strip()
+            stderr = cp.stderr.strip()
+            _trace(
+                f"{label}: xdotool {' '.join(args)} → exit={cp.returncode} "
+                f"stdout={stdout!r} stderr={stderr!r}"
+            )
+            return cp
+
+        _trace(
+            f"_click_launcher start display={display} "
+            f"timeout={launcher_timeout}s poll={poll_interval}s"
+        )
+
+        wid: str | None = None
+        for poll_idx in range(max_polls):
+            try:
+                cp = _xdotool(
+                    "search", "--name", "Starsector",
+                    label=f"poll[{poll_idx}] search",
+                )
+                first_line = cp.stdout.strip().splitlines()[:1]
+                if first_line:
+                    wid = first_line[0].strip()
                     break
             except Exception:
                 pass
             time.sleep(poll_interval)
 
+        if wid is None:
+            _trace(f"FAILED: launcher window did not appear within {launcher_timeout}s")
+            logger.warning(
+                "Instance %d: launcher window did not appear within %.1fs",
+                inst.instance_id, launcher_timeout,
+            )
+            return
+
+        # Probe geometry first — needed to compute the click coordinate.
+        # `getwindowclass` is not a real xdotool subcommand (was a typo);
+        # dropped. Window class info is recoverable via `xprop -id <wid>` if
+        # ever needed and isn't load-bearing for the dispatch.
+        for label, args in (
+            ("name", ("getwindowname", wid)),
+            ("geom", ("getwindowgeometry", "--shell", wid)),
+            ("focus_before", ("getwindowfocus",)),
+        ):
+            try:
+                _xdotool(*args, label=f"probe[{label}]")
+            except Exception:
+                continue
+
+        # Parse the geometry probe so we can target the Play button by
+        # absolute screen coordinate. Re-run `getwindowgeometry --shell`
+        # cleanly so we don't rely on stale captured output.
+        try:
+            geom_cp = _xdotool(
+                "getwindowgeometry", "--shell", wid, label="geom_for_click",
+            )
+        except Exception as e:
+            _trace(f"FAILED: geom probe raised: {e!r}")
+            return
+        coords: dict[str, int] = {}
+        for line in geom_cp.stdout.splitlines():
+            line = line.strip()
+            if "=" in line:
+                k, _, v = line.partition("=")
+                try:
+                    coords[k.strip()] = int(v.strip())
+                except ValueError:
+                    continue
+        if not all(k in coords for k in ("X", "Y", "WIDTH", "HEIGHT")):
+            _trace(f"FAILED: incomplete geometry parse: {coords}")
+            return
+        x_frac = self._config.launcher_play_button_x_fraction
+        y_frac = self._config.launcher_play_button_y_fraction
+        click_x = coords["X"] + int(coords["WIDTH"] * x_frac)
+        click_y = coords["Y"] + int(coords["HEIGHT"] * y_frac)
+        _trace(
+            f"computed click coord (W*{x_frac:.2f}, H*{y_frac:.2f}) → "
+            f"abs=({click_x}, {click_y}) from geom={coords}"
+        )
+
         time.sleep(self._config.launcher_click_settle_seconds)
         try:
-            lx, ly = self._config.launcher_x, self._config.launcher_y
-            subprocess.run(
-                ["xdotool", "mousemove", str(lx), str(ly)],
-                env=env, timeout=self._config.process_kill_timeout_seconds,
-                capture_output=True,
-            )
+            _xdotool("windowmap", wid, label="windowmap")
+            _xdotool("windowfocus", wid, label="windowfocus")
             time.sleep(self._config.launcher_click_settle_seconds)
-            subprocess.run(
-                ["xdotool", "click", "1"],
-                env=env, timeout=self._config.process_kill_timeout_seconds,
-                capture_output=True,
+            _xdotool(
+                "mousemove", str(click_x), str(click_y),
+                label="mousemove_play",
             )
-            logger.info("Instance %d: clicked launcher Play button", inst.instance_id)
+            _xdotool("click", "1", label="click_play")
+            time.sleep(self._config.launcher_click_settle_seconds)
+            # Belt-and-suspenders: if the click missed (geometry off, button
+            # moved between versions), Return at least catches default-button
+            # configurations. Cheap, never harmful.
+            _xdotool("key", "Return", label="key_Return_fallback")
+            try:
+                _xdotool("getwindowfocus", label="focus_after_dispatch")
+            except Exception:
+                pass
+            logger.info(
+                "Instance %d: clicked launcher window %s at (%d, %d)",
+                inst.instance_id, wid, click_x, click_y,
+            )
         except Exception as e:
-            logger.warning("Instance %d: failed to click launcher: %s", inst.instance_id, e)
+            _trace(f"FAILED: dispatch raised: {e!r}")
+            logger.warning(
+                "Instance %d: failed to dispatch launcher click: %s",
+                inst.instance_id, e,
+            )
 
     def _kill_instance(self, inst: GameInstance) -> None:
         """Kill game process and Xvfb for an instance."""

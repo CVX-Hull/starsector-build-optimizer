@@ -11,6 +11,7 @@ See docs/specs/22-cloud-deployment.md.
 from __future__ import annotations
 
 import dataclasses
+import glob
 import json
 import logging
 import os
@@ -245,8 +246,58 @@ def _fetch_vm_metadata() -> dict[str, str]:
         return _WORKER_VM_METADATA
 
 
+# game_stdout.log tail bytes copied into each heartbeat. Sized so the
+# whole heartbeat hash stays well under Redis's per-entry limit and a
+# `redis-cli HGETALL` on the orchestrator stays human-readable. 32 KiB
+# per instance × default smoke matchup_slots_per_worker=1 = 32 KiB.
+_GAME_LOG_TAIL_BYTES_PER_INSTANCE = 32 * 1024
+_GAME_LOG_TAIL_TOTAL_CAP_BYTES = 96 * 1024
+# Two distinct log files per instance: `game_stdout.log` (JVM stdout/stderr,
+# captured by `instance_manager._start_game()`) and `starsector.log`
+# (Starsector's own log4j FileAppender, written to `<cwd>/starsector.log`).
+# The launcher's INFO/WARN lines go to stdout, but once the game starts the
+# log4j config redirects to starsector.log — so without both globs, a JVM
+# stuck mid-game looks like the launcher hung even when it actually entered
+# combat.
+_GAME_LOG_GLOB = "/tmp/starsector-instances/instance_*/*.log"
+
+
+def _read_game_log_tails() -> str:
+    """Concatenate the tail of every per-instance game_stdout.log on this VM.
+
+    The combat-harness JVM writes log4j INFO/WARN/ERROR lines to its stdout,
+    which `instance_manager._start_game()` redirects to
+    `<work_dir>/game_stdout.log`. When a JVM hangs (no `Matchup …
+    complete` line, load_avg ≈ 0), this is the only way the orchestrator
+    can see what screen the launcher / mission is stuck on. Without this
+    diagnostic the worker is opaque from the workstation side, because
+    smoke worker SGs grant zero ingress and `tailscale ssh` from a
+    userspace-mode workstation doesn't reliably establish.
+    """
+    chunks: list[str] = []
+    for log_path in sorted(glob.glob(_GAME_LOG_GLOB)):
+        try:
+            with open(log_path, "rb") as f:
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - _GAME_LOG_TAIL_BYTES_PER_INSTANCE))
+                content = f.read().decode("utf-8", errors="replace")
+            chunks.append(
+                f"=== {log_path} (size={size}; tail={_GAME_LOG_TAIL_BYTES_PER_INSTANCE}B) ===\n{content}"
+            )
+        except OSError as e:
+            chunks.append(f"=== {log_path}: read error: {e} ===")
+    if not chunks:
+        return f"=== no logs at glob {_GAME_LOG_GLOB} ==="
+    joined = "\n\n".join(chunks)
+    if len(joined) > _GAME_LOG_TAIL_TOTAL_CAP_BYTES:
+        joined = joined[-_GAME_LOG_TAIL_TOTAL_CAP_BYTES:]
+    return joined
+
+
 def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
-    """Write worker liveness + CPU-load + VM-identity telemetry.
+    """Write worker liveness + CPU-load + VM-identity telemetry + per-instance
+    game_stdout.log tail.
 
     `load_avg_*` comes from `os.getloadavg()` so the orchestrator can verify
     the configured `matchup_slots_per_worker` actually matches the box's
@@ -258,6 +309,10 @@ def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
     `_WORKER_VM_METADATA` (populated on first call). The ledger tick
     (CampaignManager._tick_ledger) reads these to attribute cost per
     region × instance_type bucket via the provider's spot-price API.
+
+    `game_log_tail` is the concatenated last ~32 KiB of every per-instance
+    `game_stdout.log` on this VM — the only orchestrator-side window into
+    a hung JVM, since worker SGs don't grant SSH ingress.
     """
     meta = _fetch_vm_metadata()
     load_1, load_5, load_15 = os.getloadavg()
@@ -271,6 +326,7 @@ def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
             "cpu_count": os.cpu_count() or 0,
             "region": meta.get("region", "unknown"),
             "instance_type": meta.get("instance_type", "unknown"),
+            "game_log_tail": _read_game_log_tails(),
         },
     )
 

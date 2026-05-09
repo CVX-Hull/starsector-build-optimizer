@@ -4,11 +4,12 @@ Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports re
 
 ## Commands
 
-- Build: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew jar`
-- Deploy to game: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew deploy`
-- Run tests: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew test`
-- Launch game with mod: `cd game/starsector && ./starsector.sh`
-- Build + test + deploy: `cd combat-harness && JAVA_HOME=/usr/lib/jvm/java-26-openjdk ./gradlew clean jar test deploy`
+- Build: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew jar`
+- Deploy to game: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew deploy`
+- Run tests: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew test`
+- Launch game with mod: `cd game/starsector && ./starsector.sh` (Linux only — no native macOS launch path)
+- Build + test + deploy: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew clean jar test deploy`
+- `STARSECTOR_JDK_HOME` is a JDK 17 (matching Starsector's bundled JRE). On macOS via Homebrew: `export STARSECTOR_JDK_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`. On Linux: typically `/usr/lib/jvm/java-17-openjdk` (build-host JDK ≥17; Gradle 9.4 tolerates higher).
 
 ## Architecture
 

@@ -228,6 +228,101 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
         assert isinstance(out, str) and len(out) > 0
 
 
+class TestRenderUserDataSSHAccess:
+    """Operator SSH access for live debugging hung workers via the
+    optional ED25519 pubkey appended to /home/ubuntu/.ssh/authorized_keys.
+
+    Tailscale SSH (`tailscale up --ssh`) was tried 2026-05-09 (smoke #8) and
+    rejected: tailscaled hijacks port 22 and gates via the tailnet ACL, and
+    a default-permissive personal tailnet still has no `ssh` clause — so
+    connections are silently dropped while shadowing the regular sshd.
+    Cloud-init logs `Tailscale SSH enabled, but access controls don't
+    allow anyone to access this device`. The pubkey path goes through the
+    regular sshd, which answers port 22 over the tailnet without ACL
+    interception.
+    """
+
+    def test_tailscale_ssh_NOT_enabled(self):
+        """Regression: `--ssh` on `tailscale up` shadowed sshd — keep it off."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        # Must not appear as a flag (anywhere) on the `tailscale up` invocation.
+        # `tailscale up` and its continuation lines (backslash-terminated) are
+        # the only place the flag could land. The flag string must not appear
+        # in any position that a flag-parsing parser would see.
+        for line in out.splitlines():
+            stripped = line.strip().rstrip("\\").strip()
+            assert not stripped.endswith("--ssh"), (
+                f"tailscale up flag --ssh found at line {line!r}: "
+                f"hijacks port 22 and breaks key-based sshd access. "
+                f"Use debug_ssh_pubkey instead."
+            )
+            assert " --ssh " not in (" " + stripped + " "), (
+                f"tailscale --ssh flag in middle of line {line!r}"
+            )
+
+    def test_debug_pubkey_omitted_by_default(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
+        # No authorized_keys WRITE when debug_ssh_pubkey not provided
+        # (a comment mentioning the path is fine; only the install/append
+        # block is the side effect we want gated).
+        assert "STARSECTOR_DEBUG_PUBKEY_EOF" not in out
+        assert "install -d -m 0700 -o ubuntu -g ubuntu /home/ubuntu/.ssh" not in out
+
+    def test_debug_pubkey_injected_when_provided(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        pubkey = "ssh-ed25519 AAAAC3SENTINELDEBUG operator@workstation"
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            debug_ssh_pubkey=pubkey,
+        )
+        assert pubkey in out
+        assert "/home/ubuntu/.ssh/authorized_keys" in out
+        # authorized_keys must be 0600 owned by ubuntu — sshd refuses laxer.
+        assert "chmod 0600" in out or "chmod 600" in out
+        assert "chown ubuntu:ubuntu /home/ubuntu/.ssh/authorized_keys" in out
+
+    def test_debug_pubkey_empty_string_treated_as_omitted(self):
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            debug_ssh_pubkey="",
+        )
+        assert "STARSECTOR_DEBUG_PUBKEY_EOF" not in out
+
+    def test_debug_pubkey_whitespace_only_treated_as_omitted(self):
+        """`os.environ.get("X", "").strip()` upstream produces `""` for
+        unset/blank vars, but a defensive callsite might pass `"  \\n"`. The
+        renderer must treat whitespace-only as no-op."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            debug_ssh_pubkey="   \n  \t",
+        )
+        assert "STARSECTOR_DEBUG_PUBKEY_EOF" not in out
+
+    def test_debug_pubkey_runs_after_tailscale_before_systemctl(self):
+        """authorized_keys append must happen after tailscale (so SSH works
+        immediately) but before systemctl (so a worker crash on start
+        doesn't preempt operator access)."""
+        from starsector_optimizer.cloud_userdata import render_user_data
+        cfg = _make_worker_config()
+        out = render_user_data(
+            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            debug_ssh_pubkey="ssh-ed25519 AAAA test@dev",
+        )
+        ts_pos = out.find("tailscale up")
+        ak_pos = out.find("install -d -m 0700")
+        svc_pos = out.find("systemctl start")
+        assert ts_pos < ak_pos < svc_pos
+
+
 class TestRenderProbeUserData:
     def test_returns_str(self):
         from starsector_optimizer.cloud_userdata import render_probe_user_data

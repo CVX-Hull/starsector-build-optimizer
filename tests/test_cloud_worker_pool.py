@@ -44,6 +44,7 @@ def _combat_result_json(matchup_id: str) -> dict:
         "enemy_ships_destroyed": 1,
         "player_ships_retreated": 0,
         "enemy_ships_retreated": 0,
+        "player_loadout_diagnostics": [],
         "engine_stats": None,
     }
 
@@ -192,6 +193,7 @@ class TestDictToCombatResultRoundTrip:
             damage_taken=DamageBreakdown(shield=40.0, armor=10.0, hull=5.0, emp=0.0),
             overload_count=2,
         )
+        from tests.conftest import make_pass_diagnostic
         original = CombatResult(
             matchup_id="mid-123",
             winner="PLAYER",
@@ -202,6 +204,7 @@ class TestDictToCombatResultRoundTrip:
             enemy_ships_destroyed=1,
             player_ships_retreated=0,
             enemy_ships_retreated=0,
+            player_loadout_diagnostics=make_pass_diagnostic(1),
             engine_stats=EngineStats(8000.0, 600.0, 1500.0, 1.0, 0.0, 1.0),
         )
 
@@ -219,6 +222,7 @@ class TestDictToCombatResultRoundTrip:
             player_ships=(), enemy_ships=(),
             player_ships_destroyed=0, enemy_ships_destroyed=0,
             player_ships_retreated=0, enemy_ships_retreated=0,
+            player_loadout_diagnostics=(),
             engine_stats=None,
         )
         assert _dict_to_combat_result(dataclasses.asdict(original)) == original

@@ -5,6 +5,38 @@ from pathlib import Path
 import pytest
 
 
+def make_pass_diagnostic(
+    n_player_ships: int,
+    *,
+    fleet_member_id_prefix: str = "ship_",
+) -> tuple:
+    """Build N all-fields-match LoadoutDiagnostic entries for tests that
+    construct a CombatResult but don't actually exercise the loadout-swap
+    verification path. The diagnostic is required-present on CombatResult,
+    and tests that don't care about the swap-correctness invariant just
+    need a synthetic block that satisfies it.
+    """
+    from starsector_optimizer.models import LoadoutDiagnostic
+    return tuple(
+        LoadoutDiagnostic(
+            fleet_member_id=f"{fleet_member_id_prefix}{i}",
+            spec_weapons={},
+            live_weapons={},
+            spec_hullmods=(),
+            live_hullmods=(),
+            spec_flux_vents=0,
+            live_flux_vents=0,
+            spec_flux_capacitors=0,
+            live_flux_capacitors=0,
+            weapons_match=True,
+            hullmods_match=True,
+            flux_vents_match=True,
+            flux_capacitors_match=True,
+        )
+        for i in range(n_player_ships)
+    )
+
+
 @pytest.fixture(scope="session")
 def game_dir():
     """Path to the Starsector game installation directory."""

@@ -63,6 +63,7 @@ def _make_result(
     enemy_ships = tuple(
         _make_ship(hp, destroyed=(hp == 0.0)) for hp in enemy_hp
     )
+    from tests.conftest import make_pass_diagnostic
     return CombatResult(
         matchup_id="test_001",
         winner=winner,
@@ -73,6 +74,7 @@ def _make_result(
         enemy_ships_destroyed=sum(1 for hp in enemy_hp if hp == 0.0),
         player_ships_retreated=0,
         enemy_ships_retreated=0,
+        player_loadout_diagnostics=make_pass_diagnostic(len(player_ships)),
     )
 
 
@@ -286,21 +288,25 @@ class TestHpDifferential:
 
     def test_empty_player_ships(self):
         """Empty player_ships returns 0.0."""
+        from tests.conftest import make_pass_diagnostic
         result = CombatResult(
             matchup_id="test", winner="ENEMY", duration_seconds=60.0,
             player_ships=(), enemy_ships=(_make_ship(0.5),),
             player_ships_destroyed=0, enemy_ships_destroyed=0,
             player_ships_retreated=0, enemy_ships_retreated=0,
+            player_loadout_diagnostics=make_pass_diagnostic(0),
         )
         assert hp_differential(result) == 0.0
 
     def test_empty_enemy_ships(self):
         """Empty enemy_ships returns 0.0."""
+        from tests.conftest import make_pass_diagnostic
         result = CombatResult(
             matchup_id="test", winner="PLAYER", duration_seconds=60.0,
             player_ships=(_make_ship(0.8),), enemy_ships=(),
             player_ships_destroyed=0, enemy_ships_destroyed=0,
             player_ships_retreated=0, enemy_ships_retreated=0,
+            player_loadout_diagnostics=make_pass_diagnostic(1),
         )
         assert hp_differential(result) == 0.0
 

@@ -347,6 +347,34 @@ class EngineStats:
 
 
 @dataclass(frozen=True)
+class LoadoutDiagnostic:
+    """Per-player-ship verification that the in-place loadout swap took effect.
+
+    `CombatHarnessPlugin.doSetup()` spawns each player ship from a stock variant,
+    then mutates `ship.getVariant()` to install the spec's weapons, hullmods,
+    and flux. Whether those mutations actually propagate to the live deployed
+    `ShipAPI` is undetectable from the existing result schema — flux vents and
+    capacitors flow through `MutableShipStatsAPI` (read live), but weapons and
+    hullmods are bound at deployment time and may silently keep their stock
+    values. This diagnostic captures the spec's intent vs the ship's actual
+    state so the orchestrator fails fast instead of consuming bad data.
+    """
+    fleet_member_id: str
+    spec_weapons: dict[str, str]
+    live_weapons: dict[str, str]
+    spec_hullmods: tuple[str, ...]
+    live_hullmods: tuple[str, ...]
+    spec_flux_vents: int
+    live_flux_vents: int
+    spec_flux_capacitors: int
+    live_flux_capacitors: int
+    weapons_match: bool
+    hullmods_match: bool
+    flux_vents_match: bool
+    flux_capacitors_match: bool
+
+
+@dataclass(frozen=True)
 class CombatResult:
     """Full result from a single combat matchup."""
     matchup_id: str
@@ -358,6 +386,7 @@ class CombatResult:
     enemy_ships_destroyed: int
     player_ships_retreated: int
     enemy_ships_retreated: int
+    player_loadout_diagnostics: tuple[LoadoutDiagnostic, ...]
     engine_stats: EngineStats | None = None
 
 

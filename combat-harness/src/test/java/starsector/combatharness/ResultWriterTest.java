@@ -1,5 +1,6 @@
 package starsector.combatharness;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 import org.junit.jupiter.api.Test;
 
@@ -105,5 +106,70 @@ class ResultWriterTest {
                 ResultWriter.buildSetupStatsJSON(12000f, 800f, 1050f, Float.NaN, 300f, 0.75f));
         assertThrows(Exception.class, () ->
                 ResultWriter.buildSetupStatsJSON(12000f, 800f, 1050f, 1.4f, 300f, Float.NaN));
+    }
+
+    // ---- loadout_diagnostic ----
+
+    private static MatchupConfig _stubConfig() throws Exception {
+        // Minimal valid MatchupConfig — single player build + single enemy
+        // variant, all required fields. Used by buildMatchupResult tests
+        // that exercise empty playerShips/enemyShips lists.
+        JSONObject specJson = new JSONObject()
+                .put("variant_id", "stub_v")
+                .put("hull_id", "wolf")
+                .put("flux_vents", 0)
+                .put("flux_capacitors", 0);
+        JSONObject mcJson = new JSONObject()
+                .put("matchup_id", "stub_matchup")
+                .put("player_builds", new JSONArray().put(specJson))
+                .put("enemy_variants", new JSONArray().put("dominator_Standard"));
+        return MatchupConfig.fromJSON(mcJson);
+    }
+
+    @Test
+    void buildMatchupResultEmbedsLoadoutDiagnosticPlayerArray() throws Exception {
+        JSONObject diagEntry = new JSONObject()
+                .put("fleet_member_id", "fm1")
+                .put("weapons_match", true)
+                .put("hullmods_match", true)
+                .put("flux_vents_match", true)
+                .put("flux_capacitors_match", true);
+        JSONArray playerDiag = new JSONArray().put(diagEntry);
+
+        JSONObject result = ResultWriter.buildMatchupResult(
+                _stubConfig(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                new DamageTracker(),
+                "TIMEOUT", 30.0f,
+                12000f, 800f, 1050f, 1.0f, 0f, 1.0f,
+                playerDiag);
+
+        assertTrue(result.has("loadout_diagnostic"),
+                "result must always carry loadout_diagnostic — required-present");
+        JSONObject diag = result.getJSONObject("loadout_diagnostic");
+        assertTrue(diag.has("player"));
+        JSONArray players = diag.getJSONArray("player");
+        assertEquals(1, players.length());
+        JSONObject p0 = players.getJSONObject(0);
+        assertEquals("fm1", p0.getString("fleet_member_id"));
+        assertTrue(p0.getBoolean("weapons_match"));
+    }
+
+    @Test
+    void buildMatchupResultDefaultsNullPlayerDiagToEmptyArray() throws Exception {
+        // Defensive: a null array passed in still produces a valid empty
+        // `player` array on the wire, never a missing key.
+        JSONObject result = ResultWriter.buildMatchupResult(
+                _stubConfig(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                new DamageTracker(),
+                "TIMEOUT", 30.0f,
+                12000f, 800f, 1050f, 1.0f, 0f, 1.0f,
+                null);
+
+        JSONObject diag = result.getJSONObject("loadout_diagnostic");
+        assertEquals(0, diag.getJSONArray("player").length());
     }
 }

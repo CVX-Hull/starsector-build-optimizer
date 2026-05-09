@@ -21,7 +21,8 @@ from werkzeug.serving import make_server
 from .campaign import run_janitor_pass
 from .evaluator_pool import EvaluatorPool
 from .models import (
-    CombatResult, DamageBreakdown, EngineStats, MatchupConfig, ShipCombatResult,
+    CombatResult, DamageBreakdown, EngineStats, LoadoutDiagnostic, MatchupConfig,
+    ShipCombatResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -71,13 +72,62 @@ def _dict_to_ship(data: dict[str, Any]) -> ShipCombatResult:
     )
 
 
+def _log_loadout_mismatches(matchup_id: str, result: CombatResult) -> None:
+    """Loud WARN per (matchup_id, ship) when any field of the in-place
+    loadout swap failed to take. Non-fatal — the diagnostic phase needs the
+    full log of mismatches before we crash on them.
+    """
+    for d in result.player_loadout_diagnostics:
+        if (
+            d.weapons_match
+            and d.hullmods_match
+            and d.flux_vents_match
+            and d.flux_capacitors_match
+        ):
+            continue
+        logger.warning(
+            "LOADOUT_MISMATCH matchup=%s ship=%s "
+            "weapons_match=%s hullmods_match=%s "
+            "flux_vents_match=%s flux_capacitors_match=%s "
+            "spec_weapons=%s live_weapons=%s "
+            "spec_hullmods=%s live_hullmods=%s "
+            "spec_flux=(%d,%d) live_flux=(%d,%d)",
+            matchup_id, d.fleet_member_id,
+            d.weapons_match, d.hullmods_match,
+            d.flux_vents_match, d.flux_capacitors_match,
+            d.spec_weapons, d.live_weapons,
+            d.spec_hullmods, d.live_hullmods,
+            d.spec_flux_vents, d.spec_flux_capacitors,
+            d.live_flux_vents, d.live_flux_capacitors,
+        )
+
+
+def _dict_to_loadout_diagnostic(data: dict[str, Any]) -> LoadoutDiagnostic:
+    """Reconstruct LoadoutDiagnostic from a `dataclasses.asdict` dict."""
+    return LoadoutDiagnostic(
+        fleet_member_id=data["fleet_member_id"],
+        spec_weapons=dict(data["spec_weapons"]),
+        live_weapons=dict(data["live_weapons"]),
+        spec_hullmods=tuple(data["spec_hullmods"]),
+        live_hullmods=tuple(data["live_hullmods"]),
+        spec_flux_vents=int(data["spec_flux_vents"]),
+        live_flux_vents=int(data["live_flux_vents"]),
+        spec_flux_capacitors=int(data["spec_flux_capacitors"]),
+        live_flux_capacitors=int(data["live_flux_capacitors"]),
+        weapons_match=bool(data["weapons_match"]),
+        hullmods_match=bool(data["hullmods_match"]),
+        flux_vents_match=bool(data["flux_vents_match"]),
+        flux_capacitors_match=bool(data["flux_capacitors_match"]),
+    )
+
+
 def _dict_to_combat_result(data: dict[str, Any]) -> CombatResult:
     """Reconstruct CombatResult from a POST body.
 
     The POST body carries `dataclasses.asdict(result)` from the worker —
     i.e. the CombatResult schema, NOT the raw Java harness JSON. Inverse
     of `asdict`; handles the nested `ShipCombatResult` + `DamageBreakdown`
-    + optional `EngineStats` dataclasses.
+    + `LoadoutDiagnostic` + optional `EngineStats` dataclasses.
     """
     engine_stats_raw = data.get("engine_stats")
     return CombatResult(
@@ -90,6 +140,9 @@ def _dict_to_combat_result(data: dict[str, Any]) -> CombatResult:
         enemy_ships_destroyed=data["enemy_ships_destroyed"],
         player_ships_retreated=data["player_ships_retreated"],
         enemy_ships_retreated=data["enemy_ships_retreated"],
+        player_loadout_diagnostics=tuple(
+            _dict_to_loadout_diagnostic(d) for d in data["player_loadout_diagnostics"]
+        ),
         engine_stats=(
             EngineStats(**engine_stats_raw) if engine_stats_raw is not None else None
         ),
@@ -174,12 +227,12 @@ class CloudWorkerPool(EvaluatorPool):
                 if matchup_id in self._seen:
                     return jsonify({"status": "duplicate"}), 409
                 try:
-                    self._results[matchup_id] = _dict_to_combat_result(
-                        body.get("result", {})
-                    )
+                    parsed = _dict_to_combat_result(body.get("result", {}))
                 except Exception as e:
                     logger.error("failed to parse result: %s", e)
                     return jsonify({"error": "bad result"}), 400
+                self._results[matchup_id] = parsed
+                _log_loadout_mismatches(matchup_id, parsed)
                 self._seen.add(matchup_id)
                 event = self._result_events.get(matchup_id)
             if event is not None:
