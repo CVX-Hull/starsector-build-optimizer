@@ -14,6 +14,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 
 | Date | Report | Topic |
 |---|---|---|
+| 2026-05-09 | [Wave 0 validation](2026-05-09-wave0-validation.md) | **Draft.** V2 re-validation Wave 0 results: 4-step preflight; steps 1-3 GREEN, step 4 surfaces multi-worker LOADOUT_MISMATCH (Wave-1 blocker). |
 | 2026-05-10 | [V1 loadout-bug invalidation](2026-05-10-v1-loadout-bug-invalidation.md) | Master invalidation report. All Phase 5A–5F empirical claims pending re-validation. |
 | 2026-05-10 | [Validation campaign plan](2026-05-10-validation-plan.md) | **Draft.** Re-validation campaign plan: hull selection, per-mechanism gates, 4-wave architecture, budget + decision tree. |
 | 2026-05-10 | [Doc reorg summary](2026-05-10-doc-reorg-summary.md) | Documentation reorganization work-product: convention, files moved, files edited, decisions. |
