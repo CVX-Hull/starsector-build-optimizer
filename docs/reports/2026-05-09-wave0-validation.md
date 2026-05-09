@@ -1,6 +1,6 @@
 ---
 type: report
-status: draft
+status: shipped
 last-validated: 2026-05-09
 ---
 
@@ -10,7 +10,10 @@ Pre-flight gate for the V2 re-validation campaign per
 [2026-05-10-validation-plan.md](2026-05-10-validation-plan.md) §3 Wave 0.
 Confirms AWS infrastructure healthy and the V2 combat-harness loadout fix
 (commit `8a5b968`) survives the full e2e cloud path under multi-worker
-concurrency. **All four gates passed; cleared for Wave 1.**
+concurrency. Step 4 surfaced a multi-worker LOADOUT_MISMATCH concurrency
+bug; root cause was identified, fixed in commit `c2d5150`, and verified
+by a re-run that produced **0 mismatches across 200 LOADOUT_OK
+diagnostics** (§3.5). **All gates passed post-fix; cleared for Wave 1.**
 
 ## Step-by-step results
 
@@ -19,7 +22,8 @@ concurrency. **All four gates passed; cleared for Wave 1.**
 | 1 | `probe` (`probe-campaign.yaml`) | $0.02 | 4 min | ✅ AWS provider + LT + SG roundtrip in us-east-1 + us-east-2; `final_audit clean` |
 | 2 | `smoke` (`smoke-campaign.yaml`) | $0.06 | 3.5 min | ✅ Single-matchup full e2e; trial 0 COMPLETE in 96s, 1 LOADOUT_OK / 0 LOADOUT_MISMATCH |
 | 3 | `loadout-ab` (`loadout_ab_test.py`, n=10×2) | $0.20 | 10.5 min | ✅ V2 fix proven (single-worker); ARMED 10/10 PLAYER, NAKED 10/10 damage_dealt=0.0 (4 TIMEOUTs explained, see §3.3); 0 LOADOUT_MISMATCH |
-| 4 | `smoke-multiworker` (`smoke-campaign-multiworker.yaml`) | ~$0.50 | 24 min | ❌ **3 LOADOUT_MISMATCH detected — Wave-1-blocking concurrency bug; see §3.4** |
+| 4 | `smoke-multiworker` (`smoke-campaign-multiworker.yaml`) | ~$0.50 | 24 min | ❌ **3 LOADOUT_MISMATCH at 173 LOADOUT_OK — Wave-1-blocking concurrency bug; see §3.4** |
+| 4b | `smoke-multiworker` (post-fix re-run) | ~$0.50 | 28.7 min | ✅ **0 LOADOUT_MISMATCH at 200 LOADOUT_OK**, 20/20 trials finalized, 0 V2_SETUP_DEFER events; see §3.5 |
 
 ## Issues found and fixed pre-launch
 
@@ -145,17 +149,89 @@ C. **Proceed and widen the bootstrap CI** — accept the 1.7 % contamination
    excludes 0* gate is more conservative and may not. Cheapest, but
    undermines the whole reason this re-validation campaign exists.
 
+**Operator chose A.** Root-cause investigation and fix below.
+
+## 3.5 — Root cause + fix (multi-worker LOADOUT_MISMATCH)
+
+**Root cause.** `CombatHarnessPlugin.doSetup` collected player ships by
+iterating `engine.getShips()` and grabbing every `owner==0` non-fighter
+ship. Under multi-worker JVM reuse across mission cycles, that view
+could include `ShipAPI` instances from a *prior* matchup's combat that
+the engine had not yet deallocated when the new mission's `doSetup`
+ran. The plugin would pick one of those stale ships, run the
+loadout diagnostic against the new spec — and the variant_id
+naturally differed from the dispatched trial.
+
+Confirmed via `[V2_SETUP_VARIANT]` instrumentation added in `e4f1333`
+(SETUP-time log of each player ship's live `getHullVariantId()` plus
+the first three physical weapon ids):
+
+| Mismatched matchup | Dispatched spec | Live SETUP variant_id | Live phys weapons | Match found |
+|---|---|---|---|---|
+| `opt_000018_vs_berserker_Assault` (1466973ms) | hammerhead_opt_000018 | hammerhead_opt_000017 | exact byte-match for trial 17 build | trial 17, prior matchup |
+| `opt_000018_vs_phantom_Elite` (1393961ms) | hammerhead_opt_000018 | hammerhead_opt_000015 | exact byte-match for trial 15 build | trial 15, prior matchup |
+
+The `[V2_DEPLOY]` log (`MissionDefinition.java`) showed
+`after_setvariant=opt_000018` was correct — proving the V2
+placeholder-then-swap path itself worked. The bug was downstream:
+`doSetup`'s ship picker hadn't been updated to filter by the
+expected variant ID after the V2 fix narrowed deployment to a
+single per-trial spec.
+
+**Fix (commit `c2d5150`).** `doSetup` now builds
+`expectedVariantIds = {spec.variantId for spec in
+currentConfig.playerBuilds}`, filters owner-0 ships by
+`expectedVariantIds.contains(ship.getVariant().getHullVariantId())`,
+and defers state transition (re-entrant `return` from `doSetup`)
+until the expected ships are visible — with a
+`SETUP_VARIANT_WAIT_FRAMES = 600` (10s @ 60fps) backstop that
+emits `[V2_SETUP_DEFER]` (every 60 frames) and on expiry
+`[V2_SETUP_TIMEOUT]`. The post-implementation audit
+(commit `722afd2`) extracted the result-write/Robot/endCombat
+tail into a `finalizeMatchup` helper so the timeout path
+preserves spec-13's end-of-match contract.
+
+**Verification (step 4b above).** Re-ran `smoke-campaign-multiworker.yaml`
+with the fixed JAR served via `serve_mod_jar.sh` (commit `c2d5150`):
+
+| Metric | Buggy run (step 4) | Fixed run (step 4b) |
+|---|---|---|
+| Trials finalized | 20 / 20 | 20 / 20 |
+| Wall-clock | 24 min | 28.7 min |
+| LOADOUT_OK | 173 | **200** |
+| LOADOUT_MISMATCH | **3** (1.7 %) | **0** (0.0 %) |
+| V2_SETUP_DEFER events | n/a | 0 (filter caught the right ships immediately every time) |
+| V2_SETUP_TIMEOUT events | n/a | 0 |
+| Throughput | 41.8 finalized/hr | 41.8 finalized/hr |
+
+The deferral path didn't fire even once — `engine.getShips()`'s view
+was already correct on the first frame of `doSetup` for every matchup.
+The variant-id filter would have caught the leak if the engine view
+had been stale, and the SETUP_TIMEOUT backstop now writes a clean
+TIMEOUT result rather than leaving the orchestrator waiting on an
+absent done signal. Throughput is unchanged; no per-matchup latency
+regression from the filter or instrumentation.
+
+`final_audit clean` — no AWS resources lingering after teardown.
+
 ## Cumulative cost
 
-Wave 0 budget per validation plan: $1.45. Actual through step 4: ~$0.78
-(probe ~$0.02 + smoke ~$0.06 + AB ~$0.20 + smoke-multi ~$0.50).
+Wave 0 budget per validation plan: $1.45. Actual: ~$1.28
+(probe ~$0.02 + smoke ~$0.06 + AB ~$0.20 + smoke-multi-buggy ~$0.50
++ smoke-multi-fixed ~$0.50). Within budget.
 
 ## Next steps
 
-Pending operator decision on §3.4 (A/B/C). Whichever path: Wave 1 launch
-plumbing is ready (`examples/wave1-c{0a,0b,1,2,3}.yaml` +
+All Wave-0 gates green. Wave 1 launch plumbing ready
+(`examples/wave1-c{0a,0b,1,2,3}.yaml` +
 `scripts/cloud/launch_wave1.sh`); ablation env-var overrides in
 `scripts/run_optimizer.py::_resolve_ablation_overrides` are unit-tested.
 
-us-east-2 AMI re-bake deferred until Wave 3 prep (Wave 1 + Wave 2 both
-fit in us-east-1 alone).
+Wave 1 is currently using the AMI baked at 13:57 EDT plus the
+`serve_mod_jar.sh` overlay carrying `c2d5150` + `722afd2`. AMI
+re-bake to land the fix permanently is deferred until Wave 3
+prep (Wave 1 + Wave 2 both run via the JAR-overlay path; cost
+of the overlay is one-time HTTP fetch at instance boot).
+
+us-east-2 AMI re-bake also deferred until Wave 3 prep (Wave 1 + Wave 2
+both fit in us-east-1 alone).
