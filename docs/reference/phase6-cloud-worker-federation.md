@@ -191,7 +191,7 @@ studies:
 
 **State on orchestrator (single file tree):**
 ```
-~/starsector-campaigns/<campaign-name>/
+data/campaigns/<campaign-name>/
 ├── campaign.yaml                      (user-provided)
 ├── manifest.json                      (study metadata, manager state)
 ├── ledger.jsonl                       (append-only cost events)
@@ -327,7 +327,7 @@ Additional concurrency hazards identified during the audit pass but deferred (un
 **Gate criteria (ALL must hold)**:
 - `launch_campaign.sh examples/smoke-campaign.yaml` exits 0.
 - `scripts/cloud/final_audit.sh smoke` exits 0 (zero leaked resources across all 4 US regions).
-- `~/starsector-campaigns/smoke/ledger.jsonl` contains ≥ 1 `worker_heartbeat` event.
+- `data/campaigns/smoke/ledger.jsonl` contains ≥ 1 `worker_heartbeat` event.
 - The Optuna study's SQLite (at the subprocess's `--study-db` path) contains exactly 1 `TrialState.COMPLETE`.
 
 **Tier-2.5 multi-worker variant (post-Tier-2.0 pass)**: same code path, `examples/smoke-campaign-multiworker.yaml`. `workers_per_study: 3`, `matchup_slots_per_worker: 2` (default), `budget_per_study: 20`, `max_concurrent_workers: 3`, `budget_usd: 3.0`. Exercises the **total concurrency path** (pool semaphore sized to `workers × matchup_slots_per_worker = 6`), the threaded worker consumer loop (each VM drives 2 concurrent matchups), janitor re-queue under concurrent dispatch, POST dedup under duplicate results, backpressure. Additional gate: worker `load_avg_1min` (from the heartbeat hash) lands in `[3, 8]` — under-load or over-subscription indicates the fleet shape doesn't match `matchup_slots_per_worker`. Inspect via `redis-cli HGETALL worker:<project_tag>:<worker_id>:heartbeat`.

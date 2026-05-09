@@ -134,11 +134,11 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
    }
    ```
    In grants, the port moves out of `dst` into a separate `ip` array (each port/range is its own entry); `"action": "accept"` is removed (grants are accept-only). The editor has a **"Convert to grants"** button that rewrites any legacy `acls` block.
-6. **Ephemeral + pre-approved auth key exists** (from Tailscale admin panel → Keys), tagged `tag:starsector-worker`. The canonical source is the repo-local `.env` file (mode 0600, gitignored). Load it before any cloud operation:
+6. **Ephemeral + pre-approved auth key exists** (from Tailscale admin panel → Keys), tagged `tag:starsector-worker`. The canonical source is the repo-local `.env` file (mode 0600, gitignored). **`.env` is auto-sourced** by `scripts/cloud/launch_campaign.sh` and `scripts/cloud/bake_image.sh` (each script does `set -a; source .env; set +a` if `AWS_PROFILE` is unset and `.env` exists), so operators no longer need to remember the manual sourcing step before every launch. Verify the file's contents directly:
    ```bash
-   set -a && source .env && set +a   # exports every KEY=VALUE in .env
+   grep -q '^TAILSCALE_AUTHKEY=tskey-auth-' .env && grep -q '^AWS_PROFILE=starsector' .env && echo OK
    ```
-   `.env` must contain at minimum `TAILSCALE_AUTHKEY=tskey-auth-...`. Campaign YAMLs using `${TAILSCALE_AUTHKEY}` substitution resolve from the shell env, so sourcing `.env` is sufficient. If `.env` is missing or empty, recreate it from the key at the Tailscale admin panel before proceeding.
+   `.env` must contain at minimum `TAILSCALE_AUTHKEY=tskey-auth-...` and `AWS_PROFILE=starsector`. Campaign YAMLs using `${TAILSCALE_AUTHKEY}` substitution resolve from the shell env, which the auto-source populates. If `.env` is missing or empty, recreate it from the key at the Tailscale admin panel before proceeding. **Manual sourcing remains supported** for ad-hoc commands (e.g. `aws s3 ls` from outside the entry-point scripts) — `set -a; source .env; set +a`.
 7. **AWS quota check** (for every `regions:` entry):
    ```bash
    for region in us-east-1 us-east-2; do
@@ -159,7 +159,7 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
     ```bash
     scripts/cloud/probe.sh <campaign.yaml>
     ```
-11. **Provider credentials alive**: `AWS_PROFILE=starsector aws sts get-caller-identity` returns `Arn=...:user/starsector-optimizer`. If the user check fails, redo "Initial workstation setup → AWS profile" above. boto3 reads from `[starsector]` in `~/.aws/credentials`; the campaign launches via `set -a; source .env; set +a` which exports `AWS_PROFILE=starsector` into the orchestrator subprocess env.
+11. **Provider credentials alive**: `AWS_PROFILE=starsector aws sts get-caller-identity` returns `Arn=...:user/starsector-optimizer`. If the user check fails, redo "Initial workstation setup → AWS profile" above. boto3 reads from `[starsector]` in `~/.aws/credentials`; `launch_campaign.sh` + `bake_image.sh` auto-source `.env` (idempotent — skipped when `AWS_PROFILE` is already set) which exports `AWS_PROFILE=starsector` into the orchestrator subprocess env. **The wrong-creds failure mode** that recurred 10+ times in 2026-04/05: invoking `bake_image.sh` or any boto3 caller from a fresh shell where `.env` was never sourced caused the AWS SDK to fall back to the default profile in `~/.aws/config`, which on this workstation is an Amazon-Q `login_session = ...:root` entry the SDK can't resolve. Symptom: Packer "No valid credential sources found" or boto3 NoCredentialsError. The auto-sourcing eliminates the failure mode at the entry-point layer.
 12. **Tier-2 pipeline smoke passed within last 30 days** (first real paid campaign gate):
     ```bash
     export TAILSCALE_AUTHKEY=tskey-auth-...

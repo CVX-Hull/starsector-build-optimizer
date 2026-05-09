@@ -64,7 +64,7 @@ See the session-of-record findings (live-surfaced + fixed) inline in:
 ### H5 — `CampaignManager.monitor_loop` ledger tick is stubbed
 
 - **Location:** `src/starsector_optimizer/campaign.py:589-596`. The supervisor's polling loop sleeps on `ledger_heartbeat_interval_seconds` but contains a literal stub comment (`"Ledger ticking happens here in the real impl. … Stub until live smoke."`) where `ledger.record_heartbeat()` should be invoked per-worker.
-- **Finding (surfaced 2026-04-19 during Phase 7 prep run launch review):** `~/starsector-campaigns/<name>/ledger.jsonl` stays empty for the entire run. Consequence: (a) no per-worker cost attribution captured, (b) `budget_usd` hard cap is **never enforced** because `BudgetExceeded` is only raised inside `CostLedger.record_heartbeat`, which is never called. Budget is decorative.
+- **Finding (surfaced 2026-04-19 during Phase 7 prep run launch review):** `data/campaigns/<name>/ledger.jsonl` stays empty for the entire run. Consequence: (a) no per-worker cost attribution captured, (b) `budget_usd` hard cap is **never enforced** because `BudgetExceeded` is only raised inside `CostLedger.record_heartbeat`, which is never called. Budget is decorative.
 - **Observed?** **Yes** — Phase 7 prep campaign launched 2026-04-19 at 10:26 UTC, ledger path created but file never written. First real-world manifestation.
 - **Bounded by:** `max_lifetime_hours` passed to worker VMs (workers self-terminate via systemd timer in the AMI), the `trap EXIT` in `launch_campaign.sh` (fires `teardown.sh` on script exit), and `atexit.register(self.teardown)` in CampaignManager. Absolute cost ceiling is (N_workers × spot_rate × max_lifetime_hours); for Phase 7 prep at 96×$0.15×6 = ~$86 (~1.2× budget).
 - **Proposed fix:**

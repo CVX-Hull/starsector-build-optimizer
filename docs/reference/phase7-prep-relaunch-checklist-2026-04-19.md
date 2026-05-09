@@ -17,7 +17,7 @@ the optimizer was not learning. Key postmortem findings (full analysis in
   (not <1% as previously believed). Its backing implementation
   (`compute_effective_stats` + `HULLMOD_EFFECTS`) is blind to ~90% of
   tier-1 hullmods — a structurally incomplete prior driving the signal.
-- The `~/starsector-campaigns/<name>/ledger.jsonl` never got written
+- The `data/campaigns/<name>/ledger.jsonl` never got written
   because the `CampaignManager.monitor_loop` ledger-tick is a documented
   stub. The `budget_usd` hard cap was therefore never enforced.
 - Janitor re-queues observed in practice on capital trials

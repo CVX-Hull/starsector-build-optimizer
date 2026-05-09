@@ -11,6 +11,22 @@ set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
+# Auto-source .env so AWS_PROFILE (+ TAILSCALE_AUTHKEY for downstream scripts)
+# is set without operators having to remember `set -a; source .env; set +a`.
+# Per `.claude/skills/cloud-worker-ops.md` § AWS profile, the principled
+# auth flow is the dedicated `starsector` IAM user surfaced via AWS_PROFILE
+# — without it, Packer + boto3 fall back to whatever default-profile session
+# the CLI happens to have (e.g. an Amazon-Q `login_session` against root,
+# which neither tool's SDK can resolve). `set -a; source .env; set +a`
+# exports every assignment in .env into the script env. Skipped if AWS_PROFILE
+# is already set so an explicit operator override is honored.
+if [[ -z "${AWS_PROFILE:-}" && -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source .env
+  set +a
+fi
+
 DRY_RUN=${1:-}
 PACKER_TEMPLATE="scripts/cloud/packer/aws.pkr.hcl"
 SOURCE_REGION="us-east-1"

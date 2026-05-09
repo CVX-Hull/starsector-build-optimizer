@@ -7,7 +7,9 @@
 set -euo pipefail
 
 CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
-LEDGER="$HOME/starsector-campaigns/$CAMPAIGN/ledger.jsonl"
+# Project-relative — resolve git root so the script works regardless of cwd.
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+LEDGER="$PROJECT_ROOT/data/campaigns/$CAMPAIGN/ledger.jsonl"
 
 if [[ ! -f "$LEDGER" ]]; then
   echo "[status] no ledger at $LEDGER — has the campaign started?" >&2

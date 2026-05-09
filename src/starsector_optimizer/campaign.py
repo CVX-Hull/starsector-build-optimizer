@@ -851,8 +851,13 @@ def main(argv: list[str] | None = None) -> int:
 
     from .cloud_provider import AWSProvider
     provider = AWSProvider(regions=config.regions)
+    # Project-relative campaign artifacts. Resolved from the module path
+    # (parents[2] = src/starsector_optimizer → src → project_root) so the
+    # location is invariant under operator cwd. `launch_campaign.sh` and
+    # `scripts/cloud/status.sh` use the same convention.
+    project_root = Path(__file__).resolve().parents[2]
     ledger_path = (
-        Path.home() / "starsector-campaigns" / config.name / "ledger.jsonl"
+        project_root / "data" / "campaigns" / config.name / "ledger.jsonl"
     )
     ledger = CostLedger(
         path=ledger_path,

@@ -690,7 +690,7 @@ class WorkerConfig:
 
 @dataclass(frozen=True)
 class CostLedgerEntry:
-    """One JSONL row in ~/starsector-campaigns/<name>/ledger.jsonl.
+    """One JSONL row in data/campaigns/<name>/ledger.jsonl.
 
     All fields primitive and secret-free. timestamp is ISO-8601 UTC.
     """

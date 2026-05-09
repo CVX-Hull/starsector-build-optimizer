@@ -122,7 +122,7 @@ Injected by cloud-init as env vars at VM boot. Read once; worker treats as immut
 
 ### `CostLedgerEntry`
 
-One JSONL row in `~/starsector-campaigns/<name>/ledger.jsonl`. All fields primitive and secret-free.
+One JSONL row in `data/campaigns/<name>/ledger.jsonl`. All fields primitive and secret-free.
 
 | Field | Type | Description |
 |---|---|---|
@@ -205,7 +205,7 @@ No `GET`, no `PATCH`, no `PUT`, no admin route, no static files. Test `test_http
 
 ## Cost ledger
 
-Append-only JSONL at `~/starsector-campaigns/<name>/ledger.jsonl`. Every write is followed by `file.flush()` + `os.fsync(file.fileno())` to prevent torn lines on crash (~1ms overhead per row, negligible at 96 rows/min).
+Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is followed by `file.flush()` + `os.fsync(file.fileno())` to prevent torn lines on crash (~1ms overhead per row, negligible at 96 rows/min).
 
 Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown.
 
