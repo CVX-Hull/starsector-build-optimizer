@@ -21,6 +21,8 @@
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+# shellcheck source=scripts/cloud/_env.sh
+source "$(dirname "$0")/_env.sh"
 
 REGIONS=(us-east-1 us-east-2 us-west-1 us-west-2)
 TAG="Project"

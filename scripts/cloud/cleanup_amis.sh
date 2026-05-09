@@ -20,6 +20,8 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
+# shellcheck source=scripts/cloud/_env.sh
+source "$(dirname "$0")/_env.sh"
 
 APPLY=0
 FORCE=0

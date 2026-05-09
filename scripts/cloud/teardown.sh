@@ -13,6 +13,9 @@
 #   scripts/cloud/teardown.sh <campaign-name>
 set -euo pipefail
 
+# shellcheck source=scripts/cloud/_env.sh
+source "$(dirname "$0")/_env.sh"
+
 CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
 TAG="starsector-$CAMPAIGN"
 

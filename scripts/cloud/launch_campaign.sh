@@ -21,21 +21,8 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
-
-# Auto-source .env so AWS_PROFILE + TAILSCALE_AUTHKEY are set without operators
-# having to remember `set -a; source .env; set +a`. Per
-# `.claude/skills/cloud-worker-ops.md` § AWS profile, the principled auth flow
-# is the dedicated `starsector` IAM user surfaced via AWS_PROFILE — without
-# it, boto3 falls back to whatever default-profile session the CLI happens
-# to have (e.g. an Amazon-Q `login_session` against root, which boto3's SDK
-# can't resolve). Skipped if AWS_PROFILE is already set so an explicit
-# operator override is honored.
-if [[ -z "${AWS_PROFILE:-}" && -f .env ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source .env
-  set +a
-fi
+# shellcheck source=scripts/cloud/_env.sh
+source "$(dirname "$0")/_env.sh"
 YAML="${1:?Usage: $0 <campaign.yaml>}"
 CAMPAIGN_NAME=$(uv run python -c "import yaml,sys; print(yaml.safe_load(open('$YAML'))['name'])")
 # Project-relative artifacts (data/ is gitignored). Mirrors data/logs/<study>/

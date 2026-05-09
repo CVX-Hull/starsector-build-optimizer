@@ -9,6 +9,9 @@
 # Exit 0: clean. Exit 1: leaked resource (listed in stdout).
 set -uo pipefail
 
+# shellcheck source=scripts/cloud/_env.sh
+source "$(dirname "$0")/_env.sh"
+
 CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
 TAG="starsector-$CAMPAIGN"
 LEAKED=0
