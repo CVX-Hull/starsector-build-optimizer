@@ -230,6 +230,27 @@ class TestWriteQueueFile:
         assert data[0]["time_mult"] == 5.0
         assert data[0]["time_limit_seconds"] == 60
 
+    def test_debug_dumps_enabled_serialized_only_when_true(self, tmp_path):
+        """debug_dumps_enabled is opt-in — false case omits the key entirely
+        so the wire format stays minimal on the common path. Java-side
+        optBoolean default matches."""
+        mc_off = MatchupConfig(
+            matchup_id="dd_off",
+            player_builds=(self._build_spec(),),
+            enemy_variants=("dominator_Assault",),
+        )
+        mc_on = MatchupConfig(
+            matchup_id="dd_on",
+            player_builds=(self._build_spec(),),
+            enemy_variants=("dominator_Assault",),
+            debug_dumps_enabled=True,
+        )
+        path = tmp_path / "queue.json.data"
+        write_queue_file([mc_off, mc_on], path)
+        data = json.loads(path.read_text())
+        assert "debug_dumps_enabled" not in data[0]
+        assert data[1]["debug_dumps_enabled"] is True
+
     def test_custom_map_dimensions(self, tmp_path):
         mc = MatchupConfig(
             matchup_id="test_map",

@@ -35,10 +35,15 @@ Parse a single result dict from the Java JSON output into a `CombatResult` datac
 | `setup_stats.player.eff_max_flux` | `engine_stats.eff_max_flux` | Phase 5D — Java-engine-computed effective stat read at end of SETUP. See `EngineStats` below. |
 | `setup_stats.player.eff_flux_dissipation` | `engine_stats.eff_flux_dissipation` | Phase 5D |
 | `setup_stats.player.eff_armor_rating` | `engine_stats.eff_armor_rating` | Phase 5D |
+| `setup_stats.player.eff_hull_hp_pct` | `engine_stats.eff_hull_hp_pct` | Phase-7-prep (2026-04-19) |
+| `setup_stats.player.ballistic_range_bonus` | `engine_stats.ballistic_range_bonus` | Phase-7-prep |
+| `setup_stats.player.shield_damage_taken_mult` | `engine_stats.shield_damage_taken_mult` | Phase-7-prep |
+| `loadout_diagnostic.player[]` | `player_loadout_diagnostics: tuple[LoadoutDiagnostic, ...]` | Always emitted — fail-loud parse via `_parse_loadout_diagnostic`. See spec 13 SETUP step 6. |
+| `debug_dumps[]` *(optional)* | `debug_dumps: tuple[str, ...]` | Per-matchup `[SHIP_DUMP]` / `[FIGHT_TICK]` / `[WIN_DUMP]` lines emitted by Java's `recordDebug`. Tolerant parse via `data.get("debug_dumps") or ()` — older Java builds emit no key. Only `[FIGHT_TICK]` is gated on `MatchupConfig.debug_dumps_enabled`. |
 
 ### `EngineStats` dataclass
 
-Frozen dataclass in `models.py` (NOT `result_parser.py` — all domain dataclasses live in `models.py`) carrying Java-engine-computed pre-matchup effective stats:
+Frozen dataclass in `models.py` (NOT `result_parser.py` — all domain dataclasses live in `models.py`) carrying Java-engine-computed pre-matchup effective stats. **Six fields** as of Phase-7-prep (2026-04-19):
 
 ```python
 @dataclass(frozen=True)
@@ -46,12 +51,16 @@ class EngineStats:
     eff_max_flux: float
     eff_flux_dissipation: float
     eff_armor_rating: float
+    eff_hull_hp_pct: float
+    ballistic_range_bonus: float
+    shield_damage_taken_mult: float
 ```
 
 Added as an optional field on `CombatResult`:
 
 ```python
 engine_stats: EngineStats | None = None
+debug_dumps: tuple[str, ...] = ()
 ```
 
 ### `setup_stats` parsing — tolerant path
@@ -62,9 +71,9 @@ This is the **only** tolerant parse path in `result_parser.py` (all other fields
 |---|---|
 | `setup_stats` key absent | `engine_stats = None` (no warning — legitimate pre-5D result) |
 | `setup_stats` present but missing `"player"` key | `warnings.warn`, `engine_stats = None` |
-| `setup_stats.player` missing any of `eff_max_flux`/`eff_flux_dissipation`/`eff_armor_rating` | `warnings.warn`, `engine_stats = None` |
+| `setup_stats.player` missing any of the six engine-stat keys | `warnings.warn`, `engine_stats = None` |
 | Any value is NaN or non-float-convertible | `warnings.warn`, `engine_stats = None` |
-| All three values present and finite | `engine_stats = EngineStats(...)` |
+| All six values present and finite | `engine_stats = EngineStats(...)` |
 
 Requires `import warnings` and `import math` in `result_parser.py`.
 
@@ -92,6 +101,7 @@ Write a list of `MatchupConfig` objects as a JSON array to the given path.
 | `time_mult` | `time_mult` |
 | `map_width` | `map_width` |
 | `map_height` | `map_height` |
+| `debug_dumps_enabled` *(emitted only when True)* | `debug_dumps_enabled` (default `False`) |
 
 Each `BuildSpec` in `player_builds` is serialized as a dict with keys: `variant_id`, `hull_id`, `weapon_assignments` (dict), `hullmods` (list), `flux_vents` (int), `flux_capacitors` (int).
 

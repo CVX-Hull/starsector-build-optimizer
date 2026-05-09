@@ -398,7 +398,14 @@ class CombatResult:
 
 @dataclass(frozen=True)
 class MatchupConfig:
-    """Configuration for a single combat matchup. Used within a matchup queue."""
+    """Configuration for a single combat matchup. Used within a matchup queue.
+
+    `debug_dumps_enabled` opts the matchup into the high-volume Java
+    `[FIGHT_TICK]` per-second state dump. Default False for prep-scale runs
+    (50K+ matchups). One-shot SETUP `[SHIP_DUMP]` and `[WIN_DUMP]` lines are
+    always emitted regardless — they're bounded to ~4-8 lines per matchup
+    and load-bearing for any future loadout regression.
+    """
     matchup_id: str
     player_builds: tuple[BuildSpec, ...]
     enemy_variants: tuple[str, ...]
@@ -406,6 +413,7 @@ class MatchupConfig:
     time_mult: float = 3.0
     map_width: float = 24000.0
     map_height: float = 18000.0
+    debug_dumps_enabled: bool = False
 
 
 @dataclass(frozen=True)

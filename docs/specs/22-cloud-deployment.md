@@ -361,7 +361,7 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
 
 ### Cloud-init UserData
 
-`src/starsector_optimizer/cloud_userdata.py::render_user_data(worker_config, *, tailscale_authkey, debug_ssh_pubkey="") -> str` emits a bash payload that:
+`src/starsector_optimizer/cloud_userdata.py::render_user_data(worker_config, *, tailscale_authkey, debug_ssh_pubkey="", mod_jar_override_url="", mod_jar_override_sha256="") -> str` emits a bash payload that:
 
 1. `set -euo pipefail` + `umask 077` so every file created by the script is owner-read-only and any command failure halts the script before `systemctl start`.
 2. `tailscale up --auth-key=file:"$TS_AUTHKEY_FILE" --advertise-tags=tag:starsector-worker --accept-dns=false`. The authkey is written to a 0600 tmpfile (owner-only via `umask 077`), passed by path, then `shred -u`'d. Modern Tailscale CLI no longer supports `--authkey-stdin`; `--auth-key=file:` is the equivalent argv-free mechanism — only the path appears on `/proc/<pid>/cmdline`. **`--ssh` is intentionally not passed** (smoke #8 2026-05-09): it hijacks port 22 on the worker for tailscaled's identity-based SSH server, gates connections via the tailnet ACL, and a default-permissive personal tailnet still silent-denies SSH — so enabling it would shadow the regular sshd and prevent any operator access. Operator SSH instead goes through the optional debug-pubkey injection path described below.
@@ -369,9 +369,10 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
 4. Writes `/etc/starsector-worker.env` via a quoted heredoc with every `WorkerConfig` field mapped to `STARSECTOR_WORKER_<FIELD>` (every field in `dataclasses.fields(WorkerConfig)`, including the placeholder `worker_id=""`). Owner is `root:root`; mode `0600` is inherited from `umask 077`.
 5. `chown root:root /etc/starsector-worker.env`.
 6. **IMDSv2 WORKER_ID override block** (inserted between `chown` and `systemctl daemon-reload`; see §Worker ID resolution below). Fetches the live EC2 instance ID, overwrites the placeholder line in the env file. If IMDS is unreachable, `curl --fail` + `set -euo pipefail` halts the script BEFORE `systemctl start` — the worker never boots with `worker_id=""`.
-7. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
+7. **(Optional) JAR-overlay block.** When *both* `mod_jar_override_url` and `mod_jar_override_sha256` are non-empty, emits a `curl --fail | sha256sum --check | install -m 0644` block that downloads the JAR over the tailnet, verifies the digest, and overlays the AMI-baked `/opt/starsector/mods/combat-harness/jars/combat-harness.jar` before `systemctl start`. Fail-closed by design — any download error, digest mismatch, or chown failure halts boot via `set -euo pipefail` so workers never run against the wrong JAR. `_validate_jar_override` (called from `render_user_data`) raises `ValueError` if exactly one of the two values is set (no silent verification skip). Both empty → block is omitted entirely; the AMI-baked JAR runs unchanged. Caller side: `cloud_runner.run_cloud_study` reads `STARSECTOR_MOD_JAR_OVERRIDE_URL` + `STARSECTOR_MOD_JAR_OVERRIDE_SHA256` from `os.environ` and threads them through. Production runs leave both env vars unset; the Java-only fast-iteration loop populates them via `scripts/cloud/serve_mod_jar.sh --env`.
+8. `systemctl daemon-reload && systemctl start starsector-worker.service` (the service unit is baked into the AMI; see `scripts/cloud/packer/starsector-worker.service`).
 
-The renderer is a pure function — takes a frozen `WorkerConfig` + a string authkey + an optional debug pubkey, returns a string. No I/O. Lives in its own module (not `cloud_provider.py`) so providers other than AWS can reuse it.
+The renderer is a pure function — takes a frozen `WorkerConfig` + a string authkey + an optional debug pubkey + an optional URL/SHA pair, returns a string. No I/O. Lives in its own module (not `cloud_provider.py`) so providers other than AWS can reuse it.
 
 ### Worker ID resolution (IMDSv2)
 
@@ -398,7 +399,7 @@ Each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its 
 
 1. `_require_env` reads `STARSECTOR_WORKSTATION_TAILNET_IP`, `STARSECTOR_BEARER_TOKEN`, `STARSECTOR_TAILSCALE_AUTHKEY`, `STARSECTOR_PROJECT_TAG` — raises `ValueError` with remediation pointer if any missing.
 2. Constructs `WorkerConfig` with per-study bearer token (already in env), tailnet-based `redis_host` + `http_endpoint`, `worker_id=""` placeholder.
-3. Renders UserData via `render_user_data(worker_cfg, tailscale_authkey=authkey, debug_ssh_pubkey=os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip())`.
+3. Renders UserData via `render_user_data(worker_cfg, tailscale_authkey=authkey, debug_ssh_pubkey=os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip(), mod_jar_override_url=os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_URL", "").strip(), mod_jar_override_sha256=os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "").strip())`.
 4. Calls `provider.provision_fleet(fleet_name=study_id, project_tag=project_tag, ...)`.
 5. Enters `with CloudWorkerPool(...) as pool:` — Flask listener + janitor threads start.
 6. Runs Optuna study (`optimize_hull` loop).
@@ -426,6 +427,10 @@ STARSECTOR_BEARER_TOKEN=<fresh per-study token via token_factory(32)>
 STARSECTOR_TAILSCALE_AUTHKEY=<config.tailscale_authkey_secret>
 STARSECTOR_PROJECT_TAG=starsector-<config.name>
 STARSECTOR_CAMPAIGN_YAML=<resolved yaml path>
+# Optional pass-through to render_user_data — operator-set when populated:
+STARSECTOR_DEBUG_SSH_PUBKEY=<operator pubkey>          # operator SSH access
+STARSECTOR_MOD_JAR_OVERRIDE_URL=<tailnet jar URL>      # Java-only fast iteration
+STARSECTOR_MOD_JAR_OVERRIDE_SHA256=<sha256 hex>        # required when URL set; ValueError otherwise
 ```
 
 None of these are ever logged (`grep -En "logger.*env\|print.*env" src/starsector_optimizer/campaign.py` must be empty).

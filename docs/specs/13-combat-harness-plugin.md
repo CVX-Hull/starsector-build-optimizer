@@ -21,15 +21,28 @@ One matchup per mission. After `endCombat()`, Robot dismisses results, game retu
 1. Get `queue.get(0)` → `currentConfig` (single matchup per mission)
 2. Apply time multiplier: `engine.getTimeMult().modifyMult("harness", config.timeMult)`
 3. Create new DamageTracker, register via `engine.getListenerManager().addListener(tracker)`
-4. Collect ships deployed by MissionDefinition (player via `addFleetMember(side, member)` from a `VariantBuilder`-built variant; enemies via stock `addToFleet(variantId)`):
+4. Collect ships deployed by MissionDefinition (player via the
+   `addToFleet(stockVariant)` placeholder + `member.setVariant(custom, false, true)`
+   pre-deployment swap; enemies via stock `addToFleet(variantId)`):
    - Iterate `engine.getShips()`, skip fighters
    - Owner 0 → playerShips, Owner 1 → enemyShips
-5. Verify the deployed loadout against the spec by emitting a per-player-ship
+5. **Live ShipAPI CR override** (verified load-bearing 2026-05-10):
+   `member.getRepairTracker().setCR(spec.cr)` set on the FleetMemberAPI in
+   MissionDefinition does NOT propagate to the deployed `ShipAPI` —
+   `getCurrentCR()` returns 0.0, which triggers auto-retreat
+   (`isRetreating()=true`) and matchups end instantly with `winner=ENEMY,
+   dur=0`. Per player ship, call
+   `ship.setCurrentCR(spec.cr)` + `ship.setCRAtDeployment(spec.cr)` +
+   `ship.setRetreating(false, false)` (each in a `try { ... } catch (Throwable
+   ignored) {}` block — best-effort engine-API calls).
+6. Verify the deployed loadout against the spec by emitting a per-player-ship
    `LoadoutDiagnostic` (`spec_*` vs `live_*` for weapons / hullmods / flux
-   vents / flux capacitors). The variant was built pre-deployment in
-   `MissionDefinition` via `VariantBuilder.createFleetMember(spec)`, so every
-   field should match; the orchestrator WARNs on mismatch.
-6. **Engine-computed SETUP stats read (6 fields):** After deployment,
+   vents / flux capacitors). The variant was bound pre-deployment in
+   `MissionDefinition` via the addToFleet+setVariant swap, so every
+   field should match; the orchestrator WARNs on mismatch. The Java side is
+   silent on the success path (orchestrator's single LOADOUT_OK INFO is the
+   canonical signal); WARN here only on mismatch.
+7. **Engine-computed SETUP stats read (6 fields):** After deployment,
    read the player ship's effective post-hullmod stats via
    the engine's authoritative `MutableShipStats` accessors and
    cache on plugin fields for emission in the result JSON:
@@ -66,8 +79,14 @@ One matchup per mission. After `endCombat()`, Robot dismisses results, game retu
    (new 3 against vanilla 0.98a-RC8; see
    `docs/reference/phase5d-covariate-adjustment.md` §5 + the
    Phase-7-prep refactor plan).
-7. Record `spawnTime`. Set `contactMade = false`.
-8. Transition to FIGHTING
+8. **Bounded one-shot debug dump:** for every collected player + enemy
+   ship, append a `[SHIP_DUMP]` line to the per-matchup `currentDebugDumps`
+   accumulator (id / hull / owner / alive / retreat / hull-fraction / cr /
+   pos / maxFlux / dissipation / live-weapon-count / hasAI). Always-on
+   regardless of `debug_dumps_enabled` — bounded (≤ ship count, ≈4-8
+   lines per matchup) and load-bearing for any future loadout regression.
+9. Record `spawnTime`. Set `contactMade = false`.
+10. Transition to FIGHTING
 
 ### State: FIGHTING
 Per-frame:
@@ -78,13 +97,30 @@ Per-frame:
    - Else if `(now - spawnTime) > MAX_APPROACH_TIME (30s)` → force combat timer start (approach timeout for evasive AI)
 4. **Custom win detection:** Count alive non-fighter ships per side from tracked lists. If one side has zero → other side wins. If both zero → TIMEOUT.
 5. **Timeout check:** If `contactMade` and `(now - matchupStartTime) > timeLimitSeconds` → TIMEOUT
-6. On end:
-   - Build result via `ResultWriter.buildMatchupResult(..., currentEffMaxFlux, currentEffFluxDissipation, currentEffArmorRating, currentEffHullHpPct, currentBallisticRangeBonus, currentShieldDamageTakenMult)` — six trailing float args are the engine-computed SETUP stats from step SETUP.6
+6. **Opt-in `[FIGHT_TICK]` per-second state dump.** Gated on
+   `currentConfig.debugDumpsEnabled` (default false) — high-volume
+   (~10 lines/sec real time × matchup duration), so prep-scale runs leave
+   it off; smoke YAMLs and `scripts/cloud/loadout_ab_test.py` flip it on
+   for diagnosis. Every `HEARTBEAT_INTERVAL_FRAMES` frames, append a
+   `[FIGHT_TICK]` summary plus per-ship `[SHIP_DUMP_F]` lines to
+   `currentDebugDumps`.
+7. On end:
+   - Append a one-shot `[WIN_DUMP]` summary plus per-ship `[SHIP_DUMP_W]`
+     lines to `currentDebugDumps` (always-on; ~4-8 lines per matchup).
+   - Build result via `ResultWriter.buildMatchupResult(currentConfig,
+     playerShips, enemyShips, tracker, winner, elapsed,
+     currentEffMaxFlux, currentEffFluxDissipation, currentEffArmorRating,
+     currentEffHullHpPct, currentBallisticRangeBonus,
+     currentShieldDamageTakenMult, currentLoadoutDiagnosticPlayer,
+     currentDebugDumps)` — twelve trailing args carry the engine-computed
+     SETUP stats (six floats), the per-player-ship LoadoutDiagnostic
+     JSONArray, and the accumulated debug-dump JSONArray (emitted into
+     the result JSON's optional `debug_dumps` field only when non-empty).
    - Write results array + done signal via `ResultWriter.writeAllResults()` + `ResultWriter.writeDoneSignal()`
    - Unregister DamageTracker
    - **Launch Robot dismiss thread** (must happen before `endCombat()` — see note below)
    - `engine.setDoNotEndCombat(false)` then `engine.endCombat(0f, winnerSide)`
-7. Transition to DONE
+8. Transition to DONE
 
 **Timer logic:** The time limit only counts combat time, not approach time. Ships may take several seconds to fly toward each other after spawning. If one side is evasive and never engages, the 30-second approach timeout forces the combat timer to start anyway.
 
@@ -138,9 +174,9 @@ documented so downstream analysis does not mistake them for bugs and
 Phase 7's self-correcting mixture can absorb the resulting evidence.
 
 1. **Weapon groups are engine-generated.** `VariantBuilder.createVariant`
-   calls `variant.autoGenerateWeaponGroups()` (`VariantBuilder.java:48`)
-   after wiring weapons + hullmods, so the deployed ship gets engine-
-   default groups. `BuildSpec` carries no group metadata, so the Python side cannot
+   calls `variant.autoGenerateWeaponGroups()` after wiring weapons +
+   hullmods, so the deployed ship gets engine-default groups.
+   `BuildSpec` carries no group metadata, so the Python side cannot
    specify `autofire` (off for ammo-limited missiles),
    `mode = ALTERNATING` (expensive ballistics), or cross-weapon
    grouping (flux-balanced firing patterns). Stock `.variant` files
@@ -265,10 +301,23 @@ When the iterator is drained, call `finishAndExit`.
 The `optimizer_arena` mission's `defineMission` checks for the
 sentinel file:
 - If present: add a minimal stub — player-side `wolf`, enemy-side
-  `lasher` — via `addFleetMember`. Pre-Commit-G stubs included more
-  hulls to seed the old 4-representative probe; schema v2 renders
-  that obsolete because the plugin drives per-hull spawning.
-- If absent: normal combat branch (stock variants + AI).
+  `lasher` — via `addFleetMember` (each constructed via
+  `Global.getSettings().createFleetMember(...)` from an empty variant).
+  Pre-Commit-G stubs included more hulls to seed the old
+  4-representative probe; schema v2 renders that obsolete because the
+  plugin drives per-hull spawning.
+- If absent: normal combat branch. **Player path (V2, 2026-05-10):** for
+  each `BuildSpec`, look up any stock variant id starting with
+  `hullId + "_"` as a placeholder and call `addToFleet(side,
+  stockVariant, FleetMemberType.SHIP, stockVariant, false)`; on the
+  returned `FleetMemberAPI`, swap to the custom variant via
+  `member.setVariant(VariantBuilder.createVariant(spec), false, true)`
+  and set fleet-member CR via `member.getRepairTracker().setCR(spec.cr)`.
+  An earlier V1 path that called `addFleetMember(side, member)` with a
+  pre-built `VariantBuilder.createFleetMember(spec)` was reverted —
+  ships deployed via that path boot with `retreat=true` set internally
+  and `setRetreating(false, false)` cannot override (smoke #15-#17,
+  2026-05-09). Enemy path: stock `addToFleet(variantId, ...)` unchanged.
 
 ### ManifestDumper API
 

@@ -36,7 +36,6 @@ import os
 import secrets
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
 import redis
 
@@ -99,6 +98,11 @@ def _make_matchup(build: BuildSpec, run_idx: int) -> MatchupConfig:
         # time_mult=5 means in-game-time = 5*real, so 300s in-game = 60s real.
         time_limit_seconds=300.0,
         time_mult=5.0,
+        # This script is the loadout regression target — opt in to
+        # FIGHT_TICK so [SHIP_DUMP_F] timelines are available if a
+        # matchup ends in <2s with hp_diff=0 (the smoke-#15 retreat
+        # signature). Bounded volume — 6 matchups total.
+        debug_dumps_enabled=True,
     )
 
 
@@ -217,8 +221,8 @@ def main() -> int:
                         r = fut.result()
                         results.append((m, r))
                         logger.info("got result %s", m.matchup_id)
-                    except Exception as e:
-                        logger.error("matchup %s failed: %s", m.matchup_id, e)
+                    except Exception:
+                        logger.exception("matchup %s failed", m.matchup_id)
 
         print()
         print("=" * 100)
@@ -248,8 +252,8 @@ def main() -> int:
             provider.terminate_fleet(
                 fleet_name=study_id, project_tag=project_tag,
             )
-        except Exception as e:
-            logger.error("terminate_fleet failed: %s", e)
+        except Exception:
+            logger.exception("terminate_fleet failed for study=%s", study_id)
 
 
 if __name__ == "__main__":

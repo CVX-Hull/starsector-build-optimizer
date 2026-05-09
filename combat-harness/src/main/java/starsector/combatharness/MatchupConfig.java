@@ -25,10 +25,20 @@ public class MatchupConfig {
     public final float timeMult;
     public final float mapWidth;
     public final float mapHeight;
+    /**
+     * Opt-in per-tick debug emission. When false (default), CombatHarnessPlugin
+     * skips the high-volume FIGHT_TICK + per-tick SHIP_DUMP block during
+     * doFighting. SETUP SHIP_DUMP and one-shot WIN_DUMP remain always-on —
+     * those are bounded to ~4-8 lines per matchup and load-bearing for any
+     * future loadout regression. Smoke YAMLs flip this on; prep-scale runs
+     * (50K+ matchups) leave it off to avoid multi-million log lines.
+     */
+    public final boolean debugDumpsEnabled;
 
     private MatchupConfig(String matchupId, BuildSpec[] playerBuilds, String[] enemyVariants,
                           float timeLimitSeconds, float timeMult,
-                          float mapWidth, float mapHeight) {
+                          float mapWidth, float mapHeight,
+                          boolean debugDumpsEnabled) {
         this.matchupId = matchupId;
         this.playerBuilds = playerBuilds;
         this.enemyVariants = enemyVariants;
@@ -36,6 +46,7 @@ public class MatchupConfig {
         this.timeMult = timeMult;
         this.mapWidth = mapWidth;
         this.mapHeight = mapHeight;
+        this.debugDumpsEnabled = debugDumpsEnabled;
     }
 
     public static MatchupConfig fromJSON(JSONObject json) throws JSONException {
@@ -76,8 +87,11 @@ public class MatchupConfig {
             throw new IllegalArgumentException("map_height must be > 0");
         }
 
+        boolean debugDumpsEnabled = json.optBoolean("debug_dumps_enabled", false);
+
         return new MatchupConfig(matchupId, playerBuilds, enemyVariants,
-                timeLimitSeconds, timeMult, mapWidth, mapHeight);
+                timeLimitSeconds, timeMult, mapWidth, mapHeight,
+                debugDumpsEnabled);
     }
 
     public JSONObject toJSON() throws JSONException {
@@ -93,6 +107,9 @@ public class MatchupConfig {
         json.put("time_mult", timeMult);
         json.put("map_width", mapWidth);
         json.put("map_height", mapHeight);
+        if (debugDumpsEnabled) {
+            json.put("debug_dumps_enabled", true);
+        }
         return json;
     }
 

@@ -516,17 +516,15 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             else if (ship.getOwner() == 1) enemyShips.add(ship);
         }
 
-        // Force per-ship CR + clear any auto-set retreat. Even though
-        // VariantBuilder.createFleetMember sets `member.getRepairTracker().setCR(spec.cr)`
-        // BEFORE the deployment screen, the deployed `ShipAPI` does NOT
-        // inherit that — it deploys at `getCurrentCR()=0.0` (verified
-        // 2026-05-09 via [SHIP_DUMP] dumps after the addFleetMember refactor).
+        // Force per-ship CR + clear any auto-set retreat. MissionDefinition's
+        // V2 setup path sets `member.getRepairTracker().setCR(spec.cr)` on
+        // the FleetMemberAPI BEFORE the deployment screen, but the deployed
+        // `ShipAPI` does NOT inherit that value — it deploys at
+        // `getCurrentCR()=0.0` (verified 2026-05-09 via [SHIP_DUMP] dumps).
         // CR=0 triggers auto-retreat: `ship.isRetreating()` returns true at
         // SETUP, the AI immediately heads for the deploy point, and the
         // matchup ends instantly with `winner=ENEMY, dur=0`. Setting CR live
-        // on the deployed ShipAPI clears this — the OLD addToFleet path
-        // worked because doSetup also did this; my 2026-05-10 refactor
-        // dropped the calls assuming FleetMember CR propagated. It doesn't.
+        // on the deployed ShipAPI here clears that.
         for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
             ShipAPI s = playerShips.get(i);
             float cr = currentConfig.playerBuilds[i].cr;
@@ -557,15 +555,15 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             try {
                 JSONObject diag = buildLoadoutDiagnostic(ship, spec);
                 currentLoadoutDiagnosticPlayer.put(diag);
-                log.info("[LOADOUT_DBG] matchup=" + currentConfig.matchupId
-                        + " ship=" + diag.optString("fleet_member_id", "?")
-                        + " weapons_match=" + diag.optBoolean("weapons_match", false)
-                        + " hullmods_match=" + diag.optBoolean("hullmods_match", false)
-                        + " flux_vents_match=" + diag.optBoolean("flux_vents_match", false)
-                        + " flux_capacitors_match=" + diag.optBoolean("flux_capacitors_match", false));
+                // Success path is silent on Java side — orchestrator emits a
+                // single LOADOUT_OK INFO per matchup once it parses the
+                // diagnostic block. WARN here only on mismatch (the
+                // actionable case).
                 if (!diag.optBoolean("weapons_match", false)
                         || !diag.optBoolean("hullmods_match", false)) {
-                    log.warn("[LOADOUT_DBG] mismatch detail: spec_weapons="
+                    log.warn("[LOADOUT_DBG] matchup=" + currentConfig.matchupId
+                            + " ship=" + diag.optString("fleet_member_id", "?")
+                            + " mismatch spec_weapons="
                             + diag.opt("spec_weapons") + " live_weapons="
                             + diag.opt("live_weapons") + " spec_hullmods="
                             + diag.opt("spec_hullmods") + " live_hullmods="
@@ -664,12 +662,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         float elapsed = contactMade ? engine.getTotalElapsedTime(false) - matchupStartTime : 0f;
         boolean timedOut = contactMade && elapsed > currentConfig.timeLimitSeconds;
 
-        // [FIGHT_TICK] periodic per-frame state dump while combat runs. Every
-        // 60 frames (≈1s wall) dumps every tracked ship's alive/retreat/CR/hp
-        // state so we can see what changes between SETUP and the moment a
-        // matchup ends with `dur=0` + `hp_diff=0`. Independent of the regular
-        // heartbeat (which only logs aggregate counts).
-        if (frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
+        // [FIGHT_TICK] periodic per-frame state dump while combat runs.
+        // Volumous (≈10 lines/sec real time × matchup duration), so gated
+        // behind MatchupConfig.debug_dumps_enabled — opt-in for smoke / repro
+        // runs, off by default for prep-scale studies. SETUP SHIP_DUMP and
+        // one-shot WIN_DUMP below remain always-on (bounded one-shot volume,
+        // load-bearing for any future loadout regression).
+        if (currentConfig.debugDumpsEnabled
+                && frameCount % HEARTBEAT_INTERVAL_FRAMES == 0) {
             recordDebug("[FIGHT_TICK] frame=" + frameCount
                     + " contactMade=" + contactMade
                     + " elapsed=" + elapsed

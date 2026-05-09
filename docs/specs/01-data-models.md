@@ -218,9 +218,12 @@ class MatchupConfig:
     time_mult: float = 3.0
     map_width: float = 24000.0
     map_height: float = 18000.0
+    debug_dumps_enabled: bool = False
 ```
 
 Player ships are specified as inline `BuildSpec` objects (constructed programmatically by the Java harness). Enemy ships remain as stock variant ID strings (loaded from `.variant` files at game startup).
+
+`debug_dumps_enabled` is opt-in for high-volume Java `[FIGHT_TICK]` per-second state dumps. Default `False` for prep-scale runs (50K+ matchups). Smoke YAMLs and `scripts/cloud/loadout_ab_test.py` flip it on. Bounded `[SHIP_DUMP]` (SETUP) and one-shot `[WIN_DUMP]` (matchup end) lines are emitted regardless. See spec 13 SETUP / FIGHTING.
 
 ### EngineStats
 

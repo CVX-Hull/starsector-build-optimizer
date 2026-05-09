@@ -15,7 +15,7 @@ The optimizer evaluates ship builds by running AI-vs-AI combat in parallel Stars
 3. **Launcher click** — `xdotool` clicks "Play Starsector" on the Swing launcher window
 4. **Title screen** — `TitleScreenPlugin` waits ~2s for stability, then triggers `MenuNavigator`
 5. **Menu navigation** — `java.awt.Robot` clicks through: Missions → scroll → Optimizer Arena → Play Mission (~5s of Thread.sleep delays)
-6. **MissionDefinition** runs — reads queue from `saves/common/`, builds each player ship's variant from the BuildSpec via `VariantBuilder.createFleetMember(spec)` and adds via `addFleetMember()`; enemy ships use stock variant IDs via `addToFleet()`
+6. **MissionDefinition** runs — reads queue from `saves/common/`. For each player BuildSpec: deploy a stock placeholder via `addToFleet(side, anyStockVariantForHull, FleetMemberType.SHIP, fleetMemberId, false)`, then on the returned `FleetMemberAPI` swap to the optimizer-generated variant via `member.setVariant(VariantBuilder.createVariant(spec), false, true)` BEFORE the deployment screen processes the fleet. Enemy ships use stock variant IDs via `addToFleet()`. (V2 path, 2026-05-10 — earlier `addFleetMember(side, member)` path tripped a retreat=true bug; see spec 13 § MissionDefinition branching.)
 7. **CombatHarnessPlugin** state machine: INIT → SETUP → FIGHTING → DONE → WAITING
 8. **SETUP** — collects deployed `ShipAPI`s, emits `LoadoutDiagnostic` (verifies the live loadout matches the spec), reads engine-truth covariates
 9. **After matchup** — writes results + done signal, calls `endCombat()`, Robot dismisses results screen
@@ -152,7 +152,7 @@ Instead of killing the game after each matchup, the game stays running and Title
 INIT → SETUP → FIGHTING → (Robot thread + endCombat()) → DONE → WAITING → TitleScreenPlugin restarts
 ```
 
-Build specs arrive as JSON in the queue and are materialized into a `ShipVariantAPI` pre-deployment by `VariantBuilder.createFleetMember(spec)` in `MissionDefinition`; the deployed `ShipAPI` carries the correct weapons + hullmods from the start.
+Build specs arrive as JSON in the queue and are materialized into a `ShipVariantAPI` by `VariantBuilder.createVariant(spec)` in `MissionDefinition`. The deployment dance avoids `addFleetMember`'s retreat=true bug: deploy a stock placeholder via `addToFleet`, then `member.setVariant(custom, false, true)` swaps in the optimizer-generated variant before the deployment screen processes the fleet — the deployed `ShipAPI` carries the correct weapons + hullmods from the start. (V2 path, 2026-05-10.)
 
 **Engine state accumulation concerns:**
 - `FleetManager.getAllEverDeployedCopy()` accumulates across matchups (confirmed). We track ships directly and don't use this method, so it's not a functional issue, but memory grows.
@@ -320,7 +320,7 @@ Player builds are constructed programmatically. Enemy variants (stock opponents)
 INIT → SETUP → FIGHTING → DONE → endCombat() → Robot dismisses results → TitleScreenPlugin restarts
 ```
 
-1. Single matchup per mission — `MissionDefinition` builds each player ship via `VariantBuilder.createFleetMember(spec)` + `addFleetMember(side, member)`; enemies via stock `addToFleet(variantId)`
+1. Single matchup per mission — `MissionDefinition` deploys each player ship via the V2 placeholder-then-swap pattern (`addToFleet(stockVariant)` + `member.setVariant(VariantBuilder.createVariant(spec), false, true)`); enemies via stock `addToFleet(variantId)`. The earlier `addFleetMember(side, member)` path tripped a retreat=true bug — see spec 13.
 2. Plugin verifies the deployed loadout against the spec via `LoadoutDiagnostic` (no mid-combat variant mutation)
 3. After matchup: write results + done signal, call `engine.endCombat()`
 4. Robot clicks Continue (963,892) and high score OK (1119,611) to dismiss results screen

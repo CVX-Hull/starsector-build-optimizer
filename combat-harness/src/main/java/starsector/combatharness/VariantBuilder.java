@@ -3,12 +3,8 @@ package starsector.combatharness;
 import java.util.Map;
 
 import com.fs.starfarer.api.Global;
-import com.fs.starfarer.api.combat.ShipVariantAPI;
-import com.fs.starfarer.api.fleet.FleetMemberAPI;
-import com.fs.starfarer.api.fleet.FleetMemberType;
-import com.fs.starfarer.api.loading.HullModSpecAPI;
-import com.fs.starfarer.api.loading.WeaponSpecAPI;
 import com.fs.starfarer.api.combat.ShipHullSpecAPI;
+import com.fs.starfarer.api.combat.ShipVariantAPI;
 
 /**
  * Constructs ShipVariantAPI objects programmatically from BuildSpec data.
@@ -16,9 +12,15 @@ import com.fs.starfarer.api.combat.ShipHullSpecAPI;
  */
 public class VariantBuilder {
 
-
     /**
      * Create a ShipVariantAPI in memory from a build specification.
+     *
+     * <p>Used by MissionDefinition's V2 setup path: a stock variant placeholder
+     * is added via addToFleet, then the returned FleetMemberAPI's variant is
+     * swapped to this custom one via setVariant before deployment. The earlier
+     * createFleetMember + addFleetMember helper is gone because addFleetMember
+     * triggers an internal retreat=true on the deployed ship that no public API
+     * call overrides — see MissionDefinition.defineMission for the rationale.
      *
      * @param spec build specification with hull, weapons, hullmods, flux
      * @return fully configured ShipVariantAPI
@@ -48,19 +50,5 @@ public class VariantBuilder {
         variant.autoGenerateWeaponGroups();
 
         return variant;
-    }
-
-    /**
-     * Create a FleetMemberAPI from a build specification.
-     * Sets CR to max so the ship deploys combat-ready.
-     *
-     * @param spec build specification
-     * @return FleetMemberAPI wrapping the programmatically created variant, at max CR
-     */
-    public static FleetMemberAPI createFleetMember(MatchupConfig.BuildSpec spec) {
-        ShipVariantAPI variant = createVariant(spec);
-        FleetMemberAPI member = Global.getSettings().createFleetMember(FleetMemberType.SHIP, variant);
-        member.getRepairTracker().setCR(spec.cr);
-        return member;
     }
 }

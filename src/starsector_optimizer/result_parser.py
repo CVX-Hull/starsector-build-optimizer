@@ -129,7 +129,7 @@ def parse_results_file(path: Path) -> list[CombatResult]:
 
 
 def _matchup_to_dict(mc: MatchupConfig) -> dict:
-    return {
+    out: dict = {
         "matchup_id": mc.matchup_id,
         "player_builds": [
             {
@@ -149,6 +149,9 @@ def _matchup_to_dict(mc: MatchupConfig) -> dict:
         "map_width": mc.map_width,
         "map_height": mc.map_height,
     }
+    if mc.debug_dumps_enabled:
+        out["debug_dumps_enabled"] = True
+    return out
 
 
 def write_queue_file(matchups: list[MatchupConfig], path: Path) -> None:

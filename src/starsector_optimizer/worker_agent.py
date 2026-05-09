@@ -360,6 +360,7 @@ def _load_matchup(matchup_dict: dict[str, Any]) -> MatchupConfig:
         enemy_variants=tuple(matchup_dict["enemy_variants"]),
         time_limit_seconds=float(matchup_dict["time_limit_seconds"]),
         time_mult=float(matchup_dict["time_mult"]),
+        debug_dumps_enabled=bool(matchup_dict.get("debug_dumps_enabled", False)),
     )
 
 

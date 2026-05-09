@@ -107,7 +107,7 @@ member.getRepairTracker().setCR(0.7f);  // Must set CR explicitly — defaults t
 
 **CR pitfall:** `createFleetMember()` creates members at CR=0. `getRepairTracker().getMaxCR()` also returns 0 before the engine fully initializes the member. Use a hardcoded 0.7f (standard deployment CR). Without this, ships deploy disabled and are instantly destroyed.
 
-**Retreat pitfall:** Ships added to missions via `api.addFleetMember(side, member)` enter combat in retreat mode (`isRetreating()=true`). The engine overrides `setRetreating(false, false)` on the next frame. Workaround: use `addToFleet()` with a stock placeholder variant for the deployment screen, then remove placeholders and spawn real builds via `spawnFleetMember()` in the plugin.
+**Retreat pitfall:** Ships added to missions via `api.addFleetMember(side, member)` boot with `retreat=true` set internally and `setRetreating(false, false)` cannot override (smoke #15-#17, 2026-05-09 — matchups end in <2s with `winner=ENEMY, dur=0`). `spawnFleetMember()` mid-combat hits the same bug. **V2 working pattern (2026-05-10):** call `addToFleet(side, anyStockVariantIdForHull, FleetMemberType.SHIP, fleetMemberId, false)` to deploy a placeholder, then on the returned `FleetMemberAPI` call `member.setVariant(VariantBuilder.createVariant(spec), false, true)` BEFORE the deployment screen processes the fleet — the variant swap propagates to the deployed `ShipAPI` because it happens pre-deployment. Set CR via `member.getRepairTracker().setCR(spec.cr)`. **Then** in the plugin's combat-init hook, also set CR live on the deployed `ShipAPI` (`ship.setCurrentCR(cr)` + `ship.setCRAtDeployment(cr)` + `ship.setRetreating(false, false)`) — `getCurrentCR()` does NOT inherit from the FleetMember's repair tracker, deploys at 0.0, and CR=0 triggers auto-retreat.
 
 ### Ship Spawning Mid-Combat
 ```java
@@ -115,11 +115,17 @@ member.getRepairTracker().setCR(0.7f);  // Must set CR explicitly — defaults t
 ShipAPI ship = engine.getFleetManager(FleetSide.PLAYER)
     .spawnShipOrWing(variantId, new Vector2f(x, y), facing);
 
-// Programmatic variants by FleetMemberAPI:
-FleetMemberAPI member = VariantBuilder.createFleetMember(spec);
-ShipAPI ship = engine.getFleetManager(FleetSide.PLAYER)
-    .spawnFleetMember(member, new Vector2f(x, y), facing, 0f);
-// Must call ensureCombatReady(ship) after — CR may still be 0
+// Programmatic variants — V2 path (works around the addFleetMember/spawnFleetMember
+// retreat bug). Build the variant in memory, deploy a stock placeholder via
+// addToFleet, then setVariant-swap before deployment:
+ShipVariantAPI variant = VariantBuilder.createVariant(spec);
+FleetMemberAPI member = api.addToFleet(
+    FleetSide.PLAYER, stockVariantId, FleetMemberType.SHIP, stockVariantId, false);
+member.setVariant(variant, false, true);
+member.getRepairTracker().setCR(spec.cr);
+// Then in doSetup: ship.setCurrentCR(cr) + setCRAtDeployment(cr) +
+// setRetreating(false, false) per ShipAPI — the deployed ship does NOT
+// inherit CR from the FleetMember's repair tracker.
 ```
 Returns `ShipAPI` directly — track these references instead of using fleet manager queries (which accumulate across batched matchups).
 
@@ -211,7 +217,7 @@ When building search spaces for optimization, filter out:
 - `spawnFleetMember()` mid-combat ALWAYS sets `directRetreat=true` on the spawned ship at a level below the public API.
 - Tried and failed: `setDirectRetreat(false)`, `clearTasks()`, `reassign()`, `setPreventFullRetreat(true)`, `setCanForceShipsToEngageWhenBattleClearlyLost(true)`, no-op `AdmiralAIPlugin`, per-frame `setRetreating(false,false)`, `setMaxStrength()`. None override the internal retreat.
 - `spawnShipOrWing(variantId)` does NOT work with programmatic variants — `createEmptyVariant()` does not register them for lookup.
-- **Working approach**: build the variant pre-deployment with `VariantBuilder.createFleetMember(spec)` and add via `MissionDefinitionAPI.addFleetMember(side, member)` — same path the manifest probe uses for its stub. Trying to load a stock variant via `addToFleet()` and then `variant.clear()` + `addWeapon()`/`addMod()` mid-combat does NOT work: physical `WeaponAPI` instances are bound at deployment, and post-deployment `ShipVariantAPI` mutations don't back-propagate (`ship.getAllWeapons()` returns `[]` even though `getNonBuiltInWeaponSlots()` reflects the swap). Flux vents/caps DO propagate because they're read live from `MutableShipStatsAPI` — that asymmetry hid the bug for a while; the per-ship `LoadoutDiagnostic` (`weapons_match` / `hullmods_match`) is the canary that caught it.
+- **Working approach (V2, 2026-05-10)**: deploy a stock placeholder via `addToFleet(side, anyStockVariantIdForHull, FleetMemberType.SHIP, fleetMemberId, false)`, then on the returned `FleetMemberAPI` call `member.setVariant(VariantBuilder.createVariant(spec), false, true)` BEFORE the deployment screen processes the fleet. The pre-deployment swap propagates to the deployed `ShipAPI` correctly. **Followed by** a live CR override in the plugin's `doSetup` (the deployed ship doesn't inherit FleetMember CR; `getCurrentCR()=0` triggers auto-retreat). An earlier V1 attempt (`VariantBuilder.createFleetMember(spec)` + `addFleetMember(side, member)`) tripped the same retreat bug as `spawnFleetMember`. An even earlier attempt loaded a stock variant via `addToFleet()` and then `variant.clear()` + `addWeapon()`/`addMod()` mid-combat — that did NOT work because physical `WeaponAPI` instances are bound at deployment, and post-deployment `ShipVariantAPI` mutations don't back-propagate (`ship.getAllWeapons()` returned `[]` even though `getNonBuiltInWeaponSlots()` reflected the swap). Flux vents/caps DO propagate because they're read live from `MutableShipStatsAPI` — that asymmetry hid the bug for a while; the per-ship `LoadoutDiagnostic` (`weapons_match` / `hullmods_match`) is the canary that caught it.
 - **Consequence**: Single matchup per mission. After each fight: Robot dismiss thread launched → `endCombat()` → Robot dismisses results → TitleScreenPlugin restarts mission with new queue. Robot must launch before `endCombat()` because engine stops calling `advance()` immediately after.
 
 ### MenuNavigator Coordinates (1920x1080 Xvfb fullscreen)

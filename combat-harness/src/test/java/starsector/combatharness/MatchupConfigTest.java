@@ -169,6 +169,31 @@ class MatchupConfigTest {
     }
 
     @Test
+    void debugDumpsEnabledDefaultsFalse() throws Exception {
+        MatchupConfig config = MatchupConfig.fromJSON(validJSON());
+        assertFalse(config.debugDumpsEnabled);
+    }
+
+    @Test
+    void debugDumpsEnabledTrueRoundTrips() throws Exception {
+        JSONObject json = validJSON();
+        json.put("debug_dumps_enabled", true);
+        MatchupConfig config = MatchupConfig.fromJSON(json);
+        assertTrue(config.debugDumpsEnabled);
+        // toJSON only emits the key when true (smaller wire format on the
+        // common-case false path).
+        JSONObject roundTripped = config.toJSON();
+        assertTrue(roundTripped.optBoolean("debug_dumps_enabled", false));
+    }
+
+    @Test
+    void debugDumpsEnabledFalseOmittedFromJSON() throws Exception {
+        MatchupConfig config = MatchupConfig.fromJSON(validJSON());
+        JSONObject roundTripped = config.toJSON();
+        assertFalse(roundTripped.has("debug_dumps_enabled"));
+    }
+
+    @Test
     void roundTrip() throws Exception {
         JSONObject json = validJSON();
         json.put("time_mult", 4.0);

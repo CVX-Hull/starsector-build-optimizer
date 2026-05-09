@@ -243,8 +243,11 @@ class CloudWorkerPool(EvaluatorPool):
                     return jsonify({"status": "duplicate"}), 409
                 try:
                     parsed = _dict_to_combat_result(body.get("result", {}))
-                except Exception as e:
-                    logger.error("failed to parse result: %s", e)
+                except Exception:
+                    logger.exception(
+                        "failed to parse result body for matchup_id=%s",
+                        matchup_id,
+                    )
                     return jsonify({"error": "bad result"}), 400
                 self._results[matchup_id] = parsed
                 _log_loadout_diagnostics(matchup_id, parsed)
@@ -343,6 +346,6 @@ class CloudWorkerPool(EvaluatorPool):
                     self._visibility_timeout_seconds,
                     self._max_requeues,
                 )
-            except Exception as e:
-                logger.error("janitor pass failed: %s", e)
+            except Exception:
+                logger.exception("janitor pass failed for study=%s", self._study_id)
             self._stop_event.wait(timeout=self._janitor_interval_seconds)
