@@ -30,8 +30,25 @@ One matchup per mission. After `endCombat()`, Robot dismisses results, game retu
 4. Collect ships deployed by MissionDefinition (player via the
    `addToFleet(stockVariant)` placeholder + `member.setVariant(custom, false, true)`
    pre-deployment swap; enemies via stock `addToFleet(variantId)`):
+   - Build `expectedVariantIds = {spec.variantId for spec in
+     currentConfig.playerBuilds}`
    - Iterate `engine.getShips()`, skip fighters
-   - Owner 0 → playerShips, Owner 1 → enemyShips
+   - Owner 0 ship is collected ONLY if its live `getHullVariantId()` is
+     in `expectedVariantIds`; other owner-0 ships are counted as
+     `staleOwnerZero` and dropped (cross-trial leak guard — see
+     `docs/reports/2026-05-09-wave0-validation.md` §3.4 for the
+     forensics that motivated this filter).
+   - Owner 1 → enemyShips
+   - If matched player count < `playerBuilds.length`, increment
+     `setupVariantWaitFrames` and `return` without state transition
+     (re-entrant defer — the engine's deployment screen has not yet
+     swapped the new spec ships in). Log `[V2_SETUP_DEFER]` on the
+     first frame and every 60th frame. If
+     `setupVariantWaitFrames > SETUP_VARIANT_WAIT_FRAMES (600, ~10s
+     at 60fps)`, log `[V2_SETUP_TIMEOUT]`, finalize a synthetic
+     `winner=TIMEOUT` matchup result via the same end-of-match
+     path as FIGHTING (write result + done signal + Robot dismiss
+     thread + endCombat), and transition to DONE.
 5. **Live ShipAPI CR override** (verified load-bearing 2026-05-10):
    `member.getRepairTracker().setCR(spec.cr)` set on the FleetMemberAPI in
    MissionDefinition does NOT propagate to the deployed `ShipAPI` —
@@ -149,6 +166,7 @@ Per-frame (while engine still calls `advance()`):
 private static final String SHUTDOWN_FILE = MatchupConfig.COMMON_PREFIX + "shutdown";
 private static final int WAITING_TIMEOUT_FRAMES = 3600;
 private static final int HEARTBEAT_INTERVAL_FRAMES = 60;
+private static final int SETUP_VARIANT_WAIT_FRAMES = 600;
 private static final float MAX_APPROACH_TIME = 30f;
 ```
 

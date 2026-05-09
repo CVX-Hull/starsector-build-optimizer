@@ -557,7 +557,16 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                         + " never saw expected variant ids " + expectedVariantIds
                         + " in engine.getShips() after "
                         + SETUP_VARIANT_WAIT_FRAMES + " frames; aborting matchup.");
-                state = State.DONE;
+                // Write a synthetic TIMEOUT result + done signal + Robot
+                // dismiss + endCombat so the orchestrator gets a clean
+                // failed-matchup row instead of waiting on the worker's
+                // 60s WAITING idle timer to System.exit. Same end-of-match
+                // ordering as the win path in doFighting.
+                recordDebug("[SETUP_TIMEOUT_DUMP] matchup=" + currentConfig.matchupId
+                        + " expected=" + expectedVariantIds
+                        + " stale_owner0=" + staleOwnerZero
+                        + " wait_frames=" + setupVariantWaitFrames);
+                finalizeMatchup("TIMEOUT", 0f);
             }
             return;
         }
@@ -792,45 +801,64 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             for (ShipAPI s : playerShips) dumpShipState("PLAYER_W", s);
             for (ShipAPI s : enemyShips) dumpShipState("ENEMY_W ", s);
 
-            JSONArray results = new JSONArray();
-            try {
-                results.put(ResultWriter.buildMatchupResult(
-                        currentConfig, playerShips, enemyShips,
-                        currentTracker, winner, elapsed,
-                        currentEffMaxFlux, currentEffFluxDissipation,
-                        currentEffArmorRating,
-                        currentEffHullHpPct, currentBallisticRangeBonus,
-                        currentShieldDamageTakenMult,
-                        currentLoadoutDiagnosticPlayer,
-                        currentDebugDumps));
-                ResultWriter.writeAllResults(results);
-                ResultWriter.writeDoneSignal();
-                log.info("Matchup " + currentConfig.matchupId
-                        + " complete: winner=" + winner + ", duration=" + elapsed + "s");
-            } catch (Exception e) {
-                log.error("Failed to write result", e);
-            }
-
-            engine.getListenerManager().removeListener(currentTracker);
-
-            // Launch Robot dismiss thread BEFORE endCombat — the engine may stop
-            // calling advance() after endCombat, so doDone() might never execute.
-            new Thread(new Runnable() {
-                public void run() {
-                    MenuNavigator.dismissResults();
-                }
-            }).start();
-            log.info("Robot restart thread launched");
-
-            // End combat — game shows mission results screen
-            engine.setDoNotEndCombat(false);
-            FleetSide winnerSide = "PLAYER".equals(winner) ? FleetSide.PLAYER : FleetSide.ENEMY;
-            engine.endCombat(0f, winnerSide);
-            log.info("endCombat called — awaiting mission results screen");
-
-            waitingFrameCount = 0;
-            state = State.DONE;
+            finalizeMatchup(winner, elapsed);
         }
+    }
+
+    /**
+     * Write a single-matchup result + done signal, launch the Robot dismiss
+     * thread, and call endCombat — in that order. Shared by the doFighting
+     * win/timeout path and the doSetup V2_SETUP_TIMEOUT abort path; both
+     * must satisfy the spec-13 end-of-match contract (result row visible to
+     * the orchestrator before the worker re-enters WAITING) so that a
+     * timed-out setup doesn't appear to the orchestrator as a worker
+     * crash.
+     *
+     * `currentTracker` may be null in the SETUP_TIMEOUT case (we abort
+     * before allocating it); the listener-removal call is guarded.
+     * `playerShips`/`enemyShips` are empty in that case, which the
+     * builder handles (empty per-ship arrays + zero aggregates).
+     */
+    private void finalizeMatchup(String winner, float duration) {
+        JSONArray results = new JSONArray();
+        try {
+            results.put(ResultWriter.buildMatchupResult(
+                    currentConfig, playerShips, enemyShips,
+                    currentTracker, winner, duration,
+                    currentEffMaxFlux, currentEffFluxDissipation,
+                    currentEffArmorRating,
+                    currentEffHullHpPct, currentBallisticRangeBonus,
+                    currentShieldDamageTakenMult,
+                    currentLoadoutDiagnosticPlayer,
+                    currentDebugDumps));
+            ResultWriter.writeAllResults(results);
+            ResultWriter.writeDoneSignal();
+            log.info("Matchup " + currentConfig.matchupId
+                    + " complete: winner=" + winner + ", duration=" + duration + "s");
+        } catch (Exception e) {
+            log.error("Failed to write result", e);
+        }
+
+        if (currentTracker != null) {
+            engine.getListenerManager().removeListener(currentTracker);
+        }
+
+        // Launch Robot dismiss thread BEFORE endCombat — the engine may stop
+        // calling advance() after endCombat, so doDone() might never execute.
+        new Thread(new Runnable() {
+            public void run() {
+                MenuNavigator.dismissResults();
+            }
+        }).start();
+        log.info("Robot restart thread launched");
+
+        engine.setDoNotEndCombat(false);
+        FleetSide winnerSide = "PLAYER".equals(winner) ? FleetSide.PLAYER : FleetSide.ENEMY;
+        engine.endCombat(0f, winnerSide);
+        log.info("endCombat called — awaiting mission results screen");
+
+        waitingFrameCount = 0;
+        state = State.DONE;
     }
 
     private void doDone() {
