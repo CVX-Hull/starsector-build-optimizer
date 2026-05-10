@@ -34,7 +34,12 @@ combat-harness/mod/workdir/heartbeat.txt
 # Active run artifacts (future runs write here, committed data lives in experiments/).
 # Rooted because combat-harness/src/main/java/data/ is the Java `data` package
 # (MissionDefinition + ManifestDumper live there), which must stay tracked.
-/data/
+# Use /data/* + targeted negations so the report-companion outputs (charts +
+# headline_numbers.json) ride along with their reports under git, while raw
+# logs / study DBs / per-trial ledgers stay out.
+/data/*
+!/data/wave1-comprehensive/
+!/data/wave1-trajectory/
 *.db
 
 # Experiment databases (too large for git, back up separately)

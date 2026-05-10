@@ -173,6 +173,13 @@ not assembled in a notebook. Output goes to
 the report figure number). The script must be runnable end-to-end via
 `uv run python …` and write deterministic output (fixed RNG seeds).
 
+**Chart + `headline_numbers.json` outputs are tracked in git** so reports
+render out-of-the-box for any clone or web viewer. Raw inputs (per-trial
+JSONL ledgers, study DBs) stay gitignored — they are too large and can
+be reproduced from the campaign config. The `.gitignore` pattern is
+`/data/*` plus a per-campaign `!/data/<campaign>/` negation; add the
+negation line when introducing a new campaign output directory.
+
 **Production-quality requirements** (apply at module import via
 matplotlib `rcParams`, not per-figure):
 
