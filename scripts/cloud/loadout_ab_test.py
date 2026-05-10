@@ -150,7 +150,7 @@ def main() -> int:
     region = os.environ.get("STARSECTOR_AB_REGION", "us-east-1")
     ami_id = os.environ.get(
         "STARSECTOR_AB_AMI",
-        "ami-07470878a86badf73",  # current worker AMI with source/manifest tags
+        "ami-098d4cd753a6576f2",  # current worker AMI with source/manifest tags
     )
     mod_jar_url = os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_URL", "").strip()
     mod_jar_sha = os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "").strip()

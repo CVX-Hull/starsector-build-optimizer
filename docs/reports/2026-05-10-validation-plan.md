@@ -6,8 +6,10 @@ last-validated: unvalidated
 
 # Real-data validation campaign plan (post V2 loadout fix)
 
-The V2 combat-harness loadout fix (commit `dc71e3b`, 2026-05-10) is verified
-working under Tier-2 smoke. The V1-era empirical evidence is invalidated
+The V2 combat-harness loadout fix was introduced in commit `8a5b968`
+(2026-05-10) and is verified working under Tier-2 smoke. Current AMIs may
+stamp a later `ModCommitSha` after operational follow-up commits. The V1-era
+empirical evidence is invalidated
 ([2026-05-10-v1-loadout-bug-invalidation.md](2026-05-10-v1-loadout-bug-invalidation.md))
 because every prior matchup ran with `live_weapons={}` on the player ship
 while `spec_weapons` had the optimizer-generated loadout — the actually-
@@ -408,7 +410,7 @@ Wave 1 bootstrap CI excludes Δρ ≥ 0 but the point estimate is positive
 
 | # | Risk | Early-warning signal | Mitigation |
 |---|---|---|---|
-| R1 | Spot preemption spike or capacity exhaustion in a single region/type | Wave 1 ledger shows > 5 % of provisioned VMs preempted within 30 min, OR `provision_fleet` returns `< min_workers_to_start` | **Shipped 2026-05-10**: Wave 1 YAMLs (`wave1-c{0a,0b,1,2,3}.yaml`) and `phase7-prep.yaml` use `regions: [us-east-1, us-east-2]` × `instance_types: [c7a.2xlarge, c7i.2xlarge]` — 4 distinct spot pools per fleet request via `price-capacity-optimized` allocation. us-east-2 AMI (`ami-0a8e0a93acac78547`) is a tag-propagated copy of the us-east-1 AMI (`ami-07470878a86badf73`) baked 2026-05-10 with WorkerSourceSha / ManifestSha256 tags. Add us-west-2 as third region if Wave 1 shows preempt > 10 % (us-west-2 has 4 AZs and the cheapest c7a.2xlarge spot per 2026-05-10 24h price snapshot). Long-term: Phase 7.5 Tier B item 10 (`FleetLadder`) adds on-demand fallback rung |
+| R1 | Spot preemption spike or capacity exhaustion in a single region/type | Wave 1 ledger shows > 5 % of provisioned VMs preempted within 30 min, OR `provision_fleet` returns `< min_workers_to_start` | **Shipped 2026-05-10**: Wave 1 YAMLs (`wave1-c{0a,0b,1,2,3}.yaml`) and `phase7-prep.yaml` use `regions: [us-east-1, us-east-2]` × `instance_types: [c7a.2xlarge, c7i.2xlarge]` — 4 distinct spot pools per fleet request via `price-capacity-optimized` allocation. us-east-2 AMI (`ami-0ea7ac393de421fe5`) is a tag-propagated copy of the us-east-1 AMI (`ami-098d4cd753a6576f2`) baked 2026-05-10 with WorkerSourceSha / ManifestSha256 tags. Add us-west-2 as third region if Wave 1 shows preempt > 10 % (us-west-2 has 4 AZs and the cheapest c7a.2xlarge spot per 2026-05-10 24h price snapshot). Long-term: Phase 7.5 Tier B item 10 (`FleetLadder`) adds on-demand fallback rung |
 | R2 | Redis OOM on workstation under 32-VM concurrency (Wave 1 batches) | `redis-cli INFO memory` shows `used_memory_peak_human > 50 % of system RAM` | Each VM publishes ~1 row/30 s; 32 VMs × 100 trials = 3200 rows = ~5 MB. Negligible at expected scale. Mitigation: Wave 1 batches sequentially (not parallel) keep peak at 32 VMs |
 | R3 | AMI version drift (worker source, game manifest, or Java payload not in latest AMI) | Wave 0 step 3 (loadout AB test) shows corrupt-result mismatch, or launch preflight rejects AMI tags | Re-bake before Wave 0: `scripts/cloud/bake_image.sh`. AMI tags `GameVersion`, `ManifestSha256`, `ModCommitSha`, and `WorkerSourceSha` are checked before launch/resume. |
 | R4 | Engine probe regression (manifest stale) | Wave 0 step 1 probe fails with manifest mismatch | `scripts/update_manifest.py --timeout 600` rerun before bake; gated by pre-commit hook per root workflow file |

@@ -8,11 +8,9 @@
 #   2. tailscale userspace daemon up (scripts/cloud/devenv-up.sh).
 #   3. .env present (auto-sourced via _env.sh).
 #   4. AMIs in examples/phase7-prep.yaml exist (audit_amis.sh).
-#   5. (Optional but recommended) Java LOADOUT_MISMATCH fix DEPLOYED via
-#      `scripts/cloud/deploy_java_fix_for_wave2.sh`. Without it Wave 3
-#      runs with the AMI-baked jar (cross-matchup variant cache bug);
-#      fitness is protected by the cloud_worker_pool band-aid but
-#      AWS spend +7-19 % from retry overhead.
+#   5. AMI tag preflight passes; production waves should not rely on
+#      data/.mod_jar_env unless STARSECTOR_ENABLE_JAR_OVERRIDE=1 is set for
+#      a disposable debug run.
 #
 # Cost guidance: Wave 1 measured 27.3 m/trial (production-default
 # config on hammerhead). For Wave 3:
@@ -30,13 +28,19 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/cloud/_env.sh
 source "$(dirname "$0")/_env.sh"
 
-# Source Java-fix mod-jar override if present
-if [[ -f data/.mod_jar_env ]]; then
-    echo "[wave3] sourcing mod-jar override env from data/.mod_jar_env"
+# Debug-only Java JAR override. Production/resumable waves should run the
+# baked, AMI-tagged jar; opt in only for disposable smoke/debug loops.
+if [[ "${STARSECTOR_ENABLE_JAR_OVERRIDE:-}" == "1" && -f data/.mod_jar_env ]]; then
+    echo "[wave3] sourcing data/.mod_jar_env — debug Java override active"
     set -a
     # shellcheck disable=SC1091
     source data/.mod_jar_env
     set +a
+else
+    unset STARSECTOR_MOD_JAR_OVERRIDE_URL STARSECTOR_MOD_JAR_OVERRIDE_SHA256
+    if [[ -f data/.mod_jar_env ]]; then
+        echo "[wave3] ignoring data/.mod_jar_env; set STARSECTOR_ENABLE_JAR_OVERRIDE=1 for debug-only override"
+    fi
 fi
 
 # Verify Wave 2 finished

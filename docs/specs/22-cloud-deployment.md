@@ -617,7 +617,7 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 **Baked contents** (validated via post-build provisioner; AMI tag set only on zero exit code):
 - Starsector game files (551 MB) at pinned version
 - combat-harness mod (deployed, ready to run)
-- `uv` + project venv at a pinned git commit SHA
+- `uv` + project venv built from the committed worker-source input digest
 - `x11-xserver-utils` (for `xrandr --query` warmup; see below)
 - `xvfb`, `xdotool`, OpenJDK
 - Tailscale client

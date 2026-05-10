@@ -260,6 +260,10 @@ scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
 
 The `STARSECTOR_MOD_JAR_OVERRIDE_URL` + `STARSECTOR_MOD_JAR_OVERRIDE_SHA256` env vars are read by `cloud_runner.py` and rendered into UserData. Workers `curl` the JAR after `tailscale up`, sha256-verify, and `install` it before `systemctl start starsector-worker.service`. Any failure (404, sha mismatch, network) halts boot via `set -euo pipefail` — workers never run against the wrong jar.
 
+Wave launch helpers ignore `data/.mod_jar_env` by default. Set
+`STARSECTOR_ENABLE_JAR_OVERRIDE=1` only for a disposable debug launch when you
+explicitly want those helpers to source the override environment.
+
 When to AMI-rebake instead:
 - Game files, manifest, Python code, `uv.lock`, systemd unit, or bake/Packer scripts changed → rebake
 - Java changes that affect manifest output, production correctness, resumable evals, or publishable reports → rebuild/deploy, regenerate manifest if needed, then rebake

@@ -18,17 +18,19 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/cloud/_env.sh
 source "$(dirname "$0")/_env.sh"
 
-# Pick up the Java LOADOUT_MISMATCH fix override if deploy_java_fix_for_wave2.sh
-# was run. The env file exports STARSECTOR_MOD_JAR_OVERRIDE_URL +
-# STARSECTOR_MOD_JAR_OVERRIDE_SHA256; cloud_runner.py threads them through
-# to worker user-data. Without these env vars Wave 2 uses the AMI-baked jar
-# (still has the Wave 1 cross-trial loadout bleed).
-if [[ -f data/.mod_jar_env ]]; then
-    echo "[wave2] sourcing mod-jar override env from data/.mod_jar_env"
+# Debug-only Java JAR override. Production/resumable waves should run the
+# baked, AMI-tagged jar; opt in only for disposable smoke/debug loops.
+if [[ "${STARSECTOR_ENABLE_JAR_OVERRIDE:-}" == "1" && -f data/.mod_jar_env ]]; then
+    echo "[wave2] sourcing data/.mod_jar_env — debug Java override active"
     set -a
     # shellcheck disable=SC1091
     source data/.mod_jar_env
     set +a
+else
+    unset STARSECTOR_MOD_JAR_OVERRIDE_URL STARSECTOR_MOD_JAR_OVERRIDE_SHA256
+    if [[ -f data/.mod_jar_env ]]; then
+        echo "[wave2] ignoring data/.mod_jar_env; set STARSECTOR_ENABLE_JAR_OVERRIDE=1 for debug-only override"
+    fi
 fi
 
 SOURCE_DB="data/study_dbs/wave1-c2/hammerhead__early__tpe__seed0.db"

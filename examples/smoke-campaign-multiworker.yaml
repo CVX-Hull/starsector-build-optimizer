@@ -38,11 +38,11 @@ partial_fleet_policy: abort
 # pool concurrency = workers_per_study × matchup_slots_per_worker = 3 × 2 = 6.
 matchup_slots_per_worker: 2
 
-# Worker AMI baked 2026-05-10 from commit 0c11489 and tagged with
+# Worker AMI baked 2026-05-10 from worker-source digest b6ecd194 and tagged with
 # WorkerSourceSha / ManifestSha256. Re-bake after changing worker Python,
 # Java mod payload, or staged game manifest data.
 ami_ids_by_region:
-  us-east-1: ami-07470878a86badf73
+  us-east-1: ami-098d4cd753a6576f2
 
 ssh_key_name: starsector-probe
 

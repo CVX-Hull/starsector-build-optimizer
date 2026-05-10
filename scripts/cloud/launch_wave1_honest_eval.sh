@@ -41,14 +41,17 @@ cd "$(git rev-parse --show-toplevel)"
 # shellcheck source=scripts/cloud/_env.sh
 source "$(dirname "$0")/_env.sh"
 
-# Java fix override — picks up SHA from data/.mod_jar_env if
-# serve_mod_jar.sh is currently serving the post-V2 jar (see
-# deploy_java_fix_for_wave2.sh). Without this, workers boot with the
-# AMI's stale jar and the fleet-consistency WARN will fire.
-if [ -f data/.mod_jar_env ]; then
-  echo "[wave1-honest-eval] sourcing data/.mod_jar_env — Java fix override active"
+# Debug-only Java JAR override. Production/resumable evals should run the
+# baked, AMI-tagged jar; opt in only for disposable smoke/debug loops.
+if [ "${STARSECTOR_ENABLE_JAR_OVERRIDE:-}" = "1" ] && [ -f data/.mod_jar_env ]; then
+  echo "[wave1-honest-eval] sourcing data/.mod_jar_env — debug Java override active"
   # shellcheck disable=SC1091
   source data/.mod_jar_env
+else
+  unset STARSECTOR_MOD_JAR_OVERRIDE_URL STARSECTOR_MOD_JAR_OVERRIDE_SHA256
+  if [ -f data/.mod_jar_env ]; then
+    echo "[wave1-honest-eval] ignoring data/.mod_jar_env; set STARSECTOR_ENABLE_JAR_OVERRIDE=1 for debug-only override"
+  fi
 fi
 
 echo "[wave1-honest-eval] Plan C: 64 workers, full scope, ~6h walltime, ~\$70 raw"
