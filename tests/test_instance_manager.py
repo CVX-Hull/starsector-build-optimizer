@@ -485,6 +485,22 @@ def _make_matchups(n):
     ]
 
 
+def _make_result(matchup_id: str) -> CombatResult:
+    return CombatResult(
+        matchup_id=matchup_id,
+        winner="player",
+        duration_seconds=1.0,
+        player_ships=(),
+        enemy_ships=(),
+        player_ships_destroyed=0,
+        enemy_ships_destroyed=0,
+        player_ships_retreated=0,
+        enemy_ships_retreated=0,
+        player_loadout_diagnostics=(),
+        engine_stats=None,
+    )
+
+
 class TestPersistentSession:
 
     def test_shutdown_signal_path_property(self, pool, config):
@@ -499,6 +515,101 @@ class TestPersistentSession:
         assert "combat_harness_new_queue.data" not in PROTOCOL_FILES
         assert "combat_harness_shutdown.data" in PROTOCOL_FILES
         assert len(PROTOCOL_FILES) == 5
+
+    def test_stale_result_mismatch_restarts_and_retries_instance(
+        self, fake_game_dir, tmp_path,
+    ):
+        """A reused JVM that reports the previous matchup is out of sync.
+
+        The pool must kill it before returning it to the free queue; otherwise
+        the next assignment can observe the same stale done/results files and
+        loop forever. When restart budget remains, retry the same matchup
+        immediately on a clean JVM instead of making the cloud worker wait for
+        Redis visibility timeout.
+        """
+        cfg = InstanceConfig(
+            game_dir=fake_game_dir,
+            instance_root=tmp_path / "inst",
+            num_instances=1,
+            poll_interval_seconds=0.0,
+        )
+        pool = LocalInstancePool(cfg)
+        pool.setup()
+        inst = pool._instances[0]
+
+        mock_game = MagicMock(spec=subprocess.Popen)
+        mock_game.poll.return_value = None
+        mock_xvfb = MagicMock(spec=subprocess.Popen)
+        mock_xvfb.poll.return_value = None
+        inst.game_process = mock_game
+        inst.xvfb_process = mock_xvfb
+
+        def _assign_and_mark_done(_inst, _chunk, **_kwargs):
+            _inst.state = InstanceState.RUNNING
+            _inst.done_path.write_text("done")
+
+        matchup = _make_matchups(1)[0]
+        with (
+            patch.object(pool, "_assign_next_batch", side_effect=_assign_and_mark_done),
+            patch.object(pool, "_assign_and_launch", side_effect=_assign_and_mark_done),
+            patch(
+                "starsector_optimizer.instance_manager.parse_results_file",
+                side_effect=[
+                    [_make_result("previous-matchup")],
+                    [_make_result(matchup.matchup_id)],
+                ],
+            ),
+        ):
+            result = pool.run_matchup(matchup)
+
+        assert result.matchup_id == matchup.matchup_id
+        assert inst.state == InstanceState.IDLE
+        assert inst.restart_count == 1
+        mock_game.terminate.assert_called_once()
+        mock_xvfb.terminate.assert_called_once()
+
+    def test_empty_results_restarts_and_retries_instance(
+        self, fake_game_dir, tmp_path,
+    ):
+        """A done signal without parseable results is also instance-fatal,
+        but should retry immediately while restart budget remains."""
+        cfg = InstanceConfig(
+            game_dir=fake_game_dir,
+            instance_root=tmp_path / "inst",
+            num_instances=1,
+            poll_interval_seconds=0.0,
+        )
+        pool = LocalInstancePool(cfg)
+        pool.setup()
+        inst = pool._instances[0]
+
+        mock_game = MagicMock(spec=subprocess.Popen)
+        mock_game.poll.return_value = None
+        mock_xvfb = MagicMock(spec=subprocess.Popen)
+        mock_xvfb.poll.return_value = None
+        inst.game_process = mock_game
+        inst.xvfb_process = mock_xvfb
+
+        def _assign_and_mark_done(_inst, _chunk, **_kwargs):
+            _inst.state = InstanceState.RUNNING
+            _inst.done_path.write_text("done")
+
+        matchup = _make_matchups(1)[0]
+        with (
+            patch.object(pool, "_assign_next_batch", side_effect=_assign_and_mark_done),
+            patch.object(pool, "_assign_and_launch", side_effect=_assign_and_mark_done),
+            patch(
+                "starsector_optimizer.instance_manager.parse_results_file",
+                side_effect=[[], [_make_result(matchup.matchup_id)]],
+            ),
+        ):
+            result = pool.run_matchup(matchup)
+
+        assert result.matchup_id == matchup.matchup_id
+        assert inst.state == InstanceState.IDLE
+        assert inst.restart_count == 1
+        mock_game.terminate.assert_called_once()
+        mock_xvfb.terminate.assert_called_once()
 
     def test_clean_protocol_files_removes_shutdown_signal(self, pool, config):
         """_clean_protocol_files removes shutdown signal file."""
@@ -666,4 +777,3 @@ class TestPersistentSession:
             # Processes should still be terminated
             inst.game_process.terminate.assert_called_once()
             assert inst.state == InstanceState.STOPPED
-

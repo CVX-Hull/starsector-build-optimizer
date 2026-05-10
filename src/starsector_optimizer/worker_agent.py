@@ -164,11 +164,11 @@ def post_result(
                 return
             if response.status_code == LOADOUT_MISMATCH_HTTP_STATUS:
                 # Terminal discard: the orchestrator rejected this corrupt
-                # loadout and woke its dispatcher to retry the matchup with
-                # a fresh combat. Retrying the same POST would only replay
-                # the same bad result and inflate the discard count.
+                # result and woke its dispatcher to retry the matchup with a
+                # fresh combat. Retrying the same POST would only replay the
+                # same bad result and inflate the discard count.
                 logger.warning(
-                    "loadout mismatch discarded by orchestrator: matchup_id=%s",
+                    "corrupt result discarded by orchestrator: matchup_id=%s",
                     matchup_id,
                 )
                 return

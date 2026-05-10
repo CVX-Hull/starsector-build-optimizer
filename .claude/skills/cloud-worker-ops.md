@@ -265,6 +265,23 @@ When to AMI-rebake instead:
 - Java-only changes → skip rebake, use the override path
 - Mixed (Python + Java) → rebake (overlay only handles the JAR)
 
+`scripts/cloud/bake_image.sh` refuses dirty worker-source paths by default and
+tags the AMI as `ManifestSha256=<sha256(game/starsector/manifest.json)>` and
+`WorkerSourceSha=<git HEAD>`. Dirty debug bakes require
+`STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` and are tagged `<git HEAD>-dirty`. Campaign
+and honest-eval preflight compare those tags against the current manifest and
+checkout, so commit the Python/source changes before baking and update every
+region's `ami_ids_by_region` after the bake/copy finishes. Dirty launch override
+(`STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1`) is only for disposable debugging images;
+those AMIs should not back a resumable evaluation.
+
+Important failure mode: the JAR override does not update worker Python. If a
+run shows orchestrator-side `result matchup_id mismatch: envelope=... parsed=...`
+after a Python-side guard or queue/protocol fix was made locally, assume the AMI
+is stale until proven otherwise. Rebuild/copy the AMI, paste the new IDs into
+the campaign YAML, and then resume; otherwise workers can keep posting stale JVM
+results under fresh Redis envelopes.
+
 ### Study-per-(hull,regime,seed) sizing cheatsheet
 
 - **≤24 workers per study**: TPE (default). Efficient, precise, recommended.
@@ -386,6 +403,32 @@ ssh ubuntu@<worker-tailscale-ip> 'systemctl status starsector-worker; journalctl
 ```
 
 Common causes: Xvfb died, Starsector JVM hung, heartbeat file stale. `pkill -9 java; pkill -9 Xvfb` and let the `instance_manager` restart logic kick in; if 3 restarts fail, treat as broken worker and replace.
+
+### Result envelope mismatch
+
+Symptom in orchestrator log:
+`result matchup_id mismatch: envelope=<current> parsed=<previous>`.
+
+Root-cause pattern: a persistent worker JVM returned an old
+`combat_harness_results.json.data` for a newer Redis assignment, or the worker
+AMI is stale and lacks the Python-side stale-result guard. There are two
+behaviors depending on worker vintage:
+
+- Current workers detect the stale local result before POST, kill/restart the
+  desynchronized JVM, and retry the same matchup immediately while restart
+  budget remains.
+- Stale workers can still POST the stale result. Current orchestrators reject
+  that POST as HTTP 422, wake the waiting dispatcher with a retryable failure,
+  and make the worker ack the corrupt Redis item instead of replaying it.
+
+Operator action after seeing a cluster of these lines:
+
+1. Stop the run through the normal wrapper/Ctrl-C path and verify final audit is
+   clean.
+2. If any Python worker/orchestrator code changed since the AMI was baked, run
+   `scripts/cloud/bake_image.sh` and update the campaign AMI IDs before resume.
+3. Resume with `--resume-from <eval_tag>` only after the AMI and Java jar path
+   are consistent across regions.
 
 ### AMI-copy-image drift across regions
 

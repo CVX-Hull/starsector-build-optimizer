@@ -29,7 +29,8 @@ max_concurrent_workers: 2     # 1 per region
 min_workers_to_start: 1
 partial_fleet_policy: abort
 
-# AMIs from 2026-04-18 bake; re-bake produces new IDs.
+# AMIs from 2026-04-18 bake; these predate WorkerSourceSha / ManifestSha256
+# tags. Re-bake produces new IDs required by current preflight.
 ami_ids_by_region:
   us-east-1: ami-0106d8575802f9941
   us-east-2: ami-028c38dfe92e71939

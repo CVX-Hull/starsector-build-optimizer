@@ -19,6 +19,15 @@ BEARER_TOKEN_SENTINEL = "bearer-xxxxxx-secret"
 TAILSCALE_SECRET_SENTINEL = "tskey-auth-yyyyyy-secret"
 
 
+@pytest.fixture(autouse=True)
+def _clean_worker_source_checkout(monkeypatch):
+    """Unit tests run against an intentionally dirty worktree while editing."""
+    monkeypatch.setattr(
+        "starsector_optimizer.campaign._worker_source_dirty_status",
+        lambda: "",
+    )
+
+
 def _minimal_campaign_yaml(tmp_path: Path, **overrides) -> Path:
     """Write a minimal campaign YAML file and return its path."""
     defaults = {
@@ -502,15 +511,26 @@ class TestCampaignManagerPreflight:
         config = self._config(tmp_path, **overrides)
         provider = MagicMock()
         provider.list_active.return_value = []
-        # Preflight (Commit G R6) now dual-checks GameVersion AND
-        # ModCommitSha. Mock to dispatch on tag_key so both succeed; tests
-        # that want to verify mismatch paths override side_effect explicitly.
+        from starsector_optimizer.campaign import manifest_sha256
+        # Preflight checks GameVersion, ManifestSha256, ModCommitSha, and
+        # WorkerSourceSha.
+        # Mock to dispatch on tag_key so all succeed; tests that want to
+        # verify mismatch paths override side_effect explicitly.
         _m = GameManifest.load()
         def _describe_ami_tag(*, ami_id, region, tag_key):
             if tag_key == "GameVersion":
                 return _m.constants.game_version
+            if tag_key == "ManifestSha256":
+                return manifest_sha256()
             if tag_key == "ModCommitSha":
                 return _m.constants.mod_commit_sha
+            if tag_key == "WorkerSourceSha":
+                return subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
             raise KeyError(tag_key)
         provider.describe_ami_tag.side_effect = _describe_ami_tag
         ledger = MagicMock()
@@ -602,7 +622,13 @@ class TestCampaignManagerPreflight:
         def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
+        current_git_sha = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True,
+        )
+
         def subprocess_stub(cmd, *args, **kwargs):
+            if cmd[:3] == ["git", "rev-parse", "HEAD"]:
+                return MagicMock(returncode=0, stdout=current_git_sha, stderr="")
             # strip optional ["--socket", <path>] between "tailscale" and verb
             bare = [a for a in cmd if a != "tailscale" and not a.startswith("--socket")]
             # skip explicit socket-path positional (follows --socket)
@@ -775,17 +801,30 @@ class TestCheckAmiTagsAgainstManifest:
         from starsector_optimizer.game_manifest import GameManifest
         return GameManifest.load()
 
-    def _provider_returning(self, gv, sha):
+    def _manifest_sha(self):
+        from starsector_optimizer.campaign import manifest_sha256
+        return manifest_sha256()
+
+    def _provider_returning(
+        self, gv, sha, worker_sha="worker-sha", manifest_sha=None,
+    ):
         provider = MagicMock()
+        manifest_sha = manifest_sha or self._manifest_sha()
         def _describe(*, ami_id, region, tag_key):
             if tag_key == "GameVersion": return gv
+            if tag_key == "ManifestSha256": return manifest_sha
             if tag_key == "ModCommitSha": return sha
+            if tag_key == "WorkerSourceSha": return worker_sha
             raise KeyError(tag_key)
         provider.describe_ami_tag.side_effect = _describe
         return provider
 
-    def test_passes_when_both_tags_match(self):
+    def test_passes_when_all_tags_match(self, monkeypatch):
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
         m = self._manifest()
         provider = self._provider_returning(
             m.constants.game_version, m.constants.mod_commit_sha,
@@ -795,9 +834,13 @@ class TestCheckAmiTagsAgainstManifest:
             provider, {"us-east-1": "ami-1"}, m,
         )
 
-    def test_raises_on_game_version_mismatch(self):
+    def test_raises_on_game_version_mismatch(self, monkeypatch):
         from starsector_optimizer.campaign import (
             check_ami_tags_against_manifest, PreflightFailure,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
         )
         m = self._manifest()
         provider = self._provider_returning("0.0-stale", m.constants.mod_commit_sha)
@@ -806,9 +849,13 @@ class TestCheckAmiTagsAgainstManifest:
                 provider, {"us-east-1": "ami-1"}, m,
             )
 
-    def test_raises_on_mod_commit_sha_mismatch(self):
+    def test_raises_on_mod_commit_sha_mismatch(self, monkeypatch):
         from starsector_optimizer.campaign import (
             check_ami_tags_against_manifest, PreflightFailure,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
         )
         m = self._manifest()
         provider = self._provider_returning(
@@ -819,10 +866,117 @@ class TestCheckAmiTagsAgainstManifest:
                 provider, {"us-east-1": "ami-1"}, m,
             )
 
-    def test_skips_silently_when_provider_lacks_describe_ami_tag(self, caplog):
+    def test_raises_on_manifest_sha_mismatch(self, monkeypatch):
+        from starsector_optimizer.campaign import (
+            check_ami_tags_against_manifest, PreflightFailure,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version,
+            m.constants.mod_commit_sha,
+            manifest_sha="0" * 64,
+        )
+        with pytest.raises(PreflightFailure, match="ManifestSha256"):
+            check_ami_tags_against_manifest(
+                provider, {"us-east-1": "ami-1"}, m,
+            )
+
+    def test_raises_on_worker_source_sha_mismatch(self, monkeypatch):
+        from starsector_optimizer.campaign import (
+            check_ami_tags_against_manifest, PreflightFailure,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "current-worker-sha",
+        )
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version,
+            m.constants.mod_commit_sha,
+            worker_sha="stale-worker-sha",
+        )
+        with pytest.raises(PreflightFailure, match="WorkerSourceSha"):
+            check_ami_tags_against_manifest(
+                provider, {"us-east-1": "ami-1"}, m,
+            )
+
+    def test_raises_on_dirty_worker_source_checkout(self, monkeypatch):
+        from starsector_optimizer.campaign import (
+            check_ami_tags_against_manifest, PreflightFailure,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._worker_source_dirty_status",
+            lambda: " M src/starsector_optimizer/worker_agent.py",
+        )
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version, m.constants.mod_commit_sha,
+        )
+        with pytest.raises(PreflightFailure, match="uncommitted changes"):
+            check_ami_tags_against_manifest(
+                provider, {"us-east-1": "ami-1"}, m,
+            )
+
+    def test_dirty_worker_source_debug_launch_expects_dirty_tag(self, monkeypatch):
+        from starsector_optimizer.campaign import check_ami_tags_against_manifest
+        monkeypatch.setenv("STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH", "1")
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._worker_source_dirty_status",
+            lambda: " M src/starsector_optimizer/worker_agent.py",
+        )
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version,
+            m.constants.mod_commit_sha,
+            worker_sha="worker-sha-dirty",
+        )
+        check_ami_tags_against_manifest(
+            provider, {"us-east-1": "ami-1"}, m,
+        )
+
+    def test_raises_when_required_region_missing(self, monkeypatch):
+        from starsector_optimizer.campaign import (
+            check_ami_tags_against_manifest, PreflightFailure,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version,
+            m.constants.mod_commit_sha,
+        )
+        with pytest.raises(PreflightFailure, match="missing AMI IDs"):
+            check_ami_tags_against_manifest(
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
+                required_regions=("us-east-1", "us-east-2"),
+            )
+
+    def test_skips_silently_when_provider_lacks_describe_ami_tag(
+        self, caplog, monkeypatch,
+    ):
         """Hetzner stub / fake providers that don't implement describe_ami_tag
         must not hard-break the preflight — they log a warning and return."""
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
         m = self._manifest()
         provider = MagicMock()
         provider.describe_ami_tag.side_effect = AttributeError("no impl")
@@ -853,11 +1007,21 @@ class TestLedgerTick:
         provider = MagicMock()
         provider.list_active.return_value = []
         _m = GameManifest.load()
+        from starsector_optimizer.campaign import manifest_sha256
         def _describe_ami_tag(*, ami_id, region, tag_key):
             if tag_key == "GameVersion":
                 return _m.constants.game_version
+            if tag_key == "ManifestSha256":
+                return manifest_sha256()
             if tag_key == "ModCommitSha":
                 return _m.constants.mod_commit_sha
+            if tag_key == "WorkerSourceSha":
+                return subprocess.run(
+                    ["git", "rev-parse", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
             raise KeyError(tag_key)
         provider.describe_ami_tag.side_effect = _describe_ami_tag
         provider.get_spot_price.return_value = 0.30

@@ -159,7 +159,7 @@ result = LocalInstancePool(...).run_matchup(item)
 POST /result {matchup_id, result, bearer_token}   # retries from WorkerConfig
 on 200: LREM processing 1 item
 on 409: LREM processing 1 item  (already-received dedup; silently drop)
-on 422: LREM processing 1 item  (loadout mismatch; orchestrator wakes dispatcher to retry fresh combat)
+on 422: LREM processing 1 item  (corrupt result rejected; orchestrator wakes dispatcher to retry fresh combat)
 on 401: terminate worker (crypto invariant violation)
 on repeated 5xx/network: let visibility_timeout expire → janitor re-queues
 ```
@@ -204,22 +204,30 @@ Per-study Flask listener on `config.base_flask_port + study_idx` exposes exactly
 POST /result
   body: {matchup_id: str, result: CombatResult-JSON, bearer_token: str}
   200: first observation; result registered, waiter notified via threading.Event
-  409: matchup_id already observed; dedup silently drops
+  409: duplicate POST; either matchup_id already observed OR duplicate
+       corrupt-result body already rejected. Dedup silently drops on the
+       worker side; if a dispatcher is currently waiting on the duplicate
+       corrupt-result class, it is still woken with the matching retryable
+       failure before 409 is returned.
   401: bearer_token mismatch; no entry added
-  400: malformed result or envelope/result matchup_id mismatch; no entry added
-  422: LOADOUT_MISMATCH discard — diagnostic field shows weapon/hullmod
-       /flux corruption (Wave 1 cross-trial cache pollution); orchestrator
-       does NOT add to `_seen` and does NOT store the result. If a
-       dispatcher is waiting for the matchup, it is woken with
-       `LoadoutMismatchRejected` so the evaluator retry loop can resubmit
-       a fresh combat immediately. Workers treat 422 as terminal and ack
-       the Redis item so the same corrupt POST is not replayed. CloudWorkerPool
-       tracks the running discard rate and raises `LoadoutMismatchAbort`
-       from `run_matchup` when the rate exceeds `MISMATCH_ABORT_RATE` (5%)
-       after
+  400: malformed result; no entry added
+  422: corrupt result rejected; orchestrator does NOT add to `_seen` and
+       does NOT store the result. Two corrupt-result classes use this
+       terminal status:
+       - `LOADOUT_MISMATCH`: diagnostic field shows weapon/hullmod/flux
+         corruption. A waiting dispatcher is woken with
+         `LoadoutMismatchRejected`.
+       - `matchup_id_mismatch`: POST envelope `matchup_id` and parsed
+         `CombatResult.matchup_id` differ, which means the worker is
+         replaying a stale result for a new Redis assignment. A waiting
+         dispatcher is woken with `ResultEnvelopeMismatchRejected`.
+       Workers treat 422 and duplicate 409 as terminal and ack the Redis
+       item so the same corrupt POST is not replayed. CloudWorkerPool tracks the running
+       discard rate and raises `LoadoutMismatchAbort` from `run_matchup`
+       when the rate exceeds `MISMATCH_ABORT_RATE` (5%) after
        `MISMATCH_ABORT_MIN_SAMPLES` (100) observations — surfaces a
-       regressed Java fix or a stale jar instead of silently retrying
-       every matchup.
+       regressed Java fix, stale worker image, or stale jar instead of
+       silently retrying every matchup.
   404: any other path or method
 ```
 
@@ -299,7 +307,7 @@ overrides — without the consistency check, a partial override that
 some workers picked up and others didn't would silently corrupt the
 fleet's results.
 
-### Manifest + AMI tag preflight (2026-04-19)
+### Manifest + AMI tag preflight (2026-04-19, expanded 2026-05-10)
 
 `CampaignManager._check_manifest_and_ami_tags` runs alongside the
 other preflight checks. It:
@@ -310,12 +318,16 @@ other preflight checks. It:
    `check_ami_tags_against_manifest(provider, ami_ids_by_region,
    manifest)`. For every `(region, ami_id)` it calls
    `provider.describe_ami_tag(ami_id=..., region=..., tag_key="GameVersion")`
-   and `tag_key="ModCommitSha"` and asserts both values equal
-   `manifest.constants.game_version` / `mod_commit_sha`. Mismatch
+   plus `tag_key="ManifestSha256"` and `tag_key="ModCommitSha"` and asserts
+   they equal `manifest.constants.game_version`, the local manifest file hash,
+   and `manifest.constants.mod_commit_sha`. It also reads
+   `tag_key="WorkerSourceSha"` and asserts it equals the expected worker-source
+   tag. Mismatch
    raises `PreflightFailure` (a `ValueError` subclass) with
-   remediation: "re-bake AMI after running `scripts/update_manifest.py`;
-   see `.claude/skills/cloud-worker-ops.md` for the Game-Version-Update
-   runbook."
+   remediation: re-bake AMI after the relevant data/source update. The
+   source tag is required because Java JAR overlay can update the
+   combat-harness jar without updating Python worker code baked under
+   `/opt/starsector-optimizer/src`.
 3. Caches the loaded manifest on `self._manifest` for subprocess
    env plumbing (study subprocesses re-load from disk; the cache
    is orchestrator-internal).
@@ -335,17 +347,29 @@ def check_ami_tags_against_manifest(
     provider: CloudProvider,
     ami_ids_by_region: dict[str, str],
     manifest: GameManifest,
+    *,
+    required_regions: tuple[str, ...] | list[str] | None = None,
 ) -> None:
     """For every (region, ami_id) in `ami_ids_by_region`:
       1. Read `provider.describe_ami_tag(ami_id, region, "GameVersion")`
          and assert it equals `manifest.constants.game_version`.
-      2. Read `provider.describe_ami_tag(ami_id, region, "ModCommitSha")`
+      2. Read `provider.describe_ami_tag(ami_id, region, "ManifestSha256")`
+         and assert it equals sha256 of `game/starsector/manifest.json`.
+      3. Read `provider.describe_ami_tag(ami_id, region, "ModCommitSha")`
          and assert it equals `manifest.constants.mod_commit_sha`.
-      3. Reject empty/`"unknown"` `mod_commit_sha` (Commit G R6 dual-check
+      4. Reject empty/`"unknown"` `mod_commit_sha` (Commit G R6 dual-check
          — Gradle's `generateBuildInfo` task stamps the git SHA into the
          jar, ManifestDumper embeds it into the manifest, Packer reads it
          back for the AMI tag; a missing value means the chain broke
          upstream and the AMI cannot be trusted).
+      5. Read `provider.describe_ami_tag(ami_id, region, "WorkerSourceSha")`
+         and assert it equals expected worker source SHA. Clean launches
+         expect current workstation `git rev-parse HEAD`; dirty debug
+         launches with `STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1` expect
+         `<git HEAD>-dirty`. This prevents Python-only fixes from being
+         skipped by the Java-only JAR override path.
+      6. If `required_regions` is supplied, assert every configured
+         region has an explicit `ami_ids_by_region` entry before launch.
     Raises `PreflightFailure` (a `ValueError` subclass) on any mismatch
     or missing tag. Returns silently with WARN log if `provider` raises
     `AttributeError` from `describe_ami_tag` (Hetzner stub / test fakes).
@@ -363,10 +387,16 @@ def check_authkey_syntax(authkey: str) -> None:
     """Validate `authkey.startswith('tskey-auth-')`; raises PreflightFailure."""
 ```
 
-The AWS AMI tag is set by the Packer template
-(`scripts/cloud/packer/aws.pkr.hcl` `tags { GameVersion = var.game_version }`);
-the `game_version` variable MUST be bumped in lockstep with the
-manifest regen. See spec 29 for the manifest-as-oracle contract.
+The AWS AMI tags are set by the Packer template:
+`GameVersion`, `ManifestSha256`, and `ModCommitSha` are read from the committed
+manifest; `WorkerSourceSha` is passed by `scripts/cloud/bake_image.sh` from
+`git rev-parse HEAD`. The bake script refuses dirty worker-source paths (`src`,
+`pyproject.toml`, `uv.lock`, and cloud Packer/bake scripts) unless
+`STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` is set. Dirty debug bakes are tagged
+`<git HEAD>-dirty`, not clean HEAD, so they cannot masquerade as production
+AMIs. Launch/honest-eval preflight runs the same dirty-source check and rejects
+dirty launches unless `STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1` is set. See spec 29
+for the manifest-as-oracle contract.
 
 ## Worker IMDSv2 metadata fetch
 
@@ -589,6 +619,13 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 - `xvfb`, `xdotool`, OpenJDK
 - Tailscale client
 - `~/.java/.userPrefs/com/fs/starfarer/prefs.xml` (game activation; sourced from operator's `scripts/cloud/packer/prefs.xml`, gitignored — must contain at minimum `serial`, `firstGameRun=false`, `resolution=1920x1080`, `fullscreen=false`, `sound=false`)
+
+`bake_image.sh` tags the source AMI and copied regional AMIs with
+`ManifestSha256=<sha256(game/starsector/manifest.json)>` and
+`WorkerSourceSha=<git HEAD>` (or `<git HEAD>-dirty` for dirty debug bakes).
+`CampaignManager` and honest-eval preflight reject AMIs whose tags differ from
+the current checkout and manifest; after manifest, Python, or `uv.lock` changes,
+re-bake and update every relevant `ami_ids_by_region` entry before launch/resume.
 
 **Cloud-init injects** (never baked — these are per-campaign secrets and identifiers):
 - Tailscale auth key (from `CampaignConfig.tailscale_authkey_secret`)

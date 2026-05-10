@@ -117,15 +117,19 @@ class LocalInstancePool(EvaluatorPool):
     def __enter__(self) -> "LocalInstancePool": ...
     def __exit__(self, *args) -> None: ...
     # Internal methods
-    def _claim_instance(self) -> GameInstance: ...                       # blocks until an instance is free
-    def _release_instance(self, inst: GameInstance) -> None: ...
     def _is_instance_reusable(self, inst: GameInstance) -> bool: ...
     def _assign_next_batch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None: ...
+    def _assign_and_launch(self, inst: GameInstance, chunk: list[MatchupConfig], *, reset_restart_count: bool = True) -> None: ...
     def _restart_or_raise(self, inst: GameInstance, matchup: MatchupConfig) -> None: ...
     def _write_shutdown_signal(self, inst: GameInstance) -> None: ...
 ```
 
-Free-instance bookkeeping (`_claim_instance` / `_release_instance`) uses an internal `queue.Queue[GameInstance]` primed with all instances after `setup()`. The old `StagedEvaluator.free_instances: deque[int]` pattern is retired — callers no longer track worker IDs.
+Free-instance bookkeeping uses an internal `queue.Queue[GameInstance]` primed
+with all instances after `setup()`. `run_matchup()` calls
+`self._free_instances.get()` and returns the instance with
+`self._free_instances.put(inst)` in a `finally:` block. The old
+`StagedEvaluator.free_instances: deque[int]` pattern is retired — callers no
+longer track worker IDs.
 
 ## Per-Instance Work Directory
 
@@ -176,14 +180,21 @@ Each instance gets a work directory that is mostly symlinks to the shared game i
 
 Run a single matchup on a pool-chosen instance. Blocks until complete. Thread-safe; concurrent calls from up to `num_workers` threads are serialized through the internal free-instance queue. Raises `InstanceError` if the chosen instance fails unrecoverably.
 
-1. `inst = self._claim_instance()` — blocks on an internal `queue.Queue` until an instance is free.
+1. `inst = self._free_instances.get()` — blocks on an internal `queue.Queue` until an instance is free.
 2. If `inst.total_matchups_processed >= clean_restart_matchups`, kill instance, reset counter.
 3. If `_is_instance_reusable(inst)`: `_assign_next_batch(inst, [matchup])` (game still running, reuse via mission restart). Otherwise: `_assign_and_launch(inst, [matchup])` (full Xvfb + game launch).
 4. Poll loop (every `poll_interval_seconds`):
-   - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. Set state IDLE. Return `results[0]` via a `finally:` that calls `self._release_instance(inst)`.
+   - **Done check:** If done file exists → parse results. Increment `total_matchups_processed`. If no results parse, mark the instance FAILED, kill game/Xvfb via `_restart_or_raise()`, and retry the same matchup on a fresh JVM while restart budget remains. If the first result's `matchup_id` differs from the requested `MatchupConfig.matchup_id`, treat the persistent JVM as protocol-desynchronized: mark the instance FAILED, restart it via `_restart_or_raise()`, and retry the same matchup immediately while restart budget remains. Only after a non-empty matching result is validated may the state become IDLE and `results[0]` be returned via the `finally:` that returns `inst` to `_free_instances`. If restart budget is exhausted, `_restart_or_raise()` raises `InstanceError`.
    - **Process check:** If game process exited without done signal → FAILED. Call `_restart_or_raise()`. Continue polling.
    - **Heartbeat check:** If STARTING and heartbeat fresh → RUNNING. If STARTING and startup timed out → FAILED, `_restart_or_raise()`. If RUNNING and heartbeat fresh → update timestamp. If RUNNING and heartbeat stale > timeout → FAILED, `_restart_or_raise()`.
 5. Instance stays alive in IDLE after returning. Game is on title screen (or transitioning via Robot dismiss). TitleScreenPlugin will detect the next queue written by a subsequent `run_matchup()` call.
+
+The result-ID guard is mandatory for persistent-session reuse. A stale
+`combat_harness_done.data` / `combat_harness_results.json.data` pair can
+otherwise be observed after `_assign_next_batch()` writes the next queue, causing
+the same old result to be returned for new matchups. A mismatch is therefore an
+instance-fatal condition, not a normal matchup failure; the instance is restarted
+before the same matchup is retried.
 
 ### `num_workers` (property)
 
@@ -192,6 +203,8 @@ Returns `len(self._instances)`. Required by the `EvaluatorPool` ABC; `StagedEval
 ### `_restart_or_raise(inst, matchup)`
 
 Kill instance, check restart count. If `restart_count < max_restarts`: increment count, `_assign_and_launch(inst, [matchup])`. Otherwise: raise `InstanceError`.
+Restart relaunches pass `reset_restart_count=False` so the counter survives the
+new process launch and the restart budget cannot reset itself.
 
 ### `_is_instance_reusable(inst)`
 

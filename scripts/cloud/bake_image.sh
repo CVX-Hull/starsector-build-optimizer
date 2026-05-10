@@ -25,12 +25,28 @@ if [[ "$DRY_RUN" == "--dry-run" ]]; then
   exit 0
 fi
 
+WORKER_SOURCE_SHA=$(git rev-parse HEAD)
+DIRTY_STATUS=$(git status --porcelain -- src pyproject.toml uv.lock scripts/cloud/bake_image.sh scripts/cloud/packer)
+if [[ "${STARSECTOR_ALLOW_DIRTY_AMI_BAKE:-}" != "1" ]]; then
+  if [[ -n "$DIRTY_STATUS" ]]; then
+    echo "[bake_image] ERROR: worktree has uncommitted changes." >&2
+    echo "[bake_image] Commit or stash before baking so WorkerSourceSha=$WORKER_SOURCE_SHA matches the AMI contents." >&2
+    echo "[bake_image] Set STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1 only for throwaway debugging AMIs." >&2
+    exit 1
+  fi
+elif [[ -n "$DIRTY_STATUS" ]]; then
+  WORKER_SOURCE_SHA="${WORKER_SOURCE_SHA}-dirty"
+  echo "[bake_image] WARNING: baking dirty worker source; WorkerSourceSha=$WORKER_SOURCE_SHA" >&2
+fi
+
 echo "[bake_image] Teardown command if this script is interrupted:"
 echo "[bake_image]   scripts/cloud/teardown.sh <campaign-name-here>"
 echo
 
 echo "[bake_image] Building AMI in $SOURCE_REGION..."
-packer build -machine-readable "$PACKER_TEMPLATE" | tee packer.log
+packer build -machine-readable \
+  -var "worker_source_sha=$WORKER_SOURCE_SHA" \
+  "$PACKER_TEMPLATE" | tee packer.log
 AMI_ID=$(grep 'artifact,0,id' packer.log | cut -d, -f6 | cut -d: -f2)
 
 if [[ -z "$AMI_ID" ]]; then
@@ -47,7 +63,7 @@ echo "[bake_image] $SOURCE_REGION AMI: $AMI_ID"
 # campaign launch.
 src_tags_json=$(aws ec2 describe-images \
   --owners self --region "$SOURCE_REGION" --image-ids "$AMI_ID" \
-  --query 'Images[0].Tags[?Key==`Project` || Key==`Role` || Key==`GameVersion` || Key==`ModCommitSha`]' \
+  --query 'Images[0].Tags[?Key==`Project` || Key==`Role` || Key==`GameVersion` || Key==`ManifestSha256` || Key==`ModCommitSha` || Key==`WorkerSourceSha`]' \
   --output json)
 
 for target in "${TARGET_REGIONS[@]}"; do

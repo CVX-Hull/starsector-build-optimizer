@@ -45,8 +45,9 @@ max_concurrent_workers: 1
 min_workers_to_start: 1
 partial_fleet_policy: abort
 
-# AMI from 2026-05-09 re-bake (post-impl audit: V2 loadout fix, FIGHT_TICK
-# gate, .env auto-source). Built from commit dc71e3b at 2026-05-09 ~14:50 PT.
+# Old AMI from 2026-05-09 re-bake (post-impl audit: V2 loadout fix,
+# FIGHT_TICK gate, .env auto-source). Predates WorkerSourceSha /
+# ManifestSha256 tags; re-bake before launching under the current preflight.
 ami_ids_by_region:
   us-east-1: ami-0a434660884e985e3
 

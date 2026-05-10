@@ -72,19 +72,24 @@ class WorkerTimeout(Exception):
 
 
 class LoadoutMismatchAbort(Exception):
-    """Raised by run_matchup when the LOADOUT_MISMATCH discard rate exceeds
+    """Raised by run_matchup when the corrupt-result discard rate exceeds
     `MISMATCH_ABORT_RATE` over `MISMATCH_ABORT_MIN_SAMPLES`+ observations.
 
-    Empirically the post-V2 mismatch rate sits well below 1%; sustained
-    rates above the threshold mean the Java fix has regressed (or the
-    workers are running a stale jar). Aborting the run surfaces the
-    regression instead of letting evaluator-level retries silently drain
-    cloud budget on every matchup.
+    Empirically the post-V2 loadout-mismatch rate sits well below 1%;
+    sustained corrupt-result rates above the threshold mean the Java fix
+    has regressed, the worker image is stale, or the workers are running
+    a stale jar. Aborting the run surfaces the regression instead of
+    letting evaluator-level retries silently drain cloud budget on every
+    matchup.
     """
 
 
 class LoadoutMismatchRejected(RetryableMatchupError):
     """A posted result had a corrupt live loadout and was discarded."""
+
+
+class ResultEnvelopeMismatchRejected(RetryableMatchupError):
+    """A posted result belonged to a different matchup than its envelope."""
 
 
 class PoolShuttingDown(RetryableMatchupError):
@@ -282,11 +287,12 @@ class CloudWorkerPool(EvaluatorPool):
         self._results: dict[str, CombatResult] = {}
         self._failures: dict[str, Exception] = {}
         self._mismatch_signatures: dict[str, set[str]] = {}
+        self._envelope_mismatch_signatures: dict[str, set[str]] = {}
         self._seen: set[str] = set()                     # matchup_ids that have been POSTed
         self._results_lock = threading.Lock()
         self._result_events: dict[str, threading.Event] = {}
 
-        # Mismatch-rate guardrail: count discards alongside successes.
+        # Corrupt-result-rate guardrail: count discards alongside successes.
         # `_mismatch_discard_count` increments per corrupt POST;
         # `run_matchup` checks the running rate and raises
         # LoadoutMismatchAbort if it exceeds MISMATCH_ABORT_RATE after
@@ -348,15 +354,57 @@ class CloudWorkerPool(EvaluatorPool):
                     )
                     return jsonify({"error": "bad result"}), 400
                 if parsed.matchup_id != matchup_id:
+                    # This is the stale-result failure mode: a worker claimed
+                    # matchup_id but posted a prior JVM result. Treat it like a
+                    # terminal corrupt result for this Redis item. The
+                    # dispatcher retries a fresh combat immediately, while the
+                    # worker acks instead of replaying the same bad POST.
                     logger.error(
                         "result matchup_id mismatch: envelope=%s parsed=%s",
                         matchup_id, parsed.matchup_id,
                     )
+                    self._last_post_at = time.time()
+                    self._stalled_warn_emitted = False
+                    signature = json.dumps(
+                        body.get("result", {}), sort_keys=True, default=str,
+                    )
+                    signatures = self._envelope_mismatch_signatures.setdefault(
+                        matchup_id, set(),
+                    )
+                    if signature in signatures:
+                        logger.info(
+                            "dedup result matchup_id mismatch retry "
+                            "envelope=%s parsed=%s",
+                            matchup_id, parsed.matchup_id,
+                        )
+                        event = self._result_events.get(matchup_id)
+                        if event is not None:
+                            self._failures[matchup_id] = (
+                                ResultEnvelopeMismatchRejected(
+                                    f"matchup_id={matchup_id} received "
+                                    f"duplicate stale result for "
+                                    f"{parsed.matchup_id}; retrying with a "
+                                    "fresh combat"
+                                )
+                            )
+                            event.set()
+                        return jsonify({"status": "duplicate"}), 409
+                    signatures.add(signature)
+                    self._mismatch_discard_count += 1
+                    failure = ResultEnvelopeMismatchRejected(
+                        f"matchup_id={matchup_id} received result for "
+                        f"{parsed.matchup_id}; discarded stale result and "
+                        "retrying with a fresh combat"
+                    )
+                    event = self._result_events.get(matchup_id)
+                    if event is not None:
+                        self._failures[matchup_id] = failure
+                        event.set()
                     return jsonify({
                         "error": "matchup_id_mismatch",
                         "envelope_matchup_id": matchup_id,
                         "result_matchup_id": parsed.matchup_id,
-                    }), 400
+                    }), LOADOUT_MISMATCH_HTTP_STATUS
                 _log_loadout_diagnostics(matchup_id, parsed)
                 # Pass-through harness debug dumps regardless of loadout
                 # outcome — they're useful for diagnosing the mismatch
@@ -391,6 +439,16 @@ class CloudWorkerPool(EvaluatorPool):
                             "dedup LOADOUT_MISMATCH retry matchup=%s",
                             matchup_id,
                         )
+                        event = self._result_events.get(matchup_id)
+                        if event is not None:
+                            self._failures[matchup_id] = (
+                                LoadoutMismatchRejected(
+                                    f"matchup_id={matchup_id} had duplicate "
+                                    "LOADOUT_MISMATCH; discarded result and "
+                                    "retrying with a fresh combat"
+                                )
+                            )
+                            event.set()
                         return jsonify({"status": "duplicate"}), 409
                     signatures.add(signature)
                     self._mismatch_discard_count += 1
@@ -416,6 +474,7 @@ class CloudWorkerPool(EvaluatorPool):
                 self._results[matchup_id] = parsed
                 self._seen.add(matchup_id)
                 self._mismatch_signatures.pop(matchup_id, None)
+                self._envelope_mismatch_signatures.pop(matchup_id, None)
                 event = self._result_events.get(matchup_id)
             if event is not None:
                 event.set()
@@ -481,12 +540,13 @@ class CloudWorkerPool(EvaluatorPool):
     def run_matchup(self, matchup: MatchupConfig) -> CombatResult:
         """Enqueue + block up to result_timeout_seconds for a POST /result.
 
-        Pre-flight: if the running LOADOUT_MISMATCH discard rate has
+        Pre-flight: if the running corrupt-result discard rate has
         exceeded MISMATCH_ABORT_RATE over MISMATCH_ABORT_MIN_SAMPLES+
         observations, abort the run instead of letting per-matchup
         retries silently drain cloud budget. Empirically the post-V2
-        rate is well below 1%, so a sustained 5%+ rate means the Java
-        fix has regressed (or workers are running a stale jar).
+        loadout-mismatch rate is well below 1%, so a sustained 5%+ rate
+        means the Java fix has regressed, workers are running a stale jar,
+        or workers are running stale Python from an old AMI.
         """
         self._check_mismatch_rate()
         with self._dispatch_semaphore:
@@ -506,11 +566,12 @@ class CloudWorkerPool(EvaluatorPool):
         if rate <= MISMATCH_ABORT_RATE:
             return
         raise LoadoutMismatchAbort(
-            f"LOADOUT_MISMATCH discard rate {rate:.1%} "
+            f"corrupt-result discard rate {rate:.1%} "
             f"({discards} discards / {total} total) exceeded "
             f"{MISMATCH_ABORT_RATE:.0%} threshold over "
             f"{MISMATCH_ABORT_MIN_SAMPLES}+ samples. The Java "
-            f"unique-variant fix may have regressed, or workers are "
+            f"unique-variant fix may have regressed, workers may be "
+            f"running stale Python from an old AMI, or workers may be "
             f"running a stale combat-harness jar. Investigate before "
             f"resuming."
         )

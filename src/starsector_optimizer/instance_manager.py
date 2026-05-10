@@ -241,17 +241,28 @@ class LocalInstancePool(EvaluatorPool):
                                  inst.instance_id, e)
                     results = []
                 inst.total_matchups_processed += 1
-                inst.state = InstanceState.IDLE
                 if not results:
-                    raise InstanceError(
-                        f"Instance {inst.instance_id}: no results parsed")
+                    inst.state = InstanceState.FAILED
+                    logger.error(
+                        "Instance %d: done signal produced no parseable "
+                        "results. Restarting the persistent JVM before "
+                        "retrying matchup_id=%s.",
+                        inst.instance_id, matchup.matchup_id,
+                    )
+                    self._restart_or_raise(inst, matchup)
+                    continue
                 result = results[0]
                 if result.matchup_id != matchup.matchup_id:
-                    raise InstanceError(
-                        f"Instance {inst.instance_id}: result matchup_id "
-                        f"mismatch: expected {matchup.matchup_id}, "
-                        f"got {result.matchup_id}"
+                    inst.state = InstanceState.FAILED
+                    logger.error(
+                        "Instance %d: stale result mismatch; expected "
+                        "matchup_id=%s got matchup_id=%s. Restarting the "
+                        "persistent JVM before reuse.",
+                        inst.instance_id, matchup.matchup_id, result.matchup_id,
                     )
+                    self._restart_or_raise(inst, matchup)
+                    continue
+                inst.state = InstanceState.IDLE
                 return result
 
             if self._is_process_exited(inst):
@@ -393,12 +404,19 @@ class LocalInstancePool(EvaluatorPool):
 
     # --- Process management ---
 
-    def _assign_and_launch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None:
+    def _assign_and_launch(
+        self,
+        inst: GameInstance,
+        chunk: list[MatchupConfig],
+        *,
+        reset_restart_count: bool = True,
+    ) -> None:
         """Assign a chunk and launch the game instance."""
         inst.state = InstanceState.PREPARING
         inst.assigned_matchups = chunk
         inst.results = []
-        inst.restart_count = 0
+        if reset_restart_count:
+            inst.restart_count = 0
 
         self._clean_protocol_files(inst)
         self._write_queue(inst, chunk)
@@ -722,4 +740,4 @@ class LocalInstancePool(EvaluatorPool):
         logger.info("Instance %d: restarting (attempt %d/%d)",
                     inst.instance_id, inst.restart_count,
                     self._config.max_restarts)
-        self._assign_and_launch(inst, [matchup])
+        self._assign_and_launch(inst, [matchup], reset_restart_count=False)

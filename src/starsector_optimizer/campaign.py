@@ -17,6 +17,7 @@ See docs/specs/22-cloud-deployment.md.
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
@@ -519,13 +520,99 @@ def check_authkey_syntax(authkey: str) -> None:
         )
 
 
+def _current_git_commit_sha() -> str:
+    """Return the workstation source commit that should be baked into AMIs."""
+    try:
+        cp = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+        )
+    except Exception as e:
+        raise PreflightFailure(
+            f"Unable to determine current git commit for AMI source check: {e}. "
+            "Run cloud campaigns from a git checkout."
+        ) from e
+    sha = cp.stdout.strip()
+    if not sha:
+        raise PreflightFailure(
+            "Unable to determine current git commit for AMI source check: "
+            "`git rev-parse HEAD` returned empty output."
+        )
+    return sha
+
+
+def manifest_sha256(path: Path | str = Path("game/starsector/manifest.json")) -> str:
+    """Return SHA-256 for the committed game manifest JSON file."""
+    manifest_path = Path(path)
+    try:
+        return hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+    except Exception as e:
+        raise PreflightFailure(
+            f"Unable to hash manifest at {manifest_path}: {e}. "
+            "Regenerate the manifest and re-bake the AMI."
+        ) from e
+
+
+def _worker_source_dirty_status() -> str:
+    """Return porcelain status for files that are copied into worker AMIs."""
+    paths = (
+        "src",
+        "pyproject.toml",
+        "uv.lock",
+        "scripts/cloud/bake_image.sh",
+        "scripts/cloud/packer",
+    )
+    cp = subprocess.run(
+        ["git", "status", "--porcelain", "--", *paths],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5.0,
+    )
+    return cp.stdout.strip()
+
+
+def _expected_worker_source_sha() -> str:
+    """Reject cloud launches from uncommitted worker-source changes.
+
+    `WorkerSourceSha` names a committed tree. If files copied into the AMI are
+    dirty locally, comparing only `git rev-parse HEAD` would let an
+    orchestrator run code the workers cannot possibly have.
+    """
+    sha = _current_git_commit_sha()
+    try:
+        dirty = _worker_source_dirty_status()
+    except Exception as e:
+        raise PreflightFailure(
+            f"Unable to verify clean worker-source checkout: {e}. "
+            "Run cloud campaigns from a git checkout."
+        ) from e
+    if not dirty:
+        return sha
+    if os.environ.get("STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH") == "1":
+        return f"{sha}-dirty"
+    sample = "; ".join(dirty.splitlines()[:5])
+    raise PreflightFailure(
+        "Worker source checkout has uncommitted changes in files copied "
+        f"into the AMI: {sample}. Commit or stash before launching so "
+        "WorkerSourceSha matches both the orchestrator and workers. "
+        "Set STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1 only for disposable "
+        "debugging runs."
+    )
+
+
 def check_ami_tags_against_manifest(
     provider: CloudProvider,
     ami_ids_by_region: dict[str, str],
     manifest: Any,
+    *,
+    required_regions: tuple[str, ...] | list[str] | None = None,
 ) -> None:
-    """Assert every AMI's GameVersion + ModCommitSha tags match the
-    `manifest`'s `game_version` + `mod_commit_sha`. Raises
+    """Assert every AMI's game, manifest, mod, and worker-source tags
+    match the workstation inputs. Raises
     `PreflightFailure` (a `ValueError`) on mismatch.
 
     Public so `honest_evaluator._preflight_for_honest_eval` can reuse the
@@ -541,13 +628,30 @@ def check_ami_tags_against_manifest(
     behavior so non-AWS preflight paths aren't hard-broken by adopting
     this helper.
     """
+    if required_regions is not None:
+        missing = [r for r in required_regions if r not in ami_ids_by_region]
+        if missing:
+            raise PreflightFailure(
+                "ami_ids_by_region is missing AMI IDs for configured "
+                f"region(s): {', '.join(missing)}. Re-run "
+                "scripts/cloud/bake_image.sh and paste every regional AMI "
+                "into the campaign YAML."
+            )
+    worker_source_sha: str | None = None
+    manifest_sha = manifest_sha256()
     for region, ami_id in ami_ids_by_region.items():
         try:
             ami_gv = provider.describe_ami_tag(
                 ami_id=ami_id, region=region, tag_key="GameVersion",
             )
+            ami_manifest_sha = provider.describe_ami_tag(
+                ami_id=ami_id, region=region, tag_key="ManifestSha256",
+            )
             ami_sha = provider.describe_ami_tag(
                 ami_id=ami_id, region=region, tag_key="ModCommitSha",
+            )
+            ami_worker_sha = provider.describe_ami_tag(
+                ami_id=ami_id, region=region, tag_key="WorkerSourceSha",
             )
         except AttributeError:
             logger.warning(
@@ -560,12 +664,21 @@ def check_ami_tags_against_manifest(
                 f"describe_ami_tag({ami_id}, {region}) failed: {e}. "
                 f"The AMI may be missing or in a different account."
             ) from e
+        if worker_source_sha is None:
+            worker_source_sha = _expected_worker_source_sha()
         if ami_gv != manifest.constants.game_version:
             raise PreflightFailure(
                 f"AMI {ami_id} in {region} tagged GameVersion={ami_gv!r} "
                 f"but manifest.game_version={manifest.constants.game_version!r}. "
                 f"Re-bake AMI after running scripts/update_manifest.py; "
                 f"see .claude/skills/cloud-worker-ops.md."
+            )
+        if ami_manifest_sha != manifest_sha:
+            raise PreflightFailure(
+                f"AMI {ami_id} in {region} tagged ManifestSha256="
+                f"{ami_manifest_sha!r} but local manifest sha256 is "
+                f"{manifest_sha!r}. Re-bake AMI after regenerating or "
+                "editing game/starsector/manifest.json."
             )
         # ModCommitSha dual-check (Commit G R6). Gradle's `generateBuildInfo`
         # task stamps the git SHA into the jar; ManifestDumper embeds it
@@ -586,6 +699,14 @@ def check_ami_tags_against_manifest(
                 f"but manifest.mod_commit_sha={mfst_sha!r}. Re-bake AMI "
                 f"after `./gradlew deploy` + `scripts/update_manifest.py`; "
                 f"stale-mod AMI would run pre-G probe code against v2 schema."
+            )
+        if ami_worker_sha != worker_source_sha:
+            raise PreflightFailure(
+                f"AMI {ami_id} in {region} tagged WorkerSourceSha="
+                f"{ami_worker_sha!r} but current git HEAD is "
+                f"{worker_source_sha!r}. Re-bake AMI from the committed "
+                "source before launching or resuming cloud workers; "
+                "JAR overlay does not update Python worker code."
             )
 
 
@@ -693,7 +814,10 @@ class CampaignManager:
         from .game_manifest import GameManifest
         manifest = GameManifest.load()
         check_ami_tags_against_manifest(
-            self._provider, self._config.ami_ids_by_region, manifest,
+            self._provider,
+            self._config.ami_ids_by_region,
+            manifest,
+            required_regions=self._config.regions,
         )
         self._manifest = manifest
 

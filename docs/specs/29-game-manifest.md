@@ -291,26 +291,36 @@ every PR.
 
 `campaign.check_ami_tags_against_manifest(provider, ami_ids_by_region,
 manifest)` (called by both `CampaignManager._check_manifest_and_ami_tags`
-and `honest_evaluator._preflight_for_honest_eval`) cross-checks two
+and `honest_evaluator._preflight_for_honest_eval`) cross-checks four
 AMI tags per `(region, ami_id)` in `ami_ids_by_region`:
 
 1. **GameVersion** = `manifest.constants.game_version` (engine-version
-   drift gate). Packer template stamps `GameVersion = var.game_version`
-   at bake time; the `game_version` variable MUST be bumped in lockstep
-   with the manifest regen.
-2. **ModCommitSha** = `manifest.constants.mod_commit_sha` (mod-commit
+   drift gate). Packer template reads `local.game_version` from the manifest
+   at bake time; the manifest's game version must change in lockstep with
+   game-version updates.
+2. **ManifestSha256** = `sha256(game/starsector/manifest.json)` (manifest
+   content drift gate). Catches manifest or game-data changes that do not
+   change `game_version` or `mod_commit_sha`.
+3. **ModCommitSha** = `manifest.constants.mod_commit_sha` (mod-commit
    drift gate; Commit G R6). Catches the case where the engine didn't
    change but the mod did — Gradle's `generateBuildInfo` task stamps
    the git SHA into the jar, ManifestDumper embeds it into
    `manifest.constants.mod_commit_sha`, Packer reads it back for the
    AMI tag. Empty / `"unknown"` `mod_commit_sha` is also rejected: it
    means the SHA chain broke upstream and the AMI cannot be trusted.
+4. **WorkerSourceSha** = current workstation `git rev-parse HEAD`
+   (Python worker/orchestrator drift gate). Packer stamps this from
+   `scripts/cloud/bake_image.sh`; dirty debug bakes use
+   `<git HEAD>-dirty`. Launch preflight rejects uncommitted worker-source
+   changes by default because the AMI can only be trusted to contain the
+   committed source tree named by this tag.
 
-Mismatch on either tag raises `PreflightFailure` (a `ValueError`
-subclass) with remediation: "re-bake AMI after running
-`scripts/update_manifest.py`; see `.claude/skills/cloud-worker-ops.md`
-for the Game-Version-Update runbook." See spec 22 §"Manifest + AMI
-tag preflight (2026-04-19)" for the full helper signature.
+Mismatch on any tag raises `PreflightFailure` (a `ValueError` subclass) with
+tag-specific remediation: manifest/game-version drift requires manifest regen
+and AMI re-bake; mod commit drift requires Gradle deploy, manifest regen, and
+AMI re-bake; worker-source drift requires committing/stashing source changes
+and AMI re-bake. See spec 22 §"Manifest + AMI tag preflight" for the full
+helper signature.
 
 ## Rationale for existence
 

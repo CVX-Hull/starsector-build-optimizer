@@ -56,6 +56,12 @@ variable "project_src" {
   description = "Local path to Python project src/ (host side)."
 }
 
+variable "worker_source_sha" {
+  type        = string
+  default     = "unknown"
+  description = "Git commit SHA for Python/source tree baked into the AMI."
+}
+
 # GameVersion + ModCommitSha are read directly from the committed manifest
 # so they cannot desync from what the orchestrator preflights against. The
 # jar's generateBuildInfo task stamps the git SHA into the manifest; Packer
@@ -64,6 +70,7 @@ variable "project_src" {
 locals {
   manifest_path  = abspath("${path.root}/../../../game/starsector/manifest.json")
   manifest       = jsondecode(file(local.manifest_path))
+  manifest_sha   = sha256(file(local.manifest_path))
   game_version   = local.manifest.constants.game_version
   mod_commit_sha = local.manifest.constants.mod_commit_sha
 }
@@ -88,10 +95,12 @@ source "amazon-ebs" "worker" {
   }
 
   tags = {
-    Project      = "starsector"
-    Role         = "worker-image"
-    GameVersion  = local.game_version
-    ModCommitSha = local.mod_commit_sha
+    Project         = "starsector"
+    Role            = "worker-image"
+    GameVersion     = local.game_version
+    ManifestSha256  = local.manifest_sha
+    ModCommitSha    = local.mod_commit_sha
+    WorkerSourceSha = var.worker_source_sha
   }
 }
 

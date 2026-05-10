@@ -30,6 +30,15 @@ from starsector_optimizer.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _clean_worker_source_checkout(monkeypatch):
+    """Unit tests run against an intentionally dirty worktree while editing."""
+    monkeypatch.setattr(
+        "starsector_optimizer.campaign._worker_source_dirty_status",
+        lambda: "",
+    )
+
+
 # ---- Fixtures ----------------------------------------------------------------
 
 
@@ -1389,6 +1398,14 @@ class TestMainCLIWiring:
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign.manifest_sha256",
+            lambda: "manifest-sha",
+        )
         # NOT patching preflight — testing the real one. STS still needs
         # to be mocked since CI has no AWS creds.
         import boto3
@@ -1402,8 +1419,12 @@ class TestMainCLIWiring:
             def describe_ami_tag(self, *, ami_id, region, tag_key):
                 if tag_key == "GameVersion":
                     return manifest.constants.game_version
+                if tag_key == "ManifestSha256":
+                    return "manifest-sha"
                 if tag_key == "ModCommitSha":
                     return "deadbeef0000000"  # mismatched
+                if tag_key == "WorkerSourceSha":
+                    return "worker-sha"
                 raise KeyError(tag_key)
         monkeypatch.setattr(
             honest_evaluator, "AWSProvider", FakeProvider,
@@ -1439,6 +1460,14 @@ class TestMainCLIWiring:
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign._current_git_commit_sha",
+            lambda: "worker-sha",
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.campaign.manifest_sha256",
+            lambda: "manifest-sha",
+        )
         import boto3
         monkeypatch.setattr(boto3, "client", lambda *a, **kw: MagicMock(
             get_caller_identity=lambda: {"UserId": "ut"},
@@ -1449,8 +1478,12 @@ class TestMainCLIWiring:
             def describe_ami_tag(self, *, ami_id, region, tag_key):
                 if tag_key == "GameVersion":
                     return manifest.constants.game_version
+                if tag_key == "ManifestSha256":
+                    return "manifest-sha"
                 if tag_key == "ModCommitSha":
                     return manifest.constants.mod_commit_sha
+                if tag_key == "WorkerSourceSha":
+                    return "worker-sha"
                 raise KeyError(tag_key)
         monkeypatch.setattr(
             honest_evaluator, "AWSProvider", FakeProvider,

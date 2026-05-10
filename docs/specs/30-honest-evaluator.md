@@ -399,12 +399,12 @@ helper raises `PreflightFailure` (a `ValueError` subclass):
 
 - `campaign.check_authkey_syntax(authkey)` — gate 5 (`startswith("tskey-auth-")`).
 - `campaign.check_aws_credentials()` — gate 4 (`STS get_caller_identity`).
-- `campaign.check_ami_tags_against_manifest(provider, ami_ids_by_region, manifest)`
-  — "Manifest + AMI tag preflight (2026-04-19)" gate. Catches the
-  silent-corruption case where an operator regenerated the manifest
-  without re-baking the AMI: workers would run pre-G probe code
-  against a v2 manifest, producing variant-id mismatches in the
-  oracle pool.
+- `campaign.check_ami_tags_against_manifest(provider, ami_ids_by_region,
+  manifest, required_regions=campaign.regions)` — "Manifest + AMI tag
+  preflight" gate. Catches silent-corruption cases where an operator
+  regenerated the manifest, changed Java, or changed Python worker code
+  without re-baking every regional AMI. Workers must run the same game
+  data, mod commit, and committed worker source as the orchestrator.
 
 NOT included (deferred): tailnet IP probe (trusts env var), Redis
 tailnet exposure (assumes a working devenv).

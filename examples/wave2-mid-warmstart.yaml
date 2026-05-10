@@ -37,8 +37,9 @@ min_workers_to_start: 4              # >=2 workers, allow degraded fleet to proc
 partial_fleet_policy: proceed_half_speed
 matchup_slots_per_worker: 2
 
-# Same AMI as Wave 1 (post-V2, ModCommitSha=dc71e3b). Re-bake with 722afd2 +
-# c2d5150 is scheduled before Wave 3.
+# Same old AMI as Wave 1 (post-V2, ModCommitSha=dc71e3b). It predates
+# WorkerSourceSha / ManifestSha256 tags; re-bake and update both regions
+# before launching under current preflight.
 ami_ids_by_region:
   us-east-1: ami-0a434660884e985e3
   us-east-2: ami-058e7a119eb656d45

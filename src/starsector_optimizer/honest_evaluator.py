@@ -861,9 +861,10 @@ def _preflight_for_honest_eval(
 
     1. Malformed authkey (workers boot but `tailscale up` fails silently)
     2. Stale AWS creds (`provision_fleet` 401s after partial spend)
-    3. Manifest+AMI tag drift (workers run pre-G probe code against v2
-       manifest → silent oracle corruption — see spec 22 §"Manifest +
-       AMI tag preflight (2026-04-19)")
+    3. Manifest/source+AMI tag drift (workers run stale game data, stale
+       Java, or stale Python worker code against the current orchestrator
+       → silent oracle corruption — see spec 22 §"Manifest + AMI tag
+       preflight")
 
     All three gates delegate to public `campaign.check_*` helpers so
     `CampaignManager` and honest-eval cannot drift on remediation messages
@@ -882,7 +883,10 @@ def _preflight_for_honest_eval(
     # `honest_evaluator.AWSProvider` to inject a fake.
     provider = AWSProvider(regions=campaign.regions)
     check_ami_tags_against_manifest(
-        provider, campaign.ami_ids_by_region, manifest,
+        provider,
+        campaign.ami_ids_by_region,
+        manifest,
+        required_regions=campaign.regions,
     )
 
 

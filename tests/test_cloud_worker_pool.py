@@ -160,8 +160,79 @@ class TestDedup:
             "result": _combat_result_json("result-id"),
             "bearer_token": BEARER,
         })
-        assert resp.status_code == 400
+        assert resp.status_code == 422
         assert resp.get_json()["error"] == "matchup_id_mismatch"
+        assert pool._mismatch_discard_count == 1
+
+    def test_result_matchup_id_mismatch_wakes_dispatcher(
+        self, pool, flask_test_client_factory,
+    ):
+        from starsector_optimizer.cloud_worker_pool import (
+            ResultEnvelopeMismatchRejected,
+        )
+
+        client = flask_test_client_factory(pool.app)
+        matchup = _matchup("envelope-id")
+        holder = {}
+
+        def _run():
+            try:
+                pool.run_matchup(matchup)
+            except Exception as exc:
+                holder["exc"] = exc
+
+        t = threading.Thread(target=_run)
+        t.start()
+        time.sleep(0.05)
+        resp = client.post("/result", json={
+            "matchup_id": "envelope-id",
+            "result": _combat_result_json("result-id"),
+            "bearer_token": BEARER,
+        })
+        assert resp.status_code == 422
+        t.join(timeout=3.0)
+        assert isinstance(holder.get("exc"), ResultEnvelopeMismatchRejected)
+        assert "envelope-id" not in pool._seen
+        assert "envelope-id" not in pool._results
+        assert "envelope-id" not in pool._failures
+
+    def test_duplicate_result_matchup_id_mismatch_wakes_dispatcher(
+        self, pool, flask_test_client_factory,
+    ):
+        """If the same stale POST body appears again for a retried matchup,
+        dedup must still wake the currently waiting dispatcher."""
+        from starsector_optimizer.cloud_worker_pool import (
+            ResultEnvelopeMismatchRejected,
+        )
+
+        client = flask_test_client_factory(pool.app)
+        body = _combat_result_json("result-id")
+        first = client.post("/result", json={
+            "matchup_id": "envelope-id",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert first.status_code == 422
+
+        holder = {}
+
+        def _run():
+            try:
+                pool.run_matchup(_matchup("envelope-id"))
+            except Exception as exc:
+                holder["exc"] = exc
+
+        t = threading.Thread(target=_run)
+        t.start()
+        time.sleep(0.05)
+        second = client.post("/result", json={
+            "matchup_id": "envelope-id",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert second.status_code == 409
+        t.join(timeout=3.0)
+        assert isinstance(holder.get("exc"), ResultEnvelopeMismatchRejected)
 
 
 class TestAuth:
@@ -238,11 +309,11 @@ class TestLoadoutMismatchDiscard:
         assert good_resp.status_code == 200
         assert "m-retry" in pool._seen
 
-    def test_duplicate_mismatch_body_is_deduped_not_refailed(
+    def test_duplicate_mismatch_body_is_deduped_without_recount(
         self, pool, flask_test_client_factory,
     ):
         """If the worker loses the 422 response and retries the same corrupt
-        POST body, the pool must not count or wake a second discard."""
+        POST body, the pool must not count a second discard."""
         client = flask_test_client_factory(pool.app)
         body = _combat_result_json("m-dupe-bad")
         body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
@@ -258,6 +329,42 @@ class TestLoadoutMismatchDiscard:
         })
         assert first.status_code == 422
         assert second.status_code == 409
+        assert pool._mismatch_discard_count == 1
+
+    def test_duplicate_mismatch_body_wakes_active_dispatcher(
+        self, pool, flask_test_client_factory,
+    ):
+        from starsector_optimizer.cloud_worker_pool import LoadoutMismatchRejected
+
+        client = flask_test_client_factory(pool.app)
+        body = _combat_result_json("m-dupe-wake")
+        body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
+        first = client.post("/result", json={
+            "matchup_id": "m-dupe-wake",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert first.status_code == 422
+
+        holder = {}
+
+        def _run():
+            try:
+                pool.run_matchup(_matchup("m-dupe-wake"))
+            except Exception as exc:
+                holder["exc"] = exc
+
+        t = threading.Thread(target=_run)
+        t.start()
+        time.sleep(0.05)
+        second = client.post("/result", json={
+            "matchup_id": "m-dupe-wake",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert second.status_code == 409
+        t.join(timeout=3.0)
+        assert isinstance(holder.get("exc"), LoadoutMismatchRejected)
         assert pool._mismatch_discard_count == 1
 
     def test_mismatch_wakes_dispatcher_with_retryable_failure(
