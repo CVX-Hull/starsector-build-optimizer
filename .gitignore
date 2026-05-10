@@ -54,8 +54,10 @@ experiments/**/orchestrator.log
 # Notebook outputs (re-generated on execution)
 notebooks/.ipynb_checkpoints/
 
-# Claude
-.claude/
+# Claude local state stays ignored, but repo workflow skills are tracked.
+.claude/*
+!.claude/skills/
+!.claude/skills/**
 
 # Cloud secrets (Starsector serial key, Tailscale authkey, bearer tokens)
 scripts/cloud/packer/prefs.xml
