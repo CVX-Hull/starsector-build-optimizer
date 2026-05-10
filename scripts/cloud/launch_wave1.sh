@@ -23,7 +23,8 @@
 # Pre-flight (operator):
 #   1. tailscale userspace daemon up (scripts/cloud/devenv-up.sh)
 #   2. .env contains TAILSCALE_AUTHKEY + AWS_PROFILE
-#   3. AMI ami-0a434660884e985e3 still exists (audit_amis.sh)
+#   3. AMIs ami-07470878a86badf73 (us-east-1) and ami-0a8e0a93acac78547
+#      (us-east-2) still exist and pass tag preflight
 #
 # Recovery: each cell tears down its own fleet on exit (launch_campaign.sh
 # trap). If this wrapper itself is interrupted between cells, run

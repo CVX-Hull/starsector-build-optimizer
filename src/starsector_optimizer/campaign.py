@@ -501,7 +501,9 @@ def check_aws_credentials() -> None:
     except Exception as e:
         raise PreflightFailure(
             f"AWS credentials unavailable: {e}. "
-            f"Run `aws sso login` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY."
+            "Use the project AWS profile from `.env` (AWS_PROFILE=starsector) "
+            "or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY for the dedicated "
+            "EC2-only IAM user."
         ) from e
 
 
@@ -520,11 +522,24 @@ def check_authkey_syntax(authkey: str) -> None:
         )
 
 
-def _current_git_commit_sha() -> str:
-    """Return the workstation source commit that should be baked into AMIs."""
+_WORKER_SOURCE_INPUT_PATHS: tuple[str, ...] = (
+    "src",
+    "pyproject.toml",
+    "uv.lock",
+    "scripts/cloud/bake_image.sh",
+    "scripts/cloud/packer",
+)
+
+_AMI_DIRTY_INPUT_PATHS: tuple[str, ...] = (
+    *_WORKER_SOURCE_INPUT_PATHS,
+    "game/starsector/manifest.json",
+)
+
+
+def _git_object_id(path: str) -> str:
     try:
         cp = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
+            ["git", "rev-parse", f"HEAD:{path}"],
             check=True,
             capture_output=True,
             text=True,
@@ -532,16 +547,31 @@ def _current_git_commit_sha() -> str:
         )
     except Exception as e:
         raise PreflightFailure(
-            f"Unable to determine current git commit for AMI source check: {e}. "
-            "Run cloud campaigns from a git checkout."
+            f"Unable to determine git object id for {path!r}: {e}. "
+            "Run cloud campaigns from a complete git checkout."
         ) from e
-    sha = cp.stdout.strip()
-    if not sha:
+    oid = cp.stdout.strip()
+    if not oid:
         raise PreflightFailure(
-            "Unable to determine current git commit for AMI source check: "
-            "`git rev-parse HEAD` returned empty output."
+            f"Unable to determine git object id for {path!r}: empty output."
         )
-    return sha
+    return oid
+
+
+def worker_source_sha256() -> str:
+    """Return a stable digest for source inputs copied into worker AMIs.
+
+    This intentionally does not use whole-repo `HEAD`: documentation-only or
+    campaign-YAML commits do not change the bytes baked into the Python worker
+    environment, and must not force an AMI rebake.
+    """
+    h = hashlib.sha256()
+    for path in _WORKER_SOURCE_INPUT_PATHS:
+        h.update(path.encode())
+        h.update(b"\0")
+        h.update(_git_object_id(path).encode())
+        h.update(b"\0")
+    return h.hexdigest()
 
 
 def manifest_sha256(path: Path | str = Path("game/starsector/manifest.json")) -> str:
@@ -557,16 +587,9 @@ def manifest_sha256(path: Path | str = Path("game/starsector/manifest.json")) ->
 
 
 def _worker_source_dirty_status() -> str:
-    """Return porcelain status for files that are copied into worker AMIs."""
-    paths = (
-        "src",
-        "pyproject.toml",
-        "uv.lock",
-        "scripts/cloud/bake_image.sh",
-        "scripts/cloud/packer",
-    )
+    """Return porcelain status for files that determine AMI provenance."""
     cp = subprocess.run(
-        ["git", "status", "--porcelain", "--", *paths],
+        ["git", "status", "--porcelain", "--", *_AMI_DIRTY_INPUT_PATHS],
         check=True,
         capture_output=True,
         text=True,
@@ -578,11 +601,11 @@ def _worker_source_dirty_status() -> str:
 def _expected_worker_source_sha() -> str:
     """Reject cloud launches from uncommitted worker-source changes.
 
-    `WorkerSourceSha` names a committed tree. If files copied into the AMI are
-    dirty locally, comparing only `git rev-parse HEAD` would let an
-    orchestrator run code the workers cannot possibly have.
+    `WorkerSourceSha` names the committed source inputs copied into the AMI.
+    Dirty worker or manifest inputs would let an orchestrator run code or game
+    data the workers cannot reproducibly have.
     """
-    sha = _current_git_commit_sha()
+    sha = worker_source_sha256()
     try:
         dirty = _worker_source_dirty_status()
     except Exception as e:
@@ -596,8 +619,8 @@ def _expected_worker_source_sha() -> str:
         return f"{sha}-dirty"
     sample = "; ".join(dirty.splitlines()[:5])
     raise PreflightFailure(
-        "Worker source checkout has uncommitted changes in files copied "
-        f"into the AMI: {sample}. Commit or stash before launching so "
+        "AMI input checkout has uncommitted changes in files copied or "
+        f"hashed into the AMI: {sample}. Commit or stash before launching so "
         "WorkerSourceSha matches both the orchestrator and workers. "
         "Set STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1 only for disposable "
         "debugging runs."
@@ -703,7 +726,7 @@ def check_ami_tags_against_manifest(
         if ami_worker_sha != worker_source_sha:
             raise PreflightFailure(
                 f"AMI {ami_id} in {region} tagged WorkerSourceSha="
-                f"{ami_worker_sha!r} but current git HEAD is "
+                f"{ami_worker_sha!r} but current worker-source digest is "
                 f"{worker_source_sha!r}. Re-bake AMI from the committed "
                 "source before launching or resuming cloud workers; "
                 "JAR overlay does not update Python worker code."
@@ -774,7 +797,7 @@ class CampaignManager:
     # ---- Preflight ----
 
     def _preflight(self) -> None:
-        """Five checks + long-lived redis client. Failure → sys.exit(2)."""
+        """Run launch preflight + create long-lived redis client. Failure exits 2."""
         try:
             self._tailnet_ip = _resolve_tailnet_ip()
             _check_redis_reachable(

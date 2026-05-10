@@ -59,7 +59,7 @@ variable "project_src" {
 variable "worker_source_sha" {
   type        = string
   default     = "unknown"
-  description = "Git commit SHA for Python/source tree baked into the AMI."
+  description = "Digest of Python/source inputs baked into the AMI."
 }
 
 # GameVersion + ModCommitSha are read directly from the committed manifest

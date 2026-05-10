@@ -35,7 +35,7 @@ consumer — `repair.py`, `search_space.py`, `scorer.py`,
 
 `GameManifest.load()` strictly validates
 `constants.manifest_schema_version` against the Python
-`EXPECTED_SCHEMA_VERSION` constant (currently `1`). Mismatch
+`EXPECTED_SCHEMA_VERSION` constant (currently `2`). Mismatch
 raises `ValueError` with remediation pointing at
 `scripts/update_manifest.py`. Schema bumps are a deliberate
 code-review event — the Java emitter, the Python loader, and
@@ -58,7 +58,7 @@ manifest. The contract is:
 ## GameManifest dataclass
 
 ```python
-EXPECTED_SCHEMA_VERSION: int = 1
+EXPECTED_SCHEMA_VERSION: int = 2
 MIN_VANILLA_WEAPON_COUNT: int = 150   # baselines from 2026-04-19 vanilla 0.98 dump
 MIN_VANILLA_HULLMOD_COUNT: int = 60
 MIN_VANILLA_HULL_COUNT: int = 200
@@ -308,12 +308,13 @@ AMI tags per `(region, ami_id)` in `ami_ids_by_region`:
    `manifest.constants.mod_commit_sha`, Packer reads it back for the
    AMI tag. Empty / `"unknown"` `mod_commit_sha` is also rejected: it
    means the SHA chain broke upstream and the AMI cannot be trusted.
-4. **WorkerSourceSha** = current workstation `git rev-parse HEAD`
-   (Python worker/orchestrator drift gate). Packer stamps this from
-   `scripts/cloud/bake_image.sh`; dirty debug bakes use
-   `<git HEAD>-dirty`. Launch preflight rejects uncommitted worker-source
-   changes by default because the AMI can only be trusted to contain the
-   committed source tree named by this tag.
+4. **WorkerSourceSha** = SHA-256 digest over the committed worker-source
+   inputs baked into the AMI (`src`, `pyproject.toml`, `uv.lock`, and
+   the cloud bake/Packer scripts). Packer stamps this from
+   `scripts/cloud/bake_image.sh`; dirty debug bakes append `-dirty`.
+   Documentation-only or campaign-YAML commits do not change this digest.
+   Launch preflight rejects uncommitted worker-source or manifest changes by
+   default because the AMI can only be trusted to contain committed inputs.
 
 Mismatch on any tag raises `PreflightFailure` (a `ValueError` subclass) with
 tag-specific remediation: manifest/game-version drift requires manifest regen

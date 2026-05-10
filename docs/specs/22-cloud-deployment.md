@@ -363,11 +363,13 @@ def check_ami_tags_against_manifest(
          back for the AMI tag; a missing value means the chain broke
          upstream and the AMI cannot be trusted).
       5. Read `provider.describe_ami_tag(ami_id, region, "WorkerSourceSha")`
-         and assert it equals expected worker source SHA. Clean launches
-         expect current workstation `git rev-parse HEAD`; dirty debug
-         launches with `STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1` expect
-         `<git HEAD>-dirty`. This prevents Python-only fixes from being
-         skipped by the Java-only JAR override path.
+         and assert it equals the SHA-256 digest of committed worker-source
+         inputs copied into the AMI (`src`, `pyproject.toml`, `uv.lock`, and
+         cloud bake/Packer scripts). Dirty debug launches with
+         `STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1` expect `<digest>-dirty`.
+         Documentation-only commits do not change the digest. This prevents
+         Python-only fixes from being skipped by the Java-only JAR override
+         path without forcing rebakes for docs/config-only commits.
       6. If `required_regions` is supplied, assert every configured
          region has an explicit `ami_ids_by_region` entry before launch.
     Raises `PreflightFailure` (a `ValueError` subclass) on any mismatch
@@ -389,11 +391,12 @@ def check_authkey_syntax(authkey: str) -> None:
 
 The AWS AMI tags are set by the Packer template:
 `GameVersion`, `ManifestSha256`, and `ModCommitSha` are read from the committed
-manifest; `WorkerSourceSha` is passed by `scripts/cloud/bake_image.sh` from
-`git rev-parse HEAD`. The bake script refuses dirty worker-source paths (`src`,
-`pyproject.toml`, `uv.lock`, and cloud Packer/bake scripts) unless
-`STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` is set. Dirty debug bakes are tagged
-`<git HEAD>-dirty`, not clean HEAD, so they cannot masquerade as production
+manifest; `WorkerSourceSha` is passed by `scripts/cloud/bake_image.sh` from the
+committed worker-source input digest. The bake script refuses dirty AMI inputs
+(`src`, `pyproject.toml`, `uv.lock`, `game/starsector/manifest.json`, and cloud
+Packer/bake scripts) unless `STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` is set. Dirty
+debug bakes are tagged
+`<digest>-dirty`, not the clean digest, so they cannot masquerade as production
 AMIs. Launch/honest-eval preflight runs the same dirty-source check and rejects
 dirty launches unless `STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1` is set. See spec 29
 for the manifest-as-oracle contract.
@@ -579,7 +582,7 @@ The four name-bearing params (`study_id`, `project_tag`, `fleet_name`, `flask_po
    - Step 2a — Redis alive: `redis.Redis(host="127.0.0.1", port=config.redis_port, socket_timeout=config.redis_preflight_timeout_seconds).ping()`. Failure → "Redis not reachable on 127.0.0.1:<port>. Start redis-server; see `scripts/cloud/devenv-up.sh` for a rootless recipe."
    - Step 2b — Tailnet exposure: attempt `redis.Redis(host=self._tailnet_ip, port=config.redis_port, …).ping()`. On success → pass (kernel-mode tailscale binds the tailnet IP to a local interface). On failure, fall back to `_tailscale_serve_exposes_port(port)`: if `tailscale serve status` lists `127.0.0.1:<port>` in its output, pass (userspace-mode tailscale proxies via `tailscale serve`). If neither succeeds → "Redis responds on 127.0.0.1 but is not reachable over the tailnet. Either (kernel-mode) bind redis-server to the tailnet IP or (userspace-mode) run `tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>`."
 3. **Flush stale Redis keys**: `_flush_stale_campaign_keys(project_tag, port, timeout)` SCANs `queue:<project_tag>:*` and `worker:<project_tag>:*` and DELs everything. Prevents a re-launched campaign with the same `name` from inheriting processing-list entries from the prior run (which the janitor would otherwise re-dispatch as phantom matchups) or stale worker-heartbeat hashes.
-4. **AWS credentials**: `boto3.client("sts").get_caller_identity()`. Failure → fail with "AWS credentials unavailable. Run `aws sso login` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY."
+4. **AWS credentials**: `boto3.client("sts").get_caller_identity()`. Failure → fail with remediation pointing at the project `.env` profile (`AWS_PROFILE=starsector`) or dedicated EC2 IAM-user access keys. Long campaigns must not rely on transient SSO/login-session credentials.
 5. **Authkey syntax**: `config.tailscale_authkey_secret.startswith("tskey-auth-")`. Violation → fail with "tailscale_authkey_secret must start with `tskey-auth-`. Generate a pre-approved ephemeral key from the Tailscale admin panel (tagged `tag:starsector-worker`)."
 
 Preflight subprocess env plumbing (`_generate_study_env(study_idx, seed_idx, study_cfg, *, token_factory=secrets.token_urlsafe)`):
@@ -622,10 +625,12 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 
 `bake_image.sh` tags the source AMI and copied regional AMIs with
 `ManifestSha256=<sha256(game/starsector/manifest.json)>` and
-`WorkerSourceSha=<git HEAD>` (or `<git HEAD>-dirty` for dirty debug bakes).
-`CampaignManager` and honest-eval preflight reject AMIs whose tags differ from
-the current checkout and manifest; after manifest, Python, or `uv.lock` changes,
-re-bake and update every relevant `ami_ids_by_region` entry before launch/resume.
+`WorkerSourceSha=<worker-source-input digest>` (or `<digest>-dirty` for dirty
+debug bakes). `CampaignManager`, direct cloud-study, loadout-AB, and
+honest-eval preflight reject AMIs whose tags differ from the current committed
+worker inputs and manifest; after manifest, Python, `uv.lock`, or bake-script
+changes, re-bake and update every relevant `ami_ids_by_region` entry before
+launch/resume.
 
 **Cloud-init injects** (never baked — these are per-campaign secrets and identifiers):
 - Tailscale auth key (from `CampaignConfig.tailscale_authkey_secret`)

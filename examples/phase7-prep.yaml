@@ -43,12 +43,12 @@ min_workers_to_start: 48
 partial_fleet_policy: proceed_half_speed
 
 # AMIs updated 2026-05-10 to the post-V2-loadout-fix Wave 1 AMIs
-# (ModCommitSha=dc71e3b, baked 2026-05-09). These predate WorkerSourceSha /
-# ManifestSha256 tags; re-bake and update both regions before launching under
-# current preflight.
+# Worker AMIs baked 2026-05-10 from commit 0c11489 and tagged with
+# WorkerSourceSha / ManifestSha256. Re-bake and update both regions after
+# changing worker Python, Java mod payload, or staged game manifest data.
 ami_ids_by_region:
-  us-east-1: ami-0a434660884e985e3
-  us-east-2: ami-058e7a119eb656d45
+  us-east-1: ami-07470878a86badf73
+  us-east-2: ami-0a8e0a93acac78547
 
 ssh_key_name: starsector-probe
 

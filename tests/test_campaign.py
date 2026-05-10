@@ -26,6 +26,10 @@ def _clean_worker_source_checkout(monkeypatch):
         "starsector_optimizer.campaign._worker_source_dirty_status",
         lambda: "",
     )
+    monkeypatch.setattr(
+        "starsector_optimizer.campaign.worker_source_sha256",
+        lambda: "worker-sha",
+    )
 
 
 def _minimal_campaign_yaml(tmp_path: Path, **overrides) -> Path:
@@ -511,7 +515,7 @@ class TestCampaignManagerPreflight:
         config = self._config(tmp_path, **overrides)
         provider = MagicMock()
         provider.list_active.return_value = []
-        from starsector_optimizer.campaign import manifest_sha256
+        from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
         # Preflight checks GameVersion, ManifestSha256, ModCommitSha, and
         # WorkerSourceSha.
         # Mock to dispatch on tag_key so all succeed; tests that want to
@@ -525,12 +529,7 @@ class TestCampaignManagerPreflight:
             if tag_key == "ModCommitSha":
                 return _m.constants.mod_commit_sha
             if tag_key == "WorkerSourceSha":
-                return subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
+                return worker_source_sha256()
             raise KeyError(tag_key)
         provider.describe_ami_tag.side_effect = _describe_ami_tag
         ledger = MagicMock()
@@ -802,7 +801,7 @@ class TestCheckAmiTagsAgainstManifest:
         return GameManifest.load()
 
     def _manifest_sha(self):
-        from starsector_optimizer.campaign import manifest_sha256
+        from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
         return manifest_sha256()
 
     def _provider_returning(
@@ -822,7 +821,7 @@ class TestCheckAmiTagsAgainstManifest:
     def test_passes_when_all_tags_match(self, monkeypatch):
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
@@ -839,7 +838,7 @@ class TestCheckAmiTagsAgainstManifest:
             check_ami_tags_against_manifest, PreflightFailure,
         )
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
@@ -854,7 +853,7 @@ class TestCheckAmiTagsAgainstManifest:
             check_ami_tags_against_manifest, PreflightFailure,
         )
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
@@ -871,7 +870,7 @@ class TestCheckAmiTagsAgainstManifest:
             check_ami_tags_against_manifest, PreflightFailure,
         )
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
@@ -890,7 +889,7 @@ class TestCheckAmiTagsAgainstManifest:
             check_ami_tags_against_manifest, PreflightFailure,
         )
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "current-worker-sha",
         )
         m = self._manifest()
@@ -909,7 +908,7 @@ class TestCheckAmiTagsAgainstManifest:
             check_ami_tags_against_manifest, PreflightFailure,
         )
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         monkeypatch.setattr(
@@ -929,7 +928,7 @@ class TestCheckAmiTagsAgainstManifest:
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
         monkeypatch.setenv("STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH", "1")
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         monkeypatch.setattr(
@@ -951,7 +950,7 @@ class TestCheckAmiTagsAgainstManifest:
             check_ami_tags_against_manifest, PreflightFailure,
         )
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
@@ -974,7 +973,7 @@ class TestCheckAmiTagsAgainstManifest:
         must not hard-break the preflight — they log a warning and return."""
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
@@ -1016,12 +1015,7 @@ class TestLedgerTick:
             if tag_key == "ModCommitSha":
                 return _m.constants.mod_commit_sha
             if tag_key == "WorkerSourceSha":
-                return subprocess.run(
-                    ["git", "rev-parse", "HEAD"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                ).stdout.strip()
+                return worker_source_sha256()
             raise KeyError(tag_key)
         provider.describe_ami_tag.side_effect = _describe_ami_tag
         provider.get_spot_price.return_value = 0.30

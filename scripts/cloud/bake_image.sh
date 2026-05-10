@@ -25,8 +25,23 @@ if [[ "$DRY_RUN" == "--dry-run" ]]; then
   exit 0
 fi
 
-WORKER_SOURCE_SHA=$(git rev-parse HEAD)
-DIRTY_STATUS=$(git status --porcelain -- src pyproject.toml uv.lock scripts/cloud/bake_image.sh scripts/cloud/packer)
+WORKER_SOURCE_INPUTS=(
+  src
+  pyproject.toml
+  uv.lock
+  scripts/cloud/bake_image.sh
+  scripts/cloud/packer
+)
+AMI_DIRTY_INPUTS=(
+  "${WORKER_SOURCE_INPUTS[@]}"
+  game/starsector/manifest.json
+)
+WORKER_SOURCE_SHA=$(
+  for path in "${WORKER_SOURCE_INPUTS[@]}"; do
+    printf '%s\0%s\0' "$path" "$(git rev-parse "HEAD:$path")"
+  done | shasum -a 256 | awk '{print $1}'
+)
+DIRTY_STATUS=$(git status --porcelain -- "${AMI_DIRTY_INPUTS[@]}")
 if [[ "${STARSECTOR_ALLOW_DIRTY_AMI_BAKE:-}" != "1" ]]; then
   if [[ -n "$DIRTY_STATUS" ]]; then
     echo "[bake_image] ERROR: worktree has uncommitted changes." >&2

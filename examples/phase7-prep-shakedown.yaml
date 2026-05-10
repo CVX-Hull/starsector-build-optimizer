@@ -44,11 +44,12 @@ max_concurrent_workers: 32
 min_workers_to_start: 16
 partial_fleet_policy: proceed_half_speed
 
-# AMIs from 2026-04-19 bake (post-mod_commit_sha wiring fix; manifest
-# carries git SHA c813561 end-to-end; AMI tags mirror manifest via Packer).
+# Worker AMIs baked 2026-05-10 from commit 0c11489 and tagged with
+# WorkerSourceSha / ManifestSha256. Re-bake and update both regions after
+# changing worker Python, Java mod payload, or staged game manifest data.
 ami_ids_by_region:
-  us-east-1: ami-0a9cb6be884488352
-  us-east-2: ami-0e60f66b6e3799758
+  us-east-1: ami-07470878a86badf73
+  us-east-2: ami-0a8e0a93acac78547
 
 ssh_key_name: starsector-probe
 

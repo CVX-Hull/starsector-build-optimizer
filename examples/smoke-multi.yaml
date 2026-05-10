@@ -28,10 +28,11 @@ max_concurrent_workers: 3
 min_workers_to_start: 3
 partial_fleet_policy: abort
 
-# Old smoke AMI. Predates WorkerSourceSha / ManifestSha256 tags; re-bake before
-# launching under the current preflight.
+# Worker AMI baked 2026-05-10 from commit 0c11489 and tagged with
+# WorkerSourceSha / ManifestSha256. Re-bake after changing worker Python,
+# Java mod payload, or staged game manifest data.
 ami_ids_by_region:
-  us-east-1: ami-0b89617b369149ff7
+  us-east-1: ami-07470878a86badf73
 
 ssh_key_name: starsector-probe
 

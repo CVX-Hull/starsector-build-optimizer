@@ -24,10 +24,11 @@ from typing import Any, Iterator
 
 import redis
 
-from .campaign import load_campaign_config
+from .campaign import check_ami_tags_against_manifest, load_campaign_config
 from .cloud_provider import AWSProvider
 from .cloud_userdata import render_user_data
 from .cloud_worker_pool import CloudWorkerPool
+from .game_manifest import GameManifest
 from .models import CampaignConfig, WorkerConfig
 from .optimizer import optimize_hull
 
@@ -135,6 +136,12 @@ def prepare_cloud_pool(
     )
 
     provider = AWSProvider(regions=campaign.regions)
+    check_ami_tags_against_manifest(
+        provider,
+        campaign.ami_ids_by_region,
+        GameManifest.load(),
+        required_regions=campaign.regions,
+    )
     try:
         instance_ids = provider.provision_fleet(
             fleet_name=fleet_name,

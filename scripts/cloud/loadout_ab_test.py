@@ -39,9 +39,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import redis
 
+from starsector_optimizer.campaign import check_ami_tags_against_manifest
 from starsector_optimizer.cloud_provider import AWSProvider
 from starsector_optimizer.cloud_userdata import render_user_data
 from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
+from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.models import BuildSpec, MatchupConfig, WorkerConfig
 
 logging.basicConfig(
@@ -148,7 +150,7 @@ def main() -> int:
     region = os.environ.get("STARSECTOR_AB_REGION", "us-east-1")
     ami_id = os.environ.get(
         "STARSECTOR_AB_AMI",
-        "ami-0a434660884e985e3",  # smoke-campaign.yaml's post-V2-loadout-fix AMI
+        "ami-07470878a86badf73",  # current worker AMI with source/manifest tags
     )
     mod_jar_url = os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_URL", "").strip()
     mod_jar_sha = os.environ.get("STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "").strip()
@@ -181,6 +183,12 @@ def main() -> int:
     )
 
     provider = AWSProvider(regions=(region,))
+    check_ami_tags_against_manifest(
+        provider,
+        {region: ami_id},
+        GameManifest.load(),
+        required_regions=(region,),
+    )
     redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
     pool = CloudWorkerPool(
         study_id=study_id,

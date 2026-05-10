@@ -37,6 +37,10 @@ def _clean_worker_source_checkout(monkeypatch):
         "starsector_optimizer.campaign._worker_source_dirty_status",
         lambda: "",
     )
+    monkeypatch.setattr(
+        "starsector_optimizer.campaign.worker_source_sha256",
+        lambda: "worker-sha",
+    )
 
 
 # ---- Fixtures ----------------------------------------------------------------
@@ -1399,7 +1403,7 @@ class TestMainCLIWiring:
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         monkeypatch.setattr(
@@ -1461,7 +1465,7 @@ class TestMainCLIWiring:
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         monkeypatch.setattr(
-            "starsector_optimizer.campaign._current_git_commit_sha",
+            "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         monkeypatch.setattr(

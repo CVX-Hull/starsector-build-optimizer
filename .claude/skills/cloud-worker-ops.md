@@ -102,7 +102,7 @@ The file is gitignored at `scripts/cloud/packer/prefs.xml` and bakes into the AM
 
 ## Preflight checklist (before launching ANY cloud worker)
 
-Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-runs checks 3 (Tailscale up), 4 (Redis on tailnet), 11 (AWS credentials), and 6 (authkey syntax) in-process before it spawns anything; this checklist is the operator-side verification — items 1/2/5/7/8/9/10/12/13/14/15/16 are operator-only.
+Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-runs checks 3 (Tailscale up), 4 (Redis on tailnet), 11 (AWS credentials), 6 (authkey syntax), and the AMI tag/provenance portion of checks 9/15/16/17 in-process before it spawns anything. Direct cloud-study, loadout-AB, and honest-eval launch paths also run the AMI tag gate before provisioning. This checklist is the operator-side verification — items 1/2/5/7/8/10/12/13/14 are operator-only.
 
 1. **Budget is set**: user has given a `budget_usd` figure AND it's written into the campaign YAML's `budget_usd` field.
 2. **Python modules import cleanly**:
@@ -244,9 +244,9 @@ scripts/cloud/devenv-down.sh
 
 `launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that re-runs `teardown.sh` + `final_audit.sh` on any exit path (success, SIGKILL, crash). In-process, `CampaignManager.run()` has a `try/finally: terminate_all_tagged` sweep + `atexit.register(teardown)`. Each study subprocess also has its own `try/finally: terminate_fleet` for its own fleet. **Four layers of teardown belt-and-suspenders.**
 
-### Java-only fast iteration (no AMI rebake)
+### Java JAR override (debug-only fast iteration)
 
-For Java-only edits to `combat-harness/`, skip the Packer rebake. The worker's UserData fetches a freshly built jar from the workstation over the tailnet at boot, sha256-verified, and overlays the AMI-baked copy.
+For disposable Java-only smoke/debug loops, the worker's UserData can fetch a freshly built jar from the workstation over the tailnet at boot, sha256-verified, and overlay the AMI-baked copy. Do not use this path for publishable, resumable, or cross-session evaluation results: the AMI provenance gate validates the baked `ModCommitSha` and manifest, while an override changes the runtime jar after that gate. For production/resumable correctness, rebuild/deploy the jar, regenerate the manifest if needed, re-bake the AMI, and update every region's `ami_ids_by_region`.
 
 ```bash
 # Workstation terminal A: build + serve (Ctrl-C when iteration is done)
@@ -261,16 +261,19 @@ scripts/cloud/launch_campaign.sh examples/smoke-campaign.yaml
 The `STARSECTOR_MOD_JAR_OVERRIDE_URL` + `STARSECTOR_MOD_JAR_OVERRIDE_SHA256` env vars are read by `cloud_runner.py` and rendered into UserData. Workers `curl` the JAR after `tailscale up`, sha256-verify, and `install` it before `systemctl start starsector-worker.service`. Any failure (404, sha mismatch, network) halts boot via `set -euo pipefail` — workers never run against the wrong jar.
 
 When to AMI-rebake instead:
-- Game files, Python code (`uv.lock`), or systemd unit changed → rebake
-- Java-only changes → skip rebake, use the override path
+- Game files, manifest, Python code, `uv.lock`, systemd unit, or bake/Packer scripts changed → rebake
+- Java changes that affect manifest output, production correctness, resumable evals, or publishable reports → rebuild/deploy, regenerate manifest if needed, then rebake
+- Java-only smoke/debug iteration → the override path is acceptable, but results are diagnostic only
 - Mixed (Python + Java) → rebake (overlay only handles the JAR)
 
 `scripts/cloud/bake_image.sh` refuses dirty worker-source paths by default and
 tags the AMI as `ManifestSha256=<sha256(game/starsector/manifest.json)>` and
-`WorkerSourceSha=<git HEAD>`. Dirty debug bakes require
-`STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` and are tagged `<git HEAD>-dirty`. Campaign
-and honest-eval preflight compare those tags against the current manifest and
-checkout, so commit the Python/source changes before baking and update every
+`WorkerSourceSha=<worker-source-input digest>`, where the digest covers `src`,
+`pyproject.toml`, `uv.lock`, and the cloud bake/Packer scripts. Dirty debug
+bakes require `STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` and are tagged
+`<digest>-dirty`. Campaign, direct cloud-study, loadout-AB, and honest-eval
+preflight compare those tags against the current committed manifest and source
+inputs, so commit source/manifest changes before baking and update every
 region's `ami_ids_by_region` after the bake/copy finishes. Dirty launch override
 (`STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1`) is only for disposable debugging images;
 those AMIs should not back a resumable evaluation.
@@ -284,9 +287,11 @@ results under fresh Redis envelopes.
 
 ### Study-per-(hull,regime,seed) sizing cheatsheet
 
-- **≤24 workers per study**: TPE (default). Efficient, precise, recommended.
-- **24–100 workers per study**: switch sampler to `CatCMAwM` (`sampler: catcma` in the YAML). Native-parallel CMA-ES; no TPE imputation penalty.
-- **Hybrid (random→CMA→TPE)**: for per-study budgets >1000 trials.
+- **All current cloud studies**: TPE (`sampler: tpe`). It is the only accepted
+  sampler in campaign YAMLs.
+- **Future high-concurrency studies**: require a new sampler implementation and
+  spec update before use. CatCMAwM was removed because this search space has no
+  continuous dimensions.
 
 Per-study budget sweet spot: **500-1500 trials**.
 
@@ -427,8 +432,10 @@ Operator action after seeing a cluster of these lines:
    clean.
 2. If any Python worker/orchestrator code changed since the AMI was baked, run
    `scripts/cloud/bake_image.sh` and update the campaign AMI IDs before resume.
-3. Resume with `--resume-from <eval_tag>` only after the AMI and Java jar path
-   are consistent across regions.
+3. Honest-eval only: resume with `--resume-from <eval_tag>` after the AMI and
+   Java jar path are consistent across regions. Normal optimization campaigns
+   resume by relaunching the campaign YAML with the same study DBs; do not pass
+   `--resume-from` to `scripts/cloud/launch_campaign.sh`.
 
 ### AMI-copy-image drift across regions
 
