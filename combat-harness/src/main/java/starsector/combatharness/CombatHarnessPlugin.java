@@ -531,7 +531,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             if (owner == 0) {
                 ShipVariantAPI v = ship.getVariant();
                 String vid = (v == null) ? null : safeShipVariantId(v);
-                if (vid != null && expectedVariantIds.contains(vid)) {
+                if (matchesAnyExpectedVariantId(vid, expectedVariantIds)) {
                     matchedPlayerShips.add(ship);
                 } else {
                     staleOwnerZero++;
@@ -1099,6 +1099,43 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         } catch (Throwable t) {
             return "<error:" + t.getClass().getSimpleName() + ">";
         }
+    }
+
+    /**
+     * Match a deployed ship's variantId against the set of expected base
+     * variantIds from {@code currentConfig.playerBuilds}. Accepts both
+     * forms: the legacy unsuffixed id (direct equality) and the V2
+     * cache-disambiguation form {@code base + "__" + 8 hex chars}
+     * produced by {@link VariantBuilder#uniqueVariantId(String)}.
+     *
+     * <p>Without this two-form match, doSetup's
+     * {@code expectedVariantIds.contains(vid)} check fails on every
+     * matchup once {@code uniqueVariantId} starts appending suffixes —
+     * the symptom is 100% SETUP_TIMEOUT, fitness=-2.0, stale_owner0=1.
+     */
+    static boolean matchesAnyExpectedVariantId(
+            String vid, java.util.Set<String> expectedBaseIds) {
+        if (vid == null) return false;
+        if (expectedBaseIds.contains(vid)) return true;
+        int suffixLen = VariantBuilder.UNIQUE_VARIANT_SUFFIX_HEX_CHARS;
+        for (String base : expectedBaseIds) {
+            if (base == null) continue;
+            int expected = base.length() + 2 + suffixLen;
+            if (vid.length() != expected) continue;
+            if (!vid.startsWith(base)) continue;
+            if (vid.charAt(base.length()) != '_'
+                    || vid.charAt(base.length() + 1) != '_') continue;
+            boolean allHex = true;
+            for (int i = base.length() + 2; i < vid.length(); i++) {
+                char c = vid.charAt(i);
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+                    allHex = false;
+                    break;
+                }
+            }
+            if (allHex) return true;
+        }
+        return false;
     }
 
     /** Return the weapon id physically mounted at the given slot on the
