@@ -1,7 +1,7 @@
 ---
 type: reference
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-05-10
 ---
 
 # Phase 5F — Regime-Segmented Optimization
@@ -10,7 +10,7 @@ last-validated: unvalidated
 >
 > **Empirical-claims status (2026-05-10):** All Hammerhead concentration percentages, projected redirect ratios, and TTK Δρ figures cited in this document use V1 sim data and are pending re-validation under V2. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). Theory grounding (CMDP feasibility alignment, restricted-play, ludology), the rejected-alternative chain, and the design itself are unaffected.
 
-Design and research log for how the optimizer selects its feasible component pool per run, so that outputs are strong *within the progression regime the player actually inhabits* rather than strong within a nominally-complete but practically-unreachable pool. Shipped design will be **hard-masking of hullmods/weapons/hulls at `search_space.py` construction time + one Optuna study per `(hull, regime)`**, with `mid` as the default regime.
+Design and research log for how the optimizer selects its feasible component pool per run, so that outputs are strong *within the progression regime the player actually inhabits* rather than strong within a nominally-complete but practically-unreachable pool. The shipped design is **hard-masking of hullmods/weapons at `search_space.py` construction time + one Optuna study per `(hull, regime)`**, with `early` as the default regime. Hull filtering and default-`mid` arguments below are retained as historical design provenance and are superseded by §3.6 and specs 04/24.
 
 This document records the theoretical grounding (CMDP feasibility alignment, restricted-play balance evaluation, flow/ludology), the shipped-bot pattern consensus (one-run-per-tier across WoW BIS / MTG formats / StS ascension / Hearthstone / motorsport), and the rejected alternatives (scalar penalty, archive-over-single-run, curriculum, Pareto, QD).
 
@@ -96,7 +96,7 @@ A full audit of `game/starsector/data/hullmods/hull_mods.csv` and `game/starsect
 
 No schema invention is required. The CSV already encodes the regime signal.
 
-**Alex Mosolov's stated design intent** (Codex Overhaul dev post, 2024-05-11): `codex_unlockable` is primarily **spoiler avoidance, not power-gating** — "most things start out unlocked; if something could be found just by browsing a typical colony market, chances are it starts out unlocked." This partially decouples "unlock status" from "designer-intended overpowered," and suggests the primary regime-boundary tags are `no_drop` and `no_drop_salvage` (genuine campaign-acquisition gates) rather than `codex_unlockable` alone (which includes narrative-spoiler-hidden but campaign-reachable items).
+**Alex Mosolov's stated design intent** (2024-05-11 dev post): `codex_unlockable` is primarily **spoiler avoidance, not power-gating** — "most things start out unlocked; if something could be found just by browsing a typical colony market, chances are it starts out unlocked." This partially decouples "unlock status" from "designer-intended overpowered," and suggests the primary regime-boundary tags are `no_drop` and `no_drop_salvage` (genuine campaign-acquisition gates) rather than `codex_unlockable` alone (which includes narrative-spoiler-hidden but campaign-reachable items).
 
 **Community balance consensus** (Starsector wiki + fractalsoftworks forum): the live balance complaint is `Onslaught_Mk.I` + `Heavy Adjudicator` (2400 burst DPS at 0.13 flux/damage), not the shrouded/fragment hullmods. This matters for design: the regime filter should cover **ship hulls**, not just hullmods. A regime preset that allows `Onslaught_Mk.I` but forbids `shrouded_lens` would miss the actual balance flashpoint.
 
@@ -120,18 +120,18 @@ class RegimeConfig:
     exclude_weapon_tags: frozenset[str]   # e.g. {"rare_bp"}
 ```
 
-Stored in `src/starsector_optimizer/models.py` alongside `CombatFitnessConfig` and `TWFEConfig` (frozen-dataclass convention, Design Principle 2 from CLAUDE.md).
+Stored in `src/starsector_optimizer/models.py` alongside `CombatFitnessConfig` and `TWFEConfig` (frozen-dataclass convention).
 
 ### 3.2 Presets
 
 | Preset | Hullmod filter | Weapon filter | Hull filter | Grounding |
 |---|---|---|---|---|
-| `early` | `tier ≤ 1 ∧ ¬codex_unlockable ∧ ¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp ∧ ¬codex_unlockable` | vanilla civilian + faction-common | Flow/Suits — meaningful-challenge regime |
-| `mid` **(default)** | `¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp` | vanilla + faction-reachable (no Mk.I) | Jaffe restricted play; Alex-stated spoiler/access distinction |
-| `late` | `¬no_drop` | none | all except `onslaught_mk1`, Remnant-only | CMDP feasibility (only truly never-obtainable items masked) |
-| `endgame` | none | none | none | QA / exploit-discovery mode (current behaviour) |
+| `early` **(shipped default)** | `tier ≤ 1 ∧ ¬codex_unlockable ∧ ¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp ∧ ¬codex_unlockable` | not filtered; hull remains user-selected | Flow/Suits — meaningful-challenge regime |
+| `mid` | `¬no_drop ∧ ¬no_drop_salvage` | `¬rare_bp` | not filtered; hull remains user-selected | Jaffe restricted play; Alex-stated spoiler/access distinction |
+| `late` | `¬no_drop` | none | not filtered; hull remains user-selected | CMDP feasibility (only truly never-obtainable items masked) |
+| `endgame` | none | none | not filtered; hull remains user-selected | QA / exploit-discovery mode |
 
-Each preset is materialized at `search_space.py` construction time as a **mask over the hullmod / weapon / hull catalogues, applied before `repair_build()` sees any candidate**. This preserves the optimizer-space ↔ domain-space boundary (CLAUDE.md Design Principle 3) and keeps the TWFE/EB pipeline (Phases 5A / 5D) uncontaminated by regime information in the fitness signal.
+Each preset is materialized at `search_space.py` construction time as a **mask over the hullmod / weapon catalogues, applied before `repair_build()` sees any candidate**. This preserves the optimizer-space ↔ domain-space boundary and keeps the TWFE/EB pipeline (Phases 5A / 5D) uncontaminated by regime information in the fitness signal. The original hull-filter column was dropped before ship; §3.6 is the canonical implementation note.
 
 ### 3.3 One Optuna study per (hull, regime)
 
@@ -171,10 +171,10 @@ A clean integration: extend `RegimeConfig` with a per-hull / per-regime `eb_extr
 - **Open-world reframe — regime filters OUR loadout, not opponents or hull choice.** Starsector is non-linear: an early-regime fleet can encounter endgame enemies, and an endgame hull often ships without endgame weapons (weapons are rarer drops than hulls). Phase 5F therefore treats regime as a **component-availability filter on the build being optimized** (hullmods + weapons), not as a difficulty or progression gate. Opponents remain drawn from the full hull-size-matched pool (`opponent_pool.py`) regardless of regime; hull choice remains user-controlled via `--hull`. The §3.2 "vanilla civilian + faction-common" / "Remnant-only" hull-filter columns are explicitly dropped; they would have broken the open-world framing. A batch user asking "what should I fly in `mid`?" across 40 hulls must still curate the hull list — Phase 6's campaign YAML is the right layer for that.
 - **Default = `early`** (deviation from research doc §3.4). Under the open-world reframe, the conservative baseline "what can a lightly-progressed save actually assemble?" is `early`; `mid`'s argument rested on assuming the median player has progressed past `no_drop_salvage` gates, which the open-world framing doesn't justify as a *default* assumption. Users whose saves have unlocked more opt up explicitly via `--regime`.
 - **Scope deviation from §3.1** — `RegimeConfig` does NOT include `exclude_hull_ids`; hull choice is orthogonal and user-controlled. Rationale per above: any hull, any opponent, realistic loadout for what the user has.
-- **Warm-start infeasibility skip** — prior-regime trials whose repaired build is infeasible under the new regime mask are skipped with a WARNING rather than silently enqueued. Feasibility checks route through `repair_build()` + `is_feasible()` (canonical optimizer→domain boundary per CLAUDE.md Design Principle 3); raw-param checks would bypass slot-constraint and hullmod-incompat enforcement.
+- **Warm-start infeasibility skip** — prior-regime trials whose repaired build is infeasible under the new regime mask are skipped with a WARNING rather than silently enqueued. Feasibility checks route through `repair_build()` + `is_feasible()`; raw-param checks would bypass slot-constraint and hullmod-incompat enforcement.
 - **Warm-start re-encode against target search space** — after the feasibility gate, params are re-encoded via `build_to_trial_params(repaired, target_space)` before `study.enqueue_trial()`. The source study's params can reference slot/weapon choices that are structurally absent from the target's distributions (a per-slot weapon list differs between regimes) even when the components themselves pass the regime-tag mask; re-encoding ensures Optuna's `suggest_categorical` sees only target-valid choices.
 - **Study identity** — `f"{hull_id}__{regime_name}"` (double underscore). Hull IDs in `ship_data.csv` use single underscores (`onslaught_mk1`) but never `__`, so the separator is unambiguous. Pre-5F DBs (`study_name == hull_id`) are not auto-loadable; a fresh DB per regime is expected.
-- **Forward compat — future CSV tags silently admitted.** A game patch that introduces a new tag (e.g. `codex_spoiler_v2`) simply won't match any preset's `exclude_hullmod_tags` / `exclude_weapon_tags` frozenset and will default-admit to every regime. This matches the project-wide "warn don't crash on unknown game data" principle (CLAUDE.md §Design Principles #5) on the permissive side; re-tighten the presets when a patch introduces a tag that should be regime-gated.
+- **Forward compat — future CSV tags silently admitted.** A game patch that introduces a new tag (e.g. `codex_spoiler_v2`) simply won't match any preset's `exclude_hullmod_tags` / `exclude_weapon_tags` frozenset and will default-admit to every regime. This matches the project-wide "warn don't crash on unknown game data" principle on the permissive side; re-tighten the presets when a patch introduces a tag that should be regime-gated.
 - **Warm-start heuristic seeding is also regime-aware.** `warm_start()` threads `config.regime` into `generate_diverse_builds(...)` → `generate_random_build(..., regime=...)` so the heuristic top-N warm starts are sampled from the already-masked catalogue. Without this, a `mid` study's Phase-2 random builds would occasionally include `rare_bp`-tagged weapons and fail Optuna's `add_trial` distribution check.
 
 ---
@@ -252,7 +252,13 @@ Specific magnitudes (concentration percentages, redirect ratios, top-10 composit
 
 ---
 
-## 6. Implementation plan (outline — full plan to be drafted on approval)
+## 6. Historical implementation plan
+
+This outline is retained only as design history. It predates the shipped
+open-world reframe. Current implementation is: regime filters loadout
+components only (hullmods + weapons), default `early`, no hull filtering,
+opponents regime-blind, one study per `(hull, regime)`, with cross-regime
+warm-start guarded by repair/feasibility checks.
 
 ```
 Step 1: Data — enumerate rarity tags from hull_mods.csv, weapon_data.csv,
@@ -263,15 +269,15 @@ Step 2: models.py — add RegimeConfig frozen dataclass and four presets
   (REGIME_EARLY, REGIME_MID, REGIME_LATE, REGIME_ENDGAME).
 
 Step 3: search_space.py — gain a regime: RegimeConfig parameter;
-  filter the hullmod / weapon / hull catalogues in get_eligible_hullmods,
-  get_compatible_weapons, get_eligible_hulls before they reach
-  repair_build.
+  filter the hullmod / weapon catalogues in get_eligible_hullmods,
+  get_compatible_weapons before they reach repair_build. Hull choice is
+  user-controlled and not regime-filtered.
 
 Step 4: optimizer.py — thread regime through OptimizerConfig and the
   ask-tell loop. Separate studies per (hull, regime).
 
-Step 5: scripts/run_optimizer.py — add --regime CLI flag with default
-  mid. Preserve current behaviour as --regime endgame.
+Step 5: scripts/run_optimizer.py — add --regime CLI flag. Shipped default
+  is early; preserve pre-5F behaviour as --regime endgame.
 
 Step 6: Ship gate — replay the Hammerhead 2026-04-17 eval log with the
   mid mask. Verify (a) top-10 does not include shrouded_lens /
@@ -280,7 +286,7 @@ Step 6: Ship gate — replay the Hammerhead 2026-04-17 eval log with the
   in-regime trial count.
 
 Step 7: Docs — update spec 24 (optimizer), spec 04 (search-space),
-  CLAUDE.md phase overview, implementation-roadmap.md.
+  root workflow phase overview, and relevant reference/index docs.
 ```
 
 Unit tests cover: mask correctness (each preset excludes the expected components), preset immutability, regime-scoped study independence, warm-start via `enqueue_trial` preserves determinism.
@@ -329,7 +335,7 @@ Deferred formal cleanest mechanism:
 
 Starsector-specific:
 
-- Mosolov, A. (2024-05-11). "Codex Overhaul." Fractal Softworks dev blog.
+- Mosolov, A. (2024-05-11). Fractal Softworks dev blog.
 - `game/starsector/data/hullmods/hull_mods.csv` — tags column.
 - `game/starsector/data/weapons/weapon_data.csv` — tier + blueprint tags.
 

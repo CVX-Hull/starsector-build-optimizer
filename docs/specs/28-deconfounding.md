@@ -22,8 +22,9 @@ Phase-7-prep-checklist's proposed 5 post-matchup covariates
 (`mean_damage_dealt_fraction`, `mean_seconds_survived`,
 `mean_cr_remaining`, `mean_flameout_count`, `mean_overload_count`)
 as mechanical consequences of Y_ij (colliders on α). The new
-4 covariates are all pre-matchup and structurally orthogonal to
-the estimand.
+4 covariates are all pre-matchup and are not mechanical consequences of
+`Y_ij`; they are admissible for EB prior regression, not within-TWFE
+conditioning.
 
 All pure-math functions and the `ScoreMatrix` accumulator live in `src/starsector_optimizer/deconfounding.py`. Config dataclasses (`TWFEConfig`, `EBShrinkageConfig`) live in `src/starsector_optimizer/models.py`.
 
@@ -235,7 +236,7 @@ _apply_eb_shrinkage(trial_number, twfe_fitness) -> (float, _EBDiagnostics | None
     # while _completed_records holds only finalized trials (per-trial
     # write path). Only the latter feeds eb_shrinkage's OLS fit; guarding
     # on the former lets the guard pass while the fit sees n=1 and raises
-    # ValueError. See CLAUDE.md Phase 6 concurrent-dispatch fix (c).
+    # ValueError. See the root workflow file's Phase 6 concurrent-dispatch fix (c).
     if len(_completed_records) < config.eb.eb_min_builds:
         return twfe_fitness, None
     indices = list(_completed_records)

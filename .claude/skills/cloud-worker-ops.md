@@ -346,7 +346,11 @@ If this keeps firing even past the retry budget, the AWS region may be genuinely
 
 ### Other known concurrency hazards (not yet observed in prod)
 
-See `docs/reference/phase6-deferred-audit-findings-2026-04-19.md` for the deferred list from the 2026-04-19 audit — H1 TimeoutTuner dormant + would-corrupt-shared-file if wired, H2 POST-before-register race (unreachable while orchestrator never retries on `WorkerTimeout`), M1 janitor `enqueued_at` ping-pong under steady-state slow matchups. Each entry has reproduction + proposed fix + gating criterion for when to revisit. Also includes the proposed **Tier-3 concurrency shakedown** stage (4 studies × 16 slots ≈ $1) between Tier-2.5 smoke and Phase 7 prep.
+See `docs/reports/2026-04-19-phase6-deferred-audit.md` for the deferred
+list from the 2026-04-19 audit: TimeoutTuner dormancy, POST-before-register
+race, janitor `enqueued_at` ping-pong, and Tier-3 concurrency-shakedown
+proposal. Each entry has reproduction notes, a proposed fix, and a revisit
+criterion.
 
 ### `_apply_eb_shrinkage` raises `ValueError: eb_shrinkage needs n >= 3 builds, got 1`
 

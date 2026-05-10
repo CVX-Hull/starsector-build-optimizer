@@ -599,6 +599,33 @@ class TestOptimizeHullIntegration:
                 f"Trial {trial.number} is {trial.state.name}"
             )
 
+    def test_retryable_matchup_failure_requeues_trial(
+        self, wolf_hull, game_data, manifest,
+    ):
+        """RetryableMatchupError retries the same in-flight build."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.evaluator_pool import RetryableMatchupError
+
+        pool = self._make_mock_pool()
+        call_count = [0]
+        original_run = pool.run_matchup
+
+        def flaky_run(matchup):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise RetryableMatchupError("discarded corrupt result")
+            return original_run(matchup)
+
+        pool.run_matchup = flaky_run
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=2, warm_start_n=1, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+        assert call_count[0] >= 2
+        assert any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials)
+
 
 # --- Preflight Check Tests ---
 

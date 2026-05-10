@@ -180,7 +180,7 @@ public void reportDamageApplied(Object source, CombatEntityAPI target, ApplyDama
 
 ## Build System
 
-- **Gradle 9.4+** with Java 26 JDK for compilation (game runtime is Java 17)
+- **Compile target is Java 17.** Use `STARSECTOR_JDK_HOME` / a JDK 17 toolchain for Starsector API compatibility. Gradle may run on a newer host JDK, but `combat-harness/build.gradle.kts` targets Java 17.
 - **`compileOnly`** for starfarer.api.jar, json.jar, log4j-1.2.9.jar, lwjgl_util.jar
 - **`testImplementation`** needs starfarer.api.jar too (for DamageListener etc.)
 - Game's bundled JRE (`jre_linux/`) is a JRE, not JDK — can't compile with it
@@ -248,7 +248,7 @@ When building search spaces for optimization, filter out:
 - For cloud: bake into the AMI at `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml` via `scripts/cloud/packer/prefs.xml` (gitignored). Sourcing recipes for Linux/macOS/Windows in `.claude/skills/cloud-worker-ops.md` § "Initial workstation setup → Game prefs.xml".
 
 ### Headless/Cloud Requirements
-- **GPU required**: LWJGL rendering through Xvfb needs a real GPU driver. Software rendering (Mesa/llvmpipe) on CPU-only VMs is ~10-50x slower — unusable.
+- **GPU not required.** The earlier GPU requirement was a misdiagnosis; CPU-only cloud workers are supported when Xvfb, LWJGL native dependencies, prefs, and audio-null configuration are correct. See `docs/specs/22-cloud-deployment.md` for the canonical cloud contract.
 - **Native LWJGL deps**: `libxcursor1`, `libxxf86vm1`, `libxrender1`, `libxtst6`, `libxrandr2`, `libxi6` (Ubuntu package names). Missing libs cause `UnsatisfiedLinkError` crashes.
 - **Audio disabled per-instance**: `ALSOFT_DRIVERS=null` env var disables OpenAL output (bypasses PulseAudio/ALSA). Null ALSA config (`asound_null.conf` via `ALSA_CONFIG_PATH`) as fallback. Both set in `instance_manager.py:_start_game()`. On cloud, also install `libopenal1` to prevent blocking error dialog.
 - **System Java unnecessary**: Game bundles `jre_linux/` (Zulu 17.0.10). System `openjdk` can interfere via `JAVA_HOME`.

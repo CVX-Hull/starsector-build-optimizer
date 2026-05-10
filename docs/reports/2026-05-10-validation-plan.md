@@ -25,7 +25,7 @@ matrix; Wave 2 cross-validates regime + warm-start; Wave 3 is the planned
 
 Recommendation: **Hammerhead (primary) + Wolf (secondary, smaller)**.
 
-| Hull | Class | Slot count | log10 search space (operator estimate from CLAUDE.md inventory) | Opp pool size (hull-size match) | Role archetype |
+| Hull | Class | Slot count | log10 search space (operator estimate from root workflow inventory) | Opp pool size (hull-size match) | Role archetype |
 |---|---|---|---|---|---|
 | `hammerhead` | Destroyer | 8 (2 BAL + 4 HYB + 2 MIS) | ≈ 41–43 | ≈ 55 destroyer variants in `game/starsector/data/variants/` after `opponent_pool` filters | Kinetic/HE brawler |
 | `wolf` | Frigate | 6 (4 ENE + 2 MIS) | ≈ 33–37 | ≈ 70 frigate variants after filters | Flanker / energy striker |
@@ -117,14 +117,14 @@ share a single ablation matrix because both read from the same JSONL.
 | 14 | AWS provider + spot fleet | `provision_fleet` succeeds within `fleet_provision_timeout_seconds=600` for every Wave; `terminate_fleet` reaps ≥ 95 % of provisioned instances on study end | CloudTrail / AWS describe-instances post-teardown | 0 leaked instances tagged with `Project=starsector-<campaign>` after Wave teardown | n/a | Always-on; SOP in `.claude/skills/cloud-worker-ops.md` | `final_audit.sh` exit code; AWS describe-instances |
 | 15 | CloudWorkerPool + Redis | `result_timeout_seconds=900` not tripped on > 5 % of matchups; janitor `requeue_count` < `max_requeues=5` for ≥ 99 % of matchups | Orchestrator log; Redis SCAN `worker:<project_tag>:*:heartbeat` | < 5 % timeouts, < 1 % drop-path WARNs | 1000 matchups | Always-on; verified by Tier-2.5 multi-worker smoke (`smoke-campaign-multiworker.yaml:53`) | Orchestrator WARN/ERROR log; ledger.jsonl |
 | 16 | Worker throughput (122 matchups/hr/VM target) | Wave 1 measured per-VM throughput is within ±25 % of 122 matchups/hr (`docs/reference/phase6-cloud-worker-federation.md:7`). **V1-measured; Wave 1 itself re-validates** | matchups completed / VM-hours from ledger | 92 ≤ measured ≤ 152 matchups/hr/VM | 1 wall-clock hour, ≥ 4 VMs | Always-on | ledger.jsonl + `study.trials` count |
-| 17 | CostLedger | `budget_usd=70` cap is enforced — `BudgetExceeded` raises before $70 in cumulative spend | Sum `cost_usd` rows in `ledger.jsonl` | Final cumulative ≤ `budget_usd`; spurious abort if > 1.05× | n/a | Always-on; `CampaignManager._tick_ledger` (CLAUDE.md "Phase-7-prep refactor" section, "live") | `data/campaigns/<name>/ledger.jsonl` |
+| 17 | CostLedger | `budget_usd=70` cap is enforced — `BudgetExceeded` raises before $70 in cumulative spend | Sum `cost_usd` rows in `ledger.jsonl` | Final cumulative ≤ `budget_usd`; spurious abort if > 1.05× | n/a | Always-on; `CampaignManager._tick_ledger` (root workflow file "Phase-7-prep refactor" section, "live") | `data/campaigns/<name>/ledger.jsonl` |
 
 ### Group G — Mod-side correctness (Wave 0 gate)
 
 | # | Mechanism | Assertion | Metric | Pass | Min N | Ablation | Artifact |
 |---|---|---|---|---|---|---|---|
 | 18 | V2 loadout invariant | **0 LOADOUT_MISMATCH WARNs** in 10 random Wave-0 matchups | Java `[SHIP_DUMP]` line + orchestrator `LOADOUT_MISMATCH` parse | 0 mismatches across 10 sample matchups | 10 | Always-on; verified by `scripts/cloud/loadout_ab_test.py` ARMED-vs-NAKED at smoke time | Orchestrator INFO `LOADOUT_OK` count; WARN `LOADOUT_MISMATCH` count |
-| 19 | Manifest-as-oracle | `manifest.constants.{game_version, mod_commit_sha}` matches AMI tags `GameVersion` / `ModCommitSha` (preflight assert per CLAUDE.md "Phase-7-prep refactor"). | `_preflight` log on each study subprocess | All studies log "manifest version match" or equivalent assert pass | n/a | Always-on | Orchestrator INFO log |
+| 19 | Manifest-as-oracle | `manifest.constants.{game_version, mod_commit_sha}` matches AMI tags `GameVersion` / `ModCommitSha` (preflight assert per root workflow file "Phase-7-prep refactor"). | `_preflight` log on each study subprocess | All studies log "manifest version match" or equivalent assert pass | n/a | Always-on | Orchestrator INFO log |
 | 20 | engine_stats SETUP read | `engine_stats` is non-null for **100 %** of Wave-1 finalized trials. Per `optimizer.py:490-496`, any null is a hard `AssertionError` — the design intent is fail-fast, not "tolerate at 0.5 %". A single null `engine_stats` row in the JSONL is a wave-aborting regression. | JSONL `engine_stats` field | 0 null rows in finalized JSONL | 200 | Always-on | JSONL `engine_stats` |
 
 **Coverage gate added (mechanism 4 augmentation)**: per-matchup tier
@@ -287,7 +287,7 @@ Abort and re-evaluate if any of these trip:
 
 ## 4. Budget + time analysis
 
-Anchor numbers (cite source per CLAUDE.md inventory):
+Anchor numbers (cite source per root workflow inventory):
 
 - c7a.2xlarge spot ≈ $0.15/hr, 122 matchups/hr/VM, 2 slots/VM
   (`docs/reference/phase6-cloud-worker-federation.md:7`).
@@ -410,10 +410,10 @@ Wave 1 bootstrap CI excludes Δρ ≥ 0 but the point estimate is positive
 |---|---|---|---|
 | R1 | Spot preemption spike or capacity exhaustion in a single region/type | Wave 1 ledger shows > 5 % of provisioned VMs preempted within 30 min, OR `provision_fleet` returns `< min_workers_to_start` | **Shipped 2026-05-10**: Wave 1 YAMLs (`wave1-c{0a,0b,1,2,3}.yaml`) and `phase7-prep.yaml` use `regions: [us-east-1, us-east-2]` × `instance_types: [c7a.2xlarge, c7i.2xlarge]` — 4 distinct spot pools per fleet request via `price-capacity-optimized` allocation. us-east-2 AMI (`ami-058e7a119eb656d45`) is a tag-propagated copy of the post-V2 us-east-1 AMI made 2026-05-10. **Pre-Wave-3**: re-bake (`scripts/cloud/bake_image.sh`) to incorporate 722afd2 + c2d5150; add us-west-2 as third region if Wave 1 shows preempt > 10 % (us-west-2 has 4 AZs and the cheapest c7a.2xlarge spot per 2026-05-10 24h price snapshot). Long-term: Phase 7.5 Tier B item 10 (`FleetLadder`) adds on-demand fallback rung |
 | R2 | Redis OOM on workstation under 32-VM concurrency (Wave 1 batches) | `redis-cli INFO memory` shows `used_memory_peak_human > 50 % of system RAM` | Each VM publishes ~1 row/30 s; 32 VMs × 100 trials = 3200 rows = ~5 MB. Negligible at expected scale. Mitigation: Wave 1 batches sequentially (not parallel) keep peak at 32 VMs |
-| R3 | AMI version drift (V2 fix not in latest AMI) | Wave 0 step 3 (loadout AB test) shows `LOADOUT_MISMATCH` | Re-bake before Wave 0: `scripts/cloud/bake_image.sh`. AMI tags `GameVersion` + `ModCommitSha` checked by mechanism 19 preflight (per CLAUDE.md "Phase-7-prep refactor", "Preflight (Commit G R6)") |
-| R4 | Engine probe regression (manifest stale) | Wave 0 step 1 probe fails with manifest mismatch | `scripts/update_manifest.py --timeout 600` rerun before bake; gated by pre-commit hook per CLAUDE.md |
+| R3 | AMI version drift (V2 fix not in latest AMI) | Wave 0 step 3 (loadout AB test) shows `LOADOUT_MISMATCH` | Re-bake before Wave 0: `scripts/cloud/bake_image.sh`. AMI tags `GameVersion` + `ModCommitSha` checked by mechanism 19 preflight (per root workflow file "Phase-7-prep refactor", "Preflight (Commit G R6)") |
+| R4 | Engine probe regression (manifest stale) | Wave 0 step 1 probe fails with manifest mismatch | `scripts/update_manifest.py --timeout 600` rerun before bake; gated by pre-commit hook per root workflow file |
 | R5 | Frigate τ̂² collapse persists under V2 (Wave 2 wolf cell) | Wolf JSONL `twfe_fitness` variance < 1e-3 | Treat as in-scope finding, not abort; defer Wave 3 wolf cell, document as Phase 7 dependency. The V1 collapse was attributed in part to the V1 loadout bug (no weapons firing) — V2 should fix it, but if it doesn't, it's a real signal |
-| R6 | Tailscale ACL drift breaks worker→workstation Redis | Wave 0 multi-worker smoke shows worker `[FAIL] tailscale up` in CloudWatch | `docs/reference/phase6-deferred-audit-findings-2026-04-19.md` § "Additional findings" R2 (Tailscale ACL-as-code via Terraform) is deferred; manual ACL check before each wave |
+| R6 | Tailscale ACL drift breaks worker→workstation Redis | Wave 0 multi-worker smoke shows worker `[FAIL] tailscale up` in CloudWatch | [2026-04-19-phase6-deferred-audit.md](2026-04-19-phase6-deferred-audit.md) R2 (Tailscale ACL-as-code via Terraform) is deferred; manual ACL check before each wave |
 | R7 | Concurrent SG-replication lag (>4 fleets) | Wave 1 batch-3 fleet provisioning fails with `InvalidGroup.NotFound` | Already mitigated in code (`AWSProvider._ensure_security_group` blocks on waiter, `_create_fleet_in_region` retries); regression test in `tests/test_cloud_provider.py::TestFleetProvisionSGPropagation` |
 | R8 | Optuna SQLite lock contention (> 16 concurrent trials/study) | study DB write timeouts in subprocess logs | Optuna SQLite handles ~32 concurrent writes; Wave 1 stays at 16 (8 workers × 2 slots). For Wave 3 prep run, `phase7-prep.yaml` uses one DB per study (no contention) |
 | R9 | Box-Cox MLE fails on degenerate populations | JSONL `shape_passthrough_reason` consistently `transformed_constant` | Already coded as fallback (`optimizer.py:1186-1191`). If > 25 % of trials hit this, downstream fitness collapses to 0.5 — gate would fail naturally. Real-world example: a hull whose τ̂² is too small (frigates pre-V2). Fix path: collect data, decide if hull is in-scope |
@@ -484,7 +484,7 @@ failure on either half is a gate failure but the diagnosis differs.
   V2 path regressed. Halt campaign. Investigate
   `combat-harness/src/main/java/.../CombatHarnessPlugin.java` `doSetup`
   and the `member.setVariant(VariantBuilder.createVariant(spec), false, true)`
-  call referenced in CLAUDE.md "Combat-harness loadout fix 2026-05-10
+  call referenced in the root workflow file's "Combat-harness loadout fix 2026-05-10
   (V2 — final)".
 
 ### F4: Frigate gradient (Wolf) still degenerate post-V2

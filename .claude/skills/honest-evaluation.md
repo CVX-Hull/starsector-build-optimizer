@@ -93,34 +93,13 @@ override with `--workers N`. Source campaign config is read from
 `examples/{first-campaign-name}.yaml` by default; override with
 `--campaign-config <path>`.
 
-#### Fleet sizing — cost is ~constant per matchup; speed scales with concurrency
+#### Fleet sizing
 
-Total matchup-work is fixed by `top_k × n_cells × n_seeds × pool_size × replicates`.
-Cost is fleet_hours × spot_rate, which equals `total_matchups ÷ slots × matchup_duration × $/hr-per-worker / slots-per-worker` — the slot-count cancels, leaving cost roughly invariant under fleet size. **Workers buy walltime, not cost**, until you saturate your spot-quota or fragment the spot pool.
-
-**Per-matchup empirical (post-V2, 2026-05-10)**:
-- Wall-clock per matchup: **~75s** at `time_mult=5.0` (default), in-engine cap 300s, healthy combats end in ~40-60s in-engine
-- c7a.2xlarge spot: **$0.14-0.18/hr** (us-east-2c cheapest, us-east-1f priciest at this snapshot)
-- → **~$0.001 per matchup**
-
-**For Wave 1 hammerhead full sweep** (5 cells × 3 seeds × 3 builds × ~28 destroyer opponents × 30 reps ≈ 38k matchups):
-
-| Workers | Slots | Walltime | Raw cost | Recommended budget |
-|---|---|---|---|---|
-| 16 (Wave 1 baseline) | 32 | ~24h | $70 | $100 |
-| 32 | 64 | ~12h | $70 | $100 |
-| 64 (Plan C) | 128 | ~6h | $70 | $100 |
-
-The recommended default is **64 workers** (`--workers 64`): well below quota (40% of one region's `L-34B43A08`), unlikely to fragment spot pool, and 4× faster than the 16-worker baseline. Plan launch via `scripts/cloud/launch_wave1_honest_eval.sh`.
-
-Above 64 workers, spot capacity becomes the constraint (not money or quota); provisioning takes 5-10 min and partial fulfillment becomes likely. Don't go higher unless walltime is critical.
-
-**Quota check** (re-probe before any large run — cf. `reference_aws_quotas.md`):
-```sh
-aws service-quotas get-service-quota --service-code ec2 --quota-code L-34B43A08 \
-  --region us-east-1 --query 'Quota.Value'
-```
-2026-05-10 snapshot: 640 vCPU per region in us-east-1 + us-east-2 (we use both). 64 c7a.2xlarge = 512 vCPU total = 256 per region = 40% of quota.
+Honest-eval is cloud work, so the `cloud-worker-ops` money rules apply:
+budget ceiling, teardown command, and final audit. Workers buy walltime; do
+not choose a worker count without checking quota, current run scope, and the
+latest dated cost/throughput report. Campaign-specific worker counts and cost
+forecasts belong in reports or launch scripts, not in this general SOP.
 
 **Resume on interrupt**: ledger at `data/honest_eval/<eval_tag>/results.jsonl` survives SIGTERM/OOM/network partition. Tear down the fleet (`scripts/cloud/teardown.sh <eval_tag>`) then re-run with `--resume-from <eval_tag>`. Already-completed matchups skip dispatch; aggregation is identical to a clean run.
 
@@ -160,7 +139,7 @@ reference do not.
 Honest evaluation is an **operational rule** scoped to optimization-run
 lifecycle. It does not apply globally to every code change (parser
 edits, doc updates, harness work don't trigger it). Engineering
-principles in CLAUDE.md are global stances ("principled over expedient",
+principles in the root workflow file are global stances ("principled over expedient",
 "address issues, don't paper over them") that apply to all engineering.
 Honest evaluation belongs alongside `cloud-worker-ops` and
 `post-impl-audit` — operational SOPs invoked at specific lifecycle points.

@@ -1,15 +1,14 @@
 ---
 type: report
 status: draft
-last-validated: 2026-05-10
-supersedes: none
+last-validated: unvalidated
 ---
 
 # Post-hoc top-K candidate selection — research, implementation, and Wave 1 empirics
 
 **Question.** Spec 30 ranks honest-eval candidates by `mean(intermediate_values)`. Empirical work (this session) showed Box-Cox-shaped fitness saturates. Theory (phase5a/5d) says we should be doing TWFE + EB shrinkage. Is raw mean defensible, or are we systematically picking the wrong builds?
 
-**Answer.** Raw mean is severely confounded by opponent draw. TWFE / TWFE-EB / Bradley–Terry pick *different* and structurally sounder builds. A consensus across the three principled methods identifies one build (`36538033d63b`, double-heavy-AC Hammerhead) as the unambiguous Wave 1 winner.
+**Answer.** Raw mean is severely confounded by opponent draw. TWFE / TWFE-EB / Bradley–Terry pick *different* and structurally sounder builds. A consensus across the three principled methods identifies one build (`36538033d63b`, double-heavy-AC Hammerhead) as the strongest post-hoc training-log candidate. It is not the honest-eval winner; honest eval is the oracle for cross-cell build quality.
 
 This report covers (1) the methods we surveyed, (2) the implementation in `src/starsector_optimizer/posthoc_ranker.py`, (3) empirical comparison on Wave 1, and (4) Starsector domain validation of the picks.
 

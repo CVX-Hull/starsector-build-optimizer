@@ -17,7 +17,7 @@ Run this after completing implementation tasks. Combines the after-changes check
 2. **Investigate ALL failures**: Every failing test is a potential design issue — read the test, read the traceback, identify root cause. Never dismiss failures as "flaky" without reading the code.
 3. **Verify syntax**: `python -c "import ast; ast.parse(open('FILE').read())"` for each changed file
 4. **Verify imports**: `python -c "from starsector_optimizer.MODULE import SYMBOL"` for new exports
-5. **Update CLAUDE.md**: Project layout if new modules added
+5. **Update the root workflow file**: Project layout if new modules added
 6. **Update spec docs**: If function signatures, parameters, or defaults changed
 7. **Update reference docs**: If decisions, phase status, or experiment findings changed
 8. **After file renames**: `grep -rn "old_filename" --include="*.md" --include="*.py"` across the entire codebase
@@ -57,7 +57,7 @@ sub-agents. Launch **3 independent sub-agents in parallel** (single
 message, 3 Agent tool calls). Each auditor receives only the plan path
 and reference material — no hints about expected findings.
 
-Higher-priority Codex runtime or developer instructions still take
+Higher-priority runtime or developer instructions still take
 precedence. If the active session requires explicit authorization in the
 current turn, do not spawn agents until the user says e.g. **"launch audit
 sub-agents"**.
@@ -68,7 +68,7 @@ sub-agents"**.
 
 ### Sub-Agent B: Engineering & Design Invariant Audit
 
-> "You are an independent design auditor. Read the implementation files changed in this session. Read `CLAUDE.md` for engineering principles, design principles, and design invariants. Evaluate the implementation against every applicable invariant: (engineering) principled-over-expedient choices, no papered-over issues, no new TODO/FIXME/skip/type-ignore/lint-suppression deferrals without explicit user approval, no swallowed exceptions, no tests weakened to make failures pass; (design) frozen dataclasses, no magic numbers, config dataclasses, single source of truth, game data verification, forward compatibility, repair boundary. Check that `should_stop()` return values are handled correctly downstream (read `instance_manager.py`). For each issue found, judge whether the implementation chose the principled fix or an expedient shortcut. Report any violation or risk."
+> "You are an independent design auditor. Read the implementation files changed in this session. Read the root workflow file for engineering principles, design principles, and design invariants. Evaluate the implementation against every applicable invariant: (engineering) principled-over-expedient choices, no papered-over issues, no new TODO/FIXME/skip/type-ignore/lint-suppression deferrals without explicit user approval, no swallowed exceptions, no tests weakened to make failures pass; (design) frozen dataclasses, no magic numbers, config dataclasses, single source of truth, game data verification, forward compatibility, repair boundary. Check that `should_stop()` return values are handled correctly downstream (read `instance_manager.py`). For each issue found, judge whether the implementation chose the principled fix or an expedient shortcut. Report any violation or risk."
 
 ### Sub-Agent C: Spec Alignment Audit
 
@@ -78,7 +78,7 @@ sub-agents"**.
 
 ## No Deferring During Implementation
 
-Every item in an approved plan must be completed fully. The plan is the deferral mechanism — items not in the plan are deferred to a future phase. Items IN the plan are committed scope. This is the implementation-time corollary of `CLAUDE.md` § "Engineering Principles" rule 2 (address issues, don't paper over them).
+Every item in an approved plan must be completed fully. The plan is the deferral mechanism — items not in the plan are deferred to a future phase. Items IN the plan are committed scope. This is the implementation-time corollary of the engineering principle to address issues at root cause.
 
 - **Do not partially implement plan items.** No "easy part now, rest later", no TODO comments.
 - **If an item is larger than expected**, stop and re-plan with the user.

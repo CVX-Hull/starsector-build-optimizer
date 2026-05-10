@@ -1,10 +1,16 @@
 ---
 type: reference
-status: shipped
-last-validated: unvalidated
+status: deprecated
+last-validated: 2026-05-10
 ---
 
 # Quality-Diversity for Build Archetype Discovery
+
+> **Status: historical / not implementation guidance.** The QD motivation
+> remains useful, but the implementation sections still discuss CatCMAwM /
+> CMA-MAE emitter designs that were removed from the shipped optimizer surface.
+> Any future QD work must choose a discrete-compatible emitter and update this
+> reference before implementation; see [../specs/24-optimizer.md](../specs/24-optimizer.md).
 
 This document covers using MAP-Elites and related quality-diversity (QD) methods to discover the full landscape of viable ship build archetypes — not just one optimal build, but ALL the ways a ship can be effectively built.
 

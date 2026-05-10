@@ -9,7 +9,7 @@ last-validated: 2026-05-10
 
 # DDD+TDD Implementation Workflow
 
-Follow this lifecycle for all non-trivial implementation work. See `CLAUDE.md` § "Workflow — DDD + TDD" for the project rule.
+Follow this lifecycle for all non-trivial implementation work. See the root workflow file's "Workflow gates" section for the project rule.
 
 ## Step 1: Specification
 
@@ -26,10 +26,11 @@ Before writing any code:
    - Algorithm pseudocode for non-trivial logic
    - Design rationale (why this approach over alternatives)
 
-3. **Update reference docs** in `docs/reference/` if the change affects:
-   - `implementation-roadmap.md` — phase descriptions, deliverables, dependencies
-   - `optimization-methods.md` — sampler/algorithm selection guidance
-   - `phase4-research-findings.md` — experiment results and decisions
+3. **Update owning docs if the change affects them:**
+   - specs for module/protocol contracts
+   - the root workflow file for current phase/status and always-loaded invariants
+   - `docs/reference/README.md` plus relevant reference docs for design rationale
+   - `docs/reports/INDEX.md` plus dated reports for empirical findings
 
 ## Step 2: Tests
 
@@ -51,7 +52,7 @@ Make the tests pass:
 2. **Verify after each module** — `uv run pytest tests/test_<module>.py -v` after each implementation step, not just at the end
 3. **No partial implementations** — every plan item is DONE or DEFERRED, never "partially done"
 4. **If scope grows**, stop and re-plan with the user
-5. **Engineering principles apply throughout** — `CLAUDE.md` § "Engineering Principles": principled over expedient, address issues at root cause. Test failures are diagnostic signal — investigate, don't skip. Issues observed in touched files but unrelated to the immediate task are addressed in scope (boy-scout rule) or surfaced to the user with a proposed fix; never quietly TODO'd.
+5. **Engineering principles apply throughout** — principled over expedient, address issues at root cause. Test failures are diagnostic signal — investigate, don't skip. Issues observed in touched files but unrelated to the immediate task are addressed in scope or surfaced to the user with a proposed fix; never quietly TODO'd.
 
 ## Step 4: Verification
 
@@ -74,7 +75,7 @@ No item may be unlisted.
 ## Documentation Updates
 
 In the same session as code changes:
-- `CLAUDE.md` project layout if new modules added
+- root workflow file project layout if new modules added
 - Spec docs if function signatures changed
 - Reference docs if decisions or phase status changed
 - After file renames: `grep -rn "old_filename" --include="*.md" --include="*.py"`

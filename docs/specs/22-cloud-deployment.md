@@ -101,7 +101,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `teardown_retry_delay_seconds` | `float` | `10.0` | Wait before retrying `terminate_all_tagged` in `CampaignManager.teardown` when `list_active` still shows workers |
 | `teardown_thread_join_seconds` | `float` | `5.0` | Bound on `CloudWorkerPool.teardown` waits on the Flask server thread + janitor thread |
 | `spot_price_cache_ttl_seconds` | `float` | `300.0` | In-process `(region, instance_type) → rate` cache lifetime in `CampaignManager._tick_ledger`. Prevents one `DescribeSpotPriceHistory` call per tick per worker at steady-state. Cache miss or TTL expiry re-fetches. |
-| `max_requeues` | `int` | `5` | Janitor hard cap. A matchup whose `requeue_count` reaches this value on the next visibility-timeout breach is dropped (LREM from processing, NOT re-LPUSH to source) with an ERROR log. Catches permanently stuck matchups without pathological ping-pong. |
+| `max_requeues` | `int` | `5` | Janitor hard cap. A matchup whose next visibility-timeout breach would push `requeue_count` above this value is dropped (LREM from processing, NOT re-LPUSH to source) with an ERROR log. Catches permanently stuck matchups without pathological ping-pong. |
 | `heartbeat_stale_multiplier` | `int` | `3` | Heartbeats whose `timestamp > heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds` old are treated as dead and skipped by `_tick_ledger` — no cost accrues. Dead-key clean-up happens at teardown via `_flush_stale_campaign_keys`. |
 
 ### `WorkerConfig`
@@ -159,6 +159,7 @@ result = LocalInstancePool(...).run_matchup(item)
 POST /result {matchup_id, result, bearer_token}   # retries from WorkerConfig
 on 200: LREM processing 1 item
 on 409: LREM processing 1 item  (already-received dedup; silently drop)
+on 422: LREM processing 1 item  (loadout mismatch; orchestrator wakes dispatcher to retry fresh combat)
 on 401: terminate worker (crypto invariant violation)
 on repeated 5xx/network: let visibility_timeout expire → janitor re-queues
 ```
@@ -205,15 +206,17 @@ POST /result
   200: first observation; result registered, waiter notified via threading.Event
   409: matchup_id already observed; dedup silently drops
   401: bearer_token mismatch; no entry added
+  400: malformed result or envelope/result matchup_id mismatch; no entry added
   422: LOADOUT_MISMATCH discard — diagnostic field shows weapon/hullmod
        /flux corruption (Wave 1 cross-trial cache pollution); orchestrator
-       does NOT add to `_seen` and does NOT store the result. The 422 is
-       outside the worker's terminal-status set (200/409/401), so the
-       worker raises and leaves the matchup in the Redis processing list,
-       where the janitor re-queues it after `visibility_timeout_seconds`.
-       Bounded by `max_requeues`. CloudWorkerPool tracks the running
-       discard rate and raises `LoadoutMismatchAbort` from `run_matchup`
-       when the rate exceeds `MISMATCH_ABORT_RATE` (5%) after
+       does NOT add to `_seen` and does NOT store the result. If a
+       dispatcher is waiting for the matchup, it is woken with
+       `LoadoutMismatchRejected` so the evaluator retry loop can resubmit
+       a fresh combat immediately. Workers treat 422 as terminal and ack
+       the Redis item so the same corrupt POST is not replayed. CloudWorkerPool
+       tracks the running discard rate and raises `LoadoutMismatchAbort`
+       from `run_matchup` when the rate exceeds `MISMATCH_ABORT_RATE` (5%)
+       after
        `MISMATCH_ABORT_MIN_SAMPLES` (100) observations — surfaces a
        regressed Java fix or a stale jar instead of silently retrying
        every matchup.
@@ -228,7 +231,7 @@ Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is follow
 
 Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown and **returns exit code 0** (designed termination, not failure — wrapper scripts running multiple budget-capped cells back-to-back depend on this to advance to the next cell). Other failure modes keep distinct non-zero exit codes: preflight failure → 2, KeyboardInterrupt / SIGTERM / SIGHUP → 130, unexpected exception → propagates.
 
-**`budget_usd` is a hard ceiling, not a target.** Wave 1 surfaced an operator footgun: per-cell `budget_usd: 5.0` truncated cells at ~150 trials before the validation-plan-design 250 floor, making downstream gate thresholds mis-interpretable (decision recorded 2026-05-10). The principled operator contract: **size `budget_usd` as `expected_cost × 1.5` headroom**, where expected_cost = trials × matchups_per_trial × per_matchup_cost. The 1.5× cushion absorbs spot-price spikes and worker-restart overhead without hitting the cap. Studies designed against trial counts (e.g. validation plans citing N=250) MUST budget for trials, not flat dollar amounts. Future config option `min_trials_before_budget_cap` was considered and deferred — keeping budget purely-as-ceiling avoids a "two ways to do it" config surface; the trial-floor concern lives in operator math, not the framework.
+**`budget_usd` is a hard ceiling, not a target.** Wave 1 surfaced an operator footgun: a flat per-cell budget can truncate cells before their trial-count design floor, making downstream gate thresholds mis-interpretable (decision recorded 2026-05-10). The principled operator contract: **size `budget_usd` as `expected_cost × 1.5` headroom**, where expected_cost = trials × matchups_per_trial × per_matchup_cost. The 1.5× cushion absorbs spot-price spikes and worker-restart overhead without hitting the cap. Studies designed against trial counts MUST budget for trials, not flat dollar amounts. Future config option `min_trials_before_budget_cap` was considered and deferred — keeping budget purely-as-ceiling avoids a "two ways to do it" config surface; the trial-floor concern lives in operator math, not the framework.
 
 After every major optimization run that uses this infrastructure, the operator runs the **honest evaluator** ([spec 30](30-honest-evaluator.md), [`scripts/cloud/evaluate_campaign.sh`](../../scripts/cloud/evaluate_campaign.sh)) before publishing report findings — see [`honest-evaluation`](../../.claude/skills/honest-evaluation.md) skill for the SOP. The evaluator dispatches via the same `EvaluatorPool` ABC defined in this spec and reuses `cloud_runner.prepare_cloud_pool` for the per-eval fleet (separate `starsector-honest-eval-{name}-{utc}` namespace from the source campaign).
 

@@ -73,6 +73,21 @@ class TestWorkerAgentPost:
                 post_result(worker_config, matchup_id="m1", result={"foo": "bar"})
         assert mock_post.call_count <= worker_config.http_retry_count + 1
 
+    def test_post_422_loadout_mismatch_is_terminal(self, worker_config):
+        from starsector_optimizer.worker_agent import post_result
+        with patch("requests.post") as mock_post:
+            mock_post.return_value.status_code = 422
+            with patch("time.sleep") as sleep:
+                post_result(worker_config, matchup_id="m1", result={"foo": "bar"})
+        assert mock_post.call_count == 1
+        sleep.assert_not_called()
+
+    def test_post_uses_shared_loadout_mismatch_status(self):
+        import starsector_optimizer.worker_agent as wa
+        from starsector_optimizer.evaluator_pool import LOADOUT_MISMATCH_HTTP_STATUS
+
+        assert wa.LOADOUT_MISMATCH_HTTP_STATUS == LOADOUT_MISMATCH_HTTP_STATUS
+
     def test_post_401_hard_fails(self, worker_config):
         from starsector_optimizer.worker_agent import post_result, AuthError
         with patch("requests.post") as mock_post:
@@ -461,6 +476,145 @@ class TestConsumerConcurrency:
         # point — after the draining, processing is empty, but we can assert
         # pool.run_matchup was called 4 times total.
         assert pool.run_matchup.call_count == 4
+
+    def test_consumer_acks_after_terminal_422(
+        self, worker_config, fake_redis,
+    ):
+        import threading
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import CombatResult
+        from starsector_optimizer.worker_agent import _consumer_loop
+
+        source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
+        processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
+        fake_redis.lpush(source, json.dumps({
+            "matchup_id": "m422",
+            "enqueued_at": time.time(),
+            "matchup": {
+                "matchup_id": "m422",
+                "player_builds": [{
+                    "variant_id": "v", "hull_id": "wolf",
+                    "weapon_assignments": {}, "hullmods": [],
+                    "flux_vents": 0, "flux_capacitors": 0,
+                }],
+                "enemy_variants": ["dominator_Assault"],
+                "time_limit_seconds": 90.0,
+                "time_mult": 1.0,
+            },
+        }))
+
+        pool = MagicMock()
+        pool.run_matchup.return_value = CombatResult(
+            matchup_id="m422", winner="player",
+            duration_seconds=1.0,
+            player_ships=(), enemy_ships=(),
+            player_ships_destroyed=0, enemy_ships_destroyed=1,
+            player_ships_retreated=0, enemy_ships_retreated=0,
+            player_loadout_diagnostics=(),
+            engine_stats=None,
+        )
+
+        stop_event = threading.Event()
+        auth_failure_event = threading.Event()
+        started_at = time.monotonic()
+
+        with patch("requests.post") as mock_post:
+            mock_post.return_value.status_code = 422
+            thread = threading.Thread(target=_consumer_loop, kwargs={
+                "slot_idx": 0,
+                "config": worker_config,
+                "pool": pool,
+                "redis_client": fake_redis,
+                "source": source,
+                "processing": processing,
+                "started_at": started_at,
+                "stop_event": stop_event,
+                "auth_failure_event": auth_failure_event,
+                "poll_timeout": 1,
+            })
+            thread.start()
+            deadline = time.monotonic() + 5.0
+            while (
+                (fake_redis.llen(source) != 0
+                 or fake_redis.llen(processing) != 0
+                 or mock_post.call_count == 0)
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.05)
+            stop_event.set()
+            thread.join(timeout=3.0)
+
+        assert fake_redis.llen(source) == 0
+        assert fake_redis.llen(processing) == 0
+        assert mock_post.call_count == 1
+
+    def test_consumer_rejects_result_matchup_id_mismatch(
+        self, worker_config, fake_redis,
+    ):
+        import threading
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import CombatResult
+        from starsector_optimizer.worker_agent import _consumer_loop
+
+        source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
+        processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
+        fake_redis.lpush(source, json.dumps({
+            "matchup_id": "envelope-id",
+            "enqueued_at": time.time(),
+            "matchup": {
+                "matchup_id": "envelope-id",
+                "player_builds": [{
+                    "variant_id": "v", "hull_id": "wolf",
+                    "weapon_assignments": {}, "hullmods": [],
+                    "flux_vents": 0, "flux_capacitors": 0,
+                }],
+                "enemy_variants": ["dominator_Assault"],
+                "time_limit_seconds": 90.0,
+                "time_mult": 1.0,
+            },
+        }))
+
+        pool = MagicMock()
+        pool.run_matchup.return_value = CombatResult(
+            matchup_id="result-id", winner="player",
+            duration_seconds=1.0,
+            player_ships=(), enemy_ships=(),
+            player_ships_destroyed=0, enemy_ships_destroyed=1,
+            player_ships_retreated=0, enemy_ships_retreated=0,
+            player_loadout_diagnostics=(),
+            engine_stats=None,
+        )
+
+        stop_event = threading.Event()
+        auth_failure_event = threading.Event()
+        started_at = time.monotonic()
+
+        with patch("starsector_optimizer.worker_agent.post_result") as mock_post:
+            thread = threading.Thread(target=_consumer_loop, kwargs={
+                "slot_idx": 0,
+                "config": worker_config,
+                "pool": pool,
+                "redis_client": fake_redis,
+                "source": source,
+                "processing": processing,
+                "started_at": started_at,
+                "stop_event": stop_event,
+                "auth_failure_event": auth_failure_event,
+                "poll_timeout": 1,
+            })
+            thread.start()
+            deadline = time.monotonic() + 5.0
+            while pool.run_matchup.call_count == 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            deadline = time.monotonic() + 2.0
+            while fake_redis.llen(processing) == 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            stop_event.set()
+            thread.join(timeout=3.0)
+
+        mock_post.assert_not_called()
+        assert fake_redis.llen(source) == 0
+        assert fake_redis.llen(processing) == 1
 
 
 class TestRepairBoundary:

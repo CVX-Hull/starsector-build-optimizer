@@ -105,7 +105,7 @@ Standalone utility for simple aggregation of `combat_fitness` scores. The optimi
 
 1. **A1 TWFE decomposition** (spec 28) via `ScoreMatrix`
 2. **A2′ EB shrinkage** (spec 28) — fuses the TWFE estimate with a 10-covariate regression prior assembled by `optimizer.py::_build_covariate_vector` from `ScorerResult` (this module's sibling `scorer.py`), `EngineStats` (6-field Java SETUP read), and `_op_used_fraction(build, hull, manifest)` (Python-raw, manifest-driven). The covariate assembly lives in the optimizer, not in `combat_fitness.py`, because it crosses optimizer-owned state — scorer output plus SETUP engine reads plus manifest OP costs. `combat_fitness` remains a pure scalar function of one `CombatResult`. See spec 24 §A2′ for the pinned 10-component order; `ScorerResult.effective_stats` was removed 2026-04-19 (see spec 01 + spec 29).
-3. **A3 rank shaping**
+3. **A3 Box-Cox output warping** (spec 24 §A3)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|

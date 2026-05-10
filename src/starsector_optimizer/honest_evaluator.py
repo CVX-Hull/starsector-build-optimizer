@@ -441,7 +441,17 @@ def evaluate_builds(
     completed_from_ledger: dict[tuple[str, str, int], float] = {}
     if ledger_path is not None:
         completed_from_ledger = read_ledger(ledger_path)
-    build_id_to_idx = {_build_id(bi): bi for bi in range(len(builds_with_provenance))}
+    build_id_to_idx: dict[str, int] = {}
+    for bi in range(len(builds_with_provenance)):
+        bid = _build_id(bi)
+        if bid in build_id_to_idx:
+            prior = build_id_to_idx[bid]
+            raise RuntimeError(
+                f"duplicate honest-eval build_id {bid!r} for build "
+                f"indices {prior} and {bi}; source provenance is not "
+                f"unique enough to resume or score safely"
+            )
+        build_id_to_idx[bid] = bi
     scores_per_build: dict[int, list[float]] = {
         i: [] for i in range(len(builds_with_provenance))
     }

@@ -155,6 +155,8 @@ def _matchup_to_dict(mc: MatchupConfig) -> dict:
 
 
 def write_queue_file(matchups: list[MatchupConfig], path: Path) -> None:
-    """Write matchup configs as JSON array to the given path."""
+    """Write matchup configs as JSON array to the given path atomically."""
     data = [_matchup_to_dict(mc) for mc in matchups]
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp = path.with_name(f"{path.name}.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)

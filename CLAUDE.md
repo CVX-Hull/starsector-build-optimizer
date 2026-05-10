@@ -15,7 +15,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 | Phase | Status | Primary doc |
 |---|---|---|
 | 1 — Data layer (parser, search space, repair, scorer, variant) | shipped | specs `01–08` |
-| 2 — Combat harness mod (Java AI-vs-AI sim) | shipped | specs `09–16, 19, 27`; [combat-harness/CLAUDE.md](combat-harness/CLAUDE.md) |
+| 2 — Combat harness mod (Java AI-vs-AI sim) | shipped | specs `09–16, 19, 27`; [combat-harness/AGENTS.md](combat-harness/AGENTS.md) |
 | 3 — Instance manager (parallel JVMs via Xvfb) | shipped | specs `17, 18` |
 | 4 — Optimizer integration (Optuna TPE + opponent pool + importance) | shipped | specs `23–26` |
 | 5A–5F — Signal quality (TWFE / pruner / opponent curriculum / EB shrinkage / Box-Cox / regime segmentation) | shipped, pending re-val | [docs/reference/phase5*.md](docs/reference/) |
@@ -30,7 +30,7 @@ Spec number registry (gaps at 02/20/21): [docs/specs/README.md](docs/specs/READM
 ## Commands
 
 - Python tests: `uv run pytest tests/ -v`
-- Combat harness build/test/deploy: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew {jar,test,deploy}` — see [combat-harness/CLAUDE.md](combat-harness/CLAUDE.md)
+- Combat harness build/test/deploy: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew {jar,test,deploy}` — see [combat-harness/AGENTS.md](combat-harness/AGENTS.md)
 - Optimizer (heuristic-only): `uv run python scripts/run_optimizer.py --hull <id> --game-dir game/starsector --heuristic-only`
 - Optimizer (sim, local Linux): add `--num-instances <N> --sim-budget <N> --study-db data/<id>.db`. **Cap: `os.cpu_count() // 3`** (preflight-enforced; each JVM consumes ~2.5 cores).
 - Optimizer (cloud): add `--worker-pool cloud`. Full SOP: [.claude/skills/cloud-worker-ops.md](.claude/skills/cloud-worker-ops.md).
@@ -51,7 +51,7 @@ For every module: spec first, then tests, then implementation. Skills enforce qu
 | Gate | When | Skill |
 |---|---|---|
 | Planning | Before non-trivial implementation | [`ddd-tdd`](.claude/skills/ddd-tdd.md) |
-| Plan review | Before ExitPlanMode | [`plan-review`](.claude/skills/plan-review.md) |
+| Plan review | Before implementation approval | [`plan-review`](.claude/skills/plan-review.md) |
 | Implementation | During coding | [`ddd-tdd`](.claude/skills/ddd-tdd.md) step 3 |
 | Post-implementation | After all tasks complete | [`post-impl-audit`](.claude/skills/post-impl-audit.md) |
 | Invariant check | When reviewing changes | [`design-invariants`](.claude/skills/design-invariants.md) |
@@ -67,8 +67,8 @@ Six categories — full system: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 - **reference** ([docs/reference/](docs/reference/)) — design rationale, research, theory.
 - **reports** ([docs/reports/](docs/reports/)) — dated empirical evidence (the only place internal-sim numbers belong).
 - **skills** ([.claude/skills/](.claude/skills/)) — procedural how-to / SOP.
-- **always-loaded** — this file, [combat-harness/CLAUDE.md](combat-harness/CLAUDE.md), [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
-- **indices** — [docs/project-overview.md](docs/project-overview.md), [docs/reports/INDEX.md](docs/reports/INDEX.md), [experiments/INDEX.md](experiments/INDEX.md), [docs/specs/README.md](docs/specs/README.md).
+- **always-loaded** — this file (`AGENTS.md`), [combat-harness/AGENTS.md](combat-harness/AGENTS.md), [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+- **indices** — [docs/project-overview.md](docs/project-overview.md), [docs/reference/README.md](docs/reference/README.md), [docs/reports/INDEX.md](docs/reports/INDEX.md), [experiments/INDEX.md](experiments/INDEX.md), [docs/specs/README.md](docs/specs/README.md).
 
 **Empirical-numbers rule**: specs and references contain NO inline empirical numbers; reports own all dated measurements. See CONVENTIONS §"The empirical-numbers rule" for carve-outs (engine constants, list prices, designed thresholds).
 
@@ -83,7 +83,7 @@ Autonomy means "act without asking", not "take the easy path without asking".
 ## Design principles
 
 1. **Manifest-as-oracle for game knowledge.** All hullmod applicability, conditional exclusions, and damage multipliers come from `game/starsector/manifest.json` (written by Java `ManifestDumper`, read by Python `GameManifest.load()`). Never hardcode hullmod logic; regen the manifest. See [spec 29](docs/specs/29-game-manifest.md).
-2. **Immutable domain models.** `Build`, `EffectiveStats`, `ScorerResult`, `CombatFitnessConfig`, `ImportanceResult` are frozen dataclasses; `Build.hullmods` is `frozenset`. Repair returns new instances.
+2. **Immutable domain models.** `Build`, `EngineStats`, `ScorerResult`, `CombatFitnessConfig`, `ImportanceResult` are frozen dataclasses; `Build.hullmods` is `frozenset`. Repair returns new instances.
 3. **Optimizer-space vs domain-space boundary.** Raw optimizer proposals go through `repair_build()` to produce valid `Build`s; everything downstream works with concrete, valid Builds.
 4. **Data-driven over logic-driven.** Adding a new hullmod = regen the manifest, not edit if-else chains.
 5. **Forward compatibility — warn, don't crash.** `from_str()` returns `None` on unknown enum values; parser logs warning and skips. Never crash on unknown game data.
@@ -93,8 +93,8 @@ Autonomy means "act without asking", not "take the easy path without asking".
 ## Design invariants
 
 - Every `Build` returned by `repair_build()` passes `is_feasible()`.
-- `compute_effective_stats()` is the ONLY function that applies hullmod stat modifications.
 - The manifest is the ONLY source of hullmod applicability, conditional exclusions, and damage multipliers. No hardcoded game-rule registries.
+- Java `EngineStats` emission is the source of hullmod-adjusted combat stats; Python does not reimplement hullmod stat effects.
 - All game constants come from `manifest.constants`, not scattered literals.
 - **No magic numbers in function bodies.** Timeouts, coordinates, polling intervals, thresholds, batch sizes live in config dataclasses (`InstanceConfig`, `OptimizerConfig`, `CombatFitnessConfig`).
 
@@ -104,7 +104,7 @@ Full mechanical checklist + grep commands: [`design-invariants`](.claude/skills/
 
 ```
 src/starsector_optimizer/   # Python — file ↔ spec map: docs/project-overview.md
-combat-harness/             # Java mod — see combat-harness/CLAUDE.md
+combat-harness/             # Java mod — see combat-harness/AGENTS.md
 docs/{specs,reference,reports}/
 .claude/skills/             # gates + SOPs
 experiments/                # forward-looking experiment registry

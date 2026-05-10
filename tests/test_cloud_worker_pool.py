@@ -122,6 +122,16 @@ class TestDedup:
         })
         assert r2.status_code == 409
 
+    def test_result_matchup_id_must_match_envelope(self, pool, flask_test_client_factory):
+        client = flask_test_client_factory(pool.app)
+        resp = client.post("/result", json={
+            "matchup_id": "envelope-id",
+            "result": _combat_result_json("result-id"),
+            "bearer_token": BEARER,
+        })
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "matchup_id_mismatch"
+
 
 class TestAuth:
     def test_bad_bearer_returns_401(self, pool, flask_test_client_factory):
@@ -135,11 +145,10 @@ class TestAuth:
 
 
 class TestLoadoutMismatchDiscard:
-    """Wave 1 C1 surfaced a 0.59% cross-trial loadout-bleed bug: workers
-    occasionally apply trial N+1's spec to trial N's matchup. The Java root
-    cause is unsolved; the band-aid in cloud_worker_pool drops corrupt
-    results so the janitor re-queues them, instead of feeding false data
-    into fitness aggregation. See task #89 / docs/reports/2026-05-10-wave1-validation.md."""
+    """Wave 1 surfaced cross-trial loadout bleed: workers can occasionally
+    post a result whose live ship differs from the requested BuildSpec. The
+    pool drops corrupt results and wakes the dispatcher to retry a fresh
+    combat, instead of feeding false data into fitness aggregation."""
 
     @staticmethod
     def _mismatch_diagnostic_json() -> dict:
@@ -179,8 +188,8 @@ class TestLoadoutMismatchDiscard:
     def test_post_with_mismatch_then_clean_resubmit_succeeds(
         self, pool, flask_test_client_factory,
     ):
-        """Matchup re-queued by janitor → resubmitted by another worker
-        with a clean (matching) loadout → must be stored normally."""
+        """A later clean result for the same matchup id must be stored
+        normally when no dispatcher consumed the earlier discard."""
         client = flask_test_client_factory(pool.app)
         bad_body = _combat_result_json("m-retry")
         bad_body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
@@ -197,6 +206,61 @@ class TestLoadoutMismatchDiscard:
         })
         assert good_resp.status_code == 200
         assert "m-retry" in pool._seen
+
+    def test_duplicate_mismatch_body_is_deduped_not_refailed(
+        self, pool, flask_test_client_factory,
+    ):
+        """If the worker loses the 422 response and retries the same corrupt
+        POST body, the pool must not count or wake a second discard."""
+        client = flask_test_client_factory(pool.app)
+        body = _combat_result_json("m-dupe-bad")
+        body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
+        first = client.post("/result", json={
+            "matchup_id": "m-dupe-bad",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        second = client.post("/result", json={
+            "matchup_id": "m-dupe-bad",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert first.status_code == 422
+        assert second.status_code == 409
+        assert pool._mismatch_discard_count == 1
+
+    def test_mismatch_wakes_dispatcher_with_retryable_failure(
+        self, pool, flask_test_client_factory,
+    ):
+        from starsector_optimizer.cloud_worker_pool import LoadoutMismatchRejected
+
+        client = flask_test_client_factory(pool.app)
+        matchup = _matchup("m-wake")
+        holder = {}
+
+        def _run():
+            try:
+                pool.run_matchup(matchup)
+            except Exception as exc:
+                holder["exc"] = exc
+
+        t = threading.Thread(target=_run)
+        t.start()
+        time.sleep(0.05)
+
+        body = _combat_result_json("m-wake")
+        body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
+        resp = client.post("/result", json={
+            "matchup_id": "m-wake",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert resp.status_code == 422
+        t.join(timeout=3.0)
+        assert isinstance(holder.get("exc"), LoadoutMismatchRejected)
+        assert "m-wake" not in pool._seen
+        assert "m-wake" not in pool._results
+        assert "m-wake" not in pool._failures
 
     def test_empty_diagnostics_passes(self, pool, flask_test_client_factory):
         """Test fixtures + pre-V2 paths emit empty diagnostic lists. Empty
@@ -223,8 +287,7 @@ class TestLoadoutMismatchDiscard:
         )
         client = flask_test_client_factory(pool.app)
         # Drive the rate above MISMATCH_ABORT_RATE: pump in ≥
-        # MIN_SAMPLES observations where >RATE are mismatches. We use 20%
-        # mismatches over 50 samples (rate=0.20 > 0.05).
+        # MIN_SAMPLES observations where >RATE are mismatches.
         n_total = MISMATCH_ABORT_MIN_SAMPLES
         n_bad = int(n_total * 0.20)
         for i in range(n_total):

@@ -1,7 +1,7 @@
 ---
 type: reference
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-05-10
 ---
 
 # Optimization Methods — Detailed Technical Guide
@@ -10,7 +10,7 @@ This document covers each optimization method in depth: how it works, when to us
 
 **Updated based on Phase 4 research findings.** Key change: Optuna TPE replaces Bounce/SMAC3 as primary optimizer. See `phase4-research-findings.md` for full rationale.
 
-> **Update 2026-04-19:** The CatCMAwM section below is preserved as historical context, but CatCMAwM has been **REMOVED** from the production codebase. `cmaes.CatCMAwM` requires ≥1 continuous variable in its `x_space`, and the Starsector search space is fully categorical + integer (no `FloatDistribution` on any hull/regime), so CatCMAwM raises `x_space must be shape (n, 2), got (0,)` at initialization. `_create_sampler` accepts only `"tpe"`, and `_ALLOWED_SAMPLERS = {"tpe"}` in `campaign.py`. Phase 7 replaces the Optuna sampler surface entirely with a BoTorch composed-kernel GP (see `docs/reference/phase7-search-space-compression.md`). Treat the CatCMAwM / hybrid-sampler guidance in §3 and the decision tree in §1 as dead advice pending either a QD reboot with a discrete-compatible emitter or Phase 7 shipping.
+> **Update 2026-05-10:** CatCMAwM is preserved only as historical context. It was **removed** from the production codebase because `cmaes.CatCMAwM` requires ≥1 continuous variable in its `x_space`, and the Starsector search space is fully categorical + integer (no `FloatDistribution` on any hull/regime), so CatCMAwM raises `x_space must be shape (n, 2), got (0,)` at initialization. `_create_sampler` accepts only `"tpe"`, and `_ALLOWED_SAMPLERS = {"tpe"}` in `campaign.py`. Phase 7 replaces the Optuna sampler surface entirely with a BoTorch composed-kernel GP (see `docs/reference/phase7-search-space-compression.md`).
 
 ---
 
@@ -18,9 +18,9 @@ This document covers each optimization method in depth: how it works, when to us
 
 1. [Method Selection Decision Tree](#1-method-selection-decision-tree)
 2. [Optuna TPE — Primary Optimizer](#2-optuna-tpe--primary-optimizer)
-3. [CatCMAwM — Evolutionary Alternative / Primary Sampler Option](#3-catcmawm--evolutionary-alternative--primary-sampler-option)
-4. [SMAC3 — When Constraints Need ConfigSpace](#4-smac3--when-constraints-need-configspace)
-5. [Bounce — Reference Only](#5-bounce--reference-only)
+3. [CatCMAwM — Historical, Removed](#3-catcmawm-historical-removed)
+4. [SMAC3 — When Constraints Need ConfigSpace](#4-smac3-when-constraints-need-configspace)
+5. [Bounce — Reference Only](#5-bounce-reference-only)
 6. [Constraint Handling Strategy](#6-constraint-handling-strategy)
 7. [Opponent Selection Strategy](#7-opponent-selection-strategy)
 8. [Method Comparison Table](#8-method-comparison-table)
@@ -33,16 +33,16 @@ This document covers each optimization method in depth: how it works, when to us
 Is this a single-build optimization or archetype discovery?
 ├── Single-build optimization
 │   ├── Budget < 200 evals? → Optuna TPE + heuristic warm-start
-│   ├── Budget 200-1000 evals? → Optuna TPE or CatCMAwM (via --sampler catcma)
+│   ├── Budget 200-1000 evals? → Optuna TPE
 │   │   ├── Noisy signal? → Add opponent normalization + control variates (Phase 5A)
 │   │   └── Budget-constrained? → Sequential eval + Hyperband pruning (Phase 5B)
-│   ├── Need refinement after TPE? → CatCMAwM sampler (via OptunaHub)
+│   ├── Need refinement after TPE? → Phase 7 BoTorch composed-kernel GP (planned)
 │   └── Need multi-objective? → Optuna NSGA-II with 3 combat objectives (Phase 5C)
 │
 └── Archetype discovery (QD)
-    ├── Heuristic evaluation only? → CMA-MAE via pyribs (200K+ evals)
-    ├── Simulation budget 1K-5K? → DSA-ME pattern (surrogate-assisted)
-    └── Full pipeline? → Phase A heuristic illumination → Phase B sim validation
+    ├── Heuristic evaluation only? → historical CMA-MAE/QD concept only
+    ├── Simulation budget 1K-5K? → future QD requires a discrete-compatible emitter
+    └── Full pipeline? → future design; do not use removed CatCMAwM paths
 ```
 
 **Signal quality improvements (Phase 5):** Opponent normalization, control variates, Hyperband pruning, and multi-objective decomposition can be applied on top of any sampler choice. See `docs/reference/phase5-signal-quality.md` for full details.
@@ -111,13 +111,9 @@ for _ in range(budget):
         score = evaluate_against_opponent_pool(repaired)
         cache[build_hash] = score
 
-    # Lamarckian: record repaired params, not raw
-    trial = create_trial(
-        params=build_to_params(repaired),
-        distributions=search_space_distributions,
-        values=[score],
-    )
-    study.add_trial(trial)
+    # Baldwinian: tell the raw trial the repaired build's score.
+    # The repaired build is cached/logged separately for deduplication and audit.
+    study.tell(raw_trial, score)
 ```
 
 ### Known Failure Modes at 50-70D
@@ -125,7 +121,7 @@ for _ in range(budget):
 1. **High dimensionality**: Kernel density estimation degrades. TPE essentially becomes random search with mild bias past ~30D. Mitigation: increase `n_ei_candidates` to 256+, use 100+ startup trials.
 2. **Irrelevant categoricals**: TPE wastes budget exploring unimportant hullmod toggles. Many hullmods have near-zero effect on combat. Mitigation: pre-filter eligible hullmods to only combat-relevant ones.
 3. **Noisy objectives**: Combat simulation has variance from AI behavior randomness. Mitigation: average across 5+ opponent matchups (reduces noise).
-4. **Local optima trapping**: TPE's density ratio creates attraction basins. Mitigation: restart studies with different seeds; use CatCMAwM for exploration.
+4. **Local optima trapping**: TPE's density ratio creates attraction basins. Mitigation: restart studies with different seeds. Phase 7's planned BoTorch composed-kernel GP is the next production exploration path.
 5. **Constant liar degradation**: At batch size 4-8, expect ~1.5-2x the trial budget vs sequential to achieve same quality. Still far better than random search.
 
 ### Expected Performance
@@ -136,31 +132,30 @@ for _ in range(budget):
 
 ---
 
-## 3. CatCMAwM — Evolutionary Alternative / Primary Sampler Option
+## 3. CatCMAwM — Historical, Removed
 
 ### How It Works
 
 CatCMAwM jointly optimizes continuous, integer, and categorical variables using a combined multivariate Gaussian + categorical distribution. Updated via natural gradient (CMA-ES rules for Gaussian, ASNG for categoricals).
 
+This section is retained only as rejected-alternative context. It is not a
+current production path for this codebase because `cmaes.CatCMAwM` requires at
+least one continuous variable, while the Starsector search space is categorical
+and integer only. Spec 24 is canonical: `_ALLOWED_SAMPLERS = {"tpe"}`.
+
 ### Population Size
 
 Formula: `lambda = 4 + floor(3 * ln(N_co + N_ca))`. At d=60: lambda ≈ 16-17. This is small for multimodal problems — consider 2x-4x for difficult landscapes.
 
-### When to Use
+### Applicability
 
-- **As Optuna sampler**: For refinement after TPE has identified promising regions
-- **As pyribs emitter**: For quality-diversity (Phase 7) — natural batch parallelism matches instance count
-- **NOT as primary optimizer**: Only tested up to ~40D, requires 1000-5000 evaluations (too many for expensive sim)
+Do not use CatCMAwM as an Optuna sampler, refinement pass, or QD emitter in this
+repository unless a future design introduces a discrete-compatible replacement
+or a real continuous search axis. Phase 7 routes exploration work to the
+BoTorch composed-kernel GP plan in [phase7-search-space-compression.md](phase7-search-space-compression.md).
 
-### Implementation via OptunaHub
-
-```python
-from optunahub.samplers import CatCMAwMSampler
-
-sampler = CatCMAwMSampler(seed=42)
-study = optuna.create_study(sampler=sampler)
-# Same ask-tell loop as TPE
-```
+Historical OptunaHub snippets were removed to avoid copy-pasting a dead path
+back into production.
 
 ---
 
@@ -213,11 +208,11 @@ When the optimizer proposes raw build X but evaluates `repair(X)`, two issues ar
 
 **Landscape distortion:** The surrogate learns a distorted landscape where infeasible regions appear to have the score of the nearest feasible point, creating plateaus where gradient information is lost.
 
-### Recommended: Lamarckian + Deduplication + Constraint Function
+### Recommended: Baldwinian Recording + Deduplication + Constraint Function
 
-Based on literature review (Ishibuchi 2005, Koziel & Michalewicz 1999, Watanabe & Hutter c-TPE 2023):
+Based on the current spec 24 contract and literature review (Ishibuchi 2005, Koziel & Michalewicz 1999, Watanabe & Hutter c-TPE 2023):
 
-1. **Lamarckian recording**: Record `(repaired_params, score)` via `study.add_trial()`, not `(raw_params, score)`. The TPE density estimators learn the feasible manifold directly. Avoids the "Baldwinian" landscape distortion where the surrogate sees infeasible coordinates with repaired scores.
+1. **Baldwinian recording**: Record the raw Optuna trial via `study.tell(raw_trial, repaired_score)`. The repaired build is cached and logged separately. This keeps Optuna's distribution contract valid even when repair maps raw proposals onto a different feasible build. Earlier Lamarckian `study.add_trial(repaired_params)` guidance is historical and should not be used unless spec 24 changes.
 
 2. **Deduplication**: Hash repaired builds before simulation. Return cached score for collisions. At our dimensionality with greedy drop repair, the collision rate is likely 10-30%.
 
@@ -296,11 +291,11 @@ Select 5-6 stock opponents per hull size, covering archetypes:
 
 | Criterion | Optuna TPE | CatCMAwM | SMAC3 | Bounce |
 |---|---|---|---|---|
-| **Our primary use** | Main optimizer | QD emitter, refinement | Backup (if conditionals needed) | Reference only |
+| **Our primary use** | Main optimizer | Removed historical alternative | Backup (if conditionals needed) | Reference only |
 | **Categorical per-slot** | Native | Native | Native (ConfigSpace) | Native (typed bins) |
 | **Binary toggles** | Native | Native (K=2) | Native | Native |
 | **Bounded integers** | Native | Native (margin) | Native | Native (ordinal bins) |
-| **OP budget constraint** | repair + constraints_func | Repair wrapper | Repair + ConfigSpace | Repair wrapper |
+| **OP budget constraint** | repair + constraints_func | Not applicable | Repair + ConfigSpace | Repair wrapper |
 | **Batch/parallel** | constant_liar (B=4-8 OK) | Natural (pop_size) | Broken | qEI (good) |
 | **Sample efficiency (<200)** | High (with warm-start) | Medium | High | High |
 | **Sample efficiency (>500)** | Medium-High | Very High | Medium-High | High |
@@ -312,8 +307,8 @@ Select 5-6 stock opponents per hull size, covering archetypes:
 
 ### Recommendation Summary
 
-1. **Use Optuna TPE** as primary optimizer with warm-start, repair, deduplication
-2. **Use CatCMAwM** as MAP-Elites emitter (Phase 7) and optional refinement sampler
+1. **Use Optuna TPE** as the current primary optimizer with repair, deduplication, staged opponent evaluation, Wilcoxon pruning, and A1→A2′→A3 scoring.
+2. **Do not use CatCMAwM** in this codebase; it was removed because the search space has no continuous variables.
 3. **Use SMAC3** only if we discover conditional parameter spaces that repair cannot handle
 4. **Keep Bounce** as reference for benchmarking discussions only
 5. **Benchmark on heuristic proxy first** before committing simulation budget

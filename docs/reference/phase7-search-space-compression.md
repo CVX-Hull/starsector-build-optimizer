@@ -1,16 +1,16 @@
 ---
 type: reference
-status: shipped
-last-validated: unvalidated
+status: draft
+last-validated: 2026-05-10
 ---
 
-# Phase 6 — Structured Search-Space Representation
+# Phase 7 — Structured Search-Space Representation
 
 > **Status**: PLANNED. Research complete (2026-04-17). Targets the combinatorial-explosion vs expensive-evaluation bottleneck by replacing the Optuna TPE surrogate (CatCMAwM removed 2026-04-19; see spec 24) with a custom BoTorch-based Gaussian Process whose kernel composes sparse-axis-aligned priors on hullmod booleans, transformed-overlap categoricals and attribute-Matérn on weapons, Matérn on slot coordinates, opponent-context features on small-slot posteriors, gated-sentinel for conditional slots, and ICM-style per-item and per-slot residuals. Warmed by a BOCA-style 30-trial random-forest importance pilot and biased (but not locked) by πBO decay-weighted priors over nine community-stable role archetypes. No shipped code yet.
 
-Design and research log for how the optimizer **represents and searches** the ship-build space. Phase 5 improves the *scoring* of builds (signal quality); Phase 6 improves the *surrogate model* that decides which builds to test next, by injecting stable structural priors (slot geometry, weapon attributes, archetype density, hullmod sparsity) that survive game updates.
+Design and research log for how the optimizer **represents and searches** the ship-build space. Phase 5 improves the *scoring* of builds (signal quality); Phase 7 improves the *surrogate model* that decides which builds to test next, by injecting stable structural priors (slot geometry, weapon attributes, archetype density, hullmod sparsity) that survive game updates.
 
-Reading this doc cold: Phase 4 shipped the initial Optuna TPE optimizer over one-hot encoded weapons and hullmod booleans (CatCMAwM was in `_create_sampler` as a nominally-selectable alternative until 2026-04-19, when it was removed for being incompatible with our all-categorical search space). Phase 6 replaces that surrogate with a mixed-space GP whose kernel structure matches the known geometry of the ship-build problem — weapons have physics-driven attributes, slots have 2D coordinates, hullmods have sparse activity, and archetypes are stable across game patches. See `docs/reference/implementation-roadmap.md` for the full phase status.
+Reading this doc cold: Phase 4 shipped the initial Optuna TPE optimizer over one-hot encoded weapons and hullmod booleans (CatCMAwM was in `_create_sampler` as a nominally-selectable alternative until 2026-04-19, when it was removed for being incompatible with our all-categorical search space). Phase 7 would replace that surrogate with a mixed-space GP whose kernel structure matches the known geometry of the ship-build problem — weapons have physics-driven attributes, slots have 2D coordinates, hullmods have sparse activity, and archetypes are stable across game patches. See `AGENTS.md` for the current phase status.
 
 This design is the synthesis of a 10-agent, 2026-04-17 literature sweep plus a follow-up compiler-autotuning deep-dive:
 
@@ -172,7 +172,7 @@ Brown & Salcedo 2003 "Multiple-Objective Optimization in Naval Ship Design" (*NE
 
 Mapping:
 
-| Naval concept | Ship-build analog | Locked in Phase 6 design |
+| Naval concept | Ship-build analog | Locked in Phase 7 design |
 |---|---|---|
 | Design Spiral outer ring | `(hull, regime)` study pair (Phase 5F) | Per-study outer loop |
 | Design Spiral inner ring | `(weapons, hullmods, OP allocation)` | GP surrogate decision variables |
@@ -207,9 +207,9 @@ Audit of `parser.py`, `models.py`, and the CSV + `.ship` JSON schemas confirms t
 - `hull_mods.csv`: `id`, `name`, `tier`, `cost_frigate`, `cost_dest`, `cost_cruiser`, `cost_capital`, `hidden`
 - `.ship` JSON per hull: `weaponSlots[].id`, `.type`, `.size`, `.mount`, `.angle`, `.arc`, `.locations`
 
-Forward compatibility: `_ParseableEnum.from_str()` (`parser.py`) returns `None` for unknown values and the parser logs a warning and skips the record. The kernel design never hardcodes specific weapon IDs, specific hullmod IDs, or specific tags (Design Principle 5, CLAUDE.md). Only the enums (stable forever) and CSV columns (stable forever) are referenced in the kernel specification.
+Forward compatibility: `_ParseableEnum.from_str()` (`parser.py`) returns `None` for unknown values and the parser logs a warning and skips the record. The kernel design never hardcodes specific weapon IDs, specific hullmod IDs, or specific tags. Only the enums (stable forever) and CSV columns (stable forever) are referenced in the kernel specification.
 
-Caveat: hullmod incompatibility pairs (`INCOMPATIBLE_PAIRS`) and hull-size restrictions (`HULL_SIZE_RESTRICTIONS`) are hardcoded in Python (`hullmod_effects.py`), not in CSV. These require manual patching per game version. Phase 6 does not change this — it is orthogonal.
+Caveat: hullmod incompatibility pairs (`INCOMPATIBLE_PAIRS`) and hull-size restrictions (`HULL_SIZE_RESTRICTIONS`) are hardcoded in Python (`hullmod_effects.py`), not in CSV. These require manual patching per game version. Phase 7 does not change this — it is orthogonal.
 
 ### 2.10 AI pilotability is a load-bearing evaluation constraint
 
@@ -232,9 +232,9 @@ Community meta is not uniformly compatible with this premise. A well-documented 
 
 Builds that are top-tier in community meta but rely on player-only piloting (SO brawler with skill-5 Helmsmanship, phase striker with perfectly-timed cloaks, burst-missile with manually-ordered volleys) may score poorly in AI-vs-AI sim. Conversely, builds the community dismisses as "too AI-friendly" may genuinely dominate the sim because the simulator's evaluation context matches those builds' design assumption.
 
-**Implication for Phase 6.** The uniform-initial-weights + self-correcting π design from §2.5 already addresses this: community meta contributes the vocabulary of modes, not the weights, and the per-hull self-correcting mechanism online-downweights modes that underperform under the actual simulation context. An SO-brawler mode that the AI mispilots will empirically produce worse fitness than the community-meta prior predicts, and the Hvarfner 2023 marginal-likelihood-ratio update will reduce its mixture weight on the next acquisition. No hardcoding of AI-hostility flags is needed; the data does the work.
+**Implication for Phase 7.** The uniform-initial-weights + self-correcting π design from §2.5 already addresses this: community meta contributes the vocabulary of modes, not the weights, and the per-hull self-correcting mechanism online-downweights modes that underperform under the actual simulation context. An SO-brawler mode that the AI mispilots will empirically produce worse fitness than the community-meta prior predicts, and the Hvarfner 2023 marginal-likelihood-ratio update will reduce its mixture weight on the next acquisition. No hardcoding of AI-hostility flags is needed; the data does the work.
 
-**If the combat harness varies AI personality** (Cautious / Steady / Aggressive / Reckless from `PersonalityAPI`) or officer skills across trials, the varying fields enter the kernel as additional ordinal/boolean context features on the player side (same pattern as the opponent-summary features on small slots, §2.8). If the harness fixes personality to Steady and runs un-officered (the Phase 2 default), these are simulation constants and do not need to enter the kernel. The current Phase 6 ship assumes the latter — default-personality, un-officered — which matches the typical fleet deployment case (most ships in a campaign fleet have no officer). Officer-conditional or personality-conditional optimization is a Phase 6.1 extension, not part of the initial ship.
+**If the combat harness varies AI personality** (Cautious / Steady / Aggressive / Reckless from `PersonalityAPI`) or officer skills across trials, the varying fields enter the kernel as additional ordinal/boolean context features on the player side (same pattern as the opponent-summary features on small slots, §2.8). If the harness fixes personality to Steady and runs un-officered (the Phase 2 default), these are simulation constants and do not need to enter the kernel. The current Phase 7 ship assumes the latter — default-personality, un-officered — which matches the typical fleet deployment case (most ships in a campaign fleet have no officer). Officer-conditional or personality-conditional optimization is a Phase 7.1 extension, not part of the initial ship.
 
 **Weapon-group assignment.** Stock `.variant` files hand-tune `weaponGroups` with per-group `autofire` and `mode` (LINKED / ALTERNATING) — notably `autofire=false` on ammo-limited missiles and ALTERNATING pairings on expensive ballistics. The combat harness builds variants via `autoGenerateWeaponGroups()` (`VariantBuilder.java:48`); `BuildSpec` carries no group metadata from Python. Every optimizer-produced build therefore runs on the engine's default grouping algorithm, which may not reproduce the hand-tuned behaviour of community reference builds. Absorbed by the same §2.10 mechanism: builds whose fitness depends on specific grouping (burst-missile timing, mixed-flux ballistic swaps) will underperform their community prior and get downweighted by the self-correcting mixture. Documented as a fidelity floor; lifting it would require adding weapon-group decisions to the search space (deferred, Phase 7.1+).
 
@@ -278,7 +278,7 @@ BoTorch (Balandat et al. 2020) provides `SaasFullyBayesianSingleTaskGP` out of t
 - Posterior inference via NUTS / fully-Bayesian MCMC (SAASBO default). Expected overhead: 10–100× MAP-GP per acquisition, but 1–2 hours total wallclock over a 200-trial run — acceptable.
 - HyperMapper ([github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper)) is the reference implementation for BaCO's kernel choices; use it as a validation oracle, not a drop-in library (HyperMapper lacks SAAS on subspaces).
 
-Estimated integration: ~2–3 weeks of custom-kernel + sampler work; ~1 week plumbing for attribute + slot + opponent feature extraction; ~1 week for πBO acquisition layer; ~1 week for BOCA pilot phase. ~6 weeks total for a compelling Phase 6 implementation.
+Estimated integration: ~2–3 weeks of custom-kernel + sampler work; ~1 week plumbing for attribute + slot + opponent feature extraction; ~1 week for πBO acquisition layer; ~1 week for BOCA pilot phase. ~6 weeks total for a compelling Phase 7 implementation.
 
 ### 3.3 SAAS prior on hullmod subspace
 
@@ -360,9 +360,9 @@ Drops out once the main BO has accumulated ~100 trials of its own evidence. Chea
 
 ### 3.11 Relationship to other phases
 
-Phase 6 is **orthogonal to Phase 5**. It changes the optimizer's surrogate, not its fitness estimator, shape transform, opponent curriculum, or feasibility mask:
+Phase 7 is **orthogonal to Phase 5**. It changes the optimizer's surrogate, not its fitness estimator, shape transform, opponent curriculum, or feasibility mask:
 
-| Phase | What it does | Phase 6 impact |
+| Phase | What it does | Phase 7 impact |
 |---|---|---|
 | 4 | Optuna TPE over one-hot (CatCMAwM removed 2026-04-19) | Replaced by custom BoTorch sampler |
 | 5A (TWFE) | α_i + β_j decomposition | Unchanged; TWFE output feeds GP like any fitness |
@@ -370,12 +370,12 @@ Phase 6 is **orthogonal to Phase 5**. It changes the optimizer's surrogate, not 
 | 5C (anchor-first + incumbent overlap) | Opponent schedule | Provides the opponent features (§3.9) to the GP |
 | 5D (EB shrinkage) | α̂ fusion with 7-covariate prior | Unchanged; 5D and 6 share the ICM fusion paradigm but at different layers |
 | 5E (Box-Cox shape) | Fitness-shape transform at A3 | Unchanged; Box-Cox output is the GP's `y` |
-| 5F (regime segmentation) | Feasible input set | Phase 6 runs one GP per `(hull, regime)` pair; one BOCA pilot per pair |
+| 5F (regime segmentation) | Feasible input set | Phase 7 runs one GP per `(hull, regime)` pair; one BOCA pilot per pair |
 | 5G (adversarial curriculum) | Deferred | No dependency |
 
 ### 3.12 Single-hull and multi-hull scope
 
-Initial ship is single-hull per study. Multi-hull surrogate (one GP across all hulls, transferring slot and archetype kernels) is a natural Phase 6+ extension once the single-hull kernel is validated. The slot-feature vector (§3.5) is hull-agnostic by construction, so multi-hull transfer requires only `hull_id` additional categorical features — not a redesign.
+Initial ship is single-hull per study. Multi-hull surrogate (one GP across all hulls, transferring slot and archetype kernels) is a natural Phase 7+ extension once the single-hull kernel is validated. The slot-feature vector (§3.5) is hull-agnostic by construction, so multi-hull transfer requires only `hull_id` additional categorical features — not a redesign.
 
 ---
 
@@ -485,7 +485,7 @@ Community-meta insight about AI pilotability is preserved as *grounding* (§2.10
 
 **What it was.** Add a kernel context feature `is_flagship: bool` and expose per-hull player-piloted evaluation runs. Many community-top builds assume the player is the pilot (skill 5 Helmsmanship, Combat Endurance, Target Analysis). If we had player-in-the-loop simulation we could recover player-only optima.
 
-**Why out of scope.** Phase 2 combat harness is AI-vs-AI by construction; no player-in-the-loop input mechanism exists and building one is outside Phase 6's scope (would require engine-level input injection, out of the current architectural envelope). The optimizer's deployment context is the fleet — most ships in a campaign fleet are AI-piloted, so the simulation already matches the dominant deployment case. Player-piloted flagship optimization is a distinct downstream problem that would require a separate simulation harness and is deferred indefinitely.
+**Why out of scope.** Phase 2 combat harness is AI-vs-AI by construction; no player-in-the-loop input mechanism exists and building one is outside Phase 7's scope (would require engine-level input injection, out of the current architectural envelope). The optimizer's deployment context is the fleet — most ships in a campaign fleet are AI-piloted, so the simulation already matches the dominant deployment case. Player-piloted flagship optimization is a distinct downstream problem that would require a separate simulation harness and is deferred indefinitely.
 
 ### 4.18 Standalone BOCA pilot — COMMIT-FOREVER RISK
 
@@ -518,11 +518,11 @@ Game-update transfer: new weapons with similar 7-attribute profile inherit the k
 
 Synthetic validation before any live run:
 
-1. **Rank-correlation gate**: on a held-out synthetic fitness function (Phase 5D-style 7-covariate ground truth + 200-trial eval budget), Phase 6 surrogate top-10 rank ρ vs ground truth should be ≥ 0.70. Current Optuna TPE baseline ≈ 0.45.
-2. **Cold-start gate**: on a new hull (not in pilot data), Phase 6 surrogate should reach the top-10 of a 2000-trial Phase-4 run within 500 Phase-6 trials.
+1. **Rank-correlation gate**: on a held-out synthetic fitness function (Phase 5D-style 7-covariate ground truth + 200-trial eval budget), Phase 7 surrogate top-10 rank ρ vs ground truth should be ≥ 0.70. Current Optuna TPE baseline ≈ 0.45.
+2. **Cold-start gate**: on a new hull (not in pilot data), Phase 7 surrogate should reach the top-10 of a 2000-trial Phase-4 run within 500 Phase-6 trials.
 3. **Game-update gate**: on simulated addition of 5 new weapons with attribute profiles interpolated from existing weapons, posterior mean at the new-weapon points should be within 0.2 σ of the attribute-interpolation ground truth with zero observations.
-4. **Addressability gate**: on a missile-heavy opponent pool, the Phase 6 surrogate's small-slot posterior mean should prefer IPDAI + Dual Flak over the opponent-pool-agnostic posterior at p < 0.05.
-5. **Hull-generalization gate**: on a non-meta hull (Gemini, Mudskipper, or any hull without published community meta), the Phase 6 surrogate should reach top-10 of a 1000-trial Phase-4 baseline within 500 Phase-6 trials — same sample-efficiency as meta hulls, verifying the feasibility-mask + uniform-initial-weights + self-correcting mechanism removes meta-hull coverage bias.
+4. **Addressability gate**: on a missile-heavy opponent pool, the Phase 7 surrogate's small-slot posterior mean should prefer IPDAI + Dual Flak over the opponent-pool-agnostic posterior at p < 0.05.
+5. **Hull-generalization gate**: on a non-meta hull (Gemini, Mudskipper, or any hull without published community meta), the Phase 7 surrogate should reach top-10 of a 1000-trial Phase-4 baseline within 500 Phase-6 trials — same sample-efficiency as meta hulls, verifying the feasibility-mask + uniform-initial-weights + self-correcting mechanism removes meta-hull coverage bias.
 
 Pass all five → ship. Fail any → revise design.
 
@@ -664,7 +664,7 @@ Step 7: Validation
 
 ### See also
 - `docs/reference/phase5d-covariate-adjustment.md` — EB fusion paradigm that §3.7 ICM residuals mirror.
-- `docs/reference/phase5f-regime-segmented-optimization.md` — `(hull, regime)` study unit that Phase 6 operates on.
-- `docs/reference/phase5-signal-quality.md` — TWFE + WilcoxonPruner + opponent curriculum upstream of Phase 6.
+- `docs/reference/phase5f-regime-segmented-optimization.md` — `(hull, regime)` study unit that Phase 7 operates on.
+- `docs/reference/phase5-signal-quality.md` — TWFE + WilcoxonPruner + opponent curriculum upstream of Phase 7.
 - [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) — V1 invalidation that retired the original Hammerhead-twfe directory whose throughput + concentration observation motivated the dimensionality argument; the structural argument is unaffected.
 - `src/starsector_optimizer/parser.py` — `_ParseableEnum` forward-compatibility mechanism that underwrites the game-update-invariance design property.

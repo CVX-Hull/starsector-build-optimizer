@@ -288,7 +288,8 @@ covariates (`total_weapon_dps`, `engagement_range`,
 `kinetic_dps_fraction`); hullmod-adjusted stats flow through
 `EngineStats` instead. `composite_score` is retained for warm-start
 and notebook use but was dropped from the 10-dim covariate vector
-(11–22% of |γ̂| was flowing through the drift-prone registry).
+because the pre-manifest registry path was drift-prone; see
+[../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
 ### GameData
 

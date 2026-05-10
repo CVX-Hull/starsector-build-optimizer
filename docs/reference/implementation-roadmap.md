@@ -1,10 +1,18 @@
 ---
 type: reference
-status: shipped
-last-validated: unvalidated
+status: deprecated
+last-validated: 2026-05-10
 ---
 
 # Implementation Roadmap
+
+> **Status: historical aggregator.** This document is retained for phase
+> history and dependency rationale, but it is no longer the canonical source
+> for current phase status, shipped contracts, or empirical magnitudes. Use
+> [../../AGENTS.md](../../AGENTS.md) for current phase status,
+> [../project-overview.md](../project-overview.md) for navigation, specs for
+> module contracts, and [../reports/INDEX.md](../reports/INDEX.md) for
+> empirical evidence.
 
 Phased build plan with dependencies, technology choices, and build order.
 
@@ -664,7 +672,7 @@ Wall-clock: prep parallelizes across 8 studies; smoke runs in series. End-to-end
 
 6. **`docs/specs/22-cloud-deployment.md`** — rewritten for Phase 6 architecture, preserving operationally load-bearing material (cloud-init packages, LWJGL/XRandR narrative, Lessons Learned). No new spec 29.
 
-7. **`.claude/skills/cloud-worker-ops.md`** — SOP for running campaigns. Invoked by future Claude sessions on any cloud-campaign ask.
+7. **Repo-local cloud-worker skill** — SOP for running campaigns. Invoked by future agent sessions on any cloud-campaign ask.
 
 8. **Staged validation against the Phase 6 + Phase 7-prep budget**: Tier-1 probe (fleet lifecycle) → Tier-2 pipeline smoke (full round-trip per phase6 doc §11) → sampler benchmark (skipped — see §10) → Phase 7 prep campaign (8 hulls × `early` × 1 seed × ~600 trials). Specific tier costs and wall-clocks are pending V2 re-validation; see [../reports/2026-05-10-validation-plan.md](../reports/2026-05-10-validation-plan.md). Post-V2 evidence lands under `data/campaigns/<wave>/`; pre-V2 directories are listed in [../../experiments/INDEX.md](../../experiments/INDEX.md).
 

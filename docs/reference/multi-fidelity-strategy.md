@@ -1,14 +1,24 @@
 ---
 type: reference
-status: shipped
-last-validated: unvalidated
+status: deprecated
+last-validated: 2026-05-10
 ---
 
 # Multi-Fidelity Evaluation Strategy
 
-This document covers the two-tier evaluation pipeline, surrogate model design, noise handling, and adaptive replication strategies.
+Historical design notes for evaluation fidelity, surrogate model ideas, noise handling, and adaptive replication strategies.
 
-**Updated based on Phase 3.5 + Phase 4 research findings.** Key change: "short sim" fidelity level removed — empirically shown to corrupt optimizer signal. Pipeline is now heuristic + full sim.
+> **Deprecated as implementation guidance (2026-05-10):** current optimizer
+> contracts live in [spec 24](../specs/24-optimizer.md), [spec 25](../specs/25-combat-fitness.md),
+> and [spec 28](../specs/28-deconfounding.md). Current defaults are stock
+> build seeding plus optional heuristic warm-start (`warm_start_n = 0` by
+> default), `active_opponents = 10`, Wilcoxon pruning, and A1→A2′→A3
+> finalization. Internal-sim numbers in older versions of this document were
+> moved to reports or invalidated by V2 cleanup; use [../reports/INDEX.md](../reports/INDEX.md)
+> for dated evidence.
+
+Key retained design conclusion: "short sim" fidelity is rejected; the current
+pipeline is heuristic warm-start when explicitly enabled plus full simulation.
 
 ---
 
@@ -70,7 +80,11 @@ f_predicted(x) = heuristic(x) + GP_correction(x)
 
 **Key safeguard:** Linear decay weight transitions from heuristic-prior to constant-prior over time, preventing a bad prior from biasing late-stage refinement.
 
-### Implementation with Optuna + Heuristic Warm-Start
+### Historical implementation sketch with Optuna + heuristic warm-start
+
+The sketch below predates the current defaults. Production runs seed stock
+builds by default; heuristic-scored random warm-starts are opt-in via
+`warm_start_n`, and the staged evaluator defaults to `active_opponents = 10`.
 
 We don't use BoTorch's GP directly (TPE is our primary sampler). Instead, the heuristic informs optimization via warm-starting:
 
@@ -118,6 +132,10 @@ If heuristic calibration improves R² above 0.75 (after Phase 8 surrogate correc
 3. **Timing jitter**: Shield toggling, target selection slightly stochastic
 
 ### How Many Replicates?
+
+Historical planning table; current optimization-loop opponent count is owned by
+spec 24 (`active_opponents = 10`). Honest evaluation replication is owned by
+spec 30.
 
 | Phase | Replicates per Opponent | Purpose |
 |---|---|---|

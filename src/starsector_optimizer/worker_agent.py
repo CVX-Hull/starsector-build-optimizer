@@ -26,6 +26,7 @@ from typing import Any
 import redis
 import requests
 
+from .evaluator_pool import LOADOUT_MISMATCH_HTTP_STATUS
 from .instance_manager import InstanceConfig, LocalInstancePool
 from .models import MatchupConfig, WorkerConfig
 from .result_parser import parse_combat_result
@@ -160,6 +161,16 @@ def post_result(
             if response.status_code == 409:
                 # Already-received dedup: silently drop on worker side.
                 logger.info("dedup 409 from orchestrator: matchup_id=%s", matchup_id)
+                return
+            if response.status_code == LOADOUT_MISMATCH_HTTP_STATUS:
+                # Terminal discard: the orchestrator rejected this corrupt
+                # loadout and woke its dispatcher to retry the matchup with
+                # a fresh combat. Retrying the same POST would only replay
+                # the same bad result and inflate the discard count.
+                logger.warning(
+                    "loadout mismatch discarded by orchestrator: matchup_id=%s",
+                    matchup_id,
+                )
                 return
             if response.status_code == 401:
                 raise AuthError(f"401 from orchestrator: matchup_id={matchup_id}")
@@ -434,12 +445,18 @@ def _consumer_loop(
             redis_client.lrem(processing, 1, raw)
             continue
         try:
+            matchup_id = item["matchup_id"]
             matchup = _load_matchup(item["matchup"])
             result = pool.run_matchup(matchup)
+            if result.matchup_id != matchup_id:
+                raise RuntimeError(
+                    f"result matchup_id mismatch: envelope={matchup_id} "
+                    f"result={result.matchup_id}"
+                )
             result_dict = dataclasses.asdict(result)
             post_result(
                 config,
-                matchup_id=item["matchup_id"],
+                matchup_id=matchup_id,
                 result=result_dict,
             )
             ack_matchup(redis_client, processing, raw)

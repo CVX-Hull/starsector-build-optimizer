@@ -12,7 +12,7 @@ Optuna-based optimizer with heuristic warm-start, repair deduplication, and stag
 
 The optimizer proposes ship builds via Optuna's TPE sampler, repairs them to feasibility, evaluates against a diverse opponent pool with ASHA-style staged scheduling, and feeds fitness scores back. Key features:
 
-- **Heuristic warm-start:** 50K random builds scored by heuristic, top-500 seed the study
+- **Warm-start:** stock builds seed every study; heuristic-scored random builds seed only when `warm_start_n > 0`
 - **Baldwinian recording:** Raw params recorded with repaired score via tell
 - **Build cache:** Hash-based deduplication prevents wasted simulation budget
 - **Staged evaluation:** Opponents evaluated incrementally with WilcoxonPruner — poor builds pruned early, freeing slots for new builds
@@ -27,7 +27,7 @@ Frozen dataclass configuring the optimization run.
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `sim_budget` | `int` | `200` | Build evaluations (not total sims) |
-| `warm_start_n` | `int` | `0` | Heuristic builds to seed the study. Default dropped from 500 to 0 2026-04-19 — the heuristic prior was dominated by `composite_score`, which was itself drift-prone (11–22% of |γ̂| via the deleted `hullmod_effects.py` registry). Stock builds still seed via `load_stock_builds` (Phase 1 of `warm_start`); `warm_start_n` only controls the heuristic-scored portion. |
+| `warm_start_n` | `int` | `0` | Heuristic builds to seed the study. Default dropped from 500 to 0 2026-04-19 because the heuristic prior was dominated by the drift-prone `composite_score` path from the deleted hullmod-effects registry. Stock builds still seed via `load_stock_builds` (Phase 1 of `warm_start`); `warm_start_n` only controls the heuristic-scored portion. See [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md). |
 | `warm_start_sample_n` | `int` | `50_000` | Random builds to generate for screening |
 | `warm_start_scale` | `float` | `0.1` | Scale factor for heuristic scores |
 | `n_startup_trials` | `int` | `100` | Random trials before TPE kicks in |
@@ -89,10 +89,11 @@ Frozen dataclass caching the narrow subset of `_InFlightBuild` needed for EB shr
 | Field | Type | Description |
 |-------|------|-------------|
 | `trial_number` | `int` | Optuna trial number — key into `_completed_records` |
+| `build` | `Build` | Repaired build; required for manifest-driven `op_used_fraction` |
 | `scorer_result` | `ScorerResult` | Full scorer output, frozen |
 | `engine_stats` | `EngineStats \| None` | Engine-computed SETUP stats, `None` if Java didn't emit |
 
-Drops `completed_results`, `raw_scores`, `build_spec`, and the Optuna `trial` handle from the retained state (~10× memory reduction at 2000-trial scale).
+Drops `completed_results`, `raw_scores`, `build_spec`, and the Optuna `trial` handle from the retained state (~10× memory reduction at 2000-trial scale). It keeps `build` because EB10's `op_used_fraction` is manifest-driven and cannot be reconstructed from scorer output alone.
 
 **Properties:**
 - `rung` → `next_opponent_index` (ASHA rung = number of opponents evaluated)
@@ -271,14 +272,14 @@ populated by the Phase-7-prep `MutableShipStats` additions to the
 Java SETUP hook (spec 13 §SETUP.6).
 
 **Dropped 2026-04-19**: `composite_score` (previously index 6).
-11–22% of |γ̂| was flowing through `ScorerResult.composite_score`,
-which depended on the drift-prone `compute_effective_stats` call
-from the deleted `hullmod_effects.py`. Without the manifest as
+The field depended on drift-prone Python-side game-rule re-derivation
+from the deleted hullmod-effects registry. Without the manifest as
 authoritative source of game rules, Python's re-derivation produced
-structurally biased feature values — the covariate was a proxy for
-"did the hand-coded registry happen to capture this build's
-hullmods" rather than for build quality. The manifest refactor made
-it cheaper to drop the covariate than to migrate it.
+structurally biased feature values. The manifest refactor made it
+cheaper to drop the covariate than to migrate it. See
+[../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)
+for the invalidation context and [../reports/INDEX.md](../reports/INDEX.md)
+for current V2 evidence.
 
 **`engine_stats=None` is now a hard AssertionError** (no Python
 fallback). The pre-refactor fallback re-derived the 3 engine-truth
@@ -289,12 +290,11 @@ wrong re-derivation" pattern the manifest-as-oracle refactor
 eliminates. The Java mod always emits `engine_stats`; a `None` at
 this point is an invariant violation, not a legitimate replay path.
 
-**p/N budget**: p=10 at N=600 (Phase 7 prep) gives p/N=0.017, well
-below the phase5d 0.08 overfit threshold and inside the p≈8
-diminishing-returns knee from the original feature-count sweep
-(re-validation pending under V2; see
-[../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md))
-with modest headroom. The 4 additions are high-variance,
+**p/N budget**: The 10-column vector remains small relative to planned
+production run sizes and avoids the high-dimensional feature sweep failure
+mode documented in the Phase 5D research notes (re-validation pending under
+V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md)).
+The 4 additions are high-variance,
 high-coverage features.
 
 **A3 — Box-Cox Output Warping:** Final fitness passed through `scipy.stats.boxcox` fit on the population of completed EB posterior means (`_completed_fitness_values`). The transform is monotone (preserves Spearman ρ) and restores α̂-proportional gradient at the tails — the pre-5E quantile rank was also monotone but discarded magnitude information, compressing the top quartile into an evenly-spaced grid that TPE's `l(x)` could not exploit. The current trial's `eb_fitness` is transformed under the same λ via the `boxcox(scalar, lmbda=λ)` overload, then min-max rescaled against the transformed population to produce a `[0, 1]` output for JSONL schema stability. λ is refit on every `_finalize_build` call (≈1ms at n=300; batched refit saves nothing vs matchup latency and would create a (λ, shift, min, max) cache-coherence burden against the rolling rescale window).
@@ -372,9 +372,9 @@ One line per build evaluation, appended to `data/logs/{campaign}/{hull}__{regime
     {"opponent": "medusa_CS", "winner": "ENEMY", "duration_seconds": 120.0, "hp_differential": -0.12}
   ],
   "opponents_evaluated": 2,
-  "opponents_total": 5,
+  "opponents_total": 10,
   "pruned": false,
-  "opponent_order": ["doom_Strike", "aurora_Assault", "dominator_Assault", "dominator_XIV_Elite", "eagle_Assault"],
+  "opponent_order": ["doom_Strike", "aurora_Assault", "dominator_Assault", "dominator_XIV_Elite", "eagle_Assault", "... five more active opponents ..."],
   "raw_fitness": 0.21,
   "eb_fitness": 0.21,
   "twfe_fitness": 0.18,
@@ -415,7 +415,7 @@ Schema:
 
 ### Trial-row taxonomy (post-2026-05-10)
 
-Every JSONL row is exactly one of four kinds, distinguished by the always-present `pruned`, `cache_hit`, `invalid_spec` boolean flags. Pre-2026-05-10 the cache-hit and invalid-spec dispatch paths silently completed in SQLite without emitting any JSONL row, leaving ~3% of completed trials un-logged (Wave 1 surfaced this). The fix: every dispatch path that calls `study.tell` also emits exactly one JSONL row, with the kind explicit in the flags.
+Every JSONL row is exactly one of four kinds, distinguished by the always-present `pruned`, `cache_hit`, `invalid_spec` boolean flags. Pre-2026-05-10 the cache-hit and invalid-spec dispatch paths could complete in SQLite without emitting a JSONL row; Wave 1 surfaced this logging gap. The fix: every dispatch path that calls `study.tell` also emits exactly one JSONL row, with the kind explicit in the flags.
 
 | Kind | Flags | Has eb/twfe? | opponent_results | Meaning |
 |---|---|---|---|---|

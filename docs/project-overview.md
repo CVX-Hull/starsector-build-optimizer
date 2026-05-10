@@ -1,19 +1,22 @@
 ---
 type: index
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-05-10
 ---
 
 # Starsector Ship Build Optimizer — Project Overview
 
 ## What This Project Is
 
-An automated system for discovering optimal and diverse ship builds in [Starsector](https://fractalsoftworks.com/), a space combat game by Fractal Softworks. The system combines:
+An automated system for discovering optimal and diverse ship builds in [Starsector](https://fractalsoftworks.com/), a space combat game by Fractal Softworks. The shipped system combines:
 
 1. **A Java mod** that runs automated combat simulations inside the game engine
-2. **A Python optimizer** that uses state-of-the-art Bayesian optimization and evolutionary methods to search the build space
+2. **A Python optimizer** that uses Optuna TPE plus signal-quality estimators to search the build space
 3. **A multi-fidelity evaluation pipeline** that balances cheap heuristic scoring with expensive but accurate combat simulation
-4. **A quality-diversity discovery engine** that maps the full landscape of viable build archetypes
+
+Quality-diversity archetype discovery remains aspirational Phase 8+ work; the
+old CatCMA/CMA-MAE design is deprecated until a discrete-compatible emitter is
+chosen.
 
 ## Why This Exists
 
@@ -94,22 +97,25 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | Spec | Module | Contents |
 |---|---|---|
 | [29-game-manifest](./specs/29-game-manifest.md) | `game_manifest.py` + `ManifestDumper.java` | Manifest-as-oracle: `applicable_hullmods` + `conditional_exclusions` per hull from live-engine probe |
-| [30-honest-evaluator](./specs/30-honest-evaluator.md) | `honest_evaluator.py` + `scripts/cloud/evaluate_campaign.sh` | Re-score top builds against the closed opponent population with transform-free oracle (mean fitness over balanced design); standing post-major-run gate per [`honest-evaluation`](../.claude/skills/honest-evaluation.md) |
+| [30-honest-evaluator](./specs/30-honest-evaluator.md) | `honest_evaluator.py` + `scripts/cloud/evaluate_campaign.sh` | Re-score top builds against the closed opponent population with transform-free oracle (mean fitness over balanced design); standing post-major-run gate |
 
 Spec number registry (gaps at 02, 20, 21): see [specs/README.md](./specs/README.md).
 
 ### Reference Documents
+
+Full catalogue: [reference/README.md](./reference/README.md). Selected
+high-traffic references:
 
 | Document | Contents |
 |---|---|
 | [game-mechanics](./reference/game-mechanics.md) | Starsector combat mechanics, ship fitting, weapons, flux, armor, shields, AI behavior |
 | [problem-formulation](./reference/problem-formulation.md) | Formal optimization problem definition, decision variables, constraints, search space analysis |
 | [literature-review](./reference/literature-review.md) | Survey of 40+ papers across BO, evolutionary methods, QD, multi-fidelity, surrogates, game optimization |
-| [system-architecture](./reference/system-architecture.md) | Full system design: Java mod, Python orchestrator, parallel instances, optimizer integration |
+| [system-architecture](./reference/system-architecture.md) | Deprecated historical architecture tour; specs own implementation contracts |
 | [optimization-methods](./reference/optimization-methods.md) | Technical guide to each optimization method and implementation specifics |
-| [multi-fidelity-strategy](./reference/multi-fidelity-strategy.md) | Three-tier evaluation pipeline, surrogate models, noise handling |
-| [quality-diversity](./reference/quality-diversity.md) | MAP-Elites for build archetype discovery, behavior descriptors |
-| [implementation-roadmap](./reference/implementation-roadmap.md) | Phased build plan with dependencies and technology choices |
+| [multi-fidelity-strategy](./reference/multi-fidelity-strategy.md) | Historical multi-fidelity design notes; current pipeline is heuristic warm-start + full sim |
+| [quality-diversity](./reference/quality-diversity.md) | Deprecated historical MAP-Elites / CatCMA design; not implementation guidance |
+| [implementation-roadmap](./reference/implementation-roadmap.md) | Deprecated historical phased build plan; current phase status lives in the root workflow file |
 | [phase5-signal-quality](./reference/phase5-signal-quality.md) | Phase 5A/5B foundational research — opponent normalisation, multi-fidelity, pruning |
 | [phase5a-deconfounding-theory](./reference/phase5a-deconfounding-theory.md) | TWFE additive-decomposition synthesis (6-field literature consensus; foundation of 5A + 5C) |
 | [phase5c-opponent-curriculum](./reference/phase5c-opponent-curriculum.md) | Phase 5C — anchor-first + incumbent overlap + fixed pre-burn-in; rejected alternatives (Elo, per-frame Java, hullmod blacklist) |
@@ -132,8 +138,8 @@ Spec number registry (gaps at 02, 20, 21): see [specs/README.md](./specs/README.
 |---|---|
 | Combat harness mod | Java (Starsector API, LWJGL) |
 | Game data parsing | Python (pandas, stdlib json) |
-| Optimizer | Python (Optuna, cmaes) |
-| Quality-diversity | Python (pyribs, cmaes library) |
+| Optimizer | Python (Optuna TPE; Phase 7 BoTorch GP planned) |
+| Quality-diversity | Future work; no shipped QD implementation |
 | Neural surrogate | Python (TabPFN, CatBoost, scikit-learn) |
 | Multi-fidelity | Heuristic warm-start + full sim |
 | Instance management | Python + Bash (Xvfb for virtual displays) |

@@ -9,7 +9,7 @@ last-validated: 2026-05-10
 
 # Plan Review
 
-Run this **before calling ExitPlanMode**. Validates the plan for correctness, completeness, and clarity.
+Run this **before approving a plan or moving from planning into implementation**. Validates the plan for correctness, completeness, and clarity.
 
 ## Phase 1: Writing Quality (self-review)
 
@@ -25,7 +25,7 @@ Review the plan text for:
 ### Specification Phase
 - [ ] Does the plan write/update spec docs in `docs/specs/` BEFORE tests and implementation?
 - [ ] Do specs define class signatures, function parameters with types and defaults, and return types?
-- [ ] Are cross-cutting updates included (CLAUDE.md layout, reference docs)?
+- [ ] Are cross-cutting updates included (root workflow file, reference docs)?
 
 ### Test Phase
 - [ ] Are tests derived from spec requirements?
@@ -44,7 +44,7 @@ Review the plan text for:
 
 ## Phase 3: Engineering Principles (self-review)
 
-Validate against `CLAUDE.md` § "Engineering Principles":
+Validate against the root workflow file's engineering principles:
 
 - [ ] **Principled over expedient**: every shortcut in the plan has explicit justification — otherwise the principled form is taken. If the plan picks a small fix where a larger one is the principled fix, both are named and the user is asked which to take.
 - [ ] **No deferred-issue residue**: every issue surfaced by the plan (existing TODOs the plan won't fix, suspect code in touched modules, known-flaky tests, dormant code paths) is either fixed in scope, or explicitly listed in the plan's DEFERRED section with user approval.
@@ -54,7 +54,7 @@ Validate against `CLAUDE.md` § "Engineering Principles":
 
 ## Phase 4: Design Invariants (self-review)
 
-Validate against `CLAUDE.md` § "Design Principles" and § "Design Invariants":
+Validate against the root workflow file's design principles and invariants:
 
 - [ ] **Frozen dataclasses**: Are all new dataclasses `@dataclass(frozen=True)`?
 - [ ] **No magic numbers**: Are all thresholds in config dataclasses, not function bodies?
@@ -66,11 +66,16 @@ Validate against `CLAUDE.md` § "Design Principles" and § "Design Invariants":
 
 ## Phase 5: Independent Sub-Agent Audits
 
+Use sub-agents when the active workflow has user authorization for
+parallel audit work. Follow the global `sub-agent-orchestration` skill shape:
+bounded task, minimal context, no leaked expected findings, and one clear
+deliverable per auditor.
+
 Launch **3 sub-agents in parallel**. Each is an independent auditor — provide only the plan path and reference material. Do not hint at expected findings.
 
 ### Sub-Agent A: Pattern Consistency
 
-> "You are an independent code auditor. Read the implementation plan at `{plan_path}`. Read `CLAUDE.md` for project practices and design principles. For every code snippet and structural decision in the plan, find the analogous existing pattern in this codebase and compare. Report any divergence from established patterns, any practice violation, and any inconsistency you find. Use your own judgment about what to check — do not assume the plan is correct."
+> "You are an independent code auditor. Read the implementation plan at `{plan_path}`. Read the root workflow file for project practices and design principles. For every code snippet and structural decision in the plan, find the analogous existing pattern in this codebase and compare. Report any divergence from established patterns, any practice violation, and any inconsistency you find. Use your own judgment about what to check — do not assume the plan is correct."
 
 ### Sub-Agent B: Spec Alignment
 
@@ -78,11 +83,11 @@ Launch **3 sub-agents in parallel**. Each is an independent auditor — provide 
 
 ### Sub-Agent C: Engineering & Design Invariants
 
-> "You are an independent design auditor. Read the implementation plan at `{plan_path}`. Read `CLAUDE.md` for engineering principles, design principles, and design invariants. Evaluate the plan against every applicable invariant — including the global engineering invariants ('principled over expedient', 'address issues, don't paper over them'). Specifically flag: shortcuts taken without explicit justification, deferrals that aren't called out as explicit DEFERRED items with user-approval rationale, new TODO/FIXME/skip/type-ignore/lint-suppression introductions, and tests being weakened to fit the implementation. Report any violation or risk. Use your own judgment about which invariants apply — do not assume the plan is correct."
+> "You are an independent design auditor. Read the implementation plan at `{plan_path}`. Read the root workflow file for engineering principles, design principles, and design invariants. Evaluate the plan against every applicable invariant — including the global engineering invariants ('principled over expedient', 'address issues, don't paper over them'). Specifically flag: shortcuts taken without explicit justification, deferrals that aren't called out as explicit DEFERRED items with user-approval rationale, new TODO/FIXME/skip/type-ignore/lint-suppression introductions, and tests being weakened to fit the implementation. Report any violation or risk. Use your own judgment about which invariants apply — do not assume the plan is correct."
 
 ## Execution
 
 1. Run Phases 1-4 yourself (checklist self-review).
 2. Launch all 3 sub-agents for Phase 5 in a **single message** (parallel execution).
 3. Review all sub-agent findings. Fix every valid finding in the plan.
-4. Only call ExitPlanMode after all findings are resolved.
+4. Only approve the plan / proceed to implementation after all findings are resolved.

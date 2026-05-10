@@ -245,7 +245,14 @@ class LocalInstancePool(EvaluatorPool):
                 if not results:
                     raise InstanceError(
                         f"Instance {inst.instance_id}: no results parsed")
-                return results[0]
+                result = results[0]
+                if result.matchup_id != matchup.matchup_id:
+                    raise InstanceError(
+                        f"Instance {inst.instance_id}: result matchup_id "
+                        f"mismatch: expected {matchup.matchup_id}, "
+                        f"got {result.matchup_id}"
+                    )
+                return result
 
             if self._is_process_exited(inst):
                 logger.warning("Instance %d crashed", inst.instance_id)
@@ -716,4 +723,3 @@ class LocalInstancePool(EvaluatorPool):
                     inst.instance_id, inst.restart_count,
                     self._config.max_restarts)
         self._assign_and_launch(inst, [matchup])
-

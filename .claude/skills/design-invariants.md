@@ -1,6 +1,6 @@
 ---
 name: Design Invariants Check
-description: Architectural invariant checklist for the Starsector ship build optimizer — derived from CLAUDE.md design principles and invariants
+description: Architectural invariant checklist for the Starsector ship build optimizer — derived from the root workflow file's design principles and invariants
 disable-model-invocation: true
 type: skill
 status: shipped
@@ -9,13 +9,13 @@ last-validated: 2026-05-10
 
 # Design Invariants Checklist
 
-Verify these invariants against the current changes. Every applicable item must be checked during implementation review. Source: `CLAUDE.md` § "Engineering Principles", § "Design Principles", and § "Design Invariants".
+Verify these invariants against the current changes. Every applicable item must be checked during implementation review. Source: the root workflow file's engineering principles, design principles, and design invariants.
 
 ---
 
 ## Engineering Principles (global)
 
-Source: `CLAUDE.md` § "Engineering Principles". These apply to every change, not just architectural ones.
+Source: the root workflow file's engineering principles. These apply to every change, not just architectural ones.
 
 - [ ] **Principled over expedient**: every shortcut in this change has explicit user justification — otherwise the principled form was taken
 - [ ] **Root-cause fixes only**: every observed problem in touched code has been root-cause-fixed in this change, OR explicitly raised to the user with a proposed fix and deferred with explicit consent
@@ -26,7 +26,7 @@ Source: `CLAUDE.md` § "Engineering Principles". These apply to every change, no
 - [ ] **Boy-scout fixes applied**: issues observed in touched files but unrelated to the immediate task were addressed in the same change, or surfaced to the user
 
 ## Domain Models
-- [ ] All domain dataclasses are `@dataclass(frozen=True)` — `Build`, `EffectiveStats`, `ScorerResult`, `CombatFitnessConfig`, `TWFEConfig`, `ImportanceResult`, `OpponentPool`, `MatchupConfig`, `Heartbeat`, etc.
+- [ ] All domain dataclasses are `@dataclass(frozen=True)` — `Build`, `EngineStats`, `ScorerResult`, `CombatFitnessConfig`, `TWFEConfig`, `ImportanceResult`, `OpponentPool`, `MatchupConfig`, `Heartbeat`, etc.
 - [ ] `Build.hullmods` is `frozenset`, not `set` or `list`
 - [ ] Repair always returns new instances — never mutates input
 - [ ] Every `Build` returned by `repair_build()` passes `is_feasible()`
@@ -37,10 +37,10 @@ Source: `CLAUDE.md` § "Engineering Principles". These apply to every change, no
 - [ ] Formatting constants (column widths for display) use named local variables, not bare literals
 
 ## Single Source of Truth
-- [ ] All hullmod effects in `HULLMOD_EFFECTS` dict in `hullmod_effects.py` — never duplicated in scorer, repair, or search_space
-- [ ] `INCOMPATIBLE_PAIRS` and `HULL_SIZE_RESTRICTIONS` are the only locations for hullmod constraint knowledge
-- [ ] `compute_effective_stats()` is the ONLY function that applies hullmod stat modifications
-- [ ] All game constants (`MAX_VENTS`, damage multipliers, etc.) live in `hullmod_effects.py`
+- [ ] `game/starsector/manifest.json` is the only source for hullmod applicability, conditional exclusions, and damage multipliers
+- [ ] Python loads game-rule facts through `GameManifest.load()` / `manifest.constants`, not hardcoded registries
+- [ ] Java `EngineStats` emission owns hullmod-adjusted combat stats; Python does not reimplement hullmod stat effects
+- [ ] Deleted registries stay deleted: no `hullmod_effects.py`, no `HULLMOD_EFFECTS`, no `compute_effective_stats()` resurrection
 
 ## Optimizer-Space vs Domain-Space Boundary
 - [ ] Raw optimizer proposals go through `repair_build()` before any domain logic
@@ -72,7 +72,7 @@ Source: `CLAUDE.md` § "Engineering Principles". These apply to every change, no
 
 ## Documentation
 - [ ] Spec docs updated in the same session as code changes — function signatures, parameters, defaults must match
-- [ ] `CLAUDE.md` project layout updated if new modules added
+- [ ] Root workflow file project layout updated if new modules added
 - [ ] Reference docs updated if phase status or decisions changed
 - [ ] After file renames: `grep -rn "old_filename" --include="*.md" --include="*.py"`
 

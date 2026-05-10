@@ -6,10 +6,10 @@ last-validated: unvalidated
 
 # Wave 1 validation report — re-validation under V2 loadout fix
 
-> **Status: draft.** Wave 1 cells C2/C3 still running as of writing; final
-> verdicts depend on the analyzer + honest-eval pass that will run after
-> all 5 cells complete. Sections marked `<<TBD>>` are filled in by the
-> post-completion automation pass.
+> **Status: draft / partial training-gate evidence.** Wave 1 training runs
+> have completed, but the cross-cell honest-eval oracle has not completed.
+> This report must not be read as a final cross-cell build-quality verdict.
+> Sections marked `<<TBD>>` remain incomplete until honest eval finishes.
 
 Wave 1 of the validation campaign defined in [2026-05-10-validation-plan.md](2026-05-10-validation-plan.md)
 re-validates 12 of the 20 algorithmic / infrastructure mechanisms shipped
@@ -81,7 +81,7 @@ the same $5 budget than C1.
 
 | Metric | Threshold | C2 (avg over 3 seeds) | Verdict |
 |---|---|---|---|
-| Ceiling saturation (% trials with fitness ≥ 0.99) | ≤ 0.01 | **0.0478 (4.78 %)** | **FAIL** (5× threshold) |
+| Ceiling saturation (% trials with fitness ≥ 0.99) | ≤ 1 % | **0.0478 (4.78 %)** | **FAIL** (5× threshold) |
 | Top-5 Jaccard (C2 vs C1, by build_hash on eb_fitness top-5) | ≥ 0.40 | **0.000** (zero overlap) | **FAIL** |
 
 **Interpretation**: Box-Cox is saturating at 4.78 % — too aggressively;
@@ -122,7 +122,7 @@ wrong) or harmful (Box-Cox is wrong).
 
 ## 3. Honest-evaluator headline (build-quality oracle)
 
-Per CLAUDE.md skill `honest-evaluation` and spec 30: training-time fitness
+Per the `honest-evaluation` skill and spec 30: training-time fitness
 is biased by EB shrinkage, pruner truncation, and opponent-overlap
 selection. The **build-quality comparison across cells** below uses the
 honest-evaluator's mean fitness, computed by re-running each cell's
@@ -191,11 +191,11 @@ prevalent** than C1 suggested.
 
 **Band-aid shipped 2026-05-10 ~02:42 EDT** (commit pending):
 `cloud_worker_pool._result` POST handler now rejects matchups whose
-loadout diagnostics show ANY mismatch (HTTP 422). The matchup stays in
-the processing list and the janitor re-queues it. Tests in
-`TestLoadoutMismatchDiscard`. C2 + C3 confirm the band-aid works:
-**zero `exceeded max_requeues=5` events** across both cells, i.e. zero
-fitness contamination.
+loadout diagnostics show ANY mismatch (HTTP 422). The dispatcher retries
+from a fresh combat and the worker treats the discard as terminal so it
+does not replay the same corrupt POST. Tests in
+`TestLoadoutMismatchDiscard`. C2 + C3 confirm the band-aid works: zero
+fitness contamination from mismatched loadouts.
 
 The C3 19 % rate likely reflects:
 - Higher matchup throughput (warm-start makes trials finalize faster
@@ -211,12 +211,15 @@ matchup, this adds ~7 % wall-clock + AWS cost overhead. At C3's 19 %
 rate the overhead is ~38 % — a real concern for Wave 3's $33-90
 budget.
 
-**Wave 2 observation gate**: if Wave 2 produces a per-cell mismatch
-rate > 5 % AND > 0 `exceeded max_requeues` events, escalate to
+**Wave 2 observation gate**: if Wave 2 produces a per-cell
+LOADOUT_MISMATCH discard rate > 5 % after at least 100 accepted-or-
+discarded observations, or any `LoadoutMismatchAbort`, escalate to
 Java-side root-cause investigation **before** Wave 3 launch (task #89).
-Java side hypotheses: FleetMember reuse across matchups within a single
-Starsector instance; `member.setVariant()` race vs spawn loop;
-worker-side queue-ordering bleed.
+The 422 path bypasses Redis `max_requeues`; corrupt results are acked by
+workers and retried by the evaluator with fresh combat. Java side
+hypotheses: stale deployed ship references across mission restarts,
+cached `ShipVariantAPI` contents, `member.setVariant()` binding races,
+or queue-read skew between deployment and result serialization.
 
 ## 5. Decision-tree branch
 
@@ -285,9 +288,13 @@ The 27.3 m/trial reading directly invalidates the validation plan's
 average the plan modeled (rung 1-2 of 10), it's cutting them at rung 5-7
 on average. This is a finding to bring forward to Wave 3 design.
 
-## 7. Wave 1 verdict — gate for #64 unblock
+## 7. Training-gate verdict — provisional #64 unblock
 
-**Operational verdict: PROCEED to Wave 2 (with caveats below).**
+**Operational training-gate verdict: PROCEED to Wave 2 preparation only
+(with caveats below).** This section does not certify cross-cell build
+quality. The honest-evaluator (§ 3) remains the oracle before promoting
+Wave 1 build-quality conclusions or treating Box-Cox/warm-start settings as
+final defaults.
 
 Hard gates:
 - engine_stats null = 0 across all 5 cells × 3 seeds: **PASS** (mech 20).
@@ -305,8 +312,9 @@ Algorithmic gates (the F1c question):
   tie-breaker — if the C0a/C0b builds DOMINATE C2/C3 builds in
   unbiased re-scoring, F1c rollback is warranted before Wave 3.
 - Box-Cox ceiling 4.78 % (> 1 %), top-5 Jaccard 0 (< 0.40). F2a + F2b
-  both apply. **Defer to Phase 5E follow-up; Wave 2 + Wave 3 ship
-  with current Box-Cox config.**
+  both apply. **Defer interpretation to Phase 5E follow-up plus honest
+  eval.** Wave 2 can continue collecting evidence with the current config,
+  but Wave 3 defaults must be re-checked after honest-eval results land.
 
 Wave 2 scope (unchanged from validation plan §3):
 - hammerhead × mid × seed 0 × 250 trials × `--warm-start-from-regime early`
@@ -320,8 +328,8 @@ Wave 3 scope (REVISED per § 6 cost re-forecast):
   if Wave 2 confirms the bleed rate stays > 5 %. Without the fix,
   Wave 3 spends 7-19 % more on retries.
 
-Pending deliverables before Wave 2 launches:
-1. Honest-eval results — § 3 must be filled in. Currently running, ETA ~10:30 EDT.
+Pending deliverables before publishing a final Wave 1 verdict:
+1. Honest-eval results — § 3 must be filled in.
 2. Wave 2 launcher script (`scripts/cloud/launch_wave2.sh`) — shipped.
 3. **Java root-cause fix DEPLOYED via tailnet override**
    (2026-05-10 06:21 EDT): `VariantBuilder.uniqueVariantId(baseId)`
@@ -340,12 +348,13 @@ codebase that Wave 2 + Wave 3 will use.
 ### 8.1 LOADOUT_MISMATCH discard band-aid (task #89)
 
 `cloud_worker_pool._result` POST handler now rejects matchups whose
-loadout diagnostics show ANY mismatch (HTTP 422); the matchup stays in
-the processing list and the janitor re-queues it. Tests:
+loadout diagnostics show ANY mismatch (HTTP 422); the dispatcher is
+woken with a retryable failure and the worker treats the discard as
+terminal so it does not replay the same corrupt POST. Tests:
 `TestLoadoutMismatchDiscard::{test_post_with_mismatch_returns_422_and_does_not_store,
 test_post_with_mismatch_then_clean_resubmit_succeeds,
-test_empty_diagnostics_passes}`. With max_requeues=5 and the empirical
-0.6 % single-attempt mismatch rate, P(all 6 attempts fail) ≈ 5e-14.
+test_mismatch_wakes_dispatcher_with_retryable_failure,
+test_empty_diagnostics_passes}`.
 
 Root cause (Java-side state bleed) **deferred**; band-aid protects fitness
 signal in Wave 2 + Wave 3.

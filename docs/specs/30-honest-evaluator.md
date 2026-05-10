@@ -102,9 +102,10 @@ def extract_top_builds(
     (opponent id + winner + hp_differential per match) — the only data
     source that supports principled deconfounded ranking.
 
-    **Why not raw mean (the prior default).** Raw mean has 0/5 top-5
-    overlap with TWFE / EB / BT on Wave 1 (pooled and per-cell). The
-    bias comes from opponent confounding: TPE+pruner schedules
+    **Why not raw mean (the prior default).** Wave 1 training-log analysis
+    showed raw-mean confounding; see
+    [2026-05-10-posthoc-ranker-research.md](../reports/2026-05-10-posthoc-ranker-research.md).
+    The bias comes from opponent confounding: TPE+pruner schedules
     different builds against different opponent subsets, so per-trial
     means are contaminated by which opponents a build happened to face.
     `raw_mean` is kept as a `method=` choice for ablation only.

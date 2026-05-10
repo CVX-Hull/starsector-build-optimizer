@@ -19,22 +19,15 @@ from flask import Flask, jsonify, request
 from werkzeug.serving import make_server
 
 from .campaign import run_janitor_pass
-from .evaluator_pool import EvaluatorPool
+from .evaluator_pool import (
+    EvaluatorPool, LOADOUT_MISMATCH_HTTP_STATUS, RetryableMatchupError,
+)
 from .models import (
     CombatResult, DamageBreakdown, EngineStats, LoadoutDiagnostic, MatchupConfig,
     ShipCombatResult,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# HTTP 422 is returned by /result when the loadout-diagnostic fields show
-# corruption. 422 is outside the worker's terminal-status set
-# (200/409/401), which forces the worker to leave the matchup in the
-# Redis processing list so the janitor can re-queue it. Lifting the
-# literal to module scope makes the contract grep-able from worker_agent
-# and the spec.
-LOADOUT_MISMATCH_HTTP_STATUS = 422
 
 
 # Mismatch-rate guardrail. The 2026-05-10 Wave-1 C2/C3 incident hit
@@ -85,9 +78,13 @@ class LoadoutMismatchAbort(Exception):
     Empirically the post-V2 mismatch rate sits well below 1%; sustained
     rates above the threshold mean the Java fix has regressed (or the
     workers are running a stale jar). Aborting the run surfaces the
-    regression instead of letting `max_requeues=5` retries silently drain
+    regression instead of letting evaluator-level retries silently drain
     cloud budget on every matchup.
     """
+
+
+class LoadoutMismatchRejected(RetryableMatchupError):
+    """A posted result had a corrupt live loadout and was discarded."""
 
 
 def _source_key(project_tag: str, study_id: str) -> str:
@@ -279,12 +276,14 @@ class CloudWorkerPool(EvaluatorPool):
         self._processing = _processing_key(project_tag, study_id)
 
         self._results: dict[str, CombatResult] = {}
+        self._failures: dict[str, Exception] = {}
+        self._mismatch_signatures: dict[str, set[str]] = {}
         self._seen: set[str] = set()                     # matchup_ids that have been POSTed
         self._results_lock = threading.Lock()
         self._result_events: dict[str, threading.Event] = {}
 
         # Mismatch-rate guardrail: count discards alongside successes.
-        # `_mismatch_discard_count` increments per 422 response;
+        # `_mismatch_discard_count` increments per corrupt POST;
         # `run_matchup` checks the running rate and raises
         # LoadoutMismatchAbort if it exceeds MISMATCH_ABORT_RATE after
         # MISMATCH_ABORT_MIN_SAMPLES observations.
@@ -344,6 +343,16 @@ class CloudWorkerPool(EvaluatorPool):
                         matchup_id,
                     )
                     return jsonify({"error": "bad result"}), 400
+                if parsed.matchup_id != matchup_id:
+                    logger.error(
+                        "result matchup_id mismatch: envelope=%s parsed=%s",
+                        matchup_id, parsed.matchup_id,
+                    )
+                    return jsonify({
+                        "error": "matchup_id_mismatch",
+                        "envelope_matchup_id": matchup_id,
+                        "result_matchup_id": parsed.matchup_id,
+                    }), 400
                 _log_loadout_diagnostics(matchup_id, parsed)
                 # Pass-through harness debug dumps regardless of loadout
                 # outcome — they're useful for diagnosing the mismatch
@@ -360,29 +369,49 @@ class CloudWorkerPool(EvaluatorPool):
                 if not _all_loadouts_match(parsed):
                     # Corrupt matchup: drop the result instead of feeding
                     # false data into fitness aggregation. Don't add to
-                    # `_seen`, don't store, don't fire the event. Returning
-                    # LOADOUT_MISMATCH_HTTP_STATUS (422) makes the worker
-                    # raise (worker_agent.post_result only treats
-                    # 200/409/401 as terminal); the matchup stays in the
-                    # processing list and the janitor re-queues it after
-                    # visibility_timeout. With max_requeues=5 and an
-                    # empirical mismatch rate ~0.6 %, P(all 6 attempts
-                    # mismatch) ≈ 5e-14. The abort guardrail in
-                    # run_matchup catches the regression case where the
-                    # rate exceeds MISMATCH_ABORT_RATE.
+                    # `_seen` and don't store a CombatResult. If a dispatcher
+                    # is currently waiting on this matchup, wake it with a
+                    # LoadoutMismatchRejected so the evaluator's own retry
+                    # loop can resubmit a fresh combat immediately. The
+                    # worker treats LOADOUT_MISMATCH_HTTP_STATUS as terminal
+                    # and acks the Redis item; retrying the same POST only
+                    # replays the same corrupt result.
+                    signature = json.dumps(
+                        body.get("result", {}), sort_keys=True, default=str,
+                    )
+                    signatures = self._mismatch_signatures.setdefault(
+                        matchup_id, set(),
+                    )
+                    if signature in signatures:
+                        logger.info(
+                            "dedup LOADOUT_MISMATCH retry matchup=%s",
+                            matchup_id,
+                        )
+                        return jsonify({"status": "duplicate"}), 409
+                    signatures.add(signature)
                     self._mismatch_discard_count += 1
+                    failure = LoadoutMismatchRejected(
+                        f"matchup_id={matchup_id} had LOADOUT_MISMATCH; "
+                        "discarded result and retrying with a fresh combat"
+                    )
+                    event = self._result_events.get(matchup_id)
+                    if event is not None:
+                        self._failures[matchup_id] = failure
                     logger.warning(
                         "discarding LOADOUT_MISMATCH matchup=%s "
-                        "(running discards=%d, accepted=%d) — janitor "
-                        "will re-queue (matchup stays in processing list)",
+                        "(running discards=%d, accepted=%d) — dispatcher "
+                        "will retry with a fresh combat",
                         matchup_id, self._mismatch_discard_count, len(self._seen),
                     )
+                    if event is not None:
+                        event.set()
                     return jsonify({
                         "error": "loadout_mismatch",
                         "matchup_id": matchup_id,
                     }), LOADOUT_MISMATCH_HTTP_STATUS
                 self._results[matchup_id] = parsed
                 self._seen.add(matchup_id)
+                self._mismatch_signatures.pop(matchup_id, None)
                 event = self._result_events.get(matchup_id)
             if event is not None:
                 event.set()
@@ -481,6 +510,9 @@ class CloudWorkerPool(EvaluatorPool):
         with self._results_lock:
             self._result_events.pop(matchup_id, None)
             result = self._results.pop(matchup_id, None)
+            failure = self._failures.pop(matchup_id, None)
+        if failure is not None:
+            raise failure
         if not got or result is None:
             raise WorkerTimeout(
                 f"matchup_id={matchup_id} did not receive result "

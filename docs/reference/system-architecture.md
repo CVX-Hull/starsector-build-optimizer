@@ -1,12 +1,24 @@
 ---
 type: reference
-status: shipped
-last-validated: unvalidated
+status: deprecated
+last-validated: 2026-05-10
 ---
 
 # System Architecture
 
-Complete design for the Starsector Ship Build Optimizer system, covering all components from game integration to optimizer output.
+Historical architecture tour for the Starsector Ship Build Optimizer system.
+
+> **Deprecated as implementation guidance (2026-05-10):** this document
+> predates the manifest-as-oracle refactor, TPE-only sampler surface,
+> Wilcoxon staged evaluator, A1→A2′→A3 scoring pipeline, and regime study
+> identity. It may be useful as a broad component map, but specs are canonical:
+> [01](../specs/01-data-models.md), [04](../specs/04-search-space.md),
+> [09](../specs/09-combat-protocol.md), [12](../specs/12-result-writer.md),
+> [13](../specs/13-combat-harness-plugin.md), [17](../specs/17-throughput-estimator.md),
+> [18](../specs/18-instance-manager.md), [24](../specs/24-optimizer.md),
+> [25](../specs/25-combat-fitness.md), [28](../specs/28-deconfounding.md),
+> and [29](../specs/29-game-manifest.md). Do not copy code/schema snippets
+> from this file into implementation work.
 
 ---
 

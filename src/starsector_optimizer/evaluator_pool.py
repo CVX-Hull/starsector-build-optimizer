@@ -13,6 +13,13 @@ import abc
 from .models import CombatResult, MatchupConfig
 
 
+class RetryableMatchupError(Exception):
+    """A matchup attempt failed in a way the caller should resubmit."""
+
+
+LOADOUT_MISMATCH_HTTP_STATUS = 422
+
+
 class EvaluatorPool(abc.ABC):
     """Abstract pool of matchup evaluators.
 

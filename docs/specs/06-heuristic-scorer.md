@@ -44,9 +44,9 @@ Of the above, only 3 feed the 10-dim EB covariate vector
 aggregates are retained for warm-start ranking and notebook use.
 
 `composite_score` was dropped from the covariate vector 2026-04-19
-because 11–22% of |γ̂| was flowing through its structurally
-drift-prone weighted combination (the pre-manifest
-`hullmod_effects.py` registry under-modeled game rules).
+because its structurally drift-prone weighted combination depended on
+the pre-manifest `hullmod_effects.py` registry, which under-modeled
+game rules.
 `composite_score` itself is still emitted for backward-compatible
 notebook code; production Optuna objectives and the EB prior
 don't reference it.

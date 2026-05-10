@@ -1,16 +1,18 @@
 ---
 type: reference
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-05-10
 ---
 
 # Phase 5D — Empirical-Bayes Shrinkage of TWFE α̂ Toward a Heuristic-Derived Prior
 
 > **Status**: Implemented 2026-04-18. Original ship gate was a Δρ improvement on V1 LOOO Hammerhead data; that measurement is suspect under the V1 loadout bug. Re-validation of the design threshold (Δρ ≥ +0.02 vs A0 and vs A) is pending under V2 — see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md). See §5 below for implementation notes + file-placement corrections relative to §3.1.
 >
+> **Contract correction (2026-05-10):** specs 24/25/28 own the shipped A2′ contract. The shipped covariate vector is the 10-component vector assembled by `optimizer.py::_build_covariate_vector`, including 6 Java `EngineStats` fields, 3 Python scorer/build-structure fields, and `op_used_fraction`. Earlier 7-feature text in this reference records the research trajectory and is superseded for implementation purposes.
+>
 > **Empirical-claims status (2026-05-10):** All Δρ values, ρ tables, the synthetic feature-count sweep, the variance audit on the Hammerhead corpus, and the §7 TTK-signal investigation use V1 sim data. Theory, design rationale, and rejected-alternative chain (especially §4.5's refutation of the conditioning paradigm — the closed-form `ρ(α̂_CUPED, α) = √(1 − R)` derivation is paradigm-level and unaffected) are unchanged.
 
-Design for using the auxiliary per-build signals (heuristic composite score and 13 scorer components) already produced by the Python data layer to improve the TWFE fitness estimate. The shipped pipeline (`combat_fitness.py` → `deconfounding.py` A1 → `optimizer.py` A2/A3) uses the `composite_score` only as a scalar control variate at A2; the other 12 scorer components are ignored. This doc specifies a bitter-lesson-compliant extension that **fuses** (`α̂_TWFE`, `heuristic`, `scorer components`) as multiple noisy measurements of the same latent build quality α via empirical-Bayes shrinkage toward a regression-predicted prior mean.
+Design history for using auxiliary per-build signals to improve the TWFE fitness estimate. The current shipped pipeline (`combat_fitness.py` → `deconfounding.py` A1 → `optimizer.py` A2′/A3) fuses `α̂_TWFE` with a 10-component covariate-powered empirical-Bayes prior; specs 24/25/28 define the exact implementation contract.
 
 Reading this doc cold: Phase 5 is the signal-quality stage of the optimizer pipeline. A1 (TWFE decomposition) → A2 (control-variate adjustment) → A3 (rank shaping) are the three stages; Phase 5D replaces A2, Phase 5E replaces A3. Both are orthogonal and compose cleanly. See [implementation-roadmap.md](implementation-roadmap.md) for phase overview and [phase5a-deconfounding-theory.md](phase5a-deconfounding-theory.md) for the TWFE foundation.
 
@@ -28,7 +30,7 @@ Three categories of pre-matchup signal are available per build:
 
 The current shipped A2 uses only (1). The question this doc answers: **which subset of these signals should form the covariate vector `X_i` in the empirical-Bayes prior regression — and at what dimension?**
 
-The answer — derived in §2.7 from (a) a feature-count × dataset-size sweep on a realistic-throughput simulator and (b) an empirical variance audit on the 2026-04-17 Hammerhead run — is a conservative **7-feature** vector: 3 engine-computed physics stats + 3 Python-raw offense/range aggregates + 1 calibrated heuristic scalar. Rationale and the rejected higher-dimensional alternatives are in §2.7.
+The original research answer — derived in §2.7 from (a) a feature-count × dataset-size sweep on a realistic-throughput simulator and (b) an empirical variance audit on the 2026-04-17 Hammerhead run — was a conservative **7-feature** vector. That design was superseded at ship time by the 10-component vector specified in specs 24/25/28.
 
 The post-matchup outputs of the harness (`duration_seconds`, `hp_differential`, `damage_efficiency`, `overload_count_differential`, `peak_time_remaining`, `armor_fraction_remaining`) are **excluded by design** — see §2.5.
 
@@ -51,8 +53,8 @@ where:
 
 - **`α̂_i`** is the Phase 5A TWFE estimate of build i's fitness.
 - **`σ̂_i²`** is its squared standard error. Computed from TWFE residuals as `σ̂_ε² / n_i`, where `σ̂_ε²` is the pooled residual variance and `n_i` is the number of opponents build i was evaluated against.
-- **`X_i ∈ ℝ^7`** is the pre-matchup covariate vector — 3 engine-computed physics stats + 3 Python-raw offense/range aggregates + 1 calibrated heuristic scalar, standardized column-wise. Full feature list and selection rationale in §2.7.
-- **`γ ∈ ℝ^8`** (OLS coefficient vector including intercept) defines the regression prior mean `γᵀ [1, X_i]`.
+- **`X_i ∈ ℝ^10`** is the shipped pre-matchup covariate vector assembled by `optimizer.py::_build_covariate_vector`; specs 24/25/28 are canonical for the column order. The earlier 7-feature list in §2.7 is historical research provenance.
+- **`γ ∈ ℝ^11`** (OLS coefficient vector including intercept) defines the regression prior mean `γᵀ [1, X_i]`.
 - **`τ²`** is the residual variance of α around the regression prior — the unexplained between-build variance.
 
 Both `γ` and `τ²` are estimated empirically from the same data they will be applied to — this is the "empirical" in empirical Bayes, after Robbins 1956 / Efron & Morris 1975 / Ignatiadis & Wager 2022.
@@ -161,7 +163,12 @@ All seven are mathematically identical: α_i ~ N(γᵀX_i, τ²), α̂_i | α_i 
 
 For the formal derivation of why this beats CUPED — specifically the derivation `ρ(α̂_CUPED, α) = √(1 − R)` where R is the heuristic's reliability — see §4.5 below.
 
-### 2.7 Feature selection — the 7-feature ship set
+### 2.7 Historical feature selection — the pre-ship 7-feature set
+
+This subsection is historical. The shipped vector is the 10-component spec
+24/25/28 vector, with 6 Java `EngineStats` columns and 4 Python-raw columns.
+The 7-feature set below explains the research path and rejected alternatives;
+do not implement from this subsection.
 
 #### Dataset-size budget context
 
@@ -238,13 +245,18 @@ The feature-count sweep projected positive Δρ(EB − A0) at p = 7 across the t
 
 #### When to revisit
 
-- **Add back `eff_hull_hp`, `eff_max_speed`, `eff_shield_damage_mult`** for cross-hull aggregate runs where they regain real variance. Per-hull runs remain at p = 7.
+- **Add back / retain additional engine stats** only by updating specs 24/25/28 first. The shipped vector is p = 10, not p = 7.
 - **Add `mean_damage_per_shot`** (DPS-weighted) only if ship-gate is tight post-validation and armor-penetration burst matters empirically — this is mild theory injection and is a last resort.
 - **Drop to p = 6** (remove `kinetic_dps_fraction`) only if production runs routinely land at small N.
 
 ---
 
-## 3. Integration plan
+## 3. Historical integration plan
+
+This plan is retained for provenance and no longer describes current code. The
+implemented contract is `_build_covariate_vector` in `optimizer.py`, hard
+failure on missing `engine_stats` in production, and the 10-component vector
+defined by specs 24/25/28.
 
 ### 3.1 Code changes
 
@@ -254,8 +266,8 @@ The feature-count sweep projected positive Δρ(EB − A0) at p = 7 across the t
   - `TWFEResult` named tuple returning `(alpha, beta, sigma_i)`, where `sigma_i` comes from pooled residual MSE / n_i.
   - `eb_shrinkage(alpha, sigma_i, X_build, tau2_floor_frac=0.05) → (alpha_eb, gamma, tau2)`: the two-level EB closed-form from §2.2.
   - `triple_goal_rank(posterior, raw) → alpha_ebt`: the one-line histogram substitution from §2.4.
-- **`src/starsector_optimizer/optimizer.py`** — delete `_apply_control_variate`, `_refit_control_variate`, `_cv_beta`, `_cv_heuristic_mean`. Replace with one call to `eb_shrinkage` at `_finalize_build`. Route the build's 7-dim feature vector from the trial params + parsed `EngineStats`.
-- **`src/starsector_optimizer/combat_fitness.py`** — expose per-build pre-matchup feature vector combining `ScorerResult.composite_score`, `total_weapon_dps`, `engagement_range`, `kinetic_dps_fraction` (new — simple ratio of existing per-type DPS) with the 3 engine-computed stats from `EngineStats`.
+- **`src/starsector_optimizer/optimizer.py`** — delete `_apply_control_variate`, `_refit_control_variate`, `_cv_beta`, `_cv_heuristic_mean`. Replace with one call to `eb_shrinkage` at `_finalize_build`. The historical plan routed a 7-dim vector; the shipped implementation assembles the 10-dim spec vector in `_build_covariate_vector`.
+- **`src/starsector_optimizer/combat_fitness.py`** — historical placement only. Shipped covariate assembly lives in `optimizer.py`; `combat_fitness.py` stays a pure scalar function of `CombatResult`.
 - **`src/starsector_optimizer/result_parser.py`** — add `EngineStats` dataclass (`eff_max_flux`, `eff_flux_dissipation`, `eff_armor_rating`) and parse the new `setup_stats` block from the matchup result JSON.
 - **`src/starsector_optimizer/models.py`** — add `ShrinkageConfig` frozen dataclass with `enable: bool = True`, `tau2_floor_frac: float = 0.05`, `triple_goal: bool = True`. Replace the scalar `_cv_beta` fields in `OptimizerConfig` with this.
 - **`docs/specs/28-deconfounding.md`** — extend to describe the EB shrinkage step with σ_i estimation and the triple-goal correction.
@@ -440,7 +452,7 @@ Kept as a reference fallback if diagnostic evidence shows the MoM τ̂² estimat
 - `src/starsector_optimizer/deconfounding.py::triple_goal_rank` — pure function for §2.4 rank correction.
 - `src/starsector_optimizer/deconfounding.py::ScoreMatrix.build_sigma_sq` — exposes σ̂_i² = σ̂_ε² / n_i using the cached pooled residual MSE. Raises `ValueError` if called before `build_alpha()` populated the cache.
 - `src/starsector_optimizer/optimizer.py::_apply_eb_shrinkage` — orchestrates per-trial shrinkage at `_finalize_build()`.
-- `src/starsector_optimizer/optimizer.py::_build_covariate_vector` — assembles the 7-dim X_i from `_EBRecord` (scorer + engine_stats).
+- `src/starsector_optimizer/optimizer.py::_build_covariate_vector` — assembles the 10-dim X_i from `_EBRecord` using spec 24/25/28 column order.
 - `src/starsector_optimizer/optimizer.py::_completed_records: dict[int, _EBRecord]` — narrow finalized-build cache (~10× smaller than retaining full `_InFlightBuild` objects).
 
 ### §3.1 file-placement corrections
@@ -461,9 +473,14 @@ Added: `eb: EBShrinkageConfig = field(default_factory=EBShrinkageConfig)`, sibli
 
 The original plan called for always-emit with `Float.NaN` signaling failed reads. The game's bundled org.json rejects NaN in `put()`, so this was infeasible. Revised: the `setup_stats` block is emitted only when all three reads succeed (`!Float.isNaN(...)` check). If any read fails the key is OMITTED and Python treats absence as `engine_stats=None` (same as pre-5D log replay). Failed reads should never happen in production since SETUP runs right after a successful loadout swap — `MutableShipStats` and `HullSpec` are live.
 
-### Engine/Python fallback (measurement-source confound risk)
+### Engine-stats requirement
 
-`_build_covariate_vector` falls back to `ScorerResult.effective_stats` when `record.engine_stats is None`. This is a *replay / test-fixture* convenience; in production (deployed Java mod) `engine_stats` is always populated, so this branch never triggers. Mixing Java-sourced and Python-sourced rows in one X matrix would introduce a measurement-source confound that biases γ̂. `eb_min_builds=8` gates early trials before enough Java rows arrive; a long-lived miss (mod absent for many trials) would warrant a WARN that the operator can act on.
+Production EB10 requires Java `EngineStats`. `_build_covariate_vector` asserts
+on missing `engine_stats` rather than falling back to deleted Python-side
+effective-stat recomputation. Replay/test fixtures that predate `EngineStats`
+must either bypass EB10 or construct explicit fixture stats; mixed
+Java/Python-sourced rows would introduce a measurement-source confound that
+biases γ̂.
 
 ### Java API verification
 
@@ -471,14 +488,14 @@ The original plan called for always-emit with `Float.NaN` signaling failed reads
 
 ### Replay-gate finding (2026-04-18) — pending re-validation under V2
 
-The pre-5D Hammerhead log replay through the shipped production code at p=7 with Python-fallback for the engine-stat columns showed a Δρ smaller than the synthetic sweep projection. The gap is attributable to two structural effects (both unaffected by the V1 invalidation):
+The pre-5D Hammerhead log replay through the historical p=7 design with Python fallback for the engine-stat columns showed a Δρ smaller than the synthetic sweep projection. The gap is attributable to two structural effects (both unaffected by the V1 invalidation):
 
 1. **Python fallback** for the 3 engine-stat columns: pre-5D logs lack `setup_stats`, so `_build_covariate_vector` falls back to `ScorerResult.effective_stats.{flux_capacity, flux_dissipation, armor_rating}`. These values miss the contributions of the ~50 hullmods our Python model does not track and are therefore less informative than Java-authoritative `MutableShipStats` reads.
 2. **Information overlap in real data**: synthetic sweep features carry independent signal by construction. Real-data features (e.g. `composite_score`, `engagement_range`) overlap, so each additional column adds less than the sweep projects.
 
 **Implication**: the ship gate is expected to clear only after a production run collects authoritative Java `engine_stats`. Specific Δρ numbers from the V1 replay (and from the synthetic sweep projection) are pending re-validation under V2; see [../reports/2026-05-10-v1-loadout-bug-invalidation.md](../reports/2026-05-10-v1-loadout-bug-invalidation.md) and [../reports/INDEX.md](../reports/INDEX.md).
 
-**What to do next**: re-run the Hammerhead overnight campaign under V2 with the deployed mod. Early trials exercise the Python fallback; later trials with `engine_stats` populated close the gap.
+**What to do next**: re-run the Hammerhead overnight campaign under V2 with the deployed mod and require `engine_stats` throughout the EB10 path. Pre-EngineStats replays are historical calibration material, not production evidence.
 
 ---
 
@@ -516,15 +533,15 @@ A regime grid (clean / collider / mediator duration generation × N × SNR × R�
 
 `Y_new = Y − ε·(duration/timeout)` lost Δρ vs ε=0 across all explored ε, both real logs, and all estimators in the V1 benchmark. The tiebreaker does not compose with EB shrinkage when `hp_differential` is already a continuous score with no hard-tier structure to break. **Rejected.**
 
-### 7.6 Implications for the 5D-as-shipped p=7 set
+### 7.6 Historical implications for the pre-EB10 p=7 set
 
-1. The single-hull data disagreed across regimes, so the shipped p=7 choice is *neither validated nor refuted* by this investigation. On the calibration log p=7 was saturating; on the overnight log p=7 was the weaker starting point and p=8 would have helped.
+1. The single-hull data disagreed across regimes, so the historical p=7 choice was *neither validated nor refuted* by this investigation. On the calibration log p=7 was saturating; on the overnight log p=7 was the weaker starting point and p=8 would have helped.
 2. The §4.5 rejection of the conditioning-paradigm v1 still holds: v1 used covariates that were *transformations of the scorer* (i.e., scorer-component-derived Y-descendants), which is a strictly worse bad-control pattern than duration. Duration's build-mean-aggregation makes its ε-collider leakage small; scorer-transform covariates have no such protection.
 3. The **"exclude post-matchup features by construction"** rule of §2.5 remains the safe default. Duration is not admitted unconditionally — only after hull/regime-conditioned validation.
 
 ### 7.7 Recommendation
 
-- **Do not ship** TTK-related covariates or the lexicographic tiebreaker unconditionally. Keep EB7 shipped.
+- **Do not ship** TTK-related covariates or the lexicographic tiebreaker unconditionally. Keep EB10 shipped unless specs 24/28 are revised.
 - **Route via Phase 5F**: treat duration (or its log-TTK pre-battle proxy) as a candidate *regime-conditioned* covariate. Archetypes where TTK is a strong α-mediator (quick-kill hulls, SO brawlers) opt in; attrition archetypes opt out.
 - **Prerequisite for opt-in**: a live overnight V2 campaign on at least one non-Hammerhead hull covering a different archetype (e.g., Paragon or Onslaught for attrition) with a per-hull `RegimeConfig`-gated EB covariate toggle. The Eggers-Tuñón placebo should be run automatically as part of the ship gate.
 - **Defer**: Weibull-AFT residual, Heckman two-step — complexity cost exceeds the demonstrated marginal benefit.

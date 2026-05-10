@@ -24,8 +24,8 @@ mismatches against the within-cell ranking — lives in
 Each ablation cell uses a different scoring transform stack. C0a uses plain
 TWFE α̂ (no shrinkage, no Box-Cox). C2 adds EB shrinkage + Box-Cox + sigmoid
 shaping. The Optuna study under each cell ranks trials by *that cell's* shaped
-score. So C2's `best_value=0.873` and C0a's `best_value=1.000` are **not on
-the same scale** — they're scores under different metrics. Picking the cell
+score. So one cell's shaped `best_value` and another cell's shaped
+`best_value` are **not on the same scale** — they're scores under different metrics. Picking the cell
 with the highest `best_value` would be circular: it picks the cell whose
 shaper happens to assign higher numbers, not the cell whose underlying builds
 are actually stronger.

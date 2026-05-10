@@ -2,7 +2,6 @@
 type: report
 status: shipped
 last-validated: 2026-05-10
-supersedes: none
 ---
 
 # Wave 1 — Training-Log Ranker and Diagnostic Analysis

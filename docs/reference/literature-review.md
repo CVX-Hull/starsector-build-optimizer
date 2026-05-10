@@ -1,12 +1,19 @@
 ---
 type: reference
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-05-10
 ---
 
 # Literature Review
 
 Comprehensive survey of 40+ papers organized by topic. Each entry includes the key contribution, relevance assessment, and ArXiv ID where available.
+
+> **Use as literature survey, not implementation guidance.** Current
+> implementation contracts live in specs. CatCMAwM was removed from this
+> codebase because the Starsector search space has no continuous variables
+> (see [24-optimizer.md](../specs/24-optimizer.md)); QD remains future work.
+> The shipped optimizer path is TPE + Wilcoxon staged evaluation + A1 TWFE +
+> A2′ EB10 + A3 Box-Cox, with Phase 7 planning a BoTorch composed-kernel GP.
 
 ---
 
@@ -129,7 +136,7 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 - **ArXiv**: [2504.07884](https://arxiv.org/abs/2504.07884) (GECCO 2025)
 - **Authors**: Hamano, Nomura, Saito, Uchida, Shirakawa
 - **Key contribution**: Joint multivariate Gaussian + categorical distribution updated via natural gradient. Novel "margin" mechanism for integer variables: lower AND upper bounds on marginal probabilities prevent premature convergence without inflating variance. Supports multi-objective (bi-objective via COMO-CatCMAwM).
-- **Relevance**: VERY HIGH. Handles continuous + integer + categorical jointly. Outperforms BO at moderate dimensions (10+10+10). Clean ask-tell API. Population size maps naturally to parallel instances.
+- **Relevance**: HISTORICAL for this codebase. Handles continuous + integer + categorical jointly, but was removed from production because `cmaes.CatCMAwM` requires at least one continuous variable and the Starsector search space is categorical/integer only.
 - **Implementation**: `pip install cmaes` ([GitHub](https://github.com/CyberAgentAILab/cmaes)) — production-ready, MIT license, 570+ commits.
 - **Limitations**: Multi-objective currently bi-objective only. Less sample-efficient than BO at <100 evals. No built-in surrogate.
 
@@ -453,7 +460,7 @@ Comprehensive survey of 40+ papers organized by topic. Each entry includes the k
 1. No automated build optimization for Starsector or structurally similar ship-fitting games
 2. No QD-based exploration of game build archetypes with combat simulation
 3. No heuristic-as-prior-mean combined with Optuna TPE for warm-starting expensive game simulation BO
-4. No CatCMA-based emitter inside MAP-Elites for mixed-variable game build discovery
+4. No discrete-compatible QD emitter inside MAP-Elites for mixed-variable game build discovery
 5. No opponent-pool-based fitness evaluation with WilcoxonPruner for sample-efficient build optimization
 
 Our project would be novel work at the intersection of mixed-variable BO, quality-diversity, multi-fidelity optimization, and game build optimization. The opponent pool strategy with WilcoxonPruner is particularly novel — it addresses the RPS dynamics inherent in combat games while remaining sample-efficient.

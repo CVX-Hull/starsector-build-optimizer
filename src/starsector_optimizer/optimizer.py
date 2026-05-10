@@ -36,7 +36,7 @@ from optuna.trial import TrialState, create_trial
 from scipy.stats import boxcox
 
 from .calibration import generate_diverse_builds
-from .evaluator_pool import EvaluatorPool
+from .evaluator_pool import EvaluatorPool, RetryableMatchupError
 from .game_manifest import GameManifest
 from .instance_manager import InstanceError
 from .models import (
@@ -651,6 +651,12 @@ class StagedEvaluator:
 
                     try:
                         result = future.result()
+                    except RetryableMatchupError as exc:
+                        logger.warning(
+                            "Retryable matchup failure for trial %d: %s",
+                            ifb.trial.number, exc,
+                        )
+                        continue
                     except InstanceError:
                         logger.error(
                             "Worker failed for trial %d, scoring as %s",
