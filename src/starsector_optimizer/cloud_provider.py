@@ -53,6 +53,17 @@ _FLEET_TRANSIENT_ERROR_CODES = frozenset({
     "InvalidLaunchTemplateId.VersionNotFound",
 })
 
+# Error codes that mean "the resource is already gone" — i.e. the delete
+# operation's postcondition is satisfied. Treat these as success during
+# teardown rather than retrying for the full deadline. Concurrent teardown
+# paths (CampaignManager.teardown sweep + per-study `finally:
+# terminate_fleet`) routinely race on the same SG; without this, the
+# loser of the race burns the full _SG_DELETE_DEADLINE_SECONDS budget.
+_SG_DELETE_IDEMPOTENT_ERROR_CODES = frozenset({
+    "InvalidGroup.NotFound",
+    "InvalidSecurityGroupID.NotFound",
+})
+
 _HETZNER_STUB_MESSAGE = (
     "HetznerProvider is stubbed; implement when campaign budget >= $500. "
     "Hetzner's ~13% per-matchup advantage amortizes only at larger scale. "
@@ -499,6 +510,14 @@ class AWSProvider(CloudProvider):
                     )
                     break
                 except Exception as e:
+                    code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+                    if code in _SG_DELETE_IDEMPOTENT_ERROR_CODES:
+                        logger.info(
+                            "security group %s (id=%s) already gone in %s "
+                            "(concurrent teardown won the race; treating as success)",
+                            sg.get("GroupName", "?"), group_id, region,
+                        )
+                        break
                     last_error = e
                     time.sleep(_SG_DELETE_POLL_INTERVAL_SECONDS)
             else:

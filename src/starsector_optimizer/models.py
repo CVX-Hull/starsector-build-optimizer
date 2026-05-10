@@ -449,6 +449,43 @@ class CombatFitnessConfig:
 
 
 @dataclass(frozen=True)
+class HonestEvaluationConfig:
+    """Tunables for the honest evaluation pass over a finished campaign.
+
+    Defaults derived in docs/reference/honest-evaluation-methodology.md
+    §"Replication count — designed bound". N=30 sets the worst-case
+    standard error to ≤ 0.045 score-units for hulls with M ≥ 50 compatible
+    opponents (Popoviciu-bounded). Operators raise N for smaller pools.
+    """
+    top_k_per_seed: int = 3
+    replicates_per_matchup: int = 30
+    max_retries_per_matchup: int = 3
+    fitness_config: CombatFitnessConfig = field(default_factory=CombatFitnessConfig)
+    matchup_time_limit_seconds: float = 300.0
+    # Progress log emits every Nth completed matchup, where N = max(1,
+    # total // progress_log_buckets). 20 buckets ≈ a 5%-progress cadence.
+    progress_log_buckets: int = 20
+
+    def __post_init__(self) -> None:
+        if self.top_k_per_seed < 1:
+            raise ValueError(
+                f"top_k_per_seed must be >= 1, got {self.top_k_per_seed}"
+            )
+        if self.replicates_per_matchup < 1:
+            raise ValueError(
+                f"replicates_per_matchup must be >= 1, got {self.replicates_per_matchup}"
+            )
+        if self.max_retries_per_matchup < 0:
+            raise ValueError(
+                f"max_retries_per_matchup must be >= 0, got {self.max_retries_per_matchup}"
+            )
+        if self.progress_log_buckets < 1:
+            raise ValueError(
+                f"progress_log_buckets must be >= 1, got {self.progress_log_buckets}"
+            )
+
+
+@dataclass(frozen=True)
 class TWFEConfig:
     """Two-Way Fixed Effects deconfounding + opponent selection parameters.
 
@@ -566,6 +603,17 @@ class StudyConfig:
     (e.g. `active_opponents: 1` → single-rung trial → COMPLETE after one
     returned matchup). Leave unset for prep runs where statistical
     quality matters.
+
+    `warm_start_from_regime` enables Phase 5F cross-regime carry: when
+    set to a different regime name, the spawn dispatches
+    `--warm-start-from-regime <name>` to the study subprocess. The source
+    Optuna study (`{hull}__{warm_start_from_regime}`) must already exist
+    in the same per-study SQLite file that `spawn_studies` derives —
+    operator's responsibility to seed that DB (e.g. by `cp`-ing a prior
+    campaign's study DB into `data/study_dbs/<this campaign>/<study_id>.db`
+    before launch). `_parse_studies` rejects `warm_start_from_regime ==
+    regime` (Optuna's `load_if_exists` self-seeds; specifying it is a
+    config error).
     """
     hull: str
     regime: str
@@ -574,6 +622,7 @@ class StudyConfig:
     workers_per_study: int
     sampler: str
     active_opponents: int | None = None
+    warm_start_from_regime: str | None = None
 
 
 @dataclass(frozen=True)
@@ -618,6 +667,15 @@ class CampaignConfig:
     base_flask_port: int = 9000
     teardown_retry_delay_seconds: float = 10.0
     teardown_thread_join_seconds: float = 5.0
+    # Time CampaignManager.teardown waits for SIGTERM'd study subprocesses
+    # to exit cleanly (running their own `with CloudWorkerPool` __exit__ +
+    # per-study `finally: terminate_fleet`) before falling back to SIGKILL.
+    # 30s is generous: subprocess SIGTERM handler raises KeyboardInterrupt,
+    # CloudWorkerPool drains in <2s, terminate_fleet adds <10s of AWS calls;
+    # remainder absorbs werkzeug's slow shutdown. Without this fallback,
+    # subprocesses with stuck non-daemon threads (e.g. werkzeug listener)
+    # would orphan to init when CampaignManager exits.
+    study_proc_terminate_timeout_seconds: float = 30.0
     redis_port: int = 6379
     redis_preflight_timeout_seconds: float = 2.0
     matchup_slots_per_worker: int = 2

@@ -809,20 +809,24 @@ Four tiers by dependency + effort; adopt incrementally.
 **Tier A — smoother daily driver** (1–2 weeks, preserves current architecture)
 1. `just` CLI + recipes consolidating the 8+ shell scripts under `scripts/cloud/` into one self-documenting entrypoint.
 2. Worker Dockerfile + ECR push pipeline. Eliminates AMI rebakes triggered by Python-only changes (current ~8 min/iteration → 30 s image push).
-3. `starsector-repro check` preflight: machine-verifies every prerequisite (AWS creds + quota, game files, prefs.xml, Tailscale up + serve mapping, Redis, Java/uv/Packer versions) with actionable per-failure remediation.
-4. Terraform module `terraform/aws/` for static infra (VPC, subnet, IAM, SSH keypair, base SG rules). Outputs replace hardcoded IDs in `scripts/cloud/packer/aws.pkr.hcl`.
+3. `starsector-repro check` preflight: machine-verifies every prerequisite (AWS creds + per-region spot vCPU quota, game files, prefs.xml, Tailscale up + serve mapping, Redis, Java/uv/Packer versions) with actionable per-failure remediation.
+4. Terraform module `terraform/aws/` for static infra (VPC, subnet, IAM with `servicequotas:GetServiceQuota` + `servicequotas:ListServiceQuotas` so item 3's quota probe works without operator-side policy edits, SSH keypair, base SG rules). Outputs replace hardcoded IDs in `scripts/cloud/packer/aws.pkr.hcl`.
+5. Launcher OCR fallback for `_click_launcher` + `MenuNavigator` Robot clicks (text-based, robust to layout shifts). Trigger when next game-version update breaks one of the click paths, not preemptively.
+6. **L2 fleet-state plumbing** (closed-loop, observation-only). Honor `min_workers_to_start` + `partial_fleet_policy` at provisioning time (currently config-only, never read in production); add `_tick_fleet_size()` peer to `monitor_loop` calling `list_active()` every heartbeat with WARN/ERROR thresholds. ~80 LOC + 2 tests. **Ship pre-Wave-3** — Wave 3 is the cost-significant configuration most exposed to silent fleet shrinkage. Closes the "silent degraded fleet eats budget" failure mode without committing to a replenishment design that gets thrown away in Tier C.
 
 **Tier B — declarative workflow** (2–4 weeks, touches orchestration)
-5. Flyte (or Prefect 2) flow replacing `launch_campaign.sh` + bash `trap EXIT` teardown chain. Campaign lifecycle is a Python DAG with retries, state persistence, artifact lineage, dashboard visibility.
-6. Tailscale Terraform provider module `terraform/tailscale/` for tagOwners + grants + ephemeral authkey. Tailnet setup becomes `terraform apply`.
-7. `smoke-gate.py` emits structured `gate.json` with per-criterion pass/fail (launch exit, final_audit clean, ledger heartbeats, Optuna TrialState.COMPLETE, per-worker load_avg in `[3, 8]`) + top-K Jaccard diff vs. reference run.
+7. Flyte (or Prefect 2) flow replacing `launch_campaign.sh` + bash `trap EXIT` teardown chain. Campaign lifecycle is a Python DAG with retries, state persistence, artifact lineage, dashboard visibility.
+8. Tailscale Terraform provider module `terraform/tailscale/` for tagOwners + grants + ephemeral authkey + operator-SSH ACL fragment. Tailnet setup becomes `terraform apply`.
+9. `smoke-gate.py` emits structured `gate.json` with per-criterion pass/fail (launch exit, final_audit clean, ledger heartbeats, Optuna TrialState.COMPLETE, per-worker load_avg in `[3, 8]`) + top-K Jaccard diff vs. reference run.
+10. **`FleetLadder` minimal skeleton + tiered `provision_fleet`** (initial provisioning only, no mid-campaign replenishment). New `FleetRung(instance_types, regions, capacity_type, max_fraction_of_target)` + `FleetLadder(rungs)` dataclasses; YAML schema gains `fleet_ladder:` block (back-compat: synthesise a single rung from current fields when absent). `provision_fleet` iterates rungs, descending when `len(provisioned) < min_workers_to_start`. Cost ledger gains `rung` column. ~150–250 LOC. **Ship pre-Wave-3** to derisk the 96-VM cost-significant run via on-demand fallback.
+11. **Active replenishment at same rung** (closed-loop L3). `monitor_loop` calls bounded `_replenish_at_rung(rung_idx, delta)` on detected shrinkage, capped at 3 retries × `1.5 × original_fleet_cost_estimate`. ~200 LOC. **Defer unless Wave 3 telemetry shows >15% mid-campaign preemption** — most spot fleets at our scale see <5%; this code is replicated by Ray Tune autoscaler in Tier C.
 
 **Tier C — execution substrate migration** (4–8 weeks; best pursued AS Phase 7's delivery vehicle)
-8. Ray Tune adoption. Replaces `StagedEvaluator` + `CloudWorkerPool` + `worker_agent.py` main loop + reliable-queue plumbing (≈ 2000 LOC deletion). Native `ASHAScheduler`, `OptunaSearch`, spot interruption handling, heartbeat/health tracking. The remaining bespoke code is fitness (combat sim → `CombatResult`), scorer, Phase 5 deconfounding — none of which Ray touches.
+12. Ray Tune adoption. Replaces `StagedEvaluator` + `CloudWorkerPool` + `worker_agent.py` main loop + reliable-queue plumbing + Tier B items 10–11 (Ray's `available_node_types` priority ordering subsumes the ladder; Ray's autoscaler subsumes replenishment). ≈ 2000 LOC deletion plus the Tier B fleet code. Native `ASHAScheduler`, `OptunaSearch`, spot interruption handling, heartbeat/health tracking. The remaining bespoke code is fitness (combat sim → `CombatResult`), scorer, Phase 5 deconfounding — none of which Ray touches.
 
 **Tier D — canonical reproducibility** (1–2 weeks, capstone)
-9. Nix flake for worker image (`nix build .#worker-image`) for bit-identical builds across users, parallel to Docker path.
-10. Top-level `REPRODUCE.md` operator handbook + canonical reference run data (top-K elites + composite score distributions for a named hull × regime). Future runs diff against this for ecological-reproducibility validation.
+13. Nix flake for worker image (`nix build .#worker-image`) for bit-identical builds across users, parallel to Docker path.
+14. Top-level `REPRODUCE.md` operator handbook + canonical reference run data (top-K elites + composite score distributions for a named hull × regime). Future runs diff against this for ecological-reproducibility validation.
 
 ### Testing
 

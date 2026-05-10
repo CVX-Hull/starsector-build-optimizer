@@ -313,13 +313,14 @@ class TestCampaignManager:
         import starsector_optimizer.campaign as mod
         assert not hasattr(mod, "PartialFleetAbort")
 
-    def test_spawns_one_subprocess_per_study_seed(self, tmp_path):
+    def test_spawns_one_subprocess_per_study_seed(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import CampaignManager
         studies = [
             {"hull": "wolf", "regime": "early", "seeds": [0, 1, 2],
              "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
         ]
         config = self._config(tmp_path, studies=studies)
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()
@@ -333,7 +334,7 @@ class TestCampaignManager:
             manager.spawn_studies()
         assert mock_popen.call_count == 3  # one per seed
 
-    def test_subprocess_gets_study_idx_and_seed_idx(self, tmp_path):
+    def test_subprocess_gets_study_idx_and_seed_idx(self, tmp_path, monkeypatch):
         """Flat-idx bug fix: subprocess must receive BOTH indexes so
         campaign.studies[study_idx].seeds[seed_idx] picks the correct seed."""
         from starsector_optimizer.campaign import CampaignManager
@@ -344,6 +345,7 @@ class TestCampaignManager:
              "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
         ]
         config = self._config(tmp_path, studies=studies)
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()
@@ -362,9 +364,10 @@ class TestCampaignManager:
             pairs.add((int(study_idx), int(seed_idx)))
         assert pairs == {(0, 0), (0, 1), (1, 0)}
 
-    def test_subprocess_gets_yaml_path_not_pickle(self, tmp_path):
+    def test_subprocess_gets_yaml_path_not_pickle(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import CampaignManager
         config = self._config(tmp_path)
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()
@@ -378,12 +381,15 @@ class TestCampaignManager:
         assert "--campaign-config" in cmd
         assert not any(b"pickle" in str(arg).encode() for arg in cmd)
 
-    def test_subprocess_env_contains_required_secrets_and_ip(self, tmp_path):
+    def test_subprocess_env_contains_required_secrets_and_ip(
+        self, tmp_path, monkeypatch,
+    ):
         """Every subprocess gets STARSECTOR_WORKSTATION_TAILNET_IP,
         STARSECTOR_BEARER_TOKEN, STARSECTOR_TAILSCALE_AUTHKEY,
         STARSECTOR_PROJECT_TAG — the env plumbing contract."""
         from starsector_optimizer.campaign import CampaignManager
         config = self._config(tmp_path)
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()
@@ -401,7 +407,7 @@ class TestCampaignManager:
         bearer = env.get("STARSECTOR_BEARER_TOKEN", "")
         assert bearer and bearer != TAILSCALE_SECRET_SENTINEL
 
-    def test_each_study_gets_distinct_bearer_token(self, tmp_path):
+    def test_each_study_gets_distinct_bearer_token(self, tmp_path, monkeypatch):
         """Per-study secret isolation: N subprocesses → N distinct bearer tokens."""
         from starsector_optimizer.campaign import CampaignManager
         studies = [
@@ -411,6 +417,7 @@ class TestCampaignManager:
              "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
         ]
         config = self._config(tmp_path, studies=studies)
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()
@@ -759,6 +766,79 @@ class TestCampaignManagerPreflight:
         assert deleted_args == set(stale_keys)
 
 
+class TestCheckAmiTagsAgainstManifest:
+    """Module-level helper that powers both `CampaignManager._check_manifest_and_ami_tags`
+    and `honest_evaluator._preflight_for_honest_eval`. Pinning the contract
+    here so callers can rely on consistent failure modes."""
+
+    def _manifest(self):
+        from starsector_optimizer.game_manifest import GameManifest
+        return GameManifest.load()
+
+    def _provider_returning(self, gv, sha):
+        provider = MagicMock()
+        def _describe(*, ami_id, region, tag_key):
+            if tag_key == "GameVersion": return gv
+            if tag_key == "ModCommitSha": return sha
+            raise KeyError(tag_key)
+        provider.describe_ami_tag.side_effect = _describe
+        return provider
+
+    def test_passes_when_both_tags_match(self):
+        from starsector_optimizer.campaign import check_ami_tags_against_manifest
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version, m.constants.mod_commit_sha,
+        )
+        # Should not raise.
+        check_ami_tags_against_manifest(
+            provider, {"us-east-1": "ami-1"}, m,
+        )
+
+    def test_raises_on_game_version_mismatch(self):
+        from starsector_optimizer.campaign import (
+            check_ami_tags_against_manifest, PreflightFailure,
+        )
+        m = self._manifest()
+        provider = self._provider_returning("0.0-stale", m.constants.mod_commit_sha)
+        with pytest.raises(PreflightFailure, match="GameVersion"):
+            check_ami_tags_against_manifest(
+                provider, {"us-east-1": "ami-1"}, m,
+            )
+
+    def test_raises_on_mod_commit_sha_mismatch(self):
+        from starsector_optimizer.campaign import (
+            check_ami_tags_against_manifest, PreflightFailure,
+        )
+        m = self._manifest()
+        provider = self._provider_returning(
+            m.constants.game_version, "deadbeef0000000",
+        )
+        with pytest.raises(PreflightFailure, match="ModCommitSha"):
+            check_ami_tags_against_manifest(
+                provider, {"us-east-1": "ami-1"}, m,
+            )
+
+    def test_skips_silently_when_provider_lacks_describe_ami_tag(self, caplog):
+        """Hetzner stub / fake providers that don't implement describe_ami_tag
+        must not hard-break the preflight — they log a warning and return."""
+        from starsector_optimizer.campaign import check_ami_tags_against_manifest
+        m = self._manifest()
+        provider = MagicMock()
+        provider.describe_ami_tag.side_effect = AttributeError("no impl")
+        with caplog.at_level(logging.WARNING):
+            check_ami_tags_against_manifest(
+                provider, {"us-east-1": "ami-1"}, m,
+            )
+        assert any("describe_ami_tag" in r.getMessage() for r in caplog.records)
+
+    def test_preflight_failure_is_value_error(self):
+        """ValueError subclassing lets honest_evaluator propagate without
+        rewrapping its existing ValueError-based contract."""
+        from starsector_optimizer.campaign import PreflightFailure
+        assert issubclass(PreflightFailure, ValueError)
+
+
 class TestLedgerTick:
     """Phase-7-prep: CampaignManager._tick_ledger SCANs worker heartbeats,
     attributes cost via spot-price cache, records one ledger row per tick
@@ -938,6 +1018,145 @@ class TestRunJanitorPass:
         assert any("max_requeues" in r.getMessage() for r in caplog.records)
 
 
+class TestCampaignManagerTerminatesStudyProcs:
+    """teardown() must SIGTERM study subprocesses + SIGKILL survivors so
+    they don't orphan to init holding the Flask /result listener +
+    Redis connections. Bug observed 2026-05-10 wave1-c0a: CampaignManager
+    exited cleanly, 3 study Popen children orphaned to PPID=1, only
+    SIGKILL eventually freed them."""
+
+    def _manager(self, tmp_path, **overrides):
+        from starsector_optimizer.campaign import (
+            CampaignManager, CostLedger, load_campaign_config,
+        )
+        config_path = _minimal_campaign_yaml(tmp_path, **overrides)
+        config = load_campaign_config(config_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        ledger = CostLedger(
+            path=tmp_path / "ledger.jsonl",
+            budget_usd=config.budget_usd,
+        )
+        return CampaignManager(config, provider, ledger), provider, ledger
+
+    def _mock_proc(self, alive: bool):
+        """Mock Popen: poll() returns None if alive else 0."""
+        p = MagicMock()
+        p.poll.return_value = None if alive else 0
+        p.pid = 12345
+        return p
+
+    def test_teardown_sigterms_live_study_procs(self, tmp_path):
+        mgr, _, _ = self._manager(tmp_path)
+        live1 = self._mock_proc(alive=True)
+        live2 = self._mock_proc(alive=True)
+        live1.wait.return_value = 0  # exits cleanly on SIGTERM
+        live2.wait.return_value = 0
+        # After wait(), proc reports dead.
+        live1.poll.side_effect = [None, 0]
+        live2.poll.side_effect = [None, 0]
+        mgr._study_procs = [live1, live2]
+        mgr.teardown()
+        live1.terminate.assert_called_once()
+        live2.terminate.assert_called_once()
+        live1.kill.assert_not_called()
+        live2.kill.assert_not_called()
+
+    def test_teardown_sigkills_subprocs_that_dont_exit_in_time(self, tmp_path):
+        """Werkzeug + blocking AWS calls can prevent clean SIGTERM exit;
+        SIGKILL fallback ensures no orphans regardless."""
+        mgr, _, _ = self._manager(tmp_path,
+                                  study_proc_terminate_timeout_seconds=0.1)
+        stuck = self._mock_proc(alive=True)
+        stuck.wait.side_effect = subprocess.TimeoutExpired(cmd="x", timeout=0.1)
+        # Stays alive even after wait() times out, then exits on kill().
+        stuck.poll.side_effect = [None, None, 0]
+        mgr._study_procs = [stuck]
+        mgr.teardown()
+        stuck.terminate.assert_called_once()
+        stuck.kill.assert_called_once()
+
+    def test_teardown_skips_already_dead_study_procs(self, tmp_path):
+        mgr, _, _ = self._manager(tmp_path)
+        dead = self._mock_proc(alive=False)
+        mgr._study_procs = [dead]
+        mgr.teardown()
+        dead.terminate.assert_not_called()
+        dead.kill.assert_not_called()
+
+    def test_teardown_with_no_study_procs_is_noop_for_proc_path(self, tmp_path):
+        """Empty list — `_terminate_study_procs` early-returns; cloud sweep
+        still runs."""
+        mgr, provider, _ = self._manager(tmp_path)
+        mgr._study_procs = []
+        mgr.teardown()
+        # Cloud sweep ran (this is the existing teardown contract).
+        provider.terminate_all_tagged.assert_called_once()
+
+    def test_teardown_terminates_subprocs_before_cloud_sweep(self, tmp_path):
+        """Order matters: subprocess SIGTERM runs first so each subprocess
+        gets a chance to run its own per-study terminate_fleet (closest-to-
+        AWS-state caller). Cloud sweep is the safety net."""
+        mgr, provider, _ = self._manager(tmp_path)
+        live = self._mock_proc(alive=True)
+        live.wait.return_value = 0
+        live.poll.side_effect = [None, 0]
+        mgr._study_procs = [live]
+        call_order = []
+        live.terminate.side_effect = lambda: call_order.append("sigterm")
+        provider.terminate_all_tagged.side_effect = (
+            lambda tag: call_order.append("sweep")
+        )
+        mgr.teardown()
+        assert call_order == ["sigterm", "sweep"]
+
+
+class TestCampaignManagerRunExitCodes:
+    """`CampaignManager.run()` exit-code contract — wrappers like
+    `launch_wave1.sh` use these to decide whether to advance to the next
+    cell or abort. BudgetExceeded is a designed termination → 0; other
+    failure modes keep their distinct non-zero codes."""
+
+    def _manager(self, tmp_path, **overrides):
+        from starsector_optimizer.campaign import (
+            CampaignManager, CostLedger, load_campaign_config,
+        )
+        config_path = _minimal_campaign_yaml(tmp_path, **overrides)
+        config = load_campaign_config(config_path)
+        provider = MagicMock()
+        ledger = CostLedger(
+            path=tmp_path / "ledger.jsonl",
+            budget_usd=config.budget_usd,
+        )
+        return CampaignManager(config, provider, ledger), provider, ledger
+
+    def test_run_returns_zero_on_budget_exceeded(self, tmp_path):
+        """Budget cap is a designed termination — wrappers running multiple
+        budget-capped cells back-to-back must see exit 0 to advance."""
+        from starsector_optimizer.campaign import BudgetExceeded
+        mgr, _, _ = self._manager(tmp_path)
+        with patch.object(mgr, "install_signal_handlers"), \
+             patch.object(mgr, "_preflight"), \
+             patch.object(mgr, "spawn_studies", return_value=[]), \
+             patch.object(
+                 mgr, "monitor_loop",
+                 side_effect=BudgetExceeded("cumulative_usd=5.00 >= budget_usd=5.00"),
+             ), \
+             patch.object(mgr, "teardown"):
+            assert mgr.run() == 0
+
+    def test_run_returns_130_on_keyboard_interrupt(self, tmp_path):
+        """Ctrl-C / SIGTERM / SIGHUP must keep their distinct exit so the
+        wrapper aborts the wave instead of advancing."""
+        mgr, _, _ = self._manager(tmp_path)
+        with patch.object(mgr, "install_signal_handlers"), \
+             patch.object(mgr, "_preflight"), \
+             patch.object(mgr, "spawn_studies", return_value=[]), \
+             patch.object(mgr, "monitor_loop", side_effect=KeyboardInterrupt()), \
+             patch.object(mgr, "teardown"):
+            assert mgr.run() == 130
+
+
 class TestCampaignNameValidation:
     def test_name_regex_accepts_common_names(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
@@ -1029,11 +1248,12 @@ class TestActiveOpponentsPassedToSubprocess:
     one returned matchup) would silently fall back to the default 10 →
     10-rung trials → smoke gate ("≥1 TrialState.COMPLETE") fails."""
 
-    def test_active_opponents_not_passed_when_none(self, tmp_path):
+    def test_active_opponents_not_passed_when_none(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import (
             CampaignManager, load_campaign_config,
         )
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         manager = CampaignManager(config, provider, MagicMock())
@@ -1044,7 +1264,7 @@ class TestActiveOpponentsPassedToSubprocess:
         cmd = mock_popen.call_args_list[0].args[0]
         assert "--active-opponents" not in cmd
 
-    def test_active_opponents_passed_when_set(self, tmp_path):
+    def test_active_opponents_passed_when_set(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import (
             CampaignManager, load_campaign_config,
         )
@@ -1054,6 +1274,7 @@ class TestActiveOpponentsPassedToSubprocess:
              "sampler": "tpe", "active_opponents": 1},
         ])
         config = load_campaign_config(path)
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         manager = CampaignManager(config, provider, MagicMock())
@@ -1067,15 +1288,167 @@ class TestActiveOpponentsPassedToSubprocess:
         assert cmd[idx + 1] == "1"
 
 
+class TestWarmStartFromRegime:
+    """Phase 5F cross-regime carry plumbed through the campaign YAML.
+
+    The source Optuna study (`{hull}__{warm_start_from_regime}`) must
+    already exist in the per-study SQLite file derived by spawn_studies;
+    operator's responsibility to seed the DB. Validation here covers the
+    parse/dispatch surface, not the operator-side seeding step.
+    """
+
+    def test_warm_start_from_regime_defaults_to_none(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        assert config.studies[0].warm_start_from_regime is None
+
+    def test_warm_start_from_regime_loads_from_yaml(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "hammerhead", "regime": "mid", "seeds": [0],
+             "budget_per_study": 250, "workers_per_study": 8,
+             "sampler": "tpe", "warm_start_from_regime": "early"},
+        ])
+        config = load_campaign_config(path)
+        assert config.studies[0].warm_start_from_regime == "early"
+
+    def test_warm_start_from_regime_equal_to_regime_rejected(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "hammerhead", "regime": "early", "seeds": [0],
+             "budget_per_study": 250, "workers_per_study": 8,
+             "sampler": "tpe", "warm_start_from_regime": "early"},
+        ])
+        with pytest.raises(ValueError, match="warm_start_from_regime"):
+            load_campaign_config(path)
+
+    def test_warm_start_from_regime_passed_to_subprocess(
+        self, tmp_path, monkeypatch,
+    ):
+        from starsector_optimizer.campaign import (
+            CampaignManager, load_campaign_config,
+        )
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "hammerhead", "regime": "mid", "seeds": [0],
+             "budget_per_study": 250, "workers_per_study": 8,
+             "sampler": "tpe", "warm_start_from_regime": "early"},
+        ])
+        config = load_campaign_config(path)
+        monkeypatch.chdir(tmp_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        manager = CampaignManager(config, provider, MagicMock())
+        manager._tailnet_ip = "100.64.1.2"
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        cmd = mock_popen.call_args_list[0].args[0]
+        assert "--warm-start-from-regime" in cmd
+        idx = cmd.index("--warm-start-from-regime")
+        assert cmd[idx + 1] == "early"
+
+    def test_warm_start_from_regime_not_passed_when_none(
+        self, tmp_path, monkeypatch,
+    ):
+        from starsector_optimizer.campaign import (
+            CampaignManager, load_campaign_config,
+        )
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        monkeypatch.chdir(tmp_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        manager = CampaignManager(config, provider, MagicMock())
+        manager._tailnet_ip = "100.64.1.2"
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        cmd = mock_popen.call_args_list[0].args[0]
+        assert "--warm-start-from-regime" not in cmd
+
+
+class TestSpawnStudiesPersistentDb:
+    """Every spawned study writes Optuna trials to a per-study SQLite file
+    so cross-regime warm-start has a stable on-disk source. One DB per
+    (campaign, study_idx, seed) avoids Optuna `{hull}__{regime}` study-
+    name collisions across ablation cells and seeds."""
+
+    def test_study_db_path_passed_and_directory_created(
+        self, tmp_path, monkeypatch,
+    ):
+        from starsector_optimizer.campaign import (
+            CampaignManager, load_campaign_config,
+        )
+        monkeypatch.chdir(tmp_path)
+        yaml_path = tmp_path / "campaign.yaml"
+        # Reuse the helper but write into the chdir'd tmp dir so derived
+        # `data/study_dbs/...` lands somewhere inspectable.
+        yaml_text = _minimal_campaign_yaml(tmp_path).read_text()
+        yaml_path.write_text(yaml_text)
+        config = load_campaign_config(yaml_path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        manager = CampaignManager(config, provider, MagicMock())
+        manager._tailnet_ip = "100.64.1.2"
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        cmd = mock_popen.call_args_list[0].args[0]
+        assert "--study-db" in cmd
+        idx = cmd.index("--study-db")
+        db_path = Path(cmd[idx + 1])
+        # study_id derivation: {hull}__{regime}__{sampler}__seed{seed_value}
+        assert db_path == Path(
+            "data/study_dbs/test-campaign/wolf__early__tpe__seed0.db"
+        )
+        assert db_path.parent.exists()
+
+    def test_study_db_paths_unique_per_seed_and_per_study(
+        self, tmp_path, monkeypatch,
+    ):
+        """Two seeds of the same study and two studies with different hulls
+        each get their own DB file — no collisions on the
+        `{hull}__{regime}` Optuna study-name namespace."""
+        from starsector_optimizer.campaign import (
+            CampaignManager, load_campaign_config,
+        )
+        monkeypatch.chdir(tmp_path)
+        path = _minimal_campaign_yaml(tmp_path, studies=[
+            {"hull": "wolf", "regime": "early", "seeds": [0, 1],
+             "budget_per_study": 200, "workers_per_study": 8,
+             "sampler": "tpe"},
+            {"hull": "hammerhead", "regime": "early", "seeds": [0],
+             "budget_per_study": 200, "workers_per_study": 8,
+             "sampler": "tpe"},
+        ])
+        config = load_campaign_config(path)
+        provider = MagicMock()
+        provider.list_active.return_value = []
+        manager = CampaignManager(config, provider, MagicMock())
+        manager._tailnet_ip = "100.64.1.2"
+        with patch.object(subprocess, "Popen") as mock_popen:
+            mock_popen.return_value.poll.return_value = 0
+            manager.spawn_studies()
+        db_paths = []
+        for call in mock_popen.call_args_list:
+            cmd = call.args[0]
+            idx = cmd.index("--study-db")
+            db_paths.append(cmd[idx + 1])
+        assert len(db_paths) == 3
+        assert len(set(db_paths)) == 3, f"DB path collision: {db_paths}"
+
+
 class TestEnvDictNotLogged:
     """Secrets in subprocess env must never hit logs."""
 
-    def test_spawn_studies_does_not_log_env_dict(self, tmp_path, caplog):
+    def test_spawn_studies_does_not_log_env_dict(
+        self, tmp_path, monkeypatch, caplog,
+    ):
         from starsector_optimizer.campaign import CampaignManager
         import starsector_optimizer.campaign as mod
         config = load_campaign_config = __import__(
             "starsector_optimizer.campaign", fromlist=["load_campaign_config"],
         ).load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         ledger = MagicMock()

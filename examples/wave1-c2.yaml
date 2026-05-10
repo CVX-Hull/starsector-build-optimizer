@@ -25,9 +25,11 @@ provider: aws
 
 regions:
   - us-east-1
+  - us-east-2
 
 instance_types:
   - c7a.2xlarge
+  - c7i.2xlarge
 
 spot_allocation_strategy: price-capacity-optimized
 capacity_rebalancing: true
@@ -37,10 +39,14 @@ min_workers_to_start: 16          # >=2 workers per study (floor)
 partial_fleet_policy: proceed_half_speed
 matchup_slots_per_worker: 2
 
-# Post-V2-loadout-fix AMI from 2026-05-09 (commit dc71e3b). Re-bake before
-# us-east-2 use; only us-east-1 has a post-V2 AMI as of 2026-05-09.
+# Post-V2 AMI baked 2026-05-09 in us-east-1 (commit dc71e3b); us-east-2 is a
+# tag-propagated copy made 2026-05-10 for cross-region capacity diversification
+# (Phase 7.5 ladder rung 0). Both AMIs share ModCommitSha=dc71e3b. A fresh
+# re-bake is scheduled before Wave 3 to bake in commits 722afd2 + c2d5150
+# directly (Wave 1 carries them via serve_mod_jar.sh overlay).
 ami_ids_by_region:
   us-east-1: ami-0a434660884e985e3
+  us-east-2: ami-058e7a119eb656d45
 
 ssh_key_name: starsector-probe
 

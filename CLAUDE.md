@@ -55,6 +55,7 @@ For every module: spec first, then tests, then implementation. Skills enforce qu
 | Implementation | During coding | [`ddd-tdd`](.claude/skills/ddd-tdd.md) step 3 |
 | Post-implementation | After all tasks complete | [`post-impl-audit`](.claude/skills/post-impl-audit.md) |
 | Invariant check | When reviewing changes | [`design-invariants`](.claude/skills/design-invariants.md) |
+| Honest evaluation | After every major optimization run, before any report publishes findings | [`honest-evaluation`](.claude/skills/honest-evaluation.md) |
 
 For Java modding pitfalls (sandbox, file I/O, Janino, combat plugin patterns), see [`starsector-modding`](.claude/skills/starsector-modding.md).
 

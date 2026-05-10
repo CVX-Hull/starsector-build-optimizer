@@ -289,17 +289,28 @@ every PR.
 
 ## AMI preflight cross-check
 
-`CampaignManager._check_manifest_and_ami_tags` calls
-`AWSProvider.describe_ami_tag(ami_id, region, tag_key="GameVersion")`
-for every AMI in `ami_ids_by_region` and asserts the returned tag
-value equals `manifest.constants.game_version`. Mismatch raises
-`_PreflightFailure` with remediation: "re-bake AMI after running
+`campaign.check_ami_tags_against_manifest(provider, ami_ids_by_region,
+manifest)` (called by both `CampaignManager._check_manifest_and_ami_tags`
+and `honest_evaluator._preflight_for_honest_eval`) cross-checks two
+AMI tags per `(region, ami_id)` in `ami_ids_by_region`:
+
+1. **GameVersion** = `manifest.constants.game_version` (engine-version
+   drift gate). Packer template stamps `GameVersion = var.game_version`
+   at bake time; the `game_version` variable MUST be bumped in lockstep
+   with the manifest regen.
+2. **ModCommitSha** = `manifest.constants.mod_commit_sha` (mod-commit
+   drift gate; Commit G R6). Catches the case where the engine didn't
+   change but the mod did — Gradle's `generateBuildInfo` task stamps
+   the git SHA into the jar, ManifestDumper embeds it into
+   `manifest.constants.mod_commit_sha`, Packer reads it back for the
+   AMI tag. Empty / `"unknown"` `mod_commit_sha` is also rejected: it
+   means the SHA chain broke upstream and the AMI cannot be trusted.
+
+Mismatch on either tag raises `PreflightFailure` (a `ValueError`
+subclass) with remediation: "re-bake AMI after running
 `scripts/update_manifest.py`; see `.claude/skills/cloud-worker-ops.md`
-for the Game-Version-Update runbook." The Packer template
-(`scripts/cloud/packer/aws.pkr.hcl`) tags the AMI with
-`GameVersion = var.game_version` at bake time; the
-`game_version` variable MUST be bumped in lockstep with the
-manifest regen.
+for the Game-Version-Update runbook." See spec 22 §"Manifest + AMI
+tag preflight (2026-04-19)" for the full helper signature.
 
 ## Rationale for existence
 

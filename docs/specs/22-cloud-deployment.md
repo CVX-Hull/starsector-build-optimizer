@@ -52,6 +52,7 @@ One row in the campaign YAML's `studies:` list. `seeds=(0, 1, 2)` fans out into 
 | `workers_per_study` | `int` | TPE saturates above 24 |
 | `sampler` | `str` | `tpe` (only accepted value; see spec 24 for the CatCMAwM removal rationale) |
 | `active_opponents` | `int \| None` | Optional per-study override of `OptimizerConfig.active_opponents` (default 10). Smaller values shrink ASHA rungs per trial — `active_opponents: 1` makes each trial complete after one returned matchup (used by `examples/smoke-campaign.yaml` to guarantee ≥1 `TrialState.COMPLETE` within the smoke's 10-minute gate). `None` uses the optimizer default. Plumbed into the study subprocess via `--active-opponents` when non-None. |
+| `warm_start_from_regime` | `str \| None` | Optional cross-regime carry (Phase 5F mechanism 13b). When set to a regime name different from `regime`, the spawn dispatches `--warm-start-from-regime <name>` to the study subprocess. The source Optuna study (`{hull}__{warm_start_from_regime}`) must already exist in the per-study SQLite file derived by `spawn_studies` — operator's responsibility to seed that DB before launch (typically `cp` from a prior campaign's study DB, see "Per-study SQLite layout" below). `_parse_studies` rejects `warm_start_from_regime == regime`. `None` (default) skips the carry. |
 
 ### `GlobalAutoStopConfig`
 
@@ -213,7 +214,9 @@ No `GET`, no `PATCH`, no `PUT`, no admin route, no static files. Test `test_http
 
 Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is followed by `file.flush()` + `os.fsync(file.fileno())` to prevent torn lines on crash (~1ms overhead per row, negligible at 96 rows/min).
 
-Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown.
+Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown and **returns exit code 0** (designed termination, not failure — wrapper scripts running multiple budget-capped cells back-to-back depend on this to advance to the next cell). Other failure modes keep distinct non-zero exit codes: preflight failure → 2, KeyboardInterrupt / SIGTERM / SIGHUP → 130, unexpected exception → propagates.
+
+After every major optimization run that uses this infrastructure, the operator runs the **honest evaluator** ([spec 30](30-honest-evaluator.md), [`scripts/cloud/evaluate_campaign.sh`](../../scripts/cloud/evaluate_campaign.sh)) before publishing report findings — see [`honest-evaluation`](../../.claude/skills/honest-evaluation.md) skill for the SOP. The evaluator dispatches via the same `EvaluatorPool` ABC defined in this spec and reuses `cloud_runner.prepare_cloud_pool` for the per-eval fleet (separate `honest-eval-{name}-{utc}` namespace from the source campaign).
 
 ### Ledger tick (2026-04-19)
 
@@ -248,21 +251,67 @@ bare `3600.0` literals in function bodies (project invariant).
 
 ### Manifest + AMI tag preflight (2026-04-19)
 
-`_check_manifest_and_ami_tags` runs alongside the other preflight
-checks. It:
+`CampaignManager._check_manifest_and_ami_tags` runs alongside the
+other preflight checks. It:
 1. Loads `GameManifest.load()` from `game/starsector/manifest.json`.
    Schema-version mismatch raises `ValueError` with remediation
    pointing at `scripts/update_manifest.py`.
-2. For every `(region, ami_id)` in `config.ami_ids_by_region`, calls
-   `AWSProvider.describe_ami_tag(ami_id=..., region=..., tag_key="GameVersion")`
-   and asserts the tag value equals `manifest.constants.game_version`.
-   Mismatch raises `_PreflightFailure` with remediation: "re-bake
-   AMI after running `scripts/update_manifest.py`; see
-   `.claude/skills/cloud-worker-ops.md` for the Game-Version-Update
+2. Delegates the actual cross-check to the module-level helper
+   `check_ami_tags_against_manifest(provider, ami_ids_by_region,
+   manifest)`. For every `(region, ami_id)` it calls
+   `provider.describe_ami_tag(ami_id=..., region=..., tag_key="GameVersion")`
+   and `tag_key="ModCommitSha"` and asserts both values equal
+   `manifest.constants.game_version` / `mod_commit_sha`. Mismatch
+   raises `PreflightFailure` (a `ValueError` subclass) with
+   remediation: "re-bake AMI after running `scripts/update_manifest.py`;
+   see `.claude/skills/cloud-worker-ops.md` for the Game-Version-Update
    runbook."
 3. Caches the loaded manifest on `self._manifest` for subprocess
    env plumbing (study subprocesses re-load from disk; the cache
    is orchestrator-internal).
+
+The module-level helper is reused by `honest_evaluator._preflight_for_honest_eval`
+(spec 30 §Preflight) so honest-eval has the same protection against
+silent oracle corruption when an operator regenerates the manifest
+without re-baking the AMI. Providers that don't implement
+`describe_ami_tag` (Hetzner stub, test fakes) cause the helper to
+log a warning and return — preserves backward compatibility for
+non-AWS preflight paths.
+
+Helper signature:
+
+```python
+def check_ami_tags_against_manifest(
+    provider: CloudProvider,
+    ami_ids_by_region: dict[str, str],
+    manifest: GameManifest,
+) -> None:
+    """For every (region, ami_id) in `ami_ids_by_region`:
+      1. Read `provider.describe_ami_tag(ami_id, region, "GameVersion")`
+         and assert it equals `manifest.constants.game_version`.
+      2. Read `provider.describe_ami_tag(ami_id, region, "ModCommitSha")`
+         and assert it equals `manifest.constants.mod_commit_sha`.
+      3. Reject empty/`"unknown"` `mod_commit_sha` (Commit G R6 dual-check
+         — Gradle's `generateBuildInfo` task stamps the git SHA into the
+         jar, ManifestDumper embeds it into the manifest, Packer reads it
+         back for the AMI tag; a missing value means the chain broke
+         upstream and the AMI cannot be trusted).
+    Raises `PreflightFailure` (a `ValueError` subclass) on any mismatch
+    or missing tag. Returns silently with WARN log if `provider` raises
+    `AttributeError` from `describe_ami_tag` (Hetzner stub / test fakes).
+    """
+```
+
+Companion public helpers (same module, same exception type) — both
+reused by `honest_evaluator._preflight_for_honest_eval`:
+
+```python
+def check_aws_credentials() -> None:
+    """STS get_caller_identity probe; raises PreflightFailure on auth fail."""
+
+def check_authkey_syntax(authkey: str) -> None:
+    """Validate `authkey.startswith('tskey-auth-')`; raises PreflightFailure."""
+```
 
 The AWS AMI tag is set by the Packer template
 (`scripts/cloud/packer/aws.pkr.hcl` `tags { GameVersion = var.game_version }`);
@@ -399,6 +448,16 @@ echo "STARSECTOR_WORKER_WORKER_ID=$INSTANCE_ID" >> /etc/starsector-worker.env
 
 For probe scenarios where no real worker is needed, `render_probe_user_data(campaign_id) -> str` returns a minimal script: `echo probe-boot-ok > /var/log/starsector-probe.log`. The probe tests fleet lifecycle, not worker connectivity.
 
+## Per-study SQLite layout
+
+Every spawned study subprocess writes its Optuna trial state to its own SQLite file at `data/study_dbs/<campaign.name>/<study_id>.db` (created on demand by `spawn_studies`; `study_id` follows `cloud_runner.resolve_study_id` — `{hull}__{regime}__{sampler}__seed{seed_value}`). One DB per (campaign, study_idx, seed_idx) tuple is load-bearing:
+
+- The Optuna study-name namespace is `{hull}__{regime}` (no sampler, no seed). Sharing one DB across ablation cells (C0a/C0b/C1/C2/C3 of the same hull+regime) would collapse them into one Optuna study via `load_if_exists=True` and destroy per-cell trial isolation.
+- Sharing one DB across seeds within a single cell would do the same, eliminating the variance estimate seeds are designed to provide.
+- Per-(study, seed) DBs hold ≤16 concurrent writers (the matchup-slot ceiling per study), well below the SQLite-Optuna contention cliff at ~32 (R8 in `docs/reports/2026-05-10-validation-plan.md`).
+
+**Cross-regime warm-start carry** (mechanism 13b): the `--warm-start-from-regime <name>` flag — set by `spawn_studies` when `StudyConfig.warm_start_from_regime` is non-None — requires the source study `{hull}__{name}` to already exist in the same SQLite file as the target. Across campaigns, the operator carries it explicitly: `cp data/study_dbs/<source_campaign>/<source_study_id>.db data/study_dbs/<target_campaign>/<target_study_id>.db` before launch. `campaign.py` does not bake cross-campaign relations into the YAML — the carry is shell-visible, not config-buried.
+
 ## Per-study fleet lifecycle
 
 Each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its fleet end-to-end:
@@ -412,6 +471,23 @@ Each study subprocess (`scripts/run_optimizer.py --worker-pool cloud`) owns its 
 7. On any exit path (normal, KeyboardInterrupt, exception): `finally: provider.terminate_fleet(fleet_name=study_id, project_tag=project_tag)`. Pool `__exit__` runs first (via `with`), then fleet teardown.
 
 `CampaignManager` is a pure supervisor: `_preflight` + `spawn_studies` + `monitor_loop` + `teardown` (which calls `terminate_all_tagged` as a campaign-wide sweep backstop for any fleet orphaned by a study crash). It NEVER calls `provision_fleet` or `terminate_fleet` directly.
+
+Steps 2–7 are factored into `cloud_runner.prepare_cloud_pool` (a `@contextmanager`) so the same lifecycle (provision → pool.__enter__ → caller body → pool.__exit__ → terminate_fleet) is reused by `honest_evaluator.main`. Full keyword-only signature:
+
+```python
+@contextmanager
+def prepare_cloud_pool(
+    *, campaign: CampaignConfig,
+    study_id: str, project_tag: str, fleet_name: str,
+    flask_port: int, target_workers: int, total_matchup_slots: int,
+    tailnet_ip: str, bearer_token: str, tailscale_authkey: str,
+    debug_ssh_pubkey: str = "",
+    mod_jar_override_url: str = "",
+    mod_jar_override_sha256: str = "",
+) -> Iterator[CloudWorkerPool]:
+```
+
+The four name-bearing params (`study_id`, `project_tag`, `fleet_name`, `flask_port`) are caller-supplied so distinct callers (study runs vs. honest-eval) get distinct namespaces and cannot collide on Redis keys, AWS tags, or Flask ports. The orchestrator-side Redis client is hardcoded to `host="localhost"` (the tailnet-exposed Redis lives on the workstation; only workers connect via `tailnet_ip`). See spec 30 §CLI entry point.
 
 ## Preflight gates
 

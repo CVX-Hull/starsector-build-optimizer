@@ -10,9 +10,15 @@
 # below scopes the env vars to a single `launch_campaign.sh` line; the next
 # cell starts with a clean env.
 #
-# Expected total: 5 cells × ~$2.50 = ~$12.50, ~3.5 hr active wall-clock
-# (plus ~5 min provisioning per cell). The validation-plan budget is $14.37
-# cumulative through Wave 1, leaving ~10 % headroom.
+# Per-cell budget (`budget_usd: 5.0` in each YAML) is a hard cap, not an
+# estimate. Cells that hit the cap stop at partial trial completion;
+# `CampaignManager.run()` returns 0 on `BudgetExceeded` (designed
+# termination, see spec 22 §"Cost ledger") so `set -e` advances to the
+# next cell. Total wave spend ≤ 5 × $5.00 = $25.00. Equal-budget-per-cell
+# is the comparison contract: each ablation cell gets the same $-budget,
+# revealing per-cell efficiency (pruner / curriculum / EB shrinkage all
+# show up as "more useful trials per $5"). Wall-clock varies with the
+# fleet's TIMEOUT-rate; observed C0a ran 3h21m to spend $5.
 #
 # Pre-flight (operator):
 #   1. tailscale userspace daemon up (scripts/cloud/devenv-up.sh)

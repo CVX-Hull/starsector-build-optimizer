@@ -51,7 +51,16 @@ logger = logging.getLogger(__name__)
 
 
 class BudgetExceeded(Exception):
-    """Campaign cumulative cost reached budget_usd; trigger teardown."""
+    """Campaign cumulative cost reached budget_usd; trigger teardown.
+
+    This is a **designed termination**, not an error: the operator pinned a
+    hard $-cap and the run hit it. `CampaignManager.run()` exits 0 on this
+    path so wrapper scripts (e.g. `launch_wave1.sh` running 5 cells back-to-
+    back, each independently capped at the same budget) treat budget-exhaust
+    as cell-complete and proceed to the next cell. Failures of other kinds
+    (preflight, exceptions in monitor_loop, KeyboardInterrupt) still produce
+    distinct non-zero exit codes; only this designed termination maps to 0.
+    """
 
 
 class TeardownError(Exception):
@@ -123,6 +132,14 @@ def load_campaign_config(path: Path) -> CampaignConfig:
                 f"study sampler={s['sampler']!r} invalid; "
                 f"allowed: {sorted(_ALLOWED_SAMPLERS)}"
             )
+        wsr = s.get("warm_start_from_regime")
+        if wsr is not None and wsr == s["regime"]:
+            raise ValueError(
+                f"study {s['hull']}__{s['regime']}: "
+                f"warm_start_from_regime={wsr!r} cannot equal regime "
+                f"(Optuna's load_if_exists already self-seeds within a "
+                f"single study; specify a different source regime or omit)"
+            )
     studies = tuple(
         StudyConfig(
             hull=s["hull"], regime=s["regime"],
@@ -131,6 +148,7 @@ def load_campaign_config(path: Path) -> CampaignConfig:
             workers_per_study=s["workers_per_study"],
             sampler=s["sampler"],
             active_opponents=s.get("active_opponents"),
+            warm_start_from_regime=s.get("warm_start_from_regime"),
         )
         for s in raw["studies"]
     )
@@ -324,8 +342,13 @@ _DEFAULT_USERSPACE_TS_SOCKET = (
 _TS_CLI_TIMEOUT_SECONDS = 5.0
 
 
-class _PreflightFailure(Exception):
-    """Internal signal from _preflight; translated to sys.exit in run()."""
+class PreflightFailure(ValueError):
+    """Raised by preflight helpers (`check_*` module-level functions and
+    `CampaignManager._preflight`). ValueError subclass so callers (e.g.
+    `honest_evaluator._preflight_for_honest_eval`) that propagate as
+    plain `ValueError` work without rewrapping. `CampaignManager.run`
+    catches this and translates to `sys.exit(2)`.
+    """
 
 
 def _tailscale_socket_args() -> list[str]:
@@ -347,23 +370,23 @@ def _tailscale_socket_args() -> list[str]:
 
 
 def _resolve_tailnet_ip(timeout_seconds: float = _TS_CLI_TIMEOUT_SECONDS) -> str:
-    """Shell out to `tailscale ip -4`. Empty stdout → _PreflightFailure."""
+    """Shell out to `tailscale ip -4`. Empty stdout → PreflightFailure."""
     cmd = ["tailscale"] + _tailscale_socket_args() + ["ip", "-4"]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout_seconds,
         )
     except FileNotFoundError as e:
-        raise _PreflightFailure(
+        raise PreflightFailure(
             "`tailscale` not found on PATH. Install Tailscale and run "
             "`scripts/cloud/devenv-up.sh` (rootless) or `tailscale up` "
             "(kernel-mode) before launching a campaign."
         ) from e
     except subprocess.TimeoutExpired as e:
-        raise _PreflightFailure(f"`tailscale ip -4` timed out: {e}") from e
+        raise PreflightFailure(f"`tailscale ip -4` timed out: {e}") from e
     ip = (result.stdout or "").strip().split("\n")[0].strip()
     if not ip:
-        raise _PreflightFailure(
+        raise PreflightFailure(
             "`tailscale ip -4` returned no address. Run "
             "`scripts/cloud/devenv-up.sh` (rootless) or `tailscale up` "
             "(kernel-mode) to join the tailnet before launching a campaign."
@@ -412,7 +435,7 @@ def _check_redis_reachable(
             host="127.0.0.1", port=port, socket_timeout=timeout_seconds,
         ).ping()
     except Exception as e:
-        raise _PreflightFailure(
+        raise PreflightFailure(
             f"Redis not reachable on 127.0.0.1:{port}: {e}. "
             f"Start redis-server; see scripts/cloud/devenv-up.sh for a "
             f"rootless recipe."
@@ -429,7 +452,7 @@ def _check_redis_reachable(
     if _tailscale_serve_exposes_port(port):
         return
 
-    raise _PreflightFailure(
+    raise PreflightFailure(
         f"Redis responds on 127.0.0.1:{port} but is not reachable over the "
         f"tailnet. Either (kernel-mode) bind redis-server to {tailnet_ip!r} "
         f"or (userspace-mode) run "
@@ -464,24 +487,106 @@ def _flush_stale_campaign_keys(
     return deleted
 
 
-def _check_aws_credentials() -> None:
+def check_aws_credentials() -> None:
+    """Verify AWS credentials are valid via STS `get_caller_identity`.
+
+    Raises `PreflightFailure` (a `ValueError` subclass) on failure.
+    Public so `honest_evaluator._preflight_for_honest_eval` can reuse the
+    same gate as `CampaignManager._preflight`.
+    """
     import boto3
     try:
         boto3.client("sts").get_caller_identity()
     except Exception as e:
-        raise _PreflightFailure(
+        raise PreflightFailure(
             f"AWS credentials unavailable: {e}. "
             f"Run `aws sso login` or set AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY."
         ) from e
 
 
-def _check_authkey_syntax(authkey: str) -> None:
+def check_authkey_syntax(authkey: str) -> None:
+    """Validate a Tailscale authkey starts with `tskey-auth-`.
+
+    Raises `PreflightFailure` (a `ValueError` subclass) on malformed input.
+    Public so `honest_evaluator._preflight_for_honest_eval` can reuse the
+    same gate as `CampaignManager._preflight`.
+    """
     if not authkey.startswith("tskey-auth-"):
-        raise _PreflightFailure(
+        raise PreflightFailure(
             "tailscale_authkey_secret must start with `tskey-auth-`. "
             "Generate a pre-approved ephemeral key from the Tailscale admin "
             "panel tagged `tag:starsector-worker`."
         )
+
+
+def check_ami_tags_against_manifest(
+    provider: CloudProvider,
+    ami_ids_by_region: dict[str, str],
+    manifest: Any,
+) -> None:
+    """Assert every AMI's GameVersion + ModCommitSha tags match the
+    `manifest`'s `game_version` + `mod_commit_sha`. Raises
+    `PreflightFailure` (a `ValueError`) on mismatch.
+
+    Public so `honest_evaluator._preflight_for_honest_eval` can reuse the
+    same gate that protects campaign launch — without the check, an
+    operator who regenerated the manifest after the AMI was baked would
+    silently corrupt the oracle (worker variants no longer match
+    orchestrator's `pool_variant_ids`). See spec 22 §"Manifest + AMI
+    tag preflight".
+
+    Providers that don't implement `describe_ami_tag` (e.g. the Hetzner
+    stub) cause this function to log a warning and return silently —
+    matches `CampaignManager._check_manifest_and_ami_tags`'s historical
+    behavior so non-AWS preflight paths aren't hard-broken by adopting
+    this helper.
+    """
+    for region, ami_id in ami_ids_by_region.items():
+        try:
+            ami_gv = provider.describe_ami_tag(
+                ami_id=ami_id, region=region, tag_key="GameVersion",
+            )
+            ami_sha = provider.describe_ami_tag(
+                ami_id=ami_id, region=region, tag_key="ModCommitSha",
+            )
+        except AttributeError:
+            logger.warning(
+                "provider %s lacks describe_ami_tag; skipping AMI tag check",
+                type(provider).__name__,
+            )
+            return
+        except Exception as e:
+            raise PreflightFailure(
+                f"describe_ami_tag({ami_id}, {region}) failed: {e}. "
+                f"The AMI may be missing or in a different account."
+            ) from e
+        if ami_gv != manifest.constants.game_version:
+            raise PreflightFailure(
+                f"AMI {ami_id} in {region} tagged GameVersion={ami_gv!r} "
+                f"but manifest.game_version={manifest.constants.game_version!r}. "
+                f"Re-bake AMI after running scripts/update_manifest.py; "
+                f"see .claude/skills/cloud-worker-ops.md."
+            )
+        # ModCommitSha dual-check (Commit G R6). Gradle's `generateBuildInfo`
+        # task stamps the git SHA into the jar; ManifestDumper embeds it
+        # into manifest.constants.mod_commit_sha; Packer reads that value
+        # back out for the AMI tag. Either value being empty/unknown means
+        # the chain broke upstream — refuse to launch.
+        mfst_sha = manifest.constants.mod_commit_sha
+        if not mfst_sha or mfst_sha == "unknown":
+            raise PreflightFailure(
+                f"manifest.constants.mod_commit_sha={mfst_sha!r} — the "
+                "combat-harness jar was built without git-SHA wiring. "
+                "Run `cd combat-harness && ./gradlew clean deploy` from "
+                "a git checkout, then `scripts/update_manifest.py`."
+            )
+        if ami_sha != mfst_sha:
+            raise PreflightFailure(
+                f"AMI {ami_id} in {region} tagged ModCommitSha={ami_sha!r} "
+                f"but manifest.mod_commit_sha={mfst_sha!r}. Re-bake AMI "
+                f"after `./gradlew deploy` + `scripts/update_manifest.py`; "
+                f"stale-mod AMI would run pre-G probe code against v2 schema."
+            )
 
 
 # ---- Campaign manager --------------------------------------------------------
@@ -561,8 +666,8 @@ class CampaignManager:
                 port=self._config.redis_port,
                 timeout_seconds=self._config.redis_preflight_timeout_seconds,
             )
-            _check_aws_credentials()
-            _check_authkey_syntax(self._config.tailscale_authkey_secret)
+            check_aws_credentials()
+            check_authkey_syntax(self._config.tailscale_authkey_secret)
             self._check_manifest_and_ami_tags()
             # Stash a long-lived Redis client for the ledger tick (SCAN +
             # HGETALL per tick). 127.0.0.1 works for both kernel-mode
@@ -575,68 +680,21 @@ class CampaignManager:
                 socket_timeout=self._config.redis_preflight_timeout_seconds,
                 decode_responses=True,
             )
-        except _PreflightFailure as e:
+        except PreflightFailure as e:
             logger.error("preflight failed: %s", e)
             sys.exit(2)
 
     def _check_manifest_and_ami_tags(self) -> None:
-        """Assert the committed manifest loads AND every AMI's GameVersion +
-        ModCommitSha tags match the manifest's `game_version` + `mod_commit_sha`.
-
-        GameVersion catches engine-version drift. ModCommitSha (Commit G R6)
-        catches the drift case where the engine didn't change but the mod
-        did — a Python-only schema v2 commit on top of an AMI baked with a
-        pre-v2 mod would silently leave workers running v1 probe code
-        against a v2 manifest. Both checks are load-bearing.
+        """Load the committed manifest, run the AMI-tag cross-check, stash
+        the manifest for later spawn use. Delegates the cross-check to
+        `check_ami_tags_against_manifest` so honest-eval reuses the same
+        gate (spec 30 §Preflight).
         """
         from .game_manifest import GameManifest
         manifest = GameManifest.load()
-        for region, ami_id in self._config.ami_ids_by_region.items():
-            try:
-                ami_gv = self._provider.describe_ami_tag(
-                    ami_id=ami_id, region=region, tag_key="GameVersion",
-                )
-                ami_sha = self._provider.describe_ami_tag(
-                    ami_id=ami_id, region=region, tag_key="ModCommitSha",
-                )
-            except AttributeError:
-                logger.warning(
-                    "provider %s lacks describe_ami_tag; skipping AMI tag check",
-                    type(self._provider).__name__,
-                )
-                return
-            except Exception as e:
-                raise _PreflightFailure(
-                    f"describe_ami_tag({ami_id}, {region}) failed: {e}. "
-                    f"The AMI may be missing or in a different account."
-                ) from e
-            if ami_gv != manifest.constants.game_version:
-                raise _PreflightFailure(
-                    f"AMI {ami_id} in {region} tagged GameVersion={ami_gv!r} "
-                    f"but manifest.game_version={manifest.constants.game_version!r}. "
-                    f"Re-bake AMI after running scripts/update_manifest.py; "
-                    f"see .claude/skills/cloud-worker-ops.md."
-                )
-            # ModCommitSha dual-check (Commit G R6). Gradle's `generateBuildInfo`
-            # task stamps the git SHA into the jar; ManifestDumper embeds it
-            # into manifest.constants.mod_commit_sha; Packer reads that value
-            # back out for the AMI tag. Either value being empty/unknown means
-            # the chain broke upstream — refuse to launch.
-            mfst_sha = manifest.constants.mod_commit_sha
-            if not mfst_sha or mfst_sha == "unknown":
-                raise _PreflightFailure(
-                    f"manifest.constants.mod_commit_sha={mfst_sha!r} — the "
-                    "combat-harness jar was built without git-SHA wiring. "
-                    "Run `cd combat-harness && ./gradlew clean deploy` from "
-                    "a git checkout, then `scripts/update_manifest.py`."
-                )
-            if ami_sha != mfst_sha:
-                raise _PreflightFailure(
-                    f"AMI {ami_id} in {region} tagged ModCommitSha={ami_sha!r} "
-                    f"but manifest.mod_commit_sha={mfst_sha!r}. Re-bake AMI "
-                    f"after `./gradlew deploy` + `scripts/update_manifest.py`; "
-                    f"stale-mod AMI would run pre-G probe code against v2 schema."
-                )
+        check_ami_tags_against_manifest(
+            self._provider, self._config.ami_ids_by_region, manifest,
+        )
         self._manifest = manifest
 
     # ---- Subprocess env generation ----
@@ -665,10 +723,23 @@ class CampaignManager:
 
         Subprocesses receive the YAML path + both indexes; secrets cross as
         env vars. No pickled objects.
+
+        Per-study SQLite persistence: every spawned study writes its Optuna
+        trials to `data/study_dbs/<campaign>/<study_id>.db` (parent dir
+        created on demand). One DB per (campaign, study_idx, seed) tuple
+        keeps Optuna's `{hull}__{regime}` study-name namespace from
+        colliding across ablation cells or seeds, and gives cross-regime
+        warm-start a stable on-disk source.
         """
+        from starsector_optimizer.cloud_runner import resolve_study_id
         procs: list[subprocess.Popen] = []
         for study_idx, study in enumerate(self._config.studies):
             for seed_idx, _seed in enumerate(study.seeds):
+                study_id = resolve_study_id(self._config, study_idx, seed_idx)
+                study_db_path = (
+                    Path("data/study_dbs") / self._config.name / f"{study_id}.db"
+                )
+                study_db_path.parent.mkdir(parents=True, exist_ok=True)
                 cmd = [
                     sys.executable, "scripts/run_optimizer.py",
                     "--worker-pool", "cloud",
@@ -680,9 +751,12 @@ class CampaignManager:
                     "--sampler", study.sampler,
                     "--sim-budget", str(study.budget_per_study),
                     "--game-dir", self._config.game_dir,
+                    "--study-db", str(study_db_path),
                 ]
                 if study.active_opponents is not None:
                     cmd += ["--active-opponents", str(study.active_opponents)]
+                if study.warm_start_from_regime is not None:
+                    cmd += ["--warm-start-from-regime", study.warm_start_from_regime]
                 env = self._generate_study_env(
                     study_idx=study_idx, seed_idx=seed_idx, study_cfg=study,
                 )
@@ -775,13 +849,74 @@ class CampaignManager:
         self._spot_price_cache[key] = (rate, now)
         return rate
 
+    def _terminate_study_procs(self) -> None:
+        """SIGTERM all live study subprocesses, wait, then SIGKILL survivors.
+
+        Without this, study Popen children orphan to init when this process
+        exits — they hold the per-study Flask `/result` listener (werkzeug
+        non-daemon thread, slow to shut down) + Redis connections, and at
+        worst block port-budget for the next cell's listener (`base_flask_port
+        + study_idx * flask_ports_per_study`). Idempotent: dead procs are
+        skipped, empty list is no-op.
+
+        SIGTERM first because each subprocess installs a handler that raises
+        KeyboardInterrupt → its `with CloudWorkerPool` __exit__ runs →
+        per-study `finally: terminate_fleet` runs (idempotent w.r.t. the
+        campaign-wide sweep we'll do next). Falls back to SIGKILL after
+        `study_proc_terminate_timeout_seconds` for any subprocess whose
+        non-daemon threads (werkzeug, blocking AWS calls) prevent clean exit.
+        """
+        if not self._study_procs:
+            return
+        timeout = self._config.study_proc_terminate_timeout_seconds
+        live = [p for p in self._study_procs if p.poll() is None]
+        if not live:
+            return
+        logger.info(
+            "teardown: SIGTERM %d study subprocess(es), wait up to %.0fs",
+            len(live), timeout,
+        )
+        for p in live:
+            try:
+                p.terminate()
+            except Exception as e:
+                logger.warning("SIGTERM pid=%s failed: %s", p.pid, e)
+        deadline = time.time() + timeout
+        for p in live:
+            remaining = max(0.0, deadline - time.time())
+            try:
+                p.wait(timeout=remaining)
+            except subprocess.TimeoutExpired:
+                pass
+            except Exception as e:
+                logger.warning("wait pid=%s failed: %s", p.pid, e)
+        survivors = [p for p in live if p.poll() is None]
+        if survivors:
+            logger.warning(
+                "teardown: SIGKILL %d study subprocess(es) that didn't exit "
+                "within %.0fs (likely stuck werkzeug or blocked AWS call)",
+                len(survivors), timeout,
+            )
+            for p in survivors:
+                try:
+                    p.kill()
+                    p.wait(timeout=5.0)
+                except Exception as e:
+                    logger.warning("SIGKILL pid=%s failed: %s", p.pid, e)
+
     def teardown(self) -> None:
-        """Terminate workers campaign-wide, assert list_active empty. One retry.
+        """Terminate study subprocs + cloud workers campaign-wide, assert
+        list_active empty. One retry on cloud sweep.
 
         Idempotent. Raises TeardownError if workers remain after retry.
         """
         if self._teardown_done:
             return
+        # Step 1: terminate study subprocesses BEFORE the cloud sweep so each
+        # subprocess gets a chance to run its own per-study terminate_fleet
+        # (which is the closest-to-AWS-state caller). The cloud sweep below
+        # is the safety net for stuck subprocesses.
+        self._terminate_study_procs()
         tag = self._project_tag
         try:
             self._provider.terminate_all_tagged(tag)
@@ -813,8 +948,8 @@ class CampaignManager:
             self.monitor_loop(procs)
             return 0
         except BudgetExceeded as e:
-            logger.error("budget exceeded: %s", e)
-            return 3
+            logger.info("budget cap reached (designed termination): %s", e)
+            return 0
         except KeyboardInterrupt:
             logger.warning("interrupted — unwinding teardown")
             return 130

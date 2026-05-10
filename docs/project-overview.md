@@ -94,6 +94,7 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 | Spec | Module | Contents |
 |---|---|---|
 | [29-game-manifest](./specs/29-game-manifest.md) | `game_manifest.py` + `ManifestDumper.java` | Manifest-as-oracle: `applicable_hullmods` + `conditional_exclusions` per hull from live-engine probe |
+| [30-honest-evaluator](./specs/30-honest-evaluator.md) | `honest_evaluator.py` + `scripts/cloud/evaluate_campaign.sh` | Re-score top builds against the closed opponent population with transform-free oracle (mean fitness over balanced design); standing post-major-run gate per [`honest-evaluation`](../.claude/skills/honest-evaluation.md) |
 
 Spec number registry (gaps at 02, 20, 21): see [specs/README.md](./specs/README.md).
 

@@ -474,6 +474,122 @@ class TestSeedIndexResolvesCorrectSeed:
         assert captured["fleet_name"] == "hammerhead__early__tpe__seed7"
 
 
+class TestPrepareCloudPool:
+    """`prepare_cloud_pool` is the shared fleet-lifecycle helper used by both
+    `run_cloud_study` and `honest_evaluator.main`. Contract: provision →
+    pool.__enter__ → yield pool → pool.__exit__ → terminate_fleet, even on
+    exception inside the `with` body. Spec 30 §CLI entry point.
+    """
+
+    def _capture_lifecycle(self, monkeypatch):
+        import starsector_optimizer.cloud_runner as cloud_runner
+        call_log: list[str] = []
+        captured: dict = {}
+
+        class FakeProvider:
+            def __init__(self, *, regions):
+                self.regions = regions
+
+            def provision_fleet(self, **kwargs):
+                call_log.append("provision_fleet")
+                captured["provision"] = kwargs
+                return ["i-0"]
+
+            def terminate_fleet(self, *, fleet_name, project_tag):
+                call_log.append("terminate_fleet")
+                captured["terminate"] = (fleet_name, project_tag)
+                return 1
+
+        class FakePool:
+            def __init__(self, **kwargs):
+                captured["pool_kwargs"] = kwargs
+
+            def __enter__(self):
+                call_log.append("pool.__enter__")
+                return self
+
+            def __exit__(self, *a):
+                call_log.append("pool.__exit__")
+
+        monkeypatch.setattr(cloud_runner, "AWSProvider", FakeProvider)
+        monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
+        monkeypatch.setattr(cloud_runner, "render_user_data",
+                            lambda *a, **kw: "#!/bin/bash\n")
+        import redis as redis_mod
+        monkeypatch.setattr(redis_mod, "Redis", MagicMock())
+        return cloud_runner, call_log, captured
+
+    def _kwargs(self, campaign):
+        return dict(
+            campaign=campaign,
+            study_id="honest-eval-x",
+            project_tag="honest-eval-x",
+            fleet_name="honest-eval-x",
+            flask_port=8999,
+            target_workers=4,
+            total_matchup_slots=8,
+            tailnet_ip="100.64.1.2",
+            bearer_token="bt",
+            tailscale_authkey="tskey-auth-test",
+        )
+
+    def test_full_lifecycle_order(self, monkeypatch, tmp_path):
+        cloud_runner, log, captured = self._capture_lifecycle(monkeypatch)
+        cfg, _ = _make_smoke_config(tmp_path)
+        with cloud_runner.prepare_cloud_pool(**self._kwargs(cfg)) as pool:
+            log.append("yield_body")
+            assert pool is not None
+        assert log == [
+            "provision_fleet", "pool.__enter__", "yield_body",
+            "pool.__exit__", "terminate_fleet",
+        ]
+
+    def test_terminate_runs_even_on_exception_in_body(
+        self, monkeypatch, tmp_path,
+    ):
+        cloud_runner, log, _ = self._capture_lifecycle(monkeypatch)
+        cfg, _ = _make_smoke_config(tmp_path)
+        with pytest.raises(RuntimeError, match="boom"):
+            with cloud_runner.prepare_cloud_pool(**self._kwargs(cfg)):
+                raise RuntimeError("boom")
+        # pool.__exit__ runs first (Flask shutdown), then terminate_fleet
+        assert log.index("pool.__exit__") < log.index("terminate_fleet")
+        assert "terminate_fleet" in log
+
+    def test_distinct_namespaces_threaded_through(
+        self, monkeypatch, tmp_path,
+    ):
+        """honest-eval contract: all four name-bearing fields can differ
+        from any source-campaign fleet's. Verify each is forwarded to the
+        right primitive."""
+        cloud_runner, _, captured = self._capture_lifecycle(monkeypatch)
+        cfg, _ = _make_smoke_config(tmp_path)
+        kwargs = self._kwargs(cfg)
+        with cloud_runner.prepare_cloud_pool(**kwargs):
+            pass
+        # provider sees fleet_name + project_tag
+        assert captured["provision"]["fleet_name"] == "honest-eval-x"
+        assert captured["provision"]["project_tag"] == "honest-eval-x"
+        # pool sees study_id + project_tag (its Redis-key namespace)
+        assert captured["pool_kwargs"]["study_id"] == "honest-eval-x"
+        assert captured["pool_kwargs"]["project_tag"] == "honest-eval-x"
+        # terminate sees same fleet_name+tag (so we tear down what we made)
+        assert captured["terminate"] == ("honest-eval-x", "honest-eval-x")
+
+    def test_total_matchup_slots_threaded_to_pool(
+        self, monkeypatch, tmp_path,
+    ):
+        cloud_runner, _, captured = self._capture_lifecycle(monkeypatch)
+        cfg, _ = _make_smoke_config(tmp_path)
+        kwargs = self._kwargs(cfg)
+        kwargs["target_workers"] = 7
+        kwargs["total_matchup_slots"] = 14
+        with cloud_runner.prepare_cloud_pool(**kwargs):
+            pass
+        assert captured["provision"]["target_workers"] == 7
+        assert captured["pool_kwargs"]["total_matchup_slots"] == 14
+
+
 class TestResolveStudyId:
     """Shakedown-collision regression: 4 studies × same hull/regime/sampler,
     distinct seed VALUES, all seed_idx=0 must produce 4 DISTINCT study_id

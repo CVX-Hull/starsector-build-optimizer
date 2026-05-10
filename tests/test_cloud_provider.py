@@ -549,6 +549,116 @@ class TestFleetProvisionSGPropagation:
         assert client.create_fleet.call_count == _FLEET_PROVISION_MAX_RETRIES
 
 
+class TestSecurityGroupDeleteIdempotent:
+    """Concurrent teardown paths (CampaignManager.teardown sweep + per-study
+    `finally: terminate_fleet`) routinely race on the same SG. Whichever
+    path runs second sees `InvalidGroup.NotFound` from boto3. Pre-fix this
+    burned the full _SG_DELETE_DEADLINE_SECONDS (300 s) per losing race;
+    the fix treats NotFound as success and breaks the retry loop
+    immediately."""
+
+    def _mock_client_with_existing_sg(self, *, delete_side_effect):
+        from unittest.mock import MagicMock
+        client = MagicMock()
+        client.describe_security_groups.return_value = {
+            "SecurityGroups": [
+                {"GroupId": "sg-RACE", "GroupName": "starsector-r__A"},
+            ],
+        }
+        client.delete_security_group.side_effect = delete_side_effect
+        return client
+
+    def test_invalid_group_not_found_breaks_retry_loop_without_sleeping(
+        self, monkeypatch,
+    ):
+        from botocore.exceptions import ClientError
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        not_found = ClientError(
+            error_response={
+                "Error": {
+                    "Code": "InvalidGroup.NotFound",
+                    "Message": "The security group 'sg-RACE' does not exist",
+                },
+            },
+            operation_name="DeleteSecurityGroup",
+        )
+        client = self._mock_client_with_existing_sg(
+            delete_side_effect=not_found,
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: sleep_calls.append(s),
+        )
+        provider._delete_security_groups_by_tags(
+            "us-east-1", {"Project": "starsector-r", "Fleet": "A"},
+        )
+        # Single delete attempt; no sleep because NotFound = success.
+        assert client.delete_security_group.call_count == 1
+        assert sleep_calls == []
+
+    def test_invalid_security_group_id_not_found_also_idempotent(
+        self, monkeypatch,
+    ):
+        """The other variant of the not-found code (different boto3
+        operation contexts use different spellings)."""
+        from botocore.exceptions import ClientError
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        not_found = ClientError(
+            error_response={
+                "Error": {"Code": "InvalidSecurityGroupID.NotFound", "Message": "x"},
+            },
+            operation_name="DeleteSecurityGroup",
+        )
+        client = self._mock_client_with_existing_sg(
+            delete_side_effect=not_found,
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: sleep_calls.append(s),
+        )
+        provider._delete_security_groups_by_tags(
+            "us-east-1", {"Project": "starsector-r", "Fleet": "A"},
+        )
+        assert client.delete_security_group.call_count == 1
+        assert sleep_calls == []
+
+    def test_dependency_violation_still_retries(self, monkeypatch):
+        """The pre-existing ENI-detach case must keep its retry behavior —
+        DependencyViolation is the legitimate transient error this loop
+        was designed for. First two attempts fail, third succeeds."""
+        from botocore.exceptions import ClientError
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        dep_violation = ClientError(
+            error_response={
+                "Error": {"Code": "DependencyViolation",
+                          "Message": "ENI still attached"},
+            },
+            operation_name="DeleteSecurityGroup",
+        )
+        client = self._mock_client_with_existing_sg(
+            delete_side_effect=[dep_violation, dep_violation, None],
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        sleep_calls: list[float] = []
+        monkeypatch.setattr(
+            "starsector_optimizer.cloud_provider.time.sleep",
+            lambda s: sleep_calls.append(s),
+        )
+        provider._delete_security_groups_by_tags(
+            "us-east-1", {"Project": "starsector-r", "Fleet": "A"},
+        )
+        # 3 delete attempts, 2 sleeps between them.
+        assert client.delete_security_group.call_count == 3
+        assert len(sleep_calls) == 2
+
+
 class TestHetznerProvider:
     """HetznerProvider is a stub; every method raises NotImplementedError."""
 
