@@ -125,23 +125,48 @@ wrong) or harmful (Box-Cox is wrong).
 Per CLAUDE.md skill `honest-evaluation` and spec 30: training-time fitness
 is biased by EB shrinkage, pruner truncation, and opponent-overlap
 selection. The **build-quality comparison across cells** below uses the
-honest-evaluator's mean fitness, computed by re-running each cell's top-K
-builds against the FULL opponent pool (no pruner, all opponent rungs run
-to completion).
+honest-evaluator's mean fitness, computed by re-running each cell's
+top-K builds against the FULL closed destroyer-class opponent population
+(54 opponents) with the transform-free oracle (no pruner, no shaping —
+mean fitness over balanced 30-replicate matchups).
 
-| Cell | Top-1 honest fitness | Top-1 training fitness | Top-1 build hash | Δ (honest − training) |
-|---|---|---|---|---|
-| C0a | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
-| C0b | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
-| C1 | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
-| C2 | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
-| C3 | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
+**Methodology revision (2026-05-10)**: candidate selection switched from
+raw mean of `intermediate_values` to **TWFE+EB** (post-hoc deconfounding
++ EB shrinkage on residuals; default in `honest_evaluator.extract_top_builds`).
+Raw mean had 0/5 top-5 overlap with principled methods on Wave 1 due to
+opponent confounding. Top-K = 3 per study × 3 seeds = 9 candidates per
+cell. A 9-build random-feasible baseline runs alongside as an existence
+check — if no optimization cell beats random, the machinery is not
+extracting signal beyond random sampling. See
+[2026-05-10-posthoc-ranker-research.md](2026-05-10-posthoc-ranker-research.md).
 
-Cell ranking by honest fitness (production-relevant headline): <<TBD>>.
+Reproduce after the eval lands:
+`uv run python scripts/analysis/wave1_honest_eval_report.py` —
+emits the table below.
 
-If a cell's top-1 honest-fitness diverges from its top-1 training-fitness
-by > 1σ, it indicates the training-time fitness is mis-ranking — flagged
-as a regression for follow-up.
+| Cell | Mean top-K oracle | Top-1 oracle (±SE) | Top-1 source α | Top-1 build hash | Top-1 src(rank,seed) |
+|---|---|---|---|---|---|
+| wave1-c0a | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
+| wave1-c0b | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
+| wave1-c1  | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
+| wave1-c2  | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
+| wave1-c3  | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> | <<TBD>> |
+| random-baseline | <<TBD>> | <<TBD>> | n/a | <<TBD>> | <<TBD>> |
+
+Cell ranking by mean honest fitness (production-relevant headline): <<TBD>>.
+
+**F1c gate** — does the prod config (C2: EB + Box-Cox) beat A0 plain TWFE
+and A scalar-CV baselines on the unbiased oracle? Δ point estimates +
+direction-of-arrival lookup:
+
+- C2 vs C0a (EB+BoxCox vs A0 plain TWFE): Δ = <<TBD>>
+- C2 vs C0b (EB+BoxCox vs A scalar-CV):    Δ = <<TBD>>
+- F1c verdict: <<WIN/LOSS at point estimate; bootstrap CI via
+  downstream analyzer if Δ is small>>.
+
+**Random-baseline existence check** — N/5 optimization cells beat the
+random-feasible baseline. If 0/5: optimization is not extracting
+signal beyond random sampling — escalate to incident.
 
 ## 4. The C1/C2/C3 LOADOUT_MISMATCH anomaly + band-aid
 
