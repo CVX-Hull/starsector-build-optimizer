@@ -16,8 +16,12 @@ set -euo pipefail
 # shellcheck source=scripts/cloud/_env.sh
 source "$(dirname "$0")/_env.sh"
 
-CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
-TAG="starsector-$CAMPAIGN"
+CAMPAIGN="${1:?Usage: $0 <campaign-name|starsector-project-tag>}"
+if [[ "$CAMPAIGN" == starsector-* ]]; then
+  TAG="$CAMPAIGN"
+else
+  TAG="starsector-$CAMPAIGN"
+fi
 
 # AWS releases ENIs from a terminating instance asynchronously. Polling for
 # every instance to leave 'shutting-down' takes too long for a teardown

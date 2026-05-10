@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -83,6 +84,7 @@ def prepare_cloud_pool(
     debug_ssh_pubkey: str = "",
     mod_jar_override_url: str = "",
     mod_jar_override_sha256: str = "",
+    sweep_project_on_exit: bool = False,
 ) -> Iterator[CloudWorkerPool]:
     """Provision an AWS fleet, enter a CloudWorkerPool, yield it, then tear
     down in reverse order.
@@ -104,6 +106,13 @@ def prepare_cloud_pool(
     against any other in-flight pool. honest-eval uses a separate
     `honest-eval-…-<utc>` namespace for exactly this reason — see
     spec 30 §CLI entry point.
+
+    `sweep_project_on_exit=True` adds a project-wide
+    `terminate_all_tagged(project_tag)` backstop after the normal
+    fleet-specific termination. Only use it when this pool owns a unique
+    project tag. Normal campaign study subprocesses share one campaign tag,
+    so they must leave the option disabled and rely on `CampaignManager` for
+    the campaign-wide sweep.
     """
     worker_cfg = WorkerConfig(
         campaign_id=campaign.name,
@@ -158,6 +167,46 @@ def prepare_cloud_pool(
             yield pool
     finally:
         provider.terminate_fleet(fleet_name=fleet_name, project_tag=project_tag)
+        if sweep_project_on_exit:
+            try:
+                provider.terminate_all_tagged(project_tag)
+            except Exception as e:
+                logger.error(
+                    "project sweep: terminate_all_tagged(%s) raised: %s",
+                    project_tag, e,
+                )
+            try:
+                active = provider.list_active(project_tag)
+            except Exception as e:
+                logger.error(
+                    "project sweep: list_active(%s) raised: %s",
+                    project_tag, e,
+                )
+                active = []
+            if active:
+                time.sleep(campaign.teardown_retry_delay_seconds)
+                try:
+                    provider.terminate_all_tagged(project_tag)
+                except Exception as e:
+                    logger.error(
+                        "project sweep retry: terminate_all_tagged(%s) "
+                        "raised: %s",
+                        project_tag, e,
+                    )
+                try:
+                    active = provider.list_active(project_tag)
+                except Exception as e:
+                    logger.error(
+                        "project sweep retry: list_active(%s) raised: %s",
+                        project_tag, e,
+                    )
+                    active = []
+                if active:
+                    logger.error(
+                        "project sweep: %d worker(s) still active for "
+                        "Project=%s after retry: %s",
+                        len(active), project_tag, active[:5],
+                    )
 
 
 def run_cloud_study(

@@ -7,7 +7,8 @@
 #
 # Per cloud-worker-ops "three rules of money", this IS a paid cloud run:
 # every invocation prints the teardown command on first line, sources
-# .env via _env.sh, runs final-audit on EXIT.
+# .env via _env.sh, and runs final-audit on EXIT once the concrete
+# honest-eval tag has appeared in the orchestrator log.
 #
 # Usage:
 #   scripts/cloud/evaluate_campaign.sh \
@@ -42,7 +43,7 @@ source "$(dirname "$0")/_env.sh"
 echo "[evaluate_campaign] Honest evaluator — see SOP at .claude/skills/honest-evaluation.md"
 echo "[evaluate_campaign] Fleet namespace: starsector-honest-eval-<first-campaign-name>-<utc-stamp>"
 echo "[evaluate_campaign] On interrupt: tear down with:"
-echo "[evaluate_campaign]   scripts/cloud/teardown.sh starsector-honest-eval-<first-campaign-name>-<stamp>"
+echo "[evaluate_campaign]   scripts/cloud/teardown.sh honest-eval-<first-campaign-name>-<stamp>"
 echo "[evaluate_campaign]   (the exact tag is logged on the first dispatch line)"
 echo "[evaluate_campaign] To resume after interrupt: re-run with --resume-from <eval_tag>"
 echo
@@ -54,5 +55,27 @@ STAMP=$(date -u +%Y%m%dT%H%M%SZ)
 ORCHESTRATOR_LOG="$LOG_DIR/orchestrator-$STAMP.log"
 echo "[evaluate_campaign] Full log: $ORCHESTRATOR_LOG"
 echo
+
+audit_on_exit() {
+    if [[ ! -f "$ORCHESTRATOR_LOG" ]]; then
+        return 0
+    fi
+    eval_tag=$(awk '/honest_eval cloud-pool: tag=/ {
+        sub(/^.*tag=/, "", $0)
+        sub(/ workers=.*$/, "", $0)
+        tag=$0
+    } END { print tag }' "$ORCHESTRATOR_LOG")
+    if [[ -z "${eval_tag:-}" ]]; then
+        return 0
+    fi
+    campaign_arg="${eval_tag#starsector-}"
+    echo
+    echo "[evaluate_campaign] Final audit for Project=$eval_tag"
+    if ! scripts/cloud/final_audit.sh "$campaign_arg"; then
+        echo "[evaluate_campaign] Final audit found resources; run:"
+        echo "[evaluate_campaign]   scripts/cloud/teardown.sh $campaign_arg"
+    fi
+}
+trap audit_on_exit EXIT
 
 uv run python -m starsector_optimizer.honest_evaluator "$@" 2>&1 | tee "$ORCHESTRATOR_LOG"

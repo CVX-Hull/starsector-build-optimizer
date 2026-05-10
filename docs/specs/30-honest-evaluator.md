@@ -291,6 +291,21 @@ teardown convention covers every fleet we provision; the
 capped at 63 chars so the doubled `{project_tag}__{fleet_name}` form
 fits the AWS Launch Template 128-char name limit.
 
+`honest_evaluator.main()` installs SIGTERM and SIGHUP handlers that
+raise `KeyboardInterrupt`, matching `scripts/run_optimizer.py` and
+`CampaignManager.run()`. A Ctrl-C, `kill <pid>`, or shell SIGHUP must
+therefore unwind the Python context managers instead of relying on the
+process-default signal action. Interrupted honest-eval runs return exit
+code 130 after cleanup.
+
+Because an honest-eval run has a unique `Project=<eval_tag>` tag, it
+passes `sweep_project_on_exit=True` to `prepare_cloud_pool`. The helper
+first runs the normal `terminate_fleet(fleet_name, project_tag)` path
+and then runs a project-wide `terminate_all_tagged(project_tag)` sweep
+with one `list_active(project_tag)` retry. This sweep option is disabled
+for normal campaign studies because their subprocesses share a campaign
+project tag and a per-study sweep would kill sibling studies.
+
 **Inherited fields from the source campaign YAML** (read via
 `load_campaign_config(args.campaign_config)` and forwarded through
 `prepare_cloud_pool`): `regions`, `instance_types`,

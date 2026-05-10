@@ -993,6 +993,77 @@ class TestMainCLIWiring:
         assert captured["project_tag"] == captured["study_id"]
         assert captured["fleet_name"] == captured["study_id"]
         assert captured["project_tag"] != smoke_env["STARSECTOR_PROJECT_TAG"]
+        assert captured["sweep_project_on_exit"] is True
+
+    def test_signal_handlers_route_sigterm_and_sighup_to_keyboard_interrupt(
+        self, monkeypatch,
+    ):
+        """`kill <pid>` must unwind Python context managers instead of using
+        the process-default SIGTERM action."""
+        import signal
+        from starsector_optimizer import honest_evaluator
+
+        installed = {}
+        monkeypatch.setattr(
+            signal, "signal",
+            lambda sig, handler: installed.setdefault(sig, handler),
+        )
+
+        honest_evaluator._install_signal_handlers()
+        assert signal.SIGTERM in installed
+        assert signal.SIGHUP in installed
+        with pytest.raises(KeyboardInterrupt, match="received signal"):
+            installed[signal.SIGTERM](signal.SIGTERM, None)
+
+    def test_keyboard_interrupt_returns_130_after_cloud_context_unwinds(
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
+        game_dir, manifest,
+    ):
+        """If SIGTERM/SIGHUP maps to KeyboardInterrupt inside the cloud
+        context, `prepare_cloud_pool.__exit__` must run before main returns
+        130."""
+        from starsector_optimizer import honest_evaluator
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+        )
+        monkeypatch.chdir(tmp_path)
+        self._patch_manifest_load(monkeypatch, manifest)
+        self._patch_preflight(monkeypatch)
+        (tmp_path / "examples").mkdir()
+        yaml_src = _write_smoke_campaign_yaml(tmp_path)
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
+            yaml_src.read_bytes()
+        )
+
+        events: list[str] = []
+
+        class FakeContext:
+            def __enter__(self):
+                events.append("enter")
+                return MagicMock(num_workers=2)
+
+            def __exit__(self, exc_type, exc, tb):
+                events.append("exit")
+
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            lambda **kwargs: FakeContext(),
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator.evaluate_builds",
+            lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+
+        rc = honest_evaluator.main([
+            "--campaign-name", "ut-honest-eval-source",
+            "--hull", "hammerhead",
+            "--game-dir", str(game_dir),
+            "--top-k", "1",
+            "--out-root", str(tmp_path / "out"),
+        ])
+        assert rc == 130
+        assert events == ["enter", "exit"]
 
     def test_workers_override_changes_target(
         self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,

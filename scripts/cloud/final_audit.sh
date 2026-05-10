@@ -12,8 +12,12 @@ set -uo pipefail
 # shellcheck source=scripts/cloud/_env.sh
 source "$(dirname "$0")/_env.sh"
 
-CAMPAIGN="${1:?Usage: $0 <campaign-name>}"
-TAG="starsector-$CAMPAIGN"
+CAMPAIGN="${1:?Usage: $0 <campaign-name|starsector-project-tag>}"
+if [[ "$CAMPAIGN" == starsector-* ]]; then
+  TAG="$CAMPAIGN"
+else
+  TAG="starsector-$CAMPAIGN"
+fi
 LEAKED=0
 
 echo "=== AWS audit for Project=$TAG ==="
@@ -57,4 +61,4 @@ if [[ $LEAKED -ne 0 ]]; then
   exit 1
 fi
 echo
-echo "FINAL AUDIT: clean — zero resources accruing cost for $CAMPAIGN."
+echo "FINAL AUDIT: clean — zero resources accruing cost for $TAG."

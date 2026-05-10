@@ -1,0 +1,214 @@
+---
+type: report
+status: shipped
+last-validated: 2026-05-10
+---
+
+# Wave 1 honest-eval — stall checkpoint and cleanup fix (eval_tag `…20260510T170431Z`)
+
+Snapshot of the in-flight Wave 1 honest-evaluation run captured immediately before recommended kill. Records what is on disk, what guardrails tripped, and how to resume.
+
+**2026-05-10 follow-up.** The cleanup-side issue is now fixed in code:
+`honest_evaluator.main()` installs SIGTERM/SIGHUP handlers, returns 130
+after interrupted cleanup, and invokes the cloud-pool helper with an
+honest-eval-only project-wide sweep. The remaining unresolved issue is the
+fleet-health cause of the throughput collapse.
+
+## Run identity
+
+| Field | Value |
+|---|---|
+| eval_tag | `starsector-honest-eval-wave1-c0a-20260510T170431Z` |
+| Launch script | `scripts/cloud/launch_wave1_honest_eval.sh` (Plan C, 64 workers, 128 slots) |
+| Cells | `wave1-c0a wave1-c0b wave1-c1 wave1-c2 wave1-c3` + random-baseline (n=9, seed=0) |
+| top-k / replicates | 3 / 30 |
+| Ranking method | `twfe_eb` |
+| Started | 2026-05-10T17:04:31Z |
+| Last record | 2026-05-10T19:53:50Z |
+| Elapsed | 2 h 49 min |
+| Local PID at snapshot | 17167 (`python -m starsector_optimizer.honest_evaluator …`) |
+
+## Progress at snapshot
+
+| Cell | seed0 r1 | seed0 r2 | seed0 r3 | seed1 r1 | seed1 r2 | seed1 r3 | seed2 r1 | seed2 r2 | seed2 r3 |
+|---|---|---|---|---|---|---|---|---|---|
+| c0a | ✅ 1621 | ✅ 1619 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 |
+| c0b | ✅ 1620 | ✅ 1620 | ✅ 1620 | 🟡 1099 | — | — | — | — | — |
+| c1 | — | — | — | — | — | — | — | — | — |
+| c2 | — | — | — | — | — | — | — | — | — |
+| c3 | — | — | — | — | — | — | — | — | — |
+| random-baseline | not yet started — synthesized via `synthesize_random_baseline_builds(seed=0)` at run-time, deterministic |
+
+12 of 45 (cell × seed × rank) combos complete + 1 partial. Each completed combo holds 1620 records (54 opponents × 30 reps); expected total at finish ≈ 72,900 ledger lines. Currently 20,532. **Wall-clock progress ≈ 28 %.** The c0a cell (the eval_tag's lead cell) is fully done; partial work is in c0b/seed1/rank1.
+
+## Ledger location
+
+```
+data/honest_eval/starsector-honest-eval-wave1-c0a-20260510T170431Z/
+└── results.jsonl   # 20,522 lines, ~5.7 MB, last-mtime 19:53Z
+```
+
+Append-only JSONL with `flush()` + `os.fsync()` per line (`_LedgerWriter` at `src/starsector_optimizer/honest_evaluator.py:125`). Schema-version-tagged. Resume-safe.
+
+Orchestrator logs (gitignored):
+```
+data/honest_eval/orchestrator-20260510T170429Z.log   # 26 MB, this run
+```
+
+## Guardrail trip
+
+The /loop sentry (set up at launch) runs four checks:
+
+| # | Target | Observed | Verdict |
+|---|---|---|---|
+| (a) Throughput steady-state ≥ 250/min | ≥ 250/min | ~125/min for the first 2 h, then **collapse**: 44 → 11 → 2.4/min in the final three 15-min bins | **FAIL — never met target, now dying** |
+| (b) Stuck-matchup requeue rate < 5 % | < 5 % | 1,020 requeues / 20,532 results = **5.0 %** at snapshot, climbing as workers drain | **FAIL (borderline, trending wrong)** |
+| (c) Fitness diversity not stuck | distribution must not collapse | 1.5 mode 23.9 %, broad negative tail, 13 distinct builds — on-spec for a 1620-rep panel | PASS |
+| (d) No LOADOUT_MISMATCH bursts | 0 LOADOUT_MISMATCH | 0 across 20,532 records | PASS |
+
+Per-bin throughput (UTC):
+
+```
+17:05–17:20  133.7/min  ##########################
+17:20–17:35  133.7/min  ##########################
+17:35–17:50  169.1/min  #################################
+17:50–18:05  180.0/min  ####################################
+18:05–18:20  122.8/min  ########################
+18:20–18:35  120.7/min  ########################
+18:35–18:50  124.4/min  ########################
+18:50–19:05  183.9/min  ####################################
+19:05–19:20  143.7/min  ############################
+19:20–19:35   44.3/min  ########            ← collapse begins
+19:35–19:50   11.1/min  ##
+19:50–20:05    2.4/min                       ← terminal
+```
+
+### Collapse signals visible in orchestrator log
+
+- 568 HTTP 409s on `POST /result` — duplicates from requeued workers being rejected (wasted work, indicates the requeue path is firing on still-live matchups).
+- New WARN class appearing post-19:30Z: `attempt 1/3 failed: matchup … did not receive result within 900.0s — retrying`. The 900 s deadline is the orchestrator's own kill-line for a matchup; tripping it means workers are no longer reporting at all on those slots.
+- Stuck-matchup requeues escalate: most c0b/seed1/rank1 matchups now show `requeue_count=4–5` (= the same matchup has been re-dispatched 4–5 times).
+
+## Diagnosis (preliminary)
+
+Root cause not confirmed at snapshot time. Hypotheses:
+
+1. **Worker-pool degradation.** Spot interruptions or worker crashes outpacing the requeue path's ability to keep slots full. Plausible — c0a all completed at full throughput, then partial c0b started reporting timeouts on the *same opponent set*, suggesting a fleet-side change rather than a build-side one.
+2. **Stuck-matchup feedback loop.** A small number of matchups timeout repeatedly (high `requeue_count`); each requeue burns a slot that could be doing fresh work. The 5 % stuck-rate is the same as the requeue-induced wasted-work rate; if those slots compounded, they'd drag steady-state down.
+3. **Long-tailed game-side TIMEOUTs are structural, not the cause.** Game-clock TIMEOUT (300 s) hits at 17.7 % of *decided* matches — opponent-driven (fulgent_Assault 97.7 %, hammerhead_Support 99.0 %, sunder_Support 99.7 %, scintilla_Support 98.9 %). This is real game behavior and would show in any honest eval against this pool. It does not explain the throughput cliff because c0a completed full-throughput against the same pool.
+
+Diagnosis requires AWS-console / Tailscale-fleet inspection that this snapshot doesn't capture. **Do not modify the data dir** until that inspection is done.
+
+## Can the run be resumed? Yes.
+
+Resume is built into `honest_evaluator` (spec 30; see task #95). The contract:
+
+- **Ledger is append-only and dedup-keyed on `(build_id, opponent_variant_id, replicate_idx)`** (`read_ledger()` at `src/starsector_optimizer/honest_evaluator.py:85`).
+- **Random-baseline regen is deterministic in `--random-baseline-seed`** (`synthesize_random_baseline_builds()` at `:164`), so the baseline cell's build IDs match a re-run, and its ledger entries (when they exist) carry over.
+- A resume re-uses the *same eval_tag* — and therefore the same AWS resource tag. Any prior fleet must be torn down first or the next launch will refuse.
+
+### Resume procedure
+
+```bash
+# 1. Capture the eval_tag (already known)
+TAG=starsector-honest-eval-wave1-c0a-20260510T170431Z
+
+# 2. Stop the local orchestrator if still running
+kill 17167
+
+# 3. Tear down the AWS fleet (idempotent across us-east-1/2, us-west-1/2).
+#    teardown.sh accepts either the full Project tag or the tag with one
+#    leading `starsector-` stripped.
+scripts/cloud/teardown.sh honest-eval-wave1-c0a-20260510T170431Z
+
+# 4. Verify zero running instances under that Project tag
+for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  aws ec2 describe-instances \
+    --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+              "Name=instance-state-name,Values=pending,running" \
+    --query 'Reservations[].Instances[].InstanceId' --output text
+done
+
+# 5. Resume — only the missing ~52,400 matchups dispatch
+scripts/cloud/evaluate_campaign.sh \
+  --hull hammerhead \
+  --campaign-name wave1-c0a wave1-c0b wave1-c1 wave1-c2 wave1-c3 \
+  --top-k 3 --replicates 30 --workers 64 \
+  --random-baseline-n 9 --random-baseline-seed 0 \
+  --ranking-method twfe_eb \
+  --resume-from "$TAG"
+```
+
+### Resume cost forecast
+
+- Remaining work: ~72,900 − 20,532 ≈ **52,400 matchups**.
+- At Plan-C steady-state (~125–180/min observed during the healthy phase), pure-walltime estimate is ~5–7 h.
+- **Conditional on the root cause being a transient fleet issue (interruption burst, AZ flap).** If the cause is a code-path bug in the orchestrator or a permanent-state fleet problem, the resumed run will hit the same wall.
+- Cost: ~$50 incremental at Plan-C rates; ledger checkpointing means a second stall costs only the slots burnt before the next kill.
+
+### Resume hazards
+
+- The 568 HTTP 409s in the prior log indicate the orchestrator already saw duplicate result POSTs against in-flight matchups (rejected at the HTTP layer, not the ledger layer — so the ledger remains de-duped). After resume, the same race can recur.
+- The `--resume-from` preflight (spec 30) refuses if any prior fleet survives the teardown. **Do not skip step 4.** A leftover instance posting under the same eval_tag would queue-jump the resume.
+- The data dir for this tag must remain untouched between kill and resume. In particular, do not rotate the orchestrator log (`data/honest_eval/orchestrator-…log`) — keeping it gives the post-mortem an evidence trail for whatever broke at 19:20Z.
+
+## What happened on shutdown (post-action)
+
+1. **`kill 17167` (SIGTERM) at 2026-05-10T19:54Z** — orchestrator unwound and exited within ~10 s.
+2. **`scripts/cloud/teardown.sh honest-eval-wave1-c0a-20260510T170431Z`** reaped:
+   - **21 instances in us-east-1**
+   - **32 instances in us-east-2**
+   - **2 security groups** (one per region)
+   - 0 volumes, 0 resources in us-west-1 / us-west-2
+3. `final_audit.sh` confirmed **zero remaining resources** under the eval_tag's Project tag.
+
+### Root-cause signal: 53 of 64 workers survived the SIGTERM-unwind
+
+The orchestrator's clean SIGTERM-unwind path is documented in CLAUDE.md as calling `AWSProvider.terminate_all_tagged()` (mirrored by `teardown.sh`). It did not. 53 instances had to be reaped manually.
+
+This is consistent with hypothesis 1 (worker-pool degradation) but sharpens it:
+
+- **The orchestrator was not aware that 53 workers had stopped working.** Workers were AWS-instance-alive (so `describe-instances` saw them) but were not delivering results back through the heartbeat / matchup-result channel — otherwise the throughput collapse would not have happened.
+- **`terminate_all_tagged()` was apparently not invoked on shutdown.** If it had been, the 53 stragglers would have been reaped before SIGTERM-exit. Either the SIGTERM handler in `honest_evaluator` does not call it, or the call hit an exception that was swallowed.
+
+Both findings are investigation leads that belong in the post-mortem (and possibly a new task) — they would not have surfaced from the ledger alone.
+
+## Recommended next steps
+
+1. ✅ Kill orchestrator (PID 17167) — done.
+2. ✅ Tear down AWS fleet — done. 53 stragglers reaped; final_audit clean.
+3. **Investigate before resume:**
+   - Why did the worker-pool stop reporting? AWS console for spot interruption events ≥ 19:20Z; Tailscale admin panel for worker-node liveness; cross-check against the divergence between `c0a complete` and `c0b stalling` in the orchestrator log around the hand-off.
+   - Cleanup gap from the snapshot is fixed as described below; validate the final audit after the next honest-eval exit.
+4. **Resume** per the procedure above once the worker-pool degradation root cause is identified or ruled out as transient.
+
+If investigation finds the root cause is a code-path bug or a structural problem with the workload (e.g. c0b/seed1/rank1 builds inherently produce sims that hang), file a follow-up under task #84 / #93 before resume.
+
+## Follow-up implementation
+
+The checkpoint exposed two distinct problems: a fleet-health stall and an
+orchestrator cleanup gap. The cleanup gap has been addressed:
+
+- `src/starsector_optimizer/honest_evaluator.py` now installs SIGTERM and
+  SIGHUP handlers that raise `KeyboardInterrupt`, matching the optimizer
+  and campaign manager cleanup pattern.
+- Honest eval passes `sweep_project_on_exit=True` to
+  `prepare_cloud_pool()`. Because the honest-eval Project tag is unique,
+  the helper can safely run `terminate_all_tagged(Project=<eval_tag>)`
+  after the normal `terminate_fleet()` path. This option remains disabled
+  for normal campaign study subprocesses because they share one campaign
+  Project tag.
+- `scripts/cloud/evaluate_campaign.sh` now runs a final audit on shell
+  exit after it can parse the concrete eval tag from the orchestrator log.
+- `scripts/cloud/teardown.sh` and `scripts/cloud/final_audit.sh` now accept
+  either `honest-eval-...` or the full `starsector-honest-eval-...` tag,
+  removing the operator foot-gun documented in the snapshot.
+- Regression tests cover the opt-in project sweep, retry behavior, signal
+  handler installation, and the interrupted-main exit path.
+
+Validated with:
+
+```bash
+uv run pytest tests/test_honest_evaluator.py tests/test_run_optimizer_cloud.py -q
+```

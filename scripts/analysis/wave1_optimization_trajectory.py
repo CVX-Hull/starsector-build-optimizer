@@ -397,12 +397,25 @@ def section_03_time_to_target(data: dict[tuple[str, str], list[TrialRow]]) -> di
             target = TIME_TO_FRAC * final_best if final_best > 0 else None
             tt = _time_to_target(rows, target) if target is not None else None
             n_finalized = sum(1 for r in rows if r.kind == "finalized")
+            n_visible = len(rows)
+            max_trial_number = max((r.trial_number for r in rows), default=None)
             per_seed[seed] = {
                 "final_best": final_best,
                 "target": target,
                 "trial_number": tt,
                 "n_finalized": n_finalized,
-                "frac_used": (tt / n_finalized) if (tt is not None and n_finalized > 0) else None,
+                "n_visible_rows": n_visible,
+                "max_trial_number": max_trial_number,
+                "frac_visible_rows": (
+                    tt / n_visible
+                    if (tt is not None and n_visible > 0)
+                    else None
+                ),
+                "frac_trial_axis": (
+                    tt / max_trial_number
+                    if (tt is not None and max_trial_number)
+                    else None
+                ),
             }
             if tt is not None:
                 cell_vals.append(tt)
@@ -843,6 +856,126 @@ def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
     return out
 
 
+def section_12_combat_budget_pooled(
+    data: dict[tuple[str, str], list[TrialRow]],
+) -> dict:
+    """Combat-budget axis × pooled α̂_EB retrospective.
+
+    Addresses the apples-to-apples concern in §3–§7: trial_number includes
+    unlogged COMPLETE trials from the Optuna study DB. This offset is small
+    for the non-warm-start cells (stock seed trials) and large for c3
+    (stock seed trials plus 50 heuristic warm-start trials), so c3's first
+    JSONL-visible live trial appears at trial_number = 53. Re-axis on
+    *combat-budget* (= 1-based index into finalized rows in the JSONL
+    ledger) to compare cells at matched compute cost, and re-score each
+    finalized row using the **pooled** TWFE+EB α̂ (a 1,744-trial fit
+    across all 5 cells × 3 seeds — same fit the comprehensive-analysis
+    report's ranker is built from), not the per-study running α̂.
+
+    Both corrections push toward a sharper, more honest read:
+      - x-axis = combat-sim count → no warm-start head-start
+      - y-axis = pooled α̂_EB → ~3.5× tighter SE than per-study running α̂
+
+    The pooled fit excludes warm-start trials by construction (load_records
+    reads the JSONL, which has no warm-start rows). This means the
+    comparison answers: "for a fixed combat budget B, how good is the
+    best build the optimizer found, judged by a uniform cross-cell
+    ranker?" — a strictly fairer question than the trial-number axis.
+    """
+    log.info("[12] Combat-budget axis × pooled α̂_EB retrospective")
+    from starsector_optimizer.posthoc_ranker import (  # noqa: E402
+        _BuildId, load_records, rank_twfe_eb,
+    )
+
+    paths = sorted((REPO_ROOT / "data" / "logs").glob(
+        "wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl"))
+    records = load_records(paths)
+    log.info("    loaded %d pooled records across %d JSONLs",
+             len(records), len(paths))
+    ranked = rank_twfe_eb(records, k=10**6)
+    pooled_alpha: dict = {r.build_id: float(r.score) for r in ranked}
+    log.info("    pooled α̂_EB fit over %d distinct builds", len(pooled_alpha))
+
+    BUDGET_CHECKPOINTS = (25, 50, 75, 100)
+
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4.6), sharey=True)
+    out: dict[str, object] = {
+        "checkpoints_B": list(BUDGET_CHECKPOINTS),
+        "n_pooled_records": len(records),
+        "n_distinct_builds": len(pooled_alpha),
+    }
+    sample_eff: dict[str, dict] = {}
+    per_cell_finals: dict[str, dict] = {}
+    cross_axis_table: list[dict] = []
+
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+        seed_finals: dict[str, float] = {}
+        cell_seff: dict[str, list[float]] = {f"B={B}": [] for B in BUDGET_CHECKPOINTS}
+        for seed in SEEDS:
+            rows = data.get((cell, seed), [])
+            xs: list[int] = []
+            ys: list[float] = []
+            cur = float("-inf")
+            sim_idx = 0
+            for r in rows:
+                if r.kind != "finalized":
+                    continue
+                sim_idx += 1
+                if r.build_id is None:
+                    continue
+                bid = _BuildId(*r.build_id)
+                pa = pooled_alpha.get(bid)
+                if pa is None or np.isnan(pa):
+                    continue
+                cur = max(cur, pa)
+                xs.append(sim_idx)
+                ys.append(cur)
+            if xs:
+                ax.plot(xs, ys, label=f"seed {seed}", linewidth=1.4)
+                seed_finals[seed] = float(ys[-1])
+            for B in BUDGET_CHECKPOINTS:
+                vals_at_B = [y for x, y in zip(xs, ys) if x <= B]
+                if vals_at_B:
+                    cell_seff[f"B={B}"].append(vals_at_B[-1])
+        ax.set_xlabel("combat-sim count, B")
+        if ax_i == 0:
+            ax.set_ylabel(r"best-so-far pooled $\hat{\alpha}^{\mathrm{EB}}$")
+        ax.set_title(f"({chr(97 + ax_i)}) {cell}\n"
+                     f"final = "
+                     f"{', '.join(f'{seed_finals[s]:.3f}' if s in seed_finals else '—' for s in SEEDS)}")
+        ax.legend(loc="lower right")
+        ax.axhline(0, color="#cccccc", linewidth=0.6, zorder=0)
+        per_cell_finals[cell] = {"final_per_seed": seed_finals}
+        sample_eff[cell] = {}
+        for key, vals in cell_seff.items():
+            if vals:
+                sample_eff[cell][key] = {
+                    "n_seeds": len(vals),
+                    "median": float(np.median(vals)),
+                    "min": float(np.min(vals)),
+                    "max": float(np.max(vals)),
+                    "values": [float(v) for v in vals],
+                }
+                B = int(key.split("=")[1])
+                cross_axis_table.append({
+                    "cell": cell, "B": B,
+                    "median": float(np.median(vals)),
+                    "min": float(np.min(vals)),
+                    "max": float(np.max(vals)),
+                    "n": len(vals),
+                })
+    fig.suptitle("Combat-budget retrospective — pooled "
+                 r"$\hat{\alpha}^{\mathrm{EB}}$ vs combat-sim count "
+                 "(warm-start trials excluded by axis definition)")
+    fig.savefig(CHARTS_DIR / "12_combat_budget_pooled.png")
+    plt.close(fig)
+
+    out["per_cell"] = per_cell_finals
+    out["sample_efficiency"] = sample_eff
+    out["table"] = cross_axis_table
+    return out
+
+
 def section_11_early_stop(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
     """Q3 — slope-based early-stop simulation.
 
@@ -964,6 +1097,7 @@ def main() -> None:
     out["s09_axis_comparison"] = section_09_axis_comparison(data)
     out["s10_q4_boxcox"] = section_10_q4_boxcox(data)
     out["s11_early_stop"] = section_11_early_stop(data)
+    out["s12_combat_budget_pooled"] = section_12_combat_budget_pooled(data)
 
     HEADLINES_PATH.parent.mkdir(parents=True, exist_ok=True)
     HEADLINES_PATH.write_text(json.dumps(out, indent=2, default=str))

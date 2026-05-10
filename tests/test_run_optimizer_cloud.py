@@ -500,6 +500,16 @@ class TestPrepareCloudPool:
                 captured["terminate"] = (fleet_name, project_tag)
                 return 1
 
+            def terminate_all_tagged(self, project_tag):
+                call_log.append("terminate_all_tagged")
+                captured.setdefault("sweep_tags", []).append(project_tag)
+                return 1
+
+            def list_active(self, project_tag):
+                call_log.append("list_active")
+                captured.setdefault("list_active_tags", []).append(project_tag)
+                return []
+
         class FakePool:
             def __init__(self, **kwargs):
                 captured["pool_kwargs"] = kwargs
@@ -589,6 +599,86 @@ class TestPrepareCloudPool:
         assert captured["provision"]["target_workers"] == 7
         assert captured["pool_kwargs"]["total_matchup_slots"] == 14
 
+    def test_project_sweep_is_opt_in_for_honest_eval(
+        self, monkeypatch, tmp_path,
+    ):
+        """Normal campaign studies share a Project tag, so the helper must
+        not sweep by default. Honest-eval owns a unique tag and opts into
+        the sweep backstop."""
+        cloud_runner, log, captured = self._capture_lifecycle(monkeypatch)
+        cfg, _ = _make_smoke_config(tmp_path)
+        with cloud_runner.prepare_cloud_pool(**self._kwargs(cfg)):
+            pass
+        assert "terminate_all_tagged" not in log
+        assert "list_active" not in log
+
+        log.clear()
+        captured.clear()
+        kwargs = self._kwargs(cfg)
+        kwargs["sweep_project_on_exit"] = True
+        with cloud_runner.prepare_cloud_pool(**kwargs):
+            pass
+        assert log[-3:] == [
+            "terminate_fleet", "terminate_all_tagged", "list_active",
+        ]
+        assert captured["sweep_tags"] == ["honest-eval-x"]
+
+    def test_project_sweep_retries_if_instances_remain(
+        self, monkeypatch, tmp_path,
+    ):
+        import starsector_optimizer.cloud_runner as cloud_runner
+        call_log: list[str] = []
+
+        class FakeProvider:
+            def __init__(self, *, regions):
+                self._active_calls = 0
+
+            def provision_fleet(self, **kwargs):
+                call_log.append("provision_fleet")
+
+            def terminate_fleet(self, *, fleet_name, project_tag):
+                call_log.append("terminate_fleet")
+
+            def terminate_all_tagged(self, project_tag):
+                call_log.append("terminate_all_tagged")
+
+            def list_active(self, project_tag):
+                self._active_calls += 1
+                call_log.append("list_active")
+                if self._active_calls == 1:
+                    return [{"id": "i-still-up"}]
+                return []
+
+        class FakePool:
+            def __init__(self, **kwargs):
+                pass
+
+            def __enter__(self):
+                call_log.append("pool.__enter__")
+                return self
+
+            def __exit__(self, *a):
+                call_log.append("pool.__exit__")
+
+        monkeypatch.setattr(cloud_runner, "AWSProvider", FakeProvider)
+        monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
+        monkeypatch.setattr(
+            cloud_runner, "render_user_data", lambda *a, **kw: "#!/bin/bash\n",
+        )
+        monkeypatch.setattr(cloud_runner.time, "sleep", lambda _seconds: None)
+        import redis as redis_mod
+        monkeypatch.setattr(redis_mod, "Redis", MagicMock())
+
+        cfg, _ = _make_smoke_config(tmp_path)
+        kwargs = self._kwargs(cfg)
+        kwargs["sweep_project_on_exit"] = True
+        with cloud_runner.prepare_cloud_pool(**kwargs):
+            pass
+        assert call_log[-5:] == [
+            "terminate_fleet", "terminate_all_tagged", "list_active",
+            "terminate_all_tagged", "list_active",
+        ]
+
 
 class TestResolveStudyId:
     """Shakedown-collision regression: 4 studies × same hull/regime/sampler,
@@ -626,5 +716,3 @@ class TestResolveStudyId:
              "budget_per_study": 1, "workers_per_study": 1, "sampler": "tpe"},
         ])
         assert resolve_study_id(config, 0, 0) == "wolf__early__tpe__seed7"
-
-

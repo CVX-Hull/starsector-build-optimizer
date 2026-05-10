@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import os
+import signal
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
@@ -738,6 +739,33 @@ def _validate_eval_tag_length(eval_tag: str) -> None:
         )
 
 
+def _install_signal_handlers() -> None:
+    """Route SIGTERM/SIGHUP through Python cleanup.
+
+    SIGINT already raises KeyboardInterrupt. Without this, `kill <pid>` uses
+    the process-default SIGTERM action and can bypass the `with
+    prepare_cloud_pool(...)` unwinder, leaving AWS workers alive.
+    """
+    def handler(signum, _frame):
+        raise KeyboardInterrupt(f"received signal {signum}")
+
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGHUP, handler)
+
+
+def _teardown_arg_for_eval_tag(eval_tag: str) -> str:
+    """Argument to pass to scripts/cloud/teardown.sh/final_audit.sh.
+
+    Those scripts prepend `starsector-` internally. Honest-eval `eval_tag`
+    values are already full Project tag values, so operator-facing commands
+    must strip exactly one leading prefix.
+    """
+    prefix = "starsector-"
+    if eval_tag.startswith(prefix):
+        return eval_tag[len(prefix):]
+    return eval_tag
+
+
 def _preflight_for_honest_eval(
     campaign,
     tailscale_authkey: str,
@@ -869,6 +897,7 @@ def main(argv: list[str] | None = None) -> int:
         format="%(asctime)s %(name)s %(levelname)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    _install_signal_handlers()
 
     game_data = load_game_data(args.game_dir)
     manifest = GameManifest.load()
@@ -1050,9 +1079,10 @@ def main(argv: list[str] | None = None) -> int:
                 f"--resume-from {eval_tag!r}: {len(active)} instance(s) "
                 f"still tagged Project={eval_tag} are pending/running "
                 f"(e.g. {sample}). Tear down the prior fleet first: "
-                f"`scripts/cloud/teardown.sh {eval_tag}`. Resuming "
-                f"with the prior fleet still up would double-bill "
-                f"and confuse the orchestrator's heartbeat scan."
+                f"`scripts/cloud/teardown.sh "
+                f"{_teardown_arg_for_eval_tag(eval_tag)}`. Resuming with "
+                f"the prior fleet still up would double-bill and confuse "
+                f"the orchestrator's heartbeat scan."
             )
     else:
         # `starsector-` prefix matches CampaignManager.project_tag and
@@ -1123,25 +1153,30 @@ def main(argv: list[str] | None = None) -> int:
         eval_tag, target_workers, total_matchup_slots, flask_port,
     )
 
-    with prepare_cloud_pool(
-        campaign=campaign,
-        study_id=eval_tag,
-        project_tag=eval_tag,
-        fleet_name=eval_tag,
-        flask_port=flask_port,
-        target_workers=target_workers,
-        total_matchup_slots=total_matchup_slots,
-        tailnet_ip=tailnet_ip,
-        bearer_token=bearer_token,
-        tailscale_authkey=tailscale_authkey,
-        debug_ssh_pubkey=debug_ssh_pubkey,
-        mod_jar_override_url=mod_jar_override_url,
-        mod_jar_override_sha256=mod_jar_override_sha256,
-    ) as pool:
-        evaluated = evaluate_builds(
-            builds_with_provenance, eval_pool, pool, config, hull,
-            ledger_path=ledger_path,
-        )
+    try:
+        with prepare_cloud_pool(
+            campaign=campaign,
+            study_id=eval_tag,
+            project_tag=eval_tag,
+            fleet_name=eval_tag,
+            flask_port=flask_port,
+            target_workers=target_workers,
+            total_matchup_slots=total_matchup_slots,
+            tailnet_ip=tailnet_ip,
+            bearer_token=bearer_token,
+            tailscale_authkey=tailscale_authkey,
+            debug_ssh_pubkey=debug_ssh_pubkey,
+            mod_jar_override_url=mod_jar_override_url,
+            mod_jar_override_sha256=mod_jar_override_sha256,
+            sweep_project_on_exit=True,
+        ) as pool:
+            evaluated = evaluate_builds(
+                builds_with_provenance, eval_pool, pool, config, hull,
+                ledger_path=ledger_path,
+            )
+    except KeyboardInterrupt:
+        logger.warning("honest_eval interrupted — cleanup complete")
+        return 130
 
     finished_at = datetime.now(timezone.utc)
     summaries = summarize_by_cell(evaluated)
