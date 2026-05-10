@@ -135,24 +135,8 @@ def prepare_cloud_pool(
     )
 
     provider = AWSProvider(regions=campaign.regions)
-    redis_client = redis.Redis(
-        host="localhost", port=campaign.redis_port, decode_responses=True,
-    )
-    pool = CloudWorkerPool(
-        study_id=study_id,
-        project_tag=project_tag,
-        redis_client=redis_client,
-        flask_port=flask_port,
-        bearer_token=bearer_token,
-        total_matchup_slots=total_matchup_slots,
-        result_timeout_seconds=campaign.result_timeout_seconds,
-        visibility_timeout_seconds=campaign.visibility_timeout_seconds,
-        janitor_interval_seconds=campaign.janitor_interval_seconds,
-        max_requeues=campaign.max_requeues,
-    )
-
     try:
-        provider.provision_fleet(
+        instance_ids = provider.provision_fleet(
             fleet_name=fleet_name,
             project_tag=project_tag,
             regions=campaign.regions,
@@ -162,6 +146,32 @@ def prepare_cloud_pool(
             spot_allocation_strategy=campaign.spot_allocation_strategy,
             target_workers=target_workers,
             user_data=user_data,
+        )
+        if not instance_ids:
+            raise RuntimeError(
+                f"provision_fleet returned no instances for fleet_name={fleet_name}"
+            )
+        actual_matchup_slots = len(instance_ids) * campaign.matchup_slots_per_worker
+        if actual_matchup_slots != total_matchup_slots:
+            logger.warning(
+                "cloud pool capacity adjusted from requested slots=%d to "
+                "actual slots=%d based on %d provisioned worker(s)",
+                total_matchup_slots, actual_matchup_slots, len(instance_ids),
+            )
+        redis_client = redis.Redis(
+            host="localhost", port=campaign.redis_port, decode_responses=True,
+        )
+        pool = CloudWorkerPool(
+            study_id=study_id,
+            project_tag=project_tag,
+            redis_client=redis_client,
+            flask_port=flask_port,
+            bearer_token=bearer_token,
+            total_matchup_slots=actual_matchup_slots,
+            result_timeout_seconds=campaign.result_timeout_seconds,
+            visibility_timeout_seconds=campaign.visibility_timeout_seconds,
+            janitor_interval_seconds=campaign.janitor_interval_seconds,
+            max_requeues=campaign.max_requeues,
         )
         with pool:
             yield pool

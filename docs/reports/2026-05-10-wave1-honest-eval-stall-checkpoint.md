@@ -8,11 +8,16 @@ last-validated: 2026-05-10
 
 Snapshot of the in-flight Wave 1 honest-evaluation run captured immediately before recommended kill. Records what is on disk, what guardrails tripped, and how to resume.
 
-**2026-05-10 follow-up.** The cleanup-side issue is now fixed in code:
+**2026-05-10 follow-up.** The cleanup-side issue is fixed in code:
 `honest_evaluator.main()` installs SIGTERM/SIGHUP handlers, returns 130
 after interrupted cleanup, and invokes the cloud-pool helper with an
-honest-eval-only project-wide sweep. The remaining unresolved issue is the
-fleet-health cause of the throughput collapse.
+honest-eval-only project-wide sweep. A second pass over the local
+orchestrator log identified two direct stall causes: honest eval inherited
+`max_lifetime_hours=2.0` from `examples/wave1-c0a.yaml`, so workers aged
+out just before the collapse while EC2 instances stayed alive; and it
+inherited `visibility_timeout_seconds=120.0`, so slow-but-live matchups
+were requeued from minute two onward. Both timing inherits are now
+overridden for honest eval before provisioning.
 
 ## Run identity
 
@@ -32,20 +37,26 @@ fleet-health cause of the throughput collapse.
 
 | Cell | seed0 r1 | seed0 r2 | seed0 r3 | seed1 r1 | seed1 r2 | seed1 r3 | seed2 r1 | seed2 r2 | seed2 r3 |
 |---|---|---|---|---|---|---|---|---|---|
-| c0a | ✅ 1621 | ✅ 1619 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 |
-| c0b | ✅ 1620 | ✅ 1620 | ✅ 1620 | 🟡 1099 | — | — | — | — | — |
+| c0a | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 | ✅ 1620 |
+| c0b | ✅ 1620 | ✅ 1620 | ✅ 1620 | 🟡 1107 | — | — | — | — | — |
 | c1 | — | — | — | — | — | — | — | — | — |
 | c2 | — | — | — | — | — | — | — | — | — |
 | c3 | — | — | — | — | — | — | — | — | — |
 | random-baseline | not yet started — synthesized via `synthesize_random_baseline_builds(seed=0)` at run-time, deterministic |
 
-12 of 45 (cell × seed × rank) combos complete + 1 partial. Each completed combo holds 1620 records (54 opponents × 30 reps); expected total at finish ≈ 72,900 ledger lines. Currently 20,532. **Wall-clock progress ≈ 28 %.** The c0a cell (the eval_tag's lead cell) is fully done; partial work is in c0b/seed1/rank1.
+12 of 54 build panels complete + 1 partial. The 54 panels are 45
+cell × seed × rank builds plus 9 random-baseline builds. Each completed
+panel holds 1620 records (54 opponents × 30 reps); expected total at
+finish is 87,480 ledger entries. Currently 20,547 unique resume keys
+(`read_ledger()` count; also 20,547 physical JSONL lines). **Wall-clock progress
+≈ 23.5 %.** The c0a cell (the eval_tag's lead cell) is fully done;
+partial work is in c0b/seed1/rank1.
 
 ## Ledger location
 
 ```
 data/honest_eval/starsector-honest-eval-wave1-c0a-20260510T170431Z/
-└── results.jsonl   # 20,522 lines, ~5.7 MB, last-mtime 19:53Z
+└── results.jsonl   # 20,547 lines / 20,547 unique keys, ~5.7 MB, last-mtime 19:53Z
 ```
 
 Append-only JSONL with `flush()` + `os.fsync()` per line (`_LedgerWriter` at `src/starsector_optimizer/honest_evaluator.py:125`). Schema-version-tagged. Resume-safe.
@@ -62,9 +73,9 @@ The /loop sentry (set up at launch) runs four checks:
 | # | Target | Observed | Verdict |
 |---|---|---|---|
 | (a) Throughput steady-state ≥ 250/min | ≥ 250/min | ~125/min for the first 2 h, then **collapse**: 44 → 11 → 2.4/min in the final three 15-min bins | **FAIL — never met target, now dying** |
-| (b) Stuck-matchup requeue rate < 5 % | < 5 % | 1,020 requeues / 20,532 results = **5.0 %** at snapshot, climbing as workers drain | **FAIL (borderline, trending wrong)** |
+| (b) Stuck-matchup requeue rate < 5 % | < 5 % | 1,074 requeues / 20,547 results = **5.2 %** in the final local log, climbing as workers drain | **FAIL (trending wrong)** |
 | (c) Fitness diversity not stuck | distribution must not collapse | 1.5 mode 23.9 %, broad negative tail, 13 distinct builds — on-spec for a 1620-rep panel | PASS |
-| (d) No LOADOUT_MISMATCH bursts | 0 LOADOUT_MISMATCH | 0 across 20,532 records | PASS |
+| (d) No LOADOUT_MISMATCH bursts | 0 LOADOUT_MISMATCH | 0 across 20,547 records | PASS |
 
 Per-bin throughput (UTC):
 
@@ -91,13 +102,30 @@ Per-bin throughput (UTC):
 
 ## Diagnosis (preliminary)
 
-Root cause not confirmed at snapshot time. Hypotheses:
+Root cause is now confirmed from local evidence:
 
-1. **Worker-pool degradation.** Spot interruptions or worker crashes outpacing the requeue path's ability to keep slots full. Plausible — c0a all completed at full throughput, then partial c0b started reporting timeouts on the *same opponent set*, suggesting a fleet-side change rather than a build-side one.
-2. **Stuck-matchup feedback loop.** A small number of matchups timeout repeatedly (high `requeue_count`); each requeue burns a slot that could be doing fresh work. The 5 % stuck-rate is the same as the requeue-induced wasted-work rate; if those slots compounded, they'd drag steady-state down.
-3. **Long-tailed game-side TIMEOUTs are structural, not the cause.** Game-clock TIMEOUT (300 s) hits at 17.7 % of *decided* matches — opponent-driven (fulgent_Assault 97.7 %, hammerhead_Support 99.0 %, sunder_Support 99.7 %, scintilla_Support 98.9 %). This is real game behavior and would show in any honest eval against this pool. It does not explain the throughput cliff because c0a completed full-throughput against the same pool.
-
-Diagnosis requires AWS-console / Tailscale-fleet inspection that this snapshot doesn't capture. **Do not modify the data dir** until that inspection is done.
+1. **Worker lifetime inherited from the source training YAML.**
+   `examples/wave1-c0a.yaml` sets `max_lifetime_hours=2.0`. Honest eval
+   reused that value. The run started at 17:04Z and throughput collapsed
+   after 19:15Z, just after the worker-agent lifetime elapsed. The
+   `starsector-worker.service` unit uses `Restart=on-failure`, while
+   `worker_agent.main()` returns 0 on lifetime expiry, so the worker
+   process exits cleanly and is not restarted. The EC2 instances remain
+   running, explaining why teardown later found many live instances that
+   were no longer producing results.
+2. **Redis visibility timeout was too short for honest eval.**
+   Honest eval also inherited the default `visibility_timeout_seconds=120.0`
+   while its caller-level `result_timeout_seconds` was 900 s. The janitor
+   began requeueing slow-but-live work at 13:06 local, exactly 120 s after
+   first dispatch. Over the run it logged 1,074 requeues and the Flask
+   listener rejected hundreds of duplicate result POSTs with HTTP 409.
+   Requeue concentration later moved to `wave1-c0b/seed1/rank1` because
+   that was the active panel when the worker lifetime limit was reached,
+   not because that build or a single opponent was uniquely pathological.
+3. **Long-tailed game-side TIMEOUTs are structural, not the cliff cause.**
+   The ledger contains many legitimate 300 s in-engine TIMEOUT outcomes.
+   Those increase average matchup walltime and make a 120 s visibility
+   window unsafe, but they do not by themselves explain the abrupt collapse.
 
 ## Can the run be resumed? Yes.
 
@@ -130,7 +158,7 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
     --query 'Reservations[].Instances[].InstanceId' --output text
 done
 
-# 5. Resume — only the missing ~52,400 matchups dispatch
+# 5. Resume — only the missing 66,933 matchups dispatch
 scripts/cloud/evaluate_campaign.sh \
   --hull hammerhead \
   --campaign-name wave1-c0a wave1-c0b wave1-c1 wave1-c2 wave1-c3 \
@@ -142,10 +170,10 @@ scripts/cloud/evaluate_campaign.sh \
 
 ### Resume cost forecast
 
-- Remaining work: ~72,900 − 20,532 ≈ **52,400 matchups**.
-- At Plan-C steady-state (~125–180/min observed during the healthy phase), pure-walltime estimate is ~5–7 h.
-- **Conditional on the root cause being a transient fleet issue (interruption burst, AZ flap).** If the cause is a code-path bug in the orchestrator or a permanent-state fleet problem, the resumed run will hit the same wall.
-- Cost: ~$50 incremental at Plan-C rates; ledger checkpointing means a second stall costs only the slots burnt before the next kill.
+- Remaining work: 87,480 − 20,547 unique ledger keys = **66,933 matchups**.
+- At Plan-C steady-state (~125–180/min observed during the healthy phase), pure-walltime estimate is ~6.2–8.9 h.
+- Conditional on launching with the timing fixes below. Reusing the old 2 h worker lifetime or 120 s visibility timeout will reproduce the stall.
+- Cost: roughly **$65–90 incremental** at Plan-C rates, depending on spot mix and realized throughput; ledger checkpointing means a second stall costs only the slots burnt before the next kill.
 
 ### Resume hazards
 
@@ -178,12 +206,12 @@ Both findings are investigation leads that belong in the post-mortem (and possib
 
 1. ✅ Kill orchestrator (PID 17167) — done.
 2. ✅ Tear down AWS fleet — done. 53 stragglers reaped; final_audit clean.
-3. **Investigate before resume:**
-   - Why did the worker-pool stop reporting? AWS console for spot interruption events ≥ 19:20Z; Tailscale admin panel for worker-node liveness; cross-check against the divergence between `c0a complete` and `c0b stalling` in the orchestrator log around the hand-off.
-   - Cleanup gap from the snapshot is fixed as described below; validate the final audit after the next honest-eval exit.
-4. **Resume** per the procedure above once the worker-pool degradation root cause is identified or ruled out as transient.
+3. Cleanup gap from the snapshot is fixed as described below; validate the final audit after the next honest-eval exit.
+4. **Resume** per the procedure above after relaunching with the
+   timing fixes described below.
 
-If investigation finds the root cause is a code-path bug or a structural problem with the workload (e.g. c0b/seed1/rank1 builds inherently produce sims that hang), file a follow-up under task #84 / #93 before resume.
+If the resumed run still stalls with the adjusted timing, treat that as a
+new failure mode and inspect live worker logs before another resume.
 
 ## Follow-up implementation
 
@@ -199,6 +227,12 @@ orchestrator cleanup gap. The cleanup gap has been addressed:
   after the normal `terminate_fleet()` path. This option remains disabled
   for normal campaign study subprocesses because they share one campaign
   Project tag.
+- Honest eval now derives cloud timing from the oracle workload instead
+  of blindly inheriting the source training YAML: it raises worker
+  lifetime above the estimated full-sweep walltime and raises Redis
+  visibility above the full caller retry window.
+- Honest eval flushes stale Redis queue/worker keys for the eval tag
+  before launch/resume; the JSONL ledger remains the only resume substrate.
 - `scripts/cloud/evaluate_campaign.sh` now runs a final audit on shell
   exit after it can parse the concrete eval tag from the orchestrator log.
 - `scripts/cloud/teardown.sh` and `scripts/cloud/final_audit.sh` now accept

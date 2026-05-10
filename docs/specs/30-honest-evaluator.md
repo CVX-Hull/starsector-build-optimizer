@@ -35,6 +35,9 @@ class HonestEvaluationConfig:
     max_retries_per_matchup: int = 3
     fitness_config: CombatFitnessConfig = field(default_factory=CombatFitnessConfig)
     matchup_time_limit_seconds: float = 300.0  # passed to MatchupConfig
+    progress_log_buckets: int = 20
+    cloud_lifetime_headroom: float = 1.5
+    cloud_min_lifetime_hours: float = 6.0
 
 @dataclass(frozen=True)
 class EvaluatedBuild:
@@ -188,6 +191,7 @@ def evaluate_builds(
     pool: EvaluatorPool,
     config: HonestEvaluationConfig,
     hull: ShipHull,
+    ledger_path: Path | None = None,
 ) -> tuple[EvaluatedBuild, ...]:
     """Dispatch every (build × opp × replicate) matchup, retry failures up
     to `config.max_retries_per_matchup`, aggregate per-build mean.
@@ -235,8 +239,11 @@ module exposes a `main(argv)` that takes:
 - `--campaign-name <name>...` — one or more (multi-cell ablation eval)
 - `--hull <id>` — required; the hull to evaluate
 - `--top-k 3` / `--replicates 30` / `--max-retries 3` — see methodology
+- `--ranking-method twfe_eb` — score column used by `extract_top_builds`
 - `--game-dir game/starsector` — game data + manifest source
 - `--out-root data` — JSON output root
+- `--random-baseline-n 0` / `--random-baseline-seed 0` — append
+  deterministic synthetic feasible baseline builds when `n > 0`
 - `--campaign-config <path>` — source-campaign YAML for fleet config;
   default `examples/{first-campaign-name}.yaml`
 - `--workers <N>` — fleet size; default `max(s.workers_per_study)` from
@@ -306,9 +313,32 @@ with one `list_active(project_tag)` retry. This sweep option is disabled
 for normal campaign studies because their subprocesses share a campaign
 project tag and a per-study sweep would kill sibling studies.
 
-**Inherited fields from the source campaign YAML** (read via
-`load_campaign_config(args.campaign_config)` and forwarded through
-`prepare_cloud_pool`): `regions`, `instance_types`,
+Before provisioning, honest-eval derives an adjusted cloud campaign
+configuration from the source campaign YAML:
+
+- `max_lifetime_hours` is raised when needed to cover the honest-eval
+  matchup budget. The lower-bound estimate is
+  `N_matchups × (matchup_time_limit_seconds / MatchupConfig.time_mult) /
+  total_matchup_slots`, multiplied by
+  `HonestEvaluationConfig.cloud_lifetime_headroom` and floored at
+  `HonestEvaluationConfig.cloud_min_lifetime_hours`. This prevents
+  source-campaign training lifetimes (e.g. short budget-capped Wave cells)
+  from aging out the honest-eval worker processes mid-oracle.
+- `visibility_timeout_seconds` is raised above the full local
+  retry window: `result_timeout_seconds × (max_retries_per_matchup + 1) +
+  janitor_interval_seconds`. Honest-eval already retries
+  `WorkerTimeout` at the caller level; the Redis janitor must not
+  re-dispatch a slow-but-live matchup before that caller-level timeout
+  has resolved.
+- Stale Redis keys under `queue:<eval_tag>:*` and `worker:<eval_tag>:*`
+  are flushed before launch/resume. The append-only ledger is the resume
+  substrate; Redis queues are ephemeral in-flight state and must not
+  survive across interrupted fleets.
+
+**Inherited-then-adjusted fields from the source campaign YAML** (read via
+`load_campaign_config(args.campaign_config)`, adjusted for honest-eval
+timing when needed, then forwarded through `prepare_cloud_pool`):
+`regions`, `instance_types`,
 `spot_allocation_strategy`, `ami_ids_by_region`, `ssh_key_name`,
 `max_lifetime_hours`, `matchup_slots_per_worker`, `redis_port`,
 `base_flask_port`, `flask_ports_per_study`, `result_timeout_seconds`,

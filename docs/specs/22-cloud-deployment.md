@@ -531,6 +531,7 @@ def prepare_cloud_pool(
     debug_ssh_pubkey: str = "",
     mod_jar_override_url: str = "",
     mod_jar_override_sha256: str = "",
+    sweep_project_on_exit: bool = False,
 ) -> Iterator[CloudWorkerPool]:
 ```
 
@@ -571,7 +572,7 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 ## `EvaluatorPool` subclasses
 
 - `LocalInstancePool` (spec 18) — drives local JVM+Xvfb instances for `run_optimizer.py --worker-pool local`.
-- `CloudWorkerPool` — implements `EvaluatorPool.run_matchup(matchup)` by enqueueing to Redis and blocking on the Flask listener's dedup dict. Constructor takes `total_matchup_slots: int` (= `workers_per_study × matchup_slots_per_worker`); internal `threading.BoundedSemaphore(total_matchup_slots)` caps in-flight dispatches to what the fleet can actually consume. `num_workers` returns `total_matchup_slots`, which is what `StagedEvaluator` reads to size its `ThreadPoolExecutor`. StagedEvaluator sees exactly the same blocking per-call semantics as `LocalInstancePool`.
+- `CloudWorkerPool` — implements `EvaluatorPool.run_matchup(matchup)` by enqueueing to Redis and blocking on the Flask listener's dedup dict. Constructor takes `total_matchup_slots: int`; `prepare_cloud_pool` sizes it from the actual `len(instance_ids)` returned by `provider.provision_fleet(...) × campaign.matchup_slots_per_worker`, not merely the requested fleet size. The internal `threading.BoundedSemaphore(total_matchup_slots)` caps in-flight dispatches to what the fleet can actually consume. `num_workers` returns `total_matchup_slots`, which is what `StagedEvaluator` reads to size its `ThreadPoolExecutor`. StagedEvaluator sees exactly the same blocking per-call semantics as `LocalInstancePool`.
 
 ## Packer AMI
 

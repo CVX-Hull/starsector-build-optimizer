@@ -128,6 +128,14 @@ class TestHonestEvaluationConfigValidation:
         with pytest.raises(ValueError, match="max_retries"):
             HonestEvaluationConfig(max_retries_per_matchup=-1)
 
+    def test_rejects_nonpositive_cloud_lifetime_headroom(self):
+        with pytest.raises(ValueError, match="cloud_lifetime_headroom"):
+            HonestEvaluationConfig(cloud_lifetime_headroom=0)
+
+    def test_rejects_nonpositive_cloud_min_lifetime(self):
+        with pytest.raises(ValueError, match="cloud_min_lifetime_hours"):
+            HonestEvaluationConfig(cloud_min_lifetime_hours=0)
+
     def test_zero_retries_is_legal(self):
         cfg = HonestEvaluationConfig(max_retries_per_matchup=0)
         assert cfg.max_retries_per_matchup == 0
@@ -808,7 +816,7 @@ class TestSchemaVersion:
 # ---- main() CLI wiring -------------------------------------------------------
 
 
-def _write_smoke_campaign_yaml(tmp_path):
+def _write_smoke_campaign_yaml(tmp_path, **overrides):
     """Minimal campaign YAML for honest-eval-main tests."""
     import yaml
     cfg = {
@@ -831,6 +839,7 @@ def _write_smoke_campaign_yaml(tmp_path):
         }],
         "max_lifetime_hours": 0.5,
     }
+    cfg.update(overrides)
     path = tmp_path / "ut-honest-eval-source.yaml"
     path.write_text(yaml.safe_dump(cfg))
     return path
@@ -878,6 +887,10 @@ class TestMainCLIWiring:
         monkeypatch.setattr(
             "starsector_optimizer.honest_evaluator.GameManifest.load",
             classmethod(lambda cls, path=None: manifest),
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator._flush_stale_campaign_keys",
+            lambda *a, **kw: 0,
         )
 
     def _patch_preflight(self, monkeypatch):
@@ -928,6 +941,40 @@ class TestMainCLIWiring:
         ])
         assert rc == 0
         sentinel.assert_not_called()
+
+    def test_dry_run_does_not_flush_redis_keys(
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
+        game_dir, manifest,
+    ):
+        from starsector_optimizer import honest_evaluator
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+        )
+        monkeypatch.chdir(tmp_path)
+        self._patch_manifest_load(monkeypatch, manifest)
+        self._patch_preflight(monkeypatch)
+        (tmp_path / "examples").mkdir()
+        yaml_src = _write_smoke_campaign_yaml(tmp_path)
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
+            yaml_src.read_bytes()
+        )
+
+        flush = MagicMock(side_effect=AssertionError("flushed during dry-run"))
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator._flush_stale_campaign_keys",
+            flush,
+        )
+
+        rc = honest_evaluator.main([
+            "--campaign-name", "ut-honest-eval-source",
+            "--hull", "hammerhead",
+            "--game-dir", str(game_dir),
+            "--top-k", "1",
+            "--dry-run",
+        ])
+        assert rc == 0
+        flush.assert_not_called()
 
     def test_full_run_uses_honest_eval_namespace(
         self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
@@ -994,6 +1041,102 @@ class TestMainCLIWiring:
         assert captured["fleet_name"] == captured["study_id"]
         assert captured["project_tag"] != smoke_env["STARSECTOR_PROJECT_TAG"]
         assert captured["sweep_project_on_exit"] is True
+        assert captured["campaign"].max_lifetime_hours > 0.5
+        assert (
+            captured["campaign"].visibility_timeout_seconds
+            > captured["campaign"].result_timeout_seconds
+        )
+
+    def test_full_run_flushes_redis_before_prepare_cloud_pool(
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
+        game_dir, manifest,
+    ):
+        from starsector_optimizer import honest_evaluator
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+        )
+        monkeypatch.chdir(tmp_path)
+        self._patch_manifest_load(monkeypatch, manifest)
+        self._patch_preflight(monkeypatch)
+        (tmp_path / "examples").mkdir()
+        yaml_src = _write_smoke_campaign_yaml(tmp_path)
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
+            yaml_src.read_bytes()
+        )
+
+        events: list[tuple[str, tuple]] = []
+        captured: dict = {}
+        from contextlib import contextmanager
+
+        def fake_flush(*args):
+            events.append(("flush", args))
+            return 0
+
+        @contextmanager
+        def fake_prepare(**kwargs):
+            events.append(("prepare", (kwargs["study_id"],)))
+            captured.update(kwargs)
+            yield MagicMock(num_workers=2)
+
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator._flush_stale_campaign_keys",
+            fake_flush,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            fake_prepare,
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator.evaluate_builds",
+            lambda *a, **kw: (),
+        )
+
+        rc = honest_evaluator.main([
+            "--campaign-name", "ut-honest-eval-source",
+            "--hull", "hammerhead",
+            "--game-dir", str(game_dir),
+            "--top-k", "1",
+            "--out-root", str(tmp_path / "out"),
+        ])
+        assert rc == 0
+        assert [event for event, _ in events] == ["flush", "prepare"]
+        flush_args = events[0][1]
+        assert flush_args == (
+            captured["study_id"],
+            captured["campaign"].redis_port,
+            captured["campaign"].redis_preflight_timeout_seconds,
+        )
+
+    def test_honest_eval_cloud_timing_adjustment_raises_short_training_limits(
+        self, tmp_path,
+    ):
+        """Honest eval must not inherit short source-campaign cloud timing.
+
+        Wave 1's source YAML had max_lifetime_hours=2 and default
+        visibility_timeout_seconds=120. A large oracle sweep outlives both.
+        """
+        from starsector_optimizer.campaign import load_campaign_config
+        from starsector_optimizer.honest_evaluator import (
+            _adjust_campaign_for_honest_eval,
+        )
+
+        cfg_path = _write_smoke_campaign_yaml(
+            tmp_path,
+            max_lifetime_hours=0.5,
+            visibility_timeout_seconds=120.0,
+            result_timeout_seconds=900.0,
+            janitor_interval_seconds=60.0,
+        )
+        campaign = load_campaign_config(cfg_path)
+        adjusted = _adjust_campaign_for_honest_eval(
+            campaign,
+            total_matchups=87_480,
+            total_matchup_slots=128,
+            config=HonestEvaluationConfig(max_retries_per_matchup=3),
+        )
+        assert adjusted.max_lifetime_hours > campaign.max_lifetime_hours
+        assert adjusted.visibility_timeout_seconds == 3660.0
 
     def test_signal_handlers_route_sigterm_and_sighup_to_keyboard_interrupt(
         self, monkeypatch,

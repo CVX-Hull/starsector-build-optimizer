@@ -50,7 +50,17 @@ grep -B1 "class NewDataclass" src/starsector_optimizer/models.py
 
 ## Sub-Agent Audit
 
-Launch **3 independent sub-agents in parallel** (single message, 3 Agent tool calls). Each auditor receives only the plan path and reference material — no hints about expected findings.
+In this repository workflow, a user request to run a named workflow that
+includes a sub-agent lane (for example, **"post-impl audit"**) is intended
+as project-level authorization to launch that workflow's bounded audit
+sub-agents. Launch **3 independent sub-agents in parallel** (single
+message, 3 Agent tool calls). Each auditor receives only the plan path
+and reference material — no hints about expected findings.
+
+Higher-priority Codex runtime or developer instructions still take
+precedence. If the active session requires explicit authorization in the
+current turn, do not spawn agents until the user says e.g. **"launch audit
+sub-agents"**.
 
 ### Sub-Agent A: Plan-vs-Code Verification
 

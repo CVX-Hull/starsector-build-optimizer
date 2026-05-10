@@ -16,14 +16,14 @@ import os
 import signal
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
 from .campaign import (
     check_ami_tags_against_manifest, check_authkey_syntax,
-    check_aws_credentials, load_campaign_config,
+    check_aws_credentials, load_campaign_config, _flush_stale_campaign_keys,
 )
 from .cloud_provider import AWSProvider
 from .cloud_runner import prepare_cloud_pool
@@ -36,6 +36,7 @@ from .models import (
     CombatResult,
     HonestEvaluationConfig,
     MatchupConfig,
+    CampaignConfig,
     ShipHull,
 )
 from .opponent_pool import discover_opponent_pool, get_opponents
@@ -766,6 +767,61 @@ def _teardown_arg_for_eval_tag(eval_tag: str) -> str:
     return eval_tag
 
 
+def _adjust_campaign_for_honest_eval(
+    campaign: CampaignConfig,
+    *,
+    total_matchups: int,
+    total_matchup_slots: int,
+    config: HonestEvaluationConfig,
+) -> CampaignConfig:
+    """Return campaign config with honest-eval-safe cloud timing.
+
+    Source campaign YAMLs are tuned for training cells. Honest eval has a
+    different shape: one large oracle sweep, caller-level retry on
+    WorkerTimeout, and ledger-based resume. Inheriting a short training
+    worker lifetime or Redis visibility window can silently turn a healthy
+    oracle sweep into a requeue/duplicate storm.
+    """
+    if total_matchup_slots < 1:
+        raise ValueError(
+            f"total_matchup_slots={total_matchup_slots}; cannot size "
+            f"honest-eval worker lifetime"
+        )
+    full_timeout_wall_hours = (
+        total_matchups
+        * (config.matchup_time_limit_seconds / MatchupConfig.time_mult)
+        / total_matchup_slots
+        / 3600.0
+    )
+    required_lifetime = max(
+        config.cloud_min_lifetime_hours,
+        full_timeout_wall_hours * config.cloud_lifetime_headroom,
+    )
+    required_visibility = (
+        campaign.result_timeout_seconds * (config.max_retries_per_matchup + 1)
+        + campaign.janitor_interval_seconds
+    )
+    adjusted = replace(
+        campaign,
+        max_lifetime_hours=max(campaign.max_lifetime_hours, required_lifetime),
+        visibility_timeout_seconds=max(
+            campaign.visibility_timeout_seconds, required_visibility,
+        ),
+    )
+    if adjusted != campaign:
+        logger.info(
+            "honest_eval cloud timing adjusted: "
+            "max_lifetime_hours %.2f -> %.2f, "
+            "visibility_timeout_seconds %.1f -> %.1f "
+            "(total_matchups=%d, slots=%d)",
+            campaign.max_lifetime_hours, adjusted.max_lifetime_hours,
+            campaign.visibility_timeout_seconds,
+            adjusted.visibility_timeout_seconds,
+            total_matchups, total_matchup_slots,
+        )
+    return adjusted
+
+
 def _preflight_for_honest_eval(
     campaign,
     tailscale_authkey: str,
@@ -1034,6 +1090,17 @@ def main(argv: list[str] | None = None) -> int:
         s.workers_per_study for s in campaign.studies
     )
     total_matchup_slots = target_workers * campaign.matchup_slots_per_worker
+    total_matchups = (
+        len(builds_with_provenance)
+        * len(eval_pool)
+        * config.replicates_per_matchup
+    )
+    campaign = _adjust_campaign_for_honest_eval(
+        campaign,
+        total_matchups=total_matchups,
+        total_matchup_slots=total_matchup_slots,
+        config=config,
+    )
     flask_port = args.flask_port or _resolve_honest_eval_flask_port(campaign)
     # Range guard: workers can only POST to ports in
     # [base_flask_port, base + flask_ports_per_study). Outside the range
@@ -1142,6 +1209,14 @@ def main(argv: list[str] | None = None) -> int:
             target_workers, total_matchup_slots, flask_port, campaign_yaml,
         )
         return 0
+
+    # Redis queues are in-flight state, not the resume source of truth.
+    # A killed/interrupted honest-eval run may leave source/processing
+    # items behind under the same eval_tag; the ledger replay below is what
+    # decides which matchups are complete.
+    _flush_stale_campaign_keys(
+        eval_tag, campaign.redis_port, campaign.redis_preflight_timeout_seconds,
+    )
 
     # Cloud orchestration. honest-eval namespaces are SEPARATE from the
     # source campaign's project_tag/study_id/fleet_name to avoid collision

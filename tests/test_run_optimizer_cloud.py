@@ -586,7 +586,7 @@ class TestPrepareCloudPool:
         # terminate sees same fleet_name+tag (so we tear down what we made)
         assert captured["terminate"] == ("honest-eval-x", "honest-eval-x")
 
-    def test_total_matchup_slots_threaded_to_pool(
+    def test_total_matchup_slots_uses_actual_provisioned_workers(
         self, monkeypatch, tmp_path,
     ):
         cloud_runner, _, captured = self._capture_lifecycle(monkeypatch)
@@ -597,7 +597,34 @@ class TestPrepareCloudPool:
         with cloud_runner.prepare_cloud_pool(**kwargs):
             pass
         assert captured["provision"]["target_workers"] == 7
-        assert captured["pool_kwargs"]["total_matchup_slots"] == 14
+        assert captured["pool_kwargs"]["total_matchup_slots"] == (
+            1 * cfg.matchup_slots_per_worker
+        )
+
+    def test_no_provisioned_workers_raises_before_pool_enter(
+        self, monkeypatch, tmp_path,
+    ):
+        cloud_runner, log, _ = self._capture_lifecycle(monkeypatch)
+        cfg, _ = _make_smoke_config(tmp_path)
+
+        class EmptyProvider:
+            def __init__(self, *, regions):
+                pass
+
+            def provision_fleet(self, **kwargs):
+                log.append("provision_fleet")
+                return []
+
+            def terminate_fleet(self, *, fleet_name, project_tag):
+                log.append("terminate_fleet")
+                return 0
+
+        monkeypatch.setattr(cloud_runner, "AWSProvider", EmptyProvider)
+        with pytest.raises(RuntimeError, match="returned no instances"):
+            with cloud_runner.prepare_cloud_pool(**self._kwargs(cfg)):
+                pass
+        assert "pool.__enter__" not in log
+        assert "terminate_fleet" in log
 
     def test_project_sweep_is_opt_in_for_honest_eval(
         self, monkeypatch, tmp_path,
@@ -635,6 +662,7 @@ class TestPrepareCloudPool:
 
             def provision_fleet(self, **kwargs):
                 call_log.append("provision_fleet")
+                return ["i-0"]
 
             def terminate_fleet(self, *, fleet_name, project_tag):
                 call_log.append("terminate_fleet")

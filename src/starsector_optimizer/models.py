@@ -465,6 +465,10 @@ class HonestEvaluationConfig:
     # Progress log emits every Nth completed matchup, where N = max(1,
     # total // progress_log_buckets). 20 buckets ≈ a 5%-progress cadence.
     progress_log_buckets: int = 20
+    # Honest-eval cloud runs may inherit short training-cell lifetimes. Size
+    # worker lifetime from the full oracle sweep plus headroom.
+    cloud_lifetime_headroom: float = 1.5
+    cloud_min_lifetime_hours: float = 6.0
 
     def __post_init__(self) -> None:
         if self.top_k_per_seed < 1:
@@ -482,6 +486,16 @@ class HonestEvaluationConfig:
         if self.progress_log_buckets < 1:
             raise ValueError(
                 f"progress_log_buckets must be >= 1, got {self.progress_log_buckets}"
+            )
+        if self.cloud_lifetime_headroom <= 0:
+            raise ValueError(
+                "cloud_lifetime_headroom must be > 0, got "
+                f"{self.cloud_lifetime_headroom}"
+            )
+        if self.cloud_min_lifetime_hours <= 0:
+            raise ValueError(
+                "cloud_min_lifetime_hours must be > 0, got "
+                f"{self.cloud_min_lifetime_hours}"
             )
 
 
