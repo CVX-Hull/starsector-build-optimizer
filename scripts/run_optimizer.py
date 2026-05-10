@@ -188,16 +188,23 @@ def main():
         from starsector_optimizer.campaign import load_campaign_config
         from starsector_optimizer.cloud_runner import resolve_study_id
         _campaign = load_campaign_config(args.campaign_config)
-        eval_log_dirname = resolve_study_id(
+        eval_log_subdir = resolve_study_id(
             _campaign, args.study_idx, args.seed_idx,
         )
+        # Include the campaign name as a parent directory so two ablation
+        # cells with the same {hull, regime, sampler, seed} combination
+        # (Wave 1 c0a/c0b/c1/c2/c3 are all hammerhead/early/tpe/seed{0,1,2})
+        # write to disjoint log paths. Without this prefix every cell shares
+        # one JSONL and downstream analysis must time-slice by per-cell SQLite
+        # range, which is fragile under concurrent dispatch (task #90).
+        eval_log_dir = Path("data/logs") / _campaign.name / eval_log_subdir
     else:
         # Local runs have no campaign YAML / seeds tuple; keep the seed_idx
         # form for backwards-compat with existing single-hull dev workflow.
         eval_log_dirname = (
             f"{args.hull}__{args.regime}__{args.sampler}__seed_idx{args.seed_idx}"
         )
-    eval_log_dir = Path(f"data/logs/{eval_log_dirname}")
+        eval_log_dir = Path(f"data/logs/{eval_log_dirname}")
     eval_log_dir.mkdir(parents=True, exist_ok=True)
     eval_log_path = eval_log_dir / "evaluation_log.jsonl"
 
@@ -269,6 +276,7 @@ def main():
                 manifest=manifest,
                 opponent_pool=opponent_pool,
                 optimizer_config=config,
+                game_dir=args.game_dir,
             )
         except KeyboardInterrupt:
             logging.getLogger(__name__).warning(
@@ -284,6 +292,7 @@ def main():
             with LocalInstancePool(instance_config) as pool:
                 study = optimize_hull(
                     args.hull, game_data, pool, opponent_pool, config, manifest,
+                    game_dir=args.game_dir,
                 )
         except KeyboardInterrupt:
             logging.getLogger(__name__).warning(

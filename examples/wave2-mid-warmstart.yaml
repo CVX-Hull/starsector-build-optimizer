@@ -1,0 +1,59 @@
+# Wave 2 — Hammerhead × MID regime × cross-regime warm-start from Wave 1 C2.
+# Per docs/reports/2026-05-10-validation-plan.md §3 Wave 2:
+#   2. Hammerhead × `mid` × seed 0 × 250 trials × `--warm-start-from-regime early`
+#      — exercises mechanism 13b (cross-regime warm-start).
+#
+# CROSS-REGIME WARM-START WIRING:
+#   `_enqueue_warm_start_from_regime` requires the source AND target Optuna
+#   study to share the same SQLite backend (optimizer.py:1448-1452).
+#   The launcher (`scripts/cloud/launch_wave2.sh`) copies
+#     data/study_dbs/wave1-c2/hammerhead__early__tpe__seed0.db
+#   to
+#     data/study_dbs/wave2-mid-warmstart/hammerhead__mid__tpe__seed0.db
+#   BEFORE invoking this YAML. The mid study (`hammerhead__mid`) is then
+#   created via load_if_exists=True in the same DB, finding the early
+#   study (`hammerhead__early`) for warm-start.
+#
+# Wave 1 c2 must complete before this campaign runs. The launcher will
+# fail loud if the source DB is missing.
+
+name: wave2-mid-warmstart
+budget_usd: 5.0
+provider: aws
+
+regions:
+  - us-east-1
+  - us-east-2
+
+instance_types:
+  - c7a.2xlarge
+  - c7i.2xlarge
+
+spot_allocation_strategy: price-capacity-optimized
+capacity_rebalancing: true
+
+max_concurrent_workers: 8           # 1 study × 8 workers
+min_workers_to_start: 4              # >=2 workers, allow degraded fleet to proceed
+partial_fleet_policy: proceed_half_speed
+matchup_slots_per_worker: 2
+
+# Same AMI as Wave 1 (post-V2, ModCommitSha=dc71e3b). Re-bake with 722afd2 +
+# c2d5150 is scheduled before Wave 3.
+ami_ids_by_region:
+  us-east-1: ami-0a434660884e985e3
+  us-east-2: ami-058e7a119eb656d45
+
+ssh_key_name: starsector-probe
+
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+
+# Single study: hammerhead × mid × seed 0 × 250 trials.
+# warm_start_from_regime=early triggers _enqueue_warm_start_from_regime;
+# the launcher pre-seeds the SQLite so the early study is visible.
+studies:
+  - {hull: hammerhead, regime: mid, seeds: [0], budget_per_study: 250, workers_per_study: 8, sampler: tpe, warm_start_from_regime: early}
+
+max_lifetime_hours: 1.5
+fleet_provision_timeout_seconds: 600.0
+result_timeout_seconds: 900.0
+ledger_heartbeat_interval_seconds: 60.0

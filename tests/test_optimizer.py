@@ -1,5 +1,6 @@
 """Tests for optimizer — Optuna integration, build conversion, warm-start, caching."""
 
+import json
 from pathlib import Path
 
 import optuna
@@ -130,7 +131,10 @@ class TestBuildCache:
         )
         assert cache.get(build) is None
 
-    def test_cache_hit_returns_score(self):
+    def test_cache_hit_returns_full_triple(self):
+        """Cache stores _CachedTrialResult so cache-hit JSONL rows can
+        carry the origin's eb/twfe values + origin trial pointer."""
+        from starsector_optimizer.optimizer import _CachedTrialResult
         cache = BuildCache()
         build = Build(
             hull_id="wolf",
@@ -139,8 +143,19 @@ class TestBuildCache:
             flux_vents=5,
             flux_capacitors=3,
         )
-        cache.put(build, 0.42)
-        assert cache.get(build) == 0.42
+        result = _CachedTrialResult(
+            shaped_fitness=0.42,
+            eb_fitness=0.55,
+            twfe_fitness=0.60,
+            origin_trial_number=17,
+        )
+        cache.put(build, result)
+        cached = cache.get(build)
+        assert cached is not None
+        assert cached.shaped_fitness == 0.42
+        assert cached.eb_fitness == 0.55
+        assert cached.twfe_fitness == 0.60
+        assert cached.origin_trial_number == 17
 
     def test_different_builds_different_hash(self):
         cache = BuildCache()
@@ -189,6 +204,121 @@ class TestBuildCache:
             flux_capacitors=0,
         )
         assert cache.hash_build(b1) == cache.hash_build(b2)
+
+
+class TestEvalLogTrialKindTaxonomy:
+    """Every JSONL row carries `pruned`, `cache_hit`, `invalid_spec`
+    flags so analyzers can reliably partition rows into the four trial
+    kinds (real-completed, pruned, cache-hit, invalid-spec) without
+    `.get(...)` defensive coding.
+
+    Wave 1 surfaced ~3% of completed trials missing JSONL rows because
+    the cache-hit and invalid-spec dispatch paths skipped logging.
+    These tests are the regression guard.
+    """
+
+    def _build(self):
+        return Build(
+            hull_id="wolf", weapon_assignments={},
+            hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
+        )
+
+    def test_real_completed_row_has_all_three_flags_false(self, tmp_path):
+        from starsector_optimizer.optimizer import _append_eval_log
+        path = tmp_path / "eval.jsonl"
+        _append_eval_log(
+            path, "wolf", trial_number=0, build=self._build(), results=[],
+            fitness=0.5, raw_fitness=0.5, eb_fitness=0.5, twfe_fitness=0.5,
+            opponents_total=10, opponent_order=["a", "b"],
+        )
+        rec = json.loads(path.read_text().strip())
+        assert rec["pruned"] is False
+        assert rec["cache_hit"] is False
+        assert rec["invalid_spec"] is False
+        assert rec["eb_fitness"] == 0.5
+        assert rec["twfe_fitness"] == 0.5
+
+    def test_cache_hit_row_carries_origin_pointer_and_empty_results(self, tmp_path):
+        from starsector_optimizer.optimizer import _append_eval_log
+        path = tmp_path / "eval.jsonl"
+        _append_eval_log(
+            path, "wolf", trial_number=42, build=self._build(),
+            results=[],  # MUST be empty; matchups didn't run for THIS trial
+            fitness=0.5, raw_fitness=0.5, eb_fitness=0.5, twfe_fitness=0.5,
+            opponents_total=0, opponent_order=[],
+            cache_hit=True, cache_hit_origin_trial=17,
+        )
+        rec = json.loads(path.read_text().strip())
+        assert rec["cache_hit"] is True
+        assert rec["cache_hit_origin_trial"] == 17
+        assert rec["pruned"] is False
+        assert rec["invalid_spec"] is False
+        assert rec["opponent_results"] == []
+        assert rec["opponents_evaluated"] == 0
+        assert rec["opponents_total"] == 0
+        # eb/twfe carried over from origin so honest-eval can rank by them
+        assert rec["eb_fitness"] == 0.5
+        assert rec["twfe_fitness"] == 0.5
+
+    def test_invalid_spec_row_omits_eb_twfe_and_lists_errors(self, tmp_path):
+        from starsector_optimizer.optimizer import _append_eval_log
+        path = tmp_path / "eval.jsonl"
+        _append_eval_log(
+            path, "wolf", trial_number=99, build=self._build(),
+            results=[],
+            # Invalid spec gets the failure_score sentinel — explicitly
+            # NOT a measured value. eb/twfe should be omitted (never
+            # computed) so analyzers can't accidentally pool them.
+            fitness=-1000.0, raw_fitness=None, eb_fitness=None,
+            twfe_fitness=None, opponents_total=0, opponent_order=[],
+            invalid_spec=True,
+            invalid_spec_errors=["unknown weapon: phantom_gun"],
+        )
+        rec = json.loads(path.read_text().strip())
+        assert rec["invalid_spec"] is True
+        assert rec["pruned"] is False
+        assert rec["cache_hit"] is False
+        assert rec["invalid_spec_errors"] == ["unknown weapon: phantom_gun"]
+        assert rec["fitness"] == -1000.0
+        assert "eb_fitness" not in rec
+        assert "twfe_fitness" not in rec
+        assert rec["opponent_results"] == []
+
+    def test_taxonomy_partitions_cleanly(self, tmp_path):
+        """Any row is exactly ONE kind: pruned XOR cache_hit XOR
+        invalid_spec XOR (none of the above = real-completed).
+        Aggregators that re-fit TWFE post-hoc filter on
+        `not pruned and not cache_hit and not invalid_spec` to get
+        only rows whose opponent_results are this trial's own."""
+        from starsector_optimizer.optimizer import _append_eval_log
+        path = tmp_path / "eval.jsonl"
+        # One of each kind.
+        _append_eval_log(  # real
+            path, "wolf", 0, self._build(), [], 0.5,
+            eb_fitness=0.5, twfe_fitness=0.5,
+        )
+        _append_eval_log(  # pruned
+            path, "wolf", 1, self._build(), [], 0.0, pruned=True,
+        )
+        _append_eval_log(  # cache hit
+            path, "wolf", 2, self._build(), [], 0.5,
+            eb_fitness=0.5, twfe_fitness=0.5,
+            cache_hit=True, cache_hit_origin_trial=0,
+        )
+        _append_eval_log(  # invalid spec
+            path, "wolf", 3, self._build(), [], -1000.0,
+            invalid_spec=True, invalid_spec_errors=["bad slot"],
+        )
+        recs = [json.loads(l) for l in path.read_text().splitlines() if l]
+        assert len(recs) == 4
+        for rec in recs:
+            kinds = sum([rec["pruned"], rec["cache_hit"], rec["invalid_spec"]])
+            # 0 = real-completed; 1 = exactly one of pruned/cache/invalid
+            assert kinds in (0, 1), f"row kinds-flag sum = {kinds}: {rec}"
+        real = [r for r in recs
+                if not r["pruned"] and not r["cache_hit"] and not r["invalid_spec"]]
+        assert len(real) == 1
+        assert real[0]["trial_number"] == 0
 
 
 # --- Define Distributions Tests ---
@@ -321,6 +451,39 @@ class TestWarmStart:
         # Scaled by 0.1, should be 0.02-0.08
         for trial in study.trials:
             assert trial.value < 0.5  # Way below unscaled heuristic range
+
+    def test_stock_builds_loaded_when_game_dir_provided(
+        self, wolf_hull, game_data, manifest,
+    ):
+        """Mechanism 3 (validation plan): stock-build seeding must fire when
+        the caller provides game_dir, even when warm_start_n=0 (so no
+        heuristic builds are added). Regression for the Wave 1 cloud-path
+        bug where CloudWorkerPool has no game_dir attribute and stock
+        builds were silently skipped."""
+        study = optuna.create_study(direction="maximize")
+        # warm_start_n=0 ensures any added trials must come from stock seeding
+        config = OptimizerConfig(warm_start_n=0, warm_start_sample_n=10)
+        warm_start(
+            study, wolf_hull, game_data, config, manifest,
+            game_dir=Path("game/starsector"),
+        )
+        # game/starsector has 11 wolf stock variants per
+        # load_stock_builds; some may not fit distributions exactly and
+        # are silently skipped, but at least 1 should land.
+        assert len(study.trials) >= 1, (
+            f"expected ≥ 1 stock-seeded trial, got {len(study.trials)}"
+        )
+
+    def test_stock_builds_skipped_when_game_dir_none(
+        self, wolf_hull, game_data, manifest,
+    ):
+        """Without game_dir, no stock seeding happens — only heuristic.
+        This is the documented degradation path; pre-fix this WAS the
+        cloud-path behavior (with warm_start_n=0 that meant zero trials)."""
+        study = optuna.create_study(direction="maximize")
+        config = OptimizerConfig(warm_start_n=0, warm_start_sample_n=10)
+        warm_start(study, wolf_hull, game_data, config, manifest, game_dir=None)
+        assert len(study.trials) == 0
 
 
 # --- Optimize Hull Integration Tests ---

@@ -134,6 +134,283 @@ class TestAuth:
         assert resp.status_code == 401
 
 
+class TestLoadoutMismatchDiscard:
+    """Wave 1 C1 surfaced a 0.59% cross-trial loadout-bleed bug: workers
+    occasionally apply trial N+1's spec to trial N's matchup. The Java root
+    cause is unsolved; the band-aid in cloud_worker_pool drops corrupt
+    results so the janitor re-queues them, instead of feeding false data
+    into fitness aggregation. See task #89 / docs/reports/2026-05-10-wave1-validation.md."""
+
+    @staticmethod
+    def _mismatch_diagnostic_json() -> dict:
+        return {
+            "fleet_member_id": "fm-mismatch",
+            "spec_weapons": {"WS 001": "flak"},
+            "live_weapons": {"WS 001": "arbalest"},  # different
+            "spec_hullmods": ["heavyarmor"],
+            "live_hullmods": ["heavyarmor"],
+            "spec_flux_vents": 0,
+            "live_flux_vents": 0,
+            "spec_flux_capacitors": 0,
+            "live_flux_capacitors": 0,
+            "weapons_match": False,
+            "hullmods_match": True,
+            "flux_vents_match": True,
+            "flux_capacitors_match": True,
+        }
+
+    def test_post_with_mismatch_returns_422_and_does_not_store(
+        self, pool, flask_test_client_factory,
+    ):
+        client = flask_test_client_factory(pool.app)
+        body = _combat_result_json("m-mismatch")
+        body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
+        resp = client.post("/result", json={
+            "matchup_id": "m-mismatch",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert resp.status_code == 422
+        # Not stored -> a subsequent matching POST for the same id must
+        # succeed (would 409 if the prior call had registered it as seen)
+        assert "m-mismatch" not in pool._seen
+        assert "m-mismatch" not in pool._results
+
+    def test_post_with_mismatch_then_clean_resubmit_succeeds(
+        self, pool, flask_test_client_factory,
+    ):
+        """Matchup re-queued by janitor → resubmitted by another worker
+        with a clean (matching) loadout → must be stored normally."""
+        client = flask_test_client_factory(pool.app)
+        bad_body = _combat_result_json("m-retry")
+        bad_body["player_loadout_diagnostics"] = [self._mismatch_diagnostic_json()]
+        bad_resp = client.post("/result", json={
+            "matchup_id": "m-retry",
+            "result": bad_body,
+            "bearer_token": BEARER,
+        })
+        assert bad_resp.status_code == 422
+        good_resp = client.post("/result", json={
+            "matchup_id": "m-retry",
+            "result": _combat_result_json("m-retry"),
+            "bearer_token": BEARER,
+        })
+        assert good_resp.status_code == 200
+        assert "m-retry" in pool._seen
+
+    def test_empty_diagnostics_passes(self, pool, flask_test_client_factory):
+        """Test fixtures + pre-V2 paths emit empty diagnostic lists. Empty
+        means 'no signal', not 'mismatch' — must not be rejected."""
+        client = flask_test_client_factory(pool.app)
+        body = _combat_result_json("m-empty-diag")
+        body["player_loadout_diagnostics"] = []
+        resp = client.post("/result", json={
+            "matchup_id": "m-empty-diag",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert resp.status_code == 200
+
+    def test_high_mismatch_rate_aborts_run_matchup(
+        self, pool, flask_test_client_factory,
+    ):
+        """If MISMATCH_ABORT_RATE is exceeded after MIN_SAMPLES observations,
+        run_matchup must raise LoadoutMismatchAbort instead of dispatching.
+        Surfaces a regressed Java fix or a stale jar before the run drains
+        cloud budget on per-matchup retries."""
+        from starsector_optimizer.cloud_worker_pool import (
+            LoadoutMismatchAbort, MISMATCH_ABORT_MIN_SAMPLES, MISMATCH_ABORT_RATE,
+        )
+        client = flask_test_client_factory(pool.app)
+        # Drive the rate above MISMATCH_ABORT_RATE: pump in ≥
+        # MIN_SAMPLES observations where >RATE are mismatches. We use 20%
+        # mismatches over 50 samples (rate=0.20 > 0.05).
+        n_total = MISMATCH_ABORT_MIN_SAMPLES
+        n_bad = int(n_total * 0.20)
+        for i in range(n_total):
+            mid = f"m-rate-{i}"
+            body = _combat_result_json(mid)
+            if i < n_bad:
+                body["player_loadout_diagnostics"] = [
+                    self._mismatch_diagnostic_json()
+                ]
+            else:
+                body["player_loadout_diagnostics"] = []
+            client.post("/result", json={
+                "matchup_id": mid,
+                "result": body,
+                "bearer_token": BEARER,
+            })
+        assert pool._mismatch_discard_count == n_bad
+        assert (n_bad / n_total) > MISMATCH_ABORT_RATE
+        # run_matchup must raise on the next call.
+        from starsector_optimizer.models import MatchupConfig
+        sentinel = MagicMock(spec=MatchupConfig)
+        sentinel.matchup_id = "after-abort"
+        with pytest.raises(LoadoutMismatchAbort, match="exceeded"):
+            pool.run_matchup(sentinel)
+
+    def test_low_mismatch_rate_does_not_abort(
+        self, pool, flask_test_client_factory,
+    ):
+        """Below MISMATCH_ABORT_RATE the empirical noise level — must NOT
+        abort. Otherwise normal Wave-2 ~0.6% rates would falsely trip."""
+        from starsector_optimizer.cloud_worker_pool import (
+            MISMATCH_ABORT_MIN_SAMPLES,
+        )
+        client = flask_test_client_factory(pool.app)
+        # 1 mismatch in 100 = 1% < 5%.
+        n_total = max(MISMATCH_ABORT_MIN_SAMPLES, 100)
+        for i in range(n_total):
+            mid = f"m-low-{i}"
+            body = _combat_result_json(mid)
+            if i == 0:
+                body["player_loadout_diagnostics"] = [
+                    self._mismatch_diagnostic_json()
+                ]
+            else:
+                body["player_loadout_diagnostics"] = []
+            client.post("/result", json={
+                "matchup_id": mid,
+                "result": body,
+                "bearer_token": BEARER,
+            })
+        # run_matchup's pre-flight check must NOT raise.
+        pool._check_mismatch_rate()  # asserts no raise
+
+
+class TestStalledProgressDetector:
+    """Diagnostic guardrail: when no /result POST has arrived for
+    STALLED_PROGRESS_WARN_SECONDS AND queue work is pending, the
+    janitor logs WARN with in-flight matchup IDs. Catches the
+    failure mode that cost 6,596 results on 2026-05-10 (workers
+    silent for 1h20m before operator noticed)."""
+
+    def test_warn_when_idle_and_queue_nonempty(
+        self, pool, caplog,
+    ):
+        from starsector_optimizer.cloud_worker_pool import (
+            STALLED_PROGRESS_WARN_SECONDS,
+        )
+        # Queue something so source_queue > 0.
+        pool._redis.lpush(pool._source, json.dumps({
+            "matchup_id": "in-flight-A",
+            "matchup": {},
+        }))
+        # Simulate idle: rewind _last_post_at past the threshold.
+        pool._last_post_at = time.time() - STALLED_PROGRESS_WARN_SECONDS - 10
+        with caplog.at_level("WARNING"):
+            pool._check_stalled_progress()
+        records = [r for r in caplog.records if "stalled progress" in r.message]
+        assert len(records) == 1
+        assert "in-flight-A" not in records[0].message  # source, not processing
+        # Debounced: second call must NOT re-emit.
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            pool._check_stalled_progress()
+        assert not [r for r in caplog.records if "stalled progress" in r.message]
+
+    def test_no_warn_when_queue_empty(self, pool, caplog):
+        from starsector_optimizer.cloud_worker_pool import (
+            STALLED_PROGRESS_WARN_SECONDS,
+        )
+        # No items queued.
+        pool._last_post_at = time.time() - STALLED_PROGRESS_WARN_SECONDS - 10
+        with caplog.at_level("WARNING"):
+            pool._check_stalled_progress()
+        # Empty queue means dispatcher is finished, not stalled.
+        assert not [r for r in caplog.records if "stalled progress" in r.message]
+
+    def test_no_warn_when_recently_posted(self, pool, caplog):
+        # Just had a POST → not stalled even with pending work.
+        pool._redis.lpush(pool._source, json.dumps({
+            "matchup_id": "fresh", "matchup": {},
+        }))
+        pool._last_post_at = time.time()
+        with caplog.at_level("WARNING"):
+            pool._check_stalled_progress()
+        assert not [r for r in caplog.records if "stalled progress" in r.message]
+
+    def test_post_resets_idle_timer_and_debounce(
+        self, pool, flask_test_client_factory,
+    ):
+        """Any /result POST (200 or 422) resets the stalled debounce —
+        operator should see a fresh WARN if the workers stall again
+        after recovery."""
+        from starsector_optimizer.cloud_worker_pool import (
+            STALLED_PROGRESS_WARN_SECONDS,
+        )
+        client = flask_test_client_factory(pool.app)
+        # Enter the stalled state.
+        pool._stalled_warn_emitted = True
+        pool._last_post_at = time.time() - STALLED_PROGRESS_WARN_SECONDS - 1
+        # A clean POST clears the debounce + updates last_post_at.
+        body = _combat_result_json("recover-1")
+        body["player_loadout_diagnostics"] = []
+        resp = client.post("/result", json={
+            "matchup_id": "recover-1",
+            "result": body,
+            "bearer_token": BEARER,
+        })
+        assert resp.status_code == 200
+        assert pool._stalled_warn_emitted is False
+        assert (time.time() - pool._last_post_at) < 5.0
+
+
+class TestModJarConsistency:
+    """Workers report mod-jar SHA in heartbeat; janitor logs WARN if the
+    fleet is heterogeneous (some workers picked up a tailnet override
+    and others didn't). Catches the silent-stale-jar failure mode that
+    serve_mod_jar.sh introduces."""
+
+    def _seed_heartbeat(self, fake_redis, project_tag, worker_id, sha):
+        key = f"worker:{project_tag}:{worker_id}:heartbeat"
+        fake_redis.hset(key, mapping={
+            "timestamp": time.time(),
+            "mod_jar_sha256": sha,
+        })
+
+    def test_homogeneous_fleet_no_warn(self, pool, caplog):
+        sha = "a" * 64
+        self._seed_heartbeat(pool._redis, pool._project_tag, "w-001", sha)
+        self._seed_heartbeat(pool._redis, pool._project_tag, "w-002", sha)
+        with caplog.at_level("WARNING"):
+            pool._check_mod_jar_consistency()
+        assert not [r for r in caplog.records if "heterogeneous mod-jar" in r.message]
+
+    def test_heterogeneous_fleet_logs_warn(self, pool, caplog):
+        self._seed_heartbeat(pool._redis, pool._project_tag, "w-001", "a" * 64)
+        self._seed_heartbeat(pool._redis, pool._project_tag, "w-002", "b" * 64)
+        with caplog.at_level("WARNING"):
+            pool._check_mod_jar_consistency()
+        records = [r for r in caplog.records if "heterogeneous mod-jar" in r.message]
+        assert len(records) == 1
+        assert "2 distinct" in records[0].message
+
+    def test_warn_is_debounced(self, pool, caplog):
+        from starsector_optimizer.cloud_worker_pool import (
+            HETEROGENEOUS_JAR_WARN_INTERVAL_SECONDS,
+        )
+        self._seed_heartbeat(pool._redis, pool._project_tag, "w-001", "a" * 64)
+        self._seed_heartbeat(pool._redis, pool._project_tag, "w-002", "b" * 64)
+        with caplog.at_level("WARNING"):
+            pool._check_mod_jar_consistency()
+            pool._check_mod_jar_consistency()  # within debounce window
+        records = [r for r in caplog.records if "heterogeneous mod-jar" in r.message]
+        assert len(records) == 1
+        # Rewind past debounce: WARN re-emits.
+        pool._last_jar_warn_at = time.time() - HETEROGENEOUS_JAR_WARN_INTERVAL_SECONDS - 1
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            pool._check_mod_jar_consistency()
+        assert [r for r in caplog.records if "heterogeneous mod-jar" in r.message]
+
+    def test_no_workers_no_warn(self, pool, caplog):
+        with caplog.at_level("WARNING"):
+            pool._check_mod_jar_consistency()
+        assert not [r for r in caplog.records if "heterogeneous mod-jar" in r.message]
+
+
 class TestTimeout:
     def test_timeout_on_no_result(self, fake_redis):
         from starsector_optimizer.cloud_worker_pool import (

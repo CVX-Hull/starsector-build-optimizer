@@ -28,8 +28,66 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+# HTTP 422 is returned by /result when the loadout-diagnostic fields show
+# corruption. 422 is outside the worker's terminal-status set
+# (200/409/401), which forces the worker to leave the matchup in the
+# Redis processing list so the janitor can re-queue it. Lifting the
+# literal to module scope makes the contract grep-able from worker_agent
+# and the spec.
+LOADOUT_MISMATCH_HTTP_STATUS = 422
+
+
+# Mismatch-rate guardrail. The 2026-05-10 Wave-1 C2/C3 incident hit
+# ~0.6% mismatch rate (Java cross-trial cache pollution); the post-V2
+# rate is even lower. 5% × ≥100 samples is the principled abort line:
+# well above empirical noise but tripped quickly if a regressed Java
+# fix corrupts every matchup. MIN_SAMPLES=100 (not 50) keeps the
+# binomial false-trip probability at the post-V2 noise floor below
+# 0.1% — at p=0.006, P(≥6 discards in 100) ≈ 7e-5.
+MISMATCH_ABORT_RATE = 0.05
+MISMATCH_ABORT_MIN_SAMPLES = 100
+
+
+# Number of in-flight matchup IDs to include in the stalled-progress WARN
+# log. Bounded so the LRANGE is O(SAMPLE) rather than O(processing-list).
+STALLED_PROGRESS_INFLIGHT_SAMPLE_COUNT = 10
+
+
+# Stalled-progress detector. After this many seconds without any /result
+# POST AND with at least one matchup still in the source queue, the
+# janitor logs WARN with the in-flight matchup IDs (read from the Redis
+# processing list) so an operator can tell at a glance whether the
+# workers are stuck on specific builds vs simply slow vs dead. Set
+# longer than result_timeout_seconds so a single slow matchup doesn't
+# trip it; shorter than max_lifetime_hours so a real stall surfaces
+# well before the spot fleet expires.
+STALLED_PROGRESS_WARN_SECONDS = 600  # 10 min
+
+
+# Mod-jar fleet-consistency check. Workers report `mod_jar_sha256` in
+# their heartbeat (see worker_agent.heartbeat); the janitor scans
+# heartbeats and logs WARN if more than one distinct SHA appears in
+# the fleet (which means some workers picked up a tailnet override and
+# others did not, OR the AMI's baked jar drifted between regions).
+# Heterogeneous fleets produce results from different code paths and
+# must not be silently combined.
+HETEROGENEOUS_JAR_WARN_INTERVAL_SECONDS = 300  # 5 min — debounce
+
+
 class WorkerTimeout(Exception):
     """A dispatched matchup did not receive a result within result_timeout_seconds."""
+
+
+class LoadoutMismatchAbort(Exception):
+    """Raised by run_matchup when the LOADOUT_MISMATCH discard rate exceeds
+    `MISMATCH_ABORT_RATE` over `MISMATCH_ABORT_MIN_SAMPLES`+ observations.
+
+    Empirically the post-V2 mismatch rate sits well below 1%; sustained
+    rates above the threshold mean the Java fix has regressed (or the
+    workers are running a stale jar). Aborting the run surfaces the
+    regression instead of letting `max_requeues=5` retries silently drain
+    cloud budget on every matchup.
+    """
 
 
 def _source_key(project_tag: str, study_id: str) -> str:
@@ -70,6 +128,23 @@ def _dict_to_ship(data: dict[str, Any]) -> ShipCombatResult:
         damage_taken=DamageBreakdown(**data["damage_taken"]),
         overload_count=data["overload_count"],
     )
+
+
+def _all_loadouts_match(result: CombatResult) -> bool:
+    """True iff every player ship's loadout diagnostic shows all four fields
+    matching (weapons + hullmods + flux vents + flux caps). Empty diagnostic
+    list (e.g. test fixtures, or pre-V2 paths that never emitted) returns
+    True — only an explicit MISMATCH is treated as corruption.
+
+    Used by the `/result` POST handler to reject corrupt matchups so they
+    re-queue rather than feed false fitness data into the optimizer (Wave 1
+    C1 cross-trial loadout bleed, ~0.6 % rate, 2026-05-10).
+    """
+    for d in result.player_loadout_diagnostics:
+        if not (d.weapons_match and d.hullmods_match
+                and d.flux_vents_match and d.flux_capacitors_match):
+            return False
+    return True
 
 
 def _log_loadout_diagnostics(matchup_id: str, result: CombatResult) -> None:
@@ -208,6 +283,26 @@ class CloudWorkerPool(EvaluatorPool):
         self._results_lock = threading.Lock()
         self._result_events: dict[str, threading.Event] = {}
 
+        # Mismatch-rate guardrail: count discards alongside successes.
+        # `_mismatch_discard_count` increments per 422 response;
+        # `run_matchup` checks the running rate and raises
+        # LoadoutMismatchAbort if it exceeds MISMATCH_ABORT_RATE after
+        # MISMATCH_ABORT_MIN_SAMPLES observations.
+        self._mismatch_discard_count: int = 0
+
+        # Stalled-progress detector. Updated by `/result` on every
+        # accepted (200) or discarded (422) POST — the diagnostic
+        # signal we care about is "did anything change", not "did a
+        # matchup succeed". `_stalled_warn_emitted` debounces so we
+        # log once per stall episode, not once per janitor tick.
+        self._last_post_at: float = time.time()
+        self._stalled_warn_emitted: bool = False
+
+        # Mod-jar fleet consistency. Last time we emitted the WARN, so
+        # we don't repeat every janitor tick during an ongoing stale
+        # state. 0 = never emitted; otherwise float seconds since epoch.
+        self._last_jar_warn_at: float = 0.0
+
         self._stop_event = threading.Event()
         self._janitor_thread: threading.Thread | None = None
         self._server = None
@@ -249,17 +344,44 @@ class CloudWorkerPool(EvaluatorPool):
                         matchup_id,
                     )
                     return jsonify({"error": "bad result"}), 400
-                self._results[matchup_id] = parsed
                 _log_loadout_diagnostics(matchup_id, parsed)
-                # Pass-through harness debug dumps (`[SHIP_DUMP]`,
-                # `[FIGHT_TICK]`, `[WIN_DUMP]` lines from
-                # CombatHarnessPlugin). Logged at INFO so smoke-time
-                # investigations have ship-state evidence without grepping
-                # worker game stdout. Bounded volume — harness emits at most
-                # ~1 line/sec.
+                # Pass-through harness debug dumps regardless of loadout
+                # outcome — they're useful for diagnosing the mismatch
+                # itself.
                 if parsed.debug_dumps:
                     for line in parsed.debug_dumps:
                         logger.info("DEBUG_DUMP matchup=%s %s", matchup_id, line)
+                # Either acceptance or discard counts as "progress": a
+                # POST landed, so the workers are alive and reaching
+                # the listener. Use a single update site below the
+                # body-parse to cover both paths.
+                self._last_post_at = time.time()
+                self._stalled_warn_emitted = False
+                if not _all_loadouts_match(parsed):
+                    # Corrupt matchup: drop the result instead of feeding
+                    # false data into fitness aggregation. Don't add to
+                    # `_seen`, don't store, don't fire the event. Returning
+                    # LOADOUT_MISMATCH_HTTP_STATUS (422) makes the worker
+                    # raise (worker_agent.post_result only treats
+                    # 200/409/401 as terminal); the matchup stays in the
+                    # processing list and the janitor re-queues it after
+                    # visibility_timeout. With max_requeues=5 and an
+                    # empirical mismatch rate ~0.6 %, P(all 6 attempts
+                    # mismatch) ≈ 5e-14. The abort guardrail in
+                    # run_matchup catches the regression case where the
+                    # rate exceeds MISMATCH_ABORT_RATE.
+                    self._mismatch_discard_count += 1
+                    logger.warning(
+                        "discarding LOADOUT_MISMATCH matchup=%s "
+                        "(running discards=%d, accepted=%d) — janitor "
+                        "will re-queue (matchup stays in processing list)",
+                        matchup_id, self._mismatch_discard_count, len(self._seen),
+                    )
+                    return jsonify({
+                        "error": "loadout_mismatch",
+                        "matchup_id": matchup_id,
+                    }), LOADOUT_MISMATCH_HTTP_STATUS
+                self._results[matchup_id] = parsed
                 self._seen.add(matchup_id)
                 event = self._result_events.get(matchup_id)
             if event is not None:
@@ -306,9 +428,41 @@ class CloudWorkerPool(EvaluatorPool):
     # ---- run_matchup ----
 
     def run_matchup(self, matchup: MatchupConfig) -> CombatResult:
-        """Enqueue + block up to result_timeout_seconds for a POST /result."""
+        """Enqueue + block up to result_timeout_seconds for a POST /result.
+
+        Pre-flight: if the running LOADOUT_MISMATCH discard rate has
+        exceeded MISMATCH_ABORT_RATE over MISMATCH_ABORT_MIN_SAMPLES+
+        observations, abort the run instead of letting per-matchup
+        retries silently drain cloud budget. Empirically the post-V2
+        rate is well below 1%, so a sustained 5%+ rate means the Java
+        fix has regressed (or workers are running a stale jar).
+        """
+        self._check_mismatch_rate()
         with self._dispatch_semaphore:
             return self._dispatch_and_wait(matchup)
+
+    def _check_mismatch_rate(self) -> None:
+        """Raise LoadoutMismatchAbort if the running discard rate is too
+        high. See module-level MISMATCH_ABORT_RATE / _MIN_SAMPLES.
+        """
+        with self._results_lock:
+            discards = self._mismatch_discard_count
+            accepted = len(self._seen)
+        total = discards + accepted
+        if total < MISMATCH_ABORT_MIN_SAMPLES:
+            return
+        rate = discards / total
+        if rate <= MISMATCH_ABORT_RATE:
+            return
+        raise LoadoutMismatchAbort(
+            f"LOADOUT_MISMATCH discard rate {rate:.1%} "
+            f"({discards} discards / {total} total) exceeded "
+            f"{MISMATCH_ABORT_RATE:.0%} threshold over "
+            f"{MISMATCH_ABORT_MIN_SAMPLES}+ samples. The Java "
+            f"unique-variant fix may have regressed, or workers are "
+            f"running a stale combat-harness jar. Investigate before "
+            f"resuming."
+        )
 
     def _dispatch_and_wait(self, matchup: MatchupConfig) -> CombatResult:
         matchup_id = matchup.matchup_id
@@ -346,6 +500,112 @@ class CloudWorkerPool(EvaluatorPool):
                     self._visibility_timeout_seconds,
                     self._max_requeues,
                 )
+                self._check_stalled_progress()
+                self._check_mod_jar_consistency()
             except Exception:
                 logger.exception("janitor pass failed for study=%s", self._study_id)
             self._stop_event.wait(timeout=self._janitor_interval_seconds)
+
+    def _check_mod_jar_consistency(self) -> None:
+        """Scan worker heartbeats for `mod_jar_sha256`; log WARN if
+        more than one distinct SHA appears in the fleet. Diagnostic
+        only — does NOT abort dispatch. Debounced via
+        HETEROGENEOUS_JAR_WARN_INTERVAL_SECONDS so we don't repeat
+        every janitor tick during an ongoing inconsistency.
+        """
+        if (time.time() - self._last_jar_warn_at) < HETEROGENEOUS_JAR_WARN_INTERVAL_SECONDS:
+            return
+        # Heartbeat key pattern: `worker:{project_tag}:{worker_id}:heartbeat`.
+        # Scan all keys for our project_tag.
+        try:
+            cursor = 0
+            keys: list[str] = []
+            pattern = f"worker:{self._project_tag}:*:heartbeat"
+            while True:
+                cursor, batch = self._redis.scan(cursor=cursor, match=pattern, count=100)
+                keys.extend(batch)
+                if cursor == 0:
+                    break
+            if not keys:
+                return
+            shas: dict[str, list[str]] = {}
+            for key in keys:
+                hb = self._redis.hget(key, "mod_jar_sha256")
+                # A heartbeat with NO `mod_jar_sha256` field is itself
+                # a heterogeneity signal: it means the worker is
+                # running pre-2026-05-10 code that didn't report the
+                # SHA. Treat as a distinct bucket "missing" so the
+                # WARN surfaces this case rather than silently
+                # filtering it out.
+                if hb is None:
+                    sha = "missing"
+                else:
+                    sha = hb.decode() if isinstance(hb, (bytes, bytearray)) else hb
+                shas.setdefault(sha, []).append(
+                    key.decode() if isinstance(key, (bytes, bytearray)) else key
+                )
+        except Exception:
+            logger.exception(
+                "mod-jar consistency check: redis scan failed for study=%s",
+                self._study_id,
+            )
+            return
+        if len(shas) <= 1:
+            return
+        sha_summary = {sha: len(workers) for sha, workers in shas.items()}
+        logger.warning(
+            "heterogeneous mod-jar fleet for project=%s: %d distinct "
+            "SHAs across %d workers — sha_counts=%s. Workers ran from "
+            "different combat-harness jars; results may be inconsistent. "
+            "Investigate before publishing findings.",
+            self._project_tag, len(shas), sum(sha_summary.values()),
+            sha_summary,
+        )
+        self._last_jar_warn_at = time.time()
+
+    def _check_stalled_progress(self) -> None:
+        """If no /result POST has been observed for STALLED_PROGRESS_WARN_SECONDS
+        AND there is queue work pending (source or processing), log WARN
+        with in-flight matchup IDs so an operator can tell whether
+        workers are stuck on specific builds, dead, or unreachable.
+
+        Diagnostic-only; does NOT change dispatch behavior. Debounced
+        via `_stalled_warn_emitted` so we don't repeat the WARN on
+        every janitor tick during an extended stall.
+        """
+        if self._stalled_warn_emitted:
+            return
+        idle_seconds = time.time() - self._last_post_at
+        if idle_seconds < STALLED_PROGRESS_WARN_SECONDS:
+            return
+        try:
+            # Bounded reads — LRANGE 0,SAMPLE-1 is O(SAMPLE), not O(N) of
+            # the processing list. We don't need the full list, just a
+            # sample for the WARN message; LLEN gives the total cheaply.
+            source_len = self._redis.llen(self._source)
+            processing_len = self._redis.llen(self._processing)
+            sample = self._redis.lrange(
+                self._processing, 0, STALLED_PROGRESS_INFLIGHT_SAMPLE_COUNT - 1,
+            )
+        except Exception:
+            logger.exception(
+                "stalled-progress check: redis read failed for study=%s",
+                self._study_id,
+            )
+            return
+        if source_len == 0 and processing_len == 0:
+            return
+        in_flight: list[str] = []
+        for raw in sample:
+            try:
+                payload = json.loads(raw)
+                in_flight.append(str(payload.get("matchup_id")))
+            except Exception:
+                in_flight.append("<unparseable>")
+        logger.warning(
+            "stalled progress: no /result POST for %.0fs (threshold=%ds) "
+            "study=%s source_queue=%d processing=%d in_flight_sample=%s",
+            idle_seconds, STALLED_PROGRESS_WARN_SECONDS,
+            self._study_id, source_len, processing_len, in_flight,
+        )
+        self._stalled_warn_emitted = True

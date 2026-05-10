@@ -99,11 +99,41 @@ class OptimizerConfig:
     eval_log_path: Path | None = None
 
 
+@dataclass(frozen=True)
+class _CachedTrialResult:
+    """Full fitness triple + origin pointer cached on first
+    trial-completion of a Build, so cache-hit trials can emit a JSONL
+    row that's *complete but not misleading*.
+
+    The cache-hit row carries the origin's eb/twfe/shaped (so honest-eval
+    candidate ranking by eb_fitness still works for cache hits) but
+    emits an EMPTY `opponent_results` and `opponent_order` because no
+    matchups ran for the cache-hit trial itself. Aggregators that
+    re-fit TWFE post-hoc filter on `cache_hit=True` (and `invalid_spec`)
+    to avoid double-counting the origin's per-opponent observations.
+
+    `origin_trial_number` lets analysts trace a cache hit back to the
+    trial that actually ran the matchups.
+    """
+    shaped_fitness: float
+    eb_fitness: float
+    twfe_fitness: float
+    origin_trial_number: int
+
+
 class BuildCache:
-    """Hash-based deduplication cache for repaired builds."""
+    """Hash-based deduplication cache for repaired builds.
+
+    Stores `_CachedTrialResult` so cache-hit trials can both:
+      - report the original's `shaped_fitness` to Optuna (primary use), AND
+      - emit a JSONL row carrying the original's `eb_fitness` /
+        `twfe_fitness` / opponent_results, marked `cache_hit=True`,
+        so post-hoc analysis (honest-eval candidate ranking) sees a
+        complete log of every trial Optuna scored.
+    """
 
     def __init__(self) -> None:
-        self._cache: dict[str, float] = {}
+        self._cache: dict[str, _CachedTrialResult] = {}
 
     def hash_build(self, build: Build) -> str:
         """Stable hash from hull_id + weapon assignments + hullmods + vents + caps."""
@@ -116,11 +146,11 @@ class BuildCache:
         )
         return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
-    def get(self, build: Build) -> float | None:
+    def get(self, build: Build) -> _CachedTrialResult | None:
         return self._cache.get(self.hash_build(build))
 
-    def put(self, build: Build, score: float) -> None:
-        self._cache[self.hash_build(build)] = score
+    def put(self, build: Build, result: _CachedTrialResult) -> None:
+        self._cache[self.hash_build(build)] = result
 
 
 def preflight_check(
@@ -808,9 +838,38 @@ class StagedEvaluator:
 
         cached = self._cache.get(build)
         if cached is not None:
-            logger.debug("Cache hit for trial %d", trial.number)
-            self._study.tell(trial, cached)
+            logger.debug(
+                "Cache hit for trial %d (origin trial %d)",
+                trial.number, cached.origin_trial_number,
+            )
+            self._study.tell(trial, cached.shaped_fitness)
             self._trials_completed += 1
+            # Pre-2026-05-10 the cache-hit path silently completed in
+            # SQLite without a JSONL row; honest-eval / analyzers then
+            # had no eb_fitness for ~3% of completed trials. Emit a row
+            # carrying the cached fitness triple + a `cache_hit=True`
+            # marker so the JSONL is the complete source of truth.
+            #
+            # Schema-correctness: opponent_results is EMPTY because no
+            # matchups actually ran for THIS trial — they ran for the
+            # origin trial whose number is recorded. Aggregators that
+            # re-fit TWFE post-hoc must filter on `cache_hit=True` to
+            # avoid double-counting the origin's per-opponent
+            # observations.
+            if self._eval_log_path:
+                _append_eval_log(
+                    self._eval_log_path, self._hull_id, trial.number,
+                    build, [], cached.shaped_fitness,
+                    raw_fitness=cached.eb_fitness,
+                    eb_fitness=cached.eb_fitness,
+                    twfe_fitness=cached.twfe_fitness,
+                    regime=self._config.regime.name,
+                    pruned=False,
+                    opponents_total=0,
+                    opponent_order=[],
+                    cache_hit=True,
+                    cache_hit_origin_trial=cached.origin_trial_number,
+                )
             return None
 
         variant_id = f"{self._hull_id}_opt_{trial.number:06d}"
@@ -822,6 +881,21 @@ class StagedEvaluator:
             logger.warning("Invalid build spec %s: %s", variant_id, errors)
             self._study.tell(trial, self._config.failure_score)
             self._trials_completed += 1
+            # Same JSONL-completeness fix as the cache-hit path. Mark
+            # with `invalid_spec=True` so honest-eval candidate
+            # selection can skip these trials (their fitness is the
+            # `failure_score` sentinel, not a measured value).
+            if self._eval_log_path:
+                _append_eval_log(
+                    self._eval_log_path, self._hull_id, trial.number,
+                    build, [], self._config.failure_score,
+                    regime=self._config.regime.name,
+                    pruned=False,
+                    opponents_total=0,
+                    opponent_order=[],
+                    invalid_spec=True,
+                    invalid_spec_errors=errors,
+                )
             return None
 
         scorer_result = heuristic_score(build, self._hull, self._game_data)
@@ -863,7 +937,12 @@ class StagedEvaluator:
         )
         self._track_shape_summary(shape_diag)
 
-        self._cache.put(ifb.build, shaped_fitness)
+        self._cache.put(ifb.build, _CachedTrialResult(
+            shaped_fitness=shaped_fitness,
+            eb_fitness=eb_fitness,
+            twfe_fitness=twfe_fitness,
+            origin_trial_number=ifb.trial.number,
+        ))
         self._study.tell(ifb.trial, shaped_fitness)
         logger.info(
             "  Trial %d COMPLETE (twfe=%.3f, eb=%.3f, shaped=%.3f, λ=%s)",
@@ -1330,6 +1409,10 @@ def _append_eval_log(
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
     eb_diagnostics: "_EBDiagnostics | None" = None,
+    cache_hit: bool = False,
+    cache_hit_origin_trial: int | None = None,
+    invalid_spec: bool = False,
+    invalid_spec_errors: list[str] | None = None,
 ) -> None:
     """Append one JSONL record to the evaluation log.
 
@@ -1343,6 +1426,29 @@ def _append_eval_log(
     from the log alone, and `eb_diagnostics` (σ²_TWFE, σ²_EB, τ̂², γ̂, kept
     covariate columns) so posterior credible intervals can be reconstructed
     at analysis time. Pruned builds omit these EB/A3-specific fields.
+
+    **Trial-row taxonomy** — every row is exactly one of four kinds; the
+    `pruned` / `cache_hit` / `invalid_spec` flags partition them so any
+    aggregator can `filter(lambda r: not r["pruned"] and not r.get(
+    "cache_hit") and not r.get("invalid_spec"))` to get the trials that
+    *actually ran new matchups*:
+
+    1. **Real completed**: pruned=False, cache_hit=False, invalid_spec=False.
+       Has eb/twfe/shape values, opponent_results populated, EB diagnostics.
+    2. **Pruned**: pruned=True, ...=False. Has raw_mean of partial
+       opponent_results; no EB/A3 (those run only on completion).
+    3. **Cache hit**: pruned=False, cache_hit=True. Carries cached
+       eb/twfe/shaped from `cache_hit_origin_trial` so honest-eval can
+       still rank by eb_fitness, but `opponent_results` is EMPTY because
+       no matchups ran for THIS trial. `opponents_evaluated=0`,
+       `opponents_total=0`. EB diagnostics are NOT re-emitted (they
+       belong to the origin trial).
+    4. **Invalid spec**: pruned=False, invalid_spec=True. The build
+       failed `validate_build_spec` before any matchup dispatched.
+       `fitness=failure_score` (sentinel — DO NOT mix with real fitness
+       values), `raw_fitness=failure_score`, no eb/twfe (never computed),
+       `opponent_results=[]`, plus `invalid_spec_errors` listing the
+       validation reasons.
     """
     record = {
         "hull_id": hull_id,
@@ -1369,14 +1475,25 @@ def _append_eval_log(
         "opponents_total": opponents_total,
         "opponent_order": opponent_order or [],
         "pruned": pruned,
+        "cache_hit": cache_hit,
+        "invalid_spec": invalid_spec,
         "raw_fitness": raw_fitness if raw_fitness is not None else fitness,
         "fitness": fitness,
         "regime": regime,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    if eb_fitness is not None:
+    if cache_hit and cache_hit_origin_trial is not None:
+        record["cache_hit_origin_trial"] = cache_hit_origin_trial
+    if invalid_spec and invalid_spec_errors is not None:
+        record["invalid_spec_errors"] = list(invalid_spec_errors)
+    # Only emit EB/TWFE when they are MEANINGFUL for this row:
+    # - real completed: yes (computed for this trial)
+    # - cache_hit: yes (copied from origin — preserved for ranking)
+    # - pruned / invalid_spec: no (never computed; the kwargs default
+    #   to None so we just don't add the key, keeping the row honest)
+    if eb_fitness is not None and not invalid_spec:
         record["eb_fitness"] = eb_fitness
-    if twfe_fitness is not None:
+    if twfe_fitness is not None and not invalid_spec:
         record["twfe_fitness"] = twfe_fitness
     if engine_stats is not None:
         record["engine_stats"] = {
@@ -1414,7 +1531,14 @@ def optimize_hull(
     opponent_pool: OpponentPool,
     config: OptimizerConfig,
     manifest: GameManifest,
+    game_dir: Path | None = None,
 ) -> optuna.Study:
+    # `game_dir` is the source for stock-build warm-start seeding
+    # (mechanism 3). Caller MUST pass it if they want stock seeding —
+    # we no longer probe `pool.game_dir` because that fallback silently
+    # disabled stock seeding under the cloud workflow (CloudWorkerPool
+    # has no game_dir attribute). Callers without stocks (tests with
+    # mock pools, heuristic-only runs) pass None.
     """Main optimization entry point. Returns the Optuna study."""
     preflight_check(hull_id, game_data, pool, opponent_pool)
     hull = game_data.hulls[hull_id]
@@ -1463,7 +1587,6 @@ def optimize_hull(
             target_space=space,
         )
 
-    game_dir = getattr(pool, "game_dir", None)
     warm_start(study, hull, game_data, config, manifest, game_dir=game_dir)
 
     evaluator = StagedEvaluator(

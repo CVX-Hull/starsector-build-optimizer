@@ -147,7 +147,7 @@ One JSONL row in `data/campaigns/<name>/ledger.jsonl`. All fields primitive and 
 Each study subprocess owns two Redis lists:
 - `queue:<project_tag>:<study_id>:source` — matchups awaiting a worker
 - `queue:<project_tag>:<study_id>:processing` — matchups claimed by a worker but not yet ack'd via `POST /result`
-- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU), the healthy `load_avg_1min` target band is design-set at [3, 8]. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying).
+- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`, `game_log_tail`, `mod_jar_sha256`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU), the healthy `load_avg_1min` target band is design-set at [3, 8]. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying). `game_log_tail` is the concatenated last ~32 KiB of every per-instance `game_stdout.log` on this VM — the only orchestrator-side window into a hung JVM, since worker SGs grant zero ingress and `tailscale ssh` is unreliable from userspace-mode workstations. `mod_jar_sha256` is the SHA-256 of the loaded `combat-harness.jar`; the orchestrator's janitor scans it for fleet-wide consistency (see §"Diagnostic checks").
 
 Keys are namespaced by `project_tag` (= `starsector-<campaign_name>`) so a re-run of a campaign whose study_ids happen to match a prior run's never inherits stale processing-list items. `CampaignManager._preflight` additionally SCANs and DELs `queue:<project_tag>:*` + `worker:<project_tag>:*` at startup to defend against same-campaign re-launch.
 
@@ -205,6 +205,18 @@ POST /result
   200: first observation; result registered, waiter notified via threading.Event
   409: matchup_id already observed; dedup silently drops
   401: bearer_token mismatch; no entry added
+  422: LOADOUT_MISMATCH discard — diagnostic field shows weapon/hullmod
+       /flux corruption (Wave 1 cross-trial cache pollution); orchestrator
+       does NOT add to `_seen` and does NOT store the result. The 422 is
+       outside the worker's terminal-status set (200/409/401), so the
+       worker raises and leaves the matchup in the Redis processing list,
+       where the janitor re-queues it after `visibility_timeout_seconds`.
+       Bounded by `max_requeues`. CloudWorkerPool tracks the running
+       discard rate and raises `LoadoutMismatchAbort` from `run_matchup`
+       when the rate exceeds `MISMATCH_ABORT_RATE` (5%) after
+       `MISMATCH_ABORT_MIN_SAMPLES` (100) observations — surfaces a
+       regressed Java fix or a stale jar instead of silently retrying
+       every matchup.
   404: any other path or method
 ```
 
@@ -216,7 +228,9 @@ Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is follow
 
 Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown and **returns exit code 0** (designed termination, not failure — wrapper scripts running multiple budget-capped cells back-to-back depend on this to advance to the next cell). Other failure modes keep distinct non-zero exit codes: preflight failure → 2, KeyboardInterrupt / SIGTERM / SIGHUP → 130, unexpected exception → propagates.
 
-After every major optimization run that uses this infrastructure, the operator runs the **honest evaluator** ([spec 30](30-honest-evaluator.md), [`scripts/cloud/evaluate_campaign.sh`](../../scripts/cloud/evaluate_campaign.sh)) before publishing report findings — see [`honest-evaluation`](../../.claude/skills/honest-evaluation.md) skill for the SOP. The evaluator dispatches via the same `EvaluatorPool` ABC defined in this spec and reuses `cloud_runner.prepare_cloud_pool` for the per-eval fleet (separate `honest-eval-{name}-{utc}` namespace from the source campaign).
+**`budget_usd` is a hard ceiling, not a target.** Wave 1 surfaced an operator footgun: per-cell `budget_usd: 5.0` truncated cells at ~150 trials before the validation-plan-design 250 floor, making downstream gate thresholds mis-interpretable (decision recorded 2026-05-10). The principled operator contract: **size `budget_usd` as `expected_cost × 1.5` headroom**, where expected_cost = trials × matchups_per_trial × per_matchup_cost. The 1.5× cushion absorbs spot-price spikes and worker-restart overhead without hitting the cap. Studies designed against trial counts (e.g. validation plans citing N=250) MUST budget for trials, not flat dollar amounts. Future config option `min_trials_before_budget_cap` was considered and deferred — keeping budget purely-as-ceiling avoids a "two ways to do it" config surface; the trial-floor concern lives in operator math, not the framework.
+
+After every major optimization run that uses this infrastructure, the operator runs the **honest evaluator** ([spec 30](30-honest-evaluator.md), [`scripts/cloud/evaluate_campaign.sh`](../../scripts/cloud/evaluate_campaign.sh)) before publishing report findings — see [`honest-evaluation`](../../.claude/skills/honest-evaluation.md) skill for the SOP. The evaluator dispatches via the same `EvaluatorPool` ABC defined in this spec and reuses `cloud_runner.prepare_cloud_pool` for the per-eval fleet (separate `starsector-honest-eval-{name}-{utc}` namespace from the source campaign).
 
 ### Ledger tick (2026-04-19)
 
@@ -248,6 +262,39 @@ After every major optimization run that uses this infrastructure, the operator r
 
 Module-level constant `_SECONDS_PER_HOUR = 3600.0` guards against
 bare `3600.0` literals in function bodies (project invariant).
+
+### Diagnostic checks (2026-05-10)
+
+`CloudWorkerPool._janitor_loop` runs two diagnostic checks alongside
+the reliable-queue janitor pass. Both are diagnostic-only — neither
+aborts dispatch — but both surface failure modes that previously cost
+significant operator time to diagnose.
+
+**Stalled-progress detector.** If no `/result` POST has arrived for
+`STALLED_PROGRESS_WARN_SECONDS` (default 600s = 10 min) AND the source
+queue or processing list is non-empty, the janitor logs WARN with the
+source queue length, processing list length, and a sample of
+in-flight matchup IDs (bounded to `STALLED_PROGRESS_INFLIGHT_SAMPLE_COUNT`
+= 10 via `LRANGE 0,9`). `_last_post_at` is updated on every accepted
+(200) and discarded (422) `/result`, so any incoming POST counts as
+progress regardless of outcome. Debounced via `_stalled_warn_emitted`
+so a sustained stall logs once, not once per janitor tick. The
+detector caught the 2026-05-10 incident retroactively (workers idle
+for 1h20m before operator noticed manually).
+
+**Mod-jar fleet-consistency check.** Workers report `mod_jar_sha256`
+(SHA-256 of their loaded `combat-harness.jar`) in heartbeat. The
+janitor scans heartbeats and logs WARN if more than one distinct SHA
+appears in the fleet — including a `"missing"` bucket for heartbeats
+that don't carry the field at all (pre-2026-05-10 worker code).
+Heterogeneous fleets produce results from different code paths and
+must not be silently combined; the WARN tells the operator to
+investigate before publishing findings. Debounced via
+`HETEROGENEOUS_JAR_WARN_INTERVAL_SECONDS` (default 300s = 5 min).
+Catches the failure mode introduced by `serve_mod_jar.sh` tailnet
+overrides — without the consistency check, a partial override that
+some workers picked up and others didn't would silently corrupt the
+fleet's results.
 
 ### Manifest + AMI tag preflight (2026-04-19)
 

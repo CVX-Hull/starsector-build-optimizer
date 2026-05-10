@@ -16,17 +16,20 @@
 #       [--top-k 3] [--replicates 30] [--max-retries 3]
 #
 # Cost estimate: top_k × n_seeds × n_cells × pool_size × replicates matchups,
-# at ~120s/matchup observed in Wave 1 C0a. Default fleet sizing inherits
-# `max(workers_per_study)` from the source campaign — for Wave 1 that's
-# 8 workers × 2 matchup_slots = 16 concurrent matchups (NOT the 48 the
-# full Wave 1 launch used across 3 parallel studies). Wall-clock scales
-# inversely with concurrency.
+# at ~75s/matchup wall-clock (time_mult=5, in-engine 300s cap). Default
+# fleet sizing inherits `max(workers_per_study)` from the source campaign
+# — for Wave 1 that's 8 workers × 2 matchup_slots = 16 concurrent
+# matchups. Wall-clock scales inversely with concurrency; total cost
+# stays roughly constant since matchup-work is fixed.
 #
-# For Wave 1 hammerhead full sweep at the default 16-slot fleet:
-#   3 × 3 × 5 × ~54 × 30 = ~73k matchups
-#   73k × 120s ÷ 16 slots ≈ 2.5h, ~$5-10
-# Pass --workers <N> to scale concurrency up — e.g. --workers 24 → 48 slots
-# brings wall-clock back to ~30 min at 1.5× the per-hour rate (~same total).
+# For Wave 1 hammerhead full sweep (5 cells × 3 seeds × 3 builds × ~28
+# destroyer opponents × 30 reps ≈ 38k matchups):
+#   16 workers (32 slots): ~24h, ~$70 raw  ($100 with 1.5× headroom)
+#   32 workers (64 slots): ~12h, ~$70 raw
+#   64 workers (128 slots): ~6h,  ~$70 raw
+# Pass --workers <N> to scale concurrency up. The honest-eval ledger
+# at data/honest_eval/<eval_tag>/results.jsonl makes any interrupt
+# survivable — re-run with --resume-from <eval_tag> to continue.
 
 set -euo pipefail
 
@@ -37,11 +40,11 @@ source "$(dirname "$0")/_env.sh"
 # Pass-through arg passing — let argparse in honest_evaluator.main do the
 # parsing. We only need the campaign names for the teardown banner.
 echo "[evaluate_campaign] Honest evaluator — see SOP at .claude/skills/honest-evaluation.md"
-echo "[evaluate_campaign] Fleet namespace: honest-eval-<first-campaign-name>-<utc-stamp>"
-echo "[evaluate_campaign] On interrupt: honest-eval namespaces by the first"
-echo "[evaluate_campaign] --campaign-name argument plus a UTC timestamp; tear down with:"
-echo "[evaluate_campaign]   scripts/cloud/teardown.sh honest-eval-<first-campaign-name>-<stamp>"
+echo "[evaluate_campaign] Fleet namespace: starsector-honest-eval-<first-campaign-name>-<utc-stamp>"
+echo "[evaluate_campaign] On interrupt: tear down with:"
+echo "[evaluate_campaign]   scripts/cloud/teardown.sh starsector-honest-eval-<first-campaign-name>-<stamp>"
 echo "[evaluate_campaign]   (the exact tag is logged on the first dispatch line)"
+echo "[evaluate_campaign] To resume after interrupt: re-run with --resume-from <eval_tag>"
 echo
 
 # Tee stdout+stderr to data/honest_eval/orchestrator.log for diagnostics.

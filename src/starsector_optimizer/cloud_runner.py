@@ -171,6 +171,7 @@ def run_cloud_study(
     manifest: Any,
     opponent_pool: Any,
     optimizer_config: Any,
+    game_dir: Path | None = None,
 ) -> Any:
     """Provision fleet → run Optuna study → terminate fleet (in `finally`).
 
@@ -251,5 +252,5 @@ def run_cloud_study(
     ) as pool:
         return optimize_hull(
             hull_id, game_data, pool, opponent_pool, optimizer_config,
-            manifest,
+            manifest, game_dir=game_dir,
         )

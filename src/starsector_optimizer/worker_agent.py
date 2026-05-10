@@ -295,9 +295,41 @@ def _read_game_log_tails() -> str:
     return joined
 
 
-def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
-    """Write worker liveness + CPU-load + VM-identity telemetry + per-instance
-    game_stdout.log tail.
+_MOD_JAR_RELATIVE_PATH = Path("mods") / "combat-harness" / "jars" / "combat-harness.jar"
+_MOD_JAR_SHA_CACHE: dict[str, str] = {}
+
+
+def _mod_jar_sha256(game_dir: Path) -> str:
+    """SHA-256 of the loaded combat-harness jar. Cached per game_dir so
+    every heartbeat doesn't re-hash the file. Returns "unknown" on any
+    read error — operators can still tell the worker booted, but the
+    consistency check at the orchestrator side will surface the
+    misconfiguration as "heterogeneous fleet".
+    """
+    key = str(game_dir)
+    if key in _MOD_JAR_SHA_CACHE:
+        return _MOD_JAR_SHA_CACHE[key]
+    import hashlib
+    jar_path = game_dir / _MOD_JAR_RELATIVE_PATH
+    try:
+        h = hashlib.sha256()
+        with jar_path.open("rb") as f:
+            for chunk in iter(lambda: f.read(64 * 1024), b""):
+                h.update(chunk)
+        sha = h.hexdigest()
+    except OSError:
+        logger.exception("mod_jar_sha256: read failed at %s", jar_path)
+        sha = "unknown"
+    _MOD_JAR_SHA_CACHE[key] = sha
+    return sha
+
+
+def heartbeat(
+    redis_client: Any, project_tag: str, worker_id: str,
+    *, game_dir: Path,
+) -> None:
+    """Write worker liveness + CPU-load + VM-identity telemetry +
+    per-instance game_stdout.log tail + mod-jar SHA.
 
     `load_avg_*` comes from `os.getloadavg()` so the orchestrator can verify
     the configured `matchup_slots_per_worker` actually matches the box's
@@ -313,6 +345,12 @@ def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
     `game_log_tail` is the concatenated last ~32 KiB of every per-instance
     `game_stdout.log` on this VM — the only orchestrator-side window into
     a hung JVM, since worker SGs don't grant SSH ingress.
+
+    `mod_jar_sha256` is the SHA-256 of the loaded combat-harness jar.
+    The orchestrator scans heartbeats for fleet-wide consistency; a
+    heterogeneous fleet (some workers on the AMI's baked jar, others on
+    a tailnet override) means results from different code, which is
+    the exact "stale jar" failure mode `serve_mod_jar.sh` introduced.
     """
     meta = _fetch_vm_metadata()
     load_1, load_5, load_15 = os.getloadavg()
@@ -327,6 +365,7 @@ def heartbeat(redis_client: Any, project_tag: str, worker_id: str) -> None:
             "region": meta.get("region", "unknown"),
             "instance_type": meta.get("instance_type", "unknown"),
             "game_log_tail": _read_game_log_tails(),
+            "mod_jar_sha256": _mod_jar_sha256(game_dir),
         },
     )
 
@@ -419,10 +458,14 @@ def _heartbeat_loop(
     redis_client: Any,
     interval_seconds: float,
     stop_event: threading.Event,
+    game_dir: Path,
 ) -> None:
     """Write worker heartbeat (with CPU load) every interval_seconds."""
     while not stop_event.is_set():
-        heartbeat(redis_client, config.project_tag, config.worker_id)
+        heartbeat(
+            redis_client, config.project_tag, config.worker_id,
+            game_dir=game_dir,
+        )
         stop_event.wait(timeout=interval_seconds)
 
 
@@ -469,6 +512,7 @@ def main() -> int:
                 "redis_client": redis_client,
                 "interval_seconds": _HEARTBEAT_INTERVAL_SECONDS,
                 "stop_event": stop_event,
+                "game_dir": game_dir,
             },
             name="worker-heartbeat",
             daemon=True,

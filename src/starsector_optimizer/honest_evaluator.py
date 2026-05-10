@@ -13,21 +13,19 @@ import json
 import logging
 import math
 import os
+import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-import optuna
-from optuna.trial import TrialState
-
 from .campaign import (
     check_ami_tags_against_manifest, check_authkey_syntax,
     check_aws_credentials, load_campaign_config,
 )
 from .cloud_provider import AWSProvider
-from .cloud_runner import _require_env, prepare_cloud_pool
+from .cloud_runner import prepare_cloud_pool
 from .combat_fitness import combat_fitness
 from .evaluator_pool import EvaluatorPool
 from .game_manifest import GameManifest
@@ -47,6 +45,101 @@ logger = logging.getLogger(__name__)
 
 HONEST_EVAL_SCHEMA_VERSION = 1
 
+# Ledger schema version — bump when ledger entry shape changes so resume
+# code can refuse to mix old + new entries silently.
+LEDGER_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class LedgerEntry:
+    """One completed matchup, persisted to the append-only ledger.
+
+    The triple `(build_id, opponent_variant_id, replicate_idx)` is the
+    resume key — a future run with the same eval_tag skips matchups
+    whose key already appears here. `fitness` is the
+    `combat_fitness(result)` scalar; replaying the ledger reconstructs
+    the in-memory `scores_per_build` dict without needing the worker
+    fleet again.
+    """
+    schema_version: int
+    matchup_id: str
+    build_id: str
+    opponent_variant_id: str
+    replicate_idx: int
+    fitness: float
+    completed_at: str
+
+
+def _ledger_dir(out_root: Path, eval_tag: str) -> Path:
+    return out_root / "honest_eval" / eval_tag
+
+
+def _ledger_path(out_root: Path, eval_tag: str) -> Path:
+    return _ledger_dir(out_root, eval_tag) / "results.jsonl"
+
+
+def _resume_key(build_id: str, opp: str, rep: int) -> tuple[str, str, int]:
+    return (build_id, opp, rep)
+
+
+def read_ledger(ledger_path: Path) -> dict[tuple[str, str, int], float]:
+    """Parse `ledger_path` if it exists; return a {(build_id, opp, rep)
+    → fitness} dict of completed matchups.
+
+    Lines with the wrong schema_version are skipped with a warning;
+    malformed lines raise — corruption is a data-integrity signal that
+    must surface before resume rather than after.
+    """
+    if not ledger_path.exists():
+        return {}
+    completed: dict[tuple[str, str, int], float] = {}
+    with ledger_path.open() as f:
+        for lineno, line in enumerate(f, 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f"corrupt ledger line {ledger_path}:{lineno}: {exc}. "
+                    f"Refusing to resume — investigate and either fix the "
+                    f"line or move the ledger aside before re-running."
+                ) from exc
+            if data.get("schema_version") != LEDGER_SCHEMA_VERSION:
+                logger.warning(
+                    "ledger %s line %d: schema_version=%s (expected %d) — "
+                    "skipping",
+                    ledger_path, lineno,
+                    data.get("schema_version"), LEDGER_SCHEMA_VERSION,
+                )
+                continue
+            key = _resume_key(
+                data["build_id"], data["opponent_variant_id"],
+                int(data["replicate_idx"]),
+            )
+            completed[key] = float(data["fitness"])
+    return completed
+
+
+class _LedgerWriter:
+    """Append-only JSONL writer with fsync per line. Mirrors the
+    pattern in spec 22 §"Cost ledger" — torn-line risk is the failure
+    mode this guards against, and the ~1 ms fsync overhead is
+    negligible at honest-eval throughput (≪ 96 rows/min)."""
+
+    def __init__(self, ledger_path: Path) -> None:
+        ledger_path.parent.mkdir(parents=True, exist_ok=True)
+        self._path = ledger_path
+        self._lock = threading.Lock()
+
+    def append(self, entry: LedgerEntry) -> None:
+        line = json.dumps(asdict(entry)) + "\n"
+        with self._lock, self._path.open("a") as f:
+            f.write(line)
+            f.flush()
+            os.fsync(f.fileno())
+
 
 @dataclass(frozen=True)
 class _BuildWithProvenance:
@@ -57,6 +150,53 @@ class _BuildWithProvenance:
     source_seed_idx: int
     source_rank: int
     source_value: float
+
+
+# Synthetic source_campaign name for random-feasible baseline builds.
+# Per auditor C (2026-05-10): without a baseline, even successful
+# Wave 1 cell rankings can't answer the existence question — does ANY
+# of the optimization machinery beat random feasible sampling? The
+# baseline cell tags its builds with this name so summarize_by_cell
+# treats it as just another cell in the per-cell table.
+RANDOM_BASELINE_SOURCE_CAMPAIGN = "random-baseline"
+
+
+def synthesize_random_baseline_builds(
+    hull: ShipHull,
+    game_data: GameData,
+    manifest: GameManifest,
+    n: int,
+    seed: int = 0,
+    regime: str = "early",
+) -> tuple[_BuildWithProvenance, ...]:
+    """Generate `n` random feasible builds via `generate_random_build` +
+    `repair_build`, tagged with `source_campaign=RANDOM_BASELINE_SOURCE_CAMPAIGN`
+    so they ride alongside campaign-derived cells through `evaluate_builds`
+    and `summarize_by_cell`.
+
+    Deterministic in `seed`: re-running honest-eval with the same seed
+    produces the same baseline builds, so the ledger's resume
+    contract still holds.
+    """
+    import numpy as np
+    from .calibration import generate_random_build
+    from .models import REGIME_PRESETS
+    rng = np.random.default_rng(seed)
+    regime_cfg = REGIME_PRESETS[regime]
+    out: list[_BuildWithProvenance] = []
+    for i in range(n):
+        b = generate_random_build(
+            hull, game_data, manifest, rng=rng, regime=regime_cfg,
+        )
+        out.append(_BuildWithProvenance(
+            build=b,
+            source_campaign=RANDOM_BASELINE_SOURCE_CAMPAIGN,
+            source_study_idx=0,
+            source_seed_idx=seed,
+            source_rank=i + 1,
+            source_value=float("nan"),  # no within-cell scoring exists
+        ))
+    return tuple(out)
 
 
 @dataclass(frozen=True)
@@ -96,72 +236,138 @@ class HonestEvaluationResult:
 # ---- Public API --------------------------------------------------------------
 
 
+RANKING_METHODS = ("twfe_eb", "twfe", "raw_mean", "bradley_terry")
+
+
+def _build_rankers():
+    """Single source of truth for `method` → ranker function. Imported
+    lazily to avoid pulling scipy at module-load time for callers that
+    only use evaluate_builds / summarize_by_cell."""
+    from .posthoc_ranker import (
+        rank_bradley_terry, rank_raw_mean, rank_twfe, rank_twfe_eb,
+    )
+    return {
+        "raw_mean":      rank_raw_mean,
+        "twfe":          rank_twfe,
+        "twfe_eb":       rank_twfe_eb,
+        "bradley_terry": rank_bradley_terry,
+    }
+
+
 def extract_top_builds(
-    study_db_path: Path,
+    eval_log_path: Path,
     hull: ShipHull,
     game_data: GameData,
     manifest: GameManifest,
     top_k: int,
+    *,
+    method: str = "twfe_eb",
 ) -> tuple[tuple[int, float, Build], ...]:
-    """Open per-study SQLite, return (rank, value, Build) for top_k completed
-    trials in descending value order.
+    """Read per-study `evaluation_log.jsonl`, return (rank, score, Build) for
+    top_k completed trials under the chosen ranking estimator.
+
+    **Default = `twfe_eb`** (TWFE deconfounding + EB shrinkage on residuals).
+    `posthoc_ranker` reuses `deconfounding.twfe_decompose` + `eb_shrinkage`,
+    so the post-hoc estimator matches the online phase5a/5d pipeline.
+
+    **Why JSONL, not SQLite.** TWFE / EB / Bradley–Terry all need the
+    (build × opponent) score matrix. SQLite's `trial.intermediate_values`
+    keys steps by opaque step-index, which loses the opponent identity
+    needed to deconfound. The JSONL row carries `opponent_results`
+    (opponent id + winner + hp_differential per match) — the only data
+    source that supports principled post-hoc ranking. See
+    `docs/reports/2026-05-10-posthoc-ranker-research.md` for the rationale
+    and the empirical comparison that motivated this switch.
+
+    **Why not raw mean (the prior default).** Raw mean has 0/5 top-5
+    overlap with TWFE/EB/BT on Wave 1 (pooled and per-cell). The bias
+    comes from opponent confounding: TPE+pruner schedules different
+    builds against different opponent subsets, so per-trial means are
+    contaminated by which opponents a build happened to face. `raw_mean`
+    remains available as a `method=` choice for ablation/diagnostic.
+
+    Args:
+        eval_log_path: Path to `evaluation_log.jsonl` for a single
+            `(hull, regime, sampler, seed)` study (one per study).
+        method: One of RANKING_METHODS. Default `twfe_eb`.
 
     Raises:
-        ValueError: study has fewer than top_k completed trials.
-        RuntimeError: any selected trial's params fail repair_build —
-            stale params are a data-corruption signal, not a soft error
-            (see spec 30 §Error conditions, methodology §Why fail-loud).
+        ValueError: top_k < 1, or fewer than top_k completed trials.
+        FileNotFoundError: log path does not exist.
+        RuntimeError: a logged build fails `repair_build` — stale build
+            spec is a data-corruption signal (spec 30 §Error conditions).
     """
     if top_k < 1:
         raise ValueError(f"top_k must be >= 1, got {top_k}")
-    storage = f"sqlite:///{study_db_path}"
-    # Per-study DB layout (see spec 22 §Per-study SQLite layout): one Optuna
-    # study per file with name `{hull}__{regime}` (no sampler/seed suffix in
-    # the study name — those are encoded in the *filename*).
-    summaries = optuna.get_all_study_summaries(storage=storage)
-    if not summaries:
-        raise ValueError(f"no studies in DB: {study_db_path}")
-    if len(summaries) != 1:
-        # Per-study DB convention is one Optuna study per file. Multi-study
-        # DBs are a data-integrity signal (legacy import? accidental copy?
-        # cross-regime warm-start without filename split?) — silently
-        # picking summaries[0] would change which build set goes into the
-        # oracle without telling the operator.
-        names = [s.study_name for s in summaries]
-        raise RuntimeError(
-            f"{study_db_path.name}: expected 1 study per DB, found "
-            f"{len(summaries)}: {names}. Spec 22 §Per-study SQLite layout "
-            f"requires one study per file. Investigate before re-running."
-        )
-    study = optuna.load_study(study_name=summaries[0].study_name, storage=storage)
-    completed = [
-        t for t in study.trials
-        if t.state == TrialState.COMPLETE and t.value is not None
-    ]
-    if len(completed) < top_k:
+    if method not in RANKING_METHODS:
         raise ValueError(
-            f"{study_db_path.name}: only {len(completed)} completed trial(s); "
+            f"unknown ranking method {method!r}; pick one of {RANKING_METHODS}"
+        )
+    if not eval_log_path.exists():
+        raise FileNotFoundError(
+            f"no evaluation_log.jsonl at {eval_log_path}. "
+            f"Wave 1 logs must be migrated via "
+            f"`scripts/migrate_wave1_eval_logs.py` before honest-eval; "
+            f"Wave 2+ writes per-study logs natively (task #90)."
+        )
+
+    from .posthoc_ranker import load_records
+    records = load_records([eval_log_path])
+    if len(records) < top_k:
+        raise ValueError(
+            f"{eval_log_path.name}: only {len(records)} completed trial(s); "
             f"top_k={top_k}"
         )
-    completed.sort(key=lambda t: t.value, reverse=True)
-    top = completed[:top_k]
+    ranked = _build_rankers()[method](records, k=top_k)
+
     out: list[tuple[int, float, Build]] = []
-    for rank, trial in enumerate(top, start=1):
+    for rank, rb in enumerate(ranked, start=1):
+        raw = rb.raw_build
         try:
-            from .optimizer import trial_params_to_build
-            raw = trial_params_to_build(trial.params, hull.id)
-            repaired = repair_build(raw, hull, game_data, manifest)
+            # The optimizer logs *post-repair* builds, so the JSONL spec
+            # is already feasible. Re-run repair_build defensively to
+            # catch search-space drift / manifest changes between the
+            # campaign run and honest-eval (e.g. a hullmod went rare).
+            candidate = Build(
+                hull_id=raw["hull_id"],
+                weapon_assignments=dict(raw["weapon_assignments"]),
+                hullmods=frozenset(raw["hullmods"]),
+                flux_vents=int(raw["flux_vents"]),
+                flux_capacitors=int(raw["flux_capacitors"]),
+            )
+            repaired = repair_build(candidate, hull, game_data, manifest)
         except Exception as exc:
             raise RuntimeError(
-                f"{study_db_path.name}: trial {trial.number} (rank {rank}, "
-                f"value {trial.value:.4f}) failed repair_build: {exc}. "
-                f"This is a data-corruption signal (search-space drift or "
-                f"repair regression). Investigate before re-running honest "
-                f"eval — silently skipping would alter what 'top-k' means "
-                f"and break cross-cell comparison."
+                f"{eval_log_path.name}: rank {rank} build "
+                f"({rb.build_id.short}, score={rb.score:.4f}) failed "
+                f"repair_build: {exc}. This is a data-corruption signal "
+                f"(search-space drift or repair regression). Investigate "
+                f"before re-running honest eval — silently skipping would "
+                f"alter 'top-k' meaning and break cross-cell comparison."
             ) from exc
-        out.append((rank, float(trial.value), repaired))
+        out.append((rank, float(rb.score), repaired))
     return tuple(out)
+
+
+def report_method_disagreement(
+    eval_log_path: Path,
+    top_k: int,
+    methods: tuple[str, ...] = RANKING_METHODS,
+) -> dict[str, list[str]]:
+    """Diagnostic: top-K build-hash list under each estimator. Logs a WARN
+    when methods disagree on the top-K so the operator notices before
+    spending money on the oracle pass. Used by `main()` pre-dispatch.
+
+    Returns: `{method_name: [build_hash_short, ...]}` — same length per
+    method, easy to diff visually in logs.
+    """
+    from .posthoc_ranker import load_records
+    rankers = _build_rankers()
+    records = load_records([eval_log_path])
+    out = {}
+    for m in methods:
+        out[m] = [rb.build_id.short for rb in rankers[m](records, k=top_k)]
+    return out
 
 
 def discover_evaluation_pool(
@@ -182,13 +388,26 @@ def evaluate_builds(
     pool: EvaluatorPool,
     config: HonestEvaluationConfig,
     hull: ShipHull,
+    ledger_path: Path | None = None,
 ) -> tuple[EvaluatedBuild, ...]:
     """Dispatch every (build × opp × replicate) matchup, retry failures up to
     config.max_retries_per_matchup, aggregate per-build mean fitness.
 
+    If `ledger_path` is provided, every successful matchup result is
+    appended to the JSONL ledger with `flush()` + `os.fsync()` before we
+    move on. On entry, an existing ledger is replayed: matchups already
+    present skip dispatch and their stored fitness folds straight into
+    the in-memory aggregation. This makes a SIGTERM / OOM / network
+    partition mid-run survivable — the operator re-runs with the same
+    eval_tag (via `--resume-from`) and only the missing matchups
+    re-dispatch.
+
     Raises:
         ValueError: empty eval_pool, or empty builds_with_provenance.
-        RuntimeError: a matchup failed after all retries.
+        RuntimeError: a matchup failed after all retries, or the ledger
+            references a build_id that doesn't appear in
+            `builds_with_provenance` (a sign that --top-k or the
+            campaign DBs changed between runs).
     """
     if not eval_pool:
         raise ValueError("eval_pool is empty — no compatible opponents")
@@ -205,23 +424,56 @@ def evaluate_builds(
         rep: int
         attempt: int = 0
 
-    jobs: list[_Job] = []
-    for bi, _ in enumerate(builds_with_provenance):
-        for opp in eval_pool:
-            for rep in range(config.replicates_per_matchup):
-                jobs.append(_Job(build_idx=bi, opp=opp, rep=rep))
-
-    # build_idx → list of per-matchup fitness scores
-    scores_per_build: dict[int, list[float]] = {
-        i: [] for i in range(len(builds_with_provenance))
-    }
-
     def _build_id(bi: int) -> str:
         bp = builds_with_provenance[bi]
         return (
             f"honest__{bp.source_campaign}__s{bp.source_study_idx}"
             f"__seed{bp.source_seed_idx}__rank{bp.source_rank}"
         )
+
+    # Replay the ledger: skip jobs already completed and pre-populate
+    # scores_per_build with their fitnesses. A ledger entry whose
+    # build_id no longer maps to any current build is a strong signal
+    # that --top-k or the campaign DBs changed between runs — refuse to
+    # silently mix old + new scores.
+    completed_from_ledger: dict[tuple[str, str, int], float] = {}
+    if ledger_path is not None:
+        completed_from_ledger = read_ledger(ledger_path)
+    build_id_to_idx = {_build_id(bi): bi for bi in range(len(builds_with_provenance))}
+    scores_per_build: dict[int, list[float]] = {
+        i: [] for i in range(len(builds_with_provenance))
+    }
+    for (bid, _opp, _rep), fit in completed_from_ledger.items():
+        if bid not in build_id_to_idx:
+            raise RuntimeError(
+                f"ledger {ledger_path} references unknown build_id "
+                f"{bid!r}. The current run's --top-k or campaign DBs "
+                f"differ from when the ledger was written. Refusing to "
+                f"resume — move the ledger aside or re-run with the "
+                f"original parameters."
+            )
+        scores_per_build[build_id_to_idx[bid]].append(float(fit))
+
+    jobs: list[_Job] = []
+    skipped_from_ledger = 0
+    for bi, _ in enumerate(builds_with_provenance):
+        bid = _build_id(bi)
+        for opp in eval_pool:
+            for rep in range(config.replicates_per_matchup):
+                if (bid, opp, rep) in completed_from_ledger:
+                    skipped_from_ledger += 1
+                    continue
+                jobs.append(_Job(build_idx=bi, opp=opp, rep=rep))
+    if skipped_from_ledger:
+        logger.info(
+            "honest_eval: replaying %d completed matchups from ledger %s; "
+            "%d new matchups to dispatch",
+            skipped_from_ledger, ledger_path, len(jobs),
+        )
+
+    ledger_writer = (
+        _LedgerWriter(ledger_path) if ledger_path is not None else None
+    )
 
     def _make_matchup(job: _Job) -> MatchupConfig:
         bp = builds_with_provenance[job.build_idx]
@@ -305,6 +557,16 @@ def evaluate_builds(
                     ))
                     continue
                 fitness = combat_fitness(result, config=config.fitness_config)
+                if ledger_writer is not None:
+                    ledger_writer.append(LedgerEntry(
+                        schema_version=LEDGER_SCHEMA_VERSION,
+                        matchup_id=result.matchup_id,
+                        build_id=_build_id(job.build_idx),
+                        opponent_variant_id=job.opp,
+                        replicate_idx=job.rep,
+                        fitness=fitness,
+                        completed_at=datetime.now(timezone.utc).isoformat(),
+                    ))
                 scores_per_build[job.build_idx].append(fitness)
                 completed += 1
                 log_every = max(1, total // config.progress_log_buckets)
@@ -455,17 +717,23 @@ def _resolve_honest_eval_flask_port(campaign) -> int:
     return campaign.base_flask_port + campaign.flask_ports_per_study - 1
 
 
+MAX_EVAL_TAG_LEN = 63
+"""AWS Launch Template names cap at 128 chars; AWSProvider composes
+resource names like `{project_tag}__{fleet_name}` (= 2 × eval_tag + 2).
+2 × 63 + 2 = 128, so 63 is the hard ceiling. Lifted to a module
+constant so spec 30 and the validator can't drift."""
+
+
 def _validate_eval_tag_length(eval_tag: str) -> None:
-    """AWS Launch Template names cap at 128 chars; AWSProvider then
-    composes resource names like `{project_tag}__{fleet_name}` (= 2 ×
-    eval_tag + 2). Cap eval_tag at 60 so the doubled form fits.
+    """Reject `eval_tag` values that would overflow AWS Launch Template
+    names once AWSProvider doubles them. Cap = `MAX_EVAL_TAG_LEN`.
     """
-    max_eval_tag = 60
-    if len(eval_tag) > max_eval_tag:
+    if len(eval_tag) > MAX_EVAL_TAG_LEN:
         raise ValueError(
-            f"eval_tag {eval_tag!r} is {len(eval_tag)} chars > {max_eval_tag}; "
-            f"shorten the source campaign name (`{eval_tag[:60]}…` would "
-            f"overflow AWS Launch Template name limits when doubled into "
+            f"eval_tag {eval_tag!r} is {len(eval_tag)} chars > "
+            f"{MAX_EVAL_TAG_LEN}; shorten the source campaign name "
+            f"(`{eval_tag[:MAX_EVAL_TAG_LEN]}…` would overflow AWS "
+            f"Launch Template name limits when doubled into "
             f"`{{project_tag}}__{{fleet_name}}`)."
         )
 
@@ -512,8 +780,10 @@ def main(argv: list[str] | None = None) -> int:
     → enumerate eval pool → preflight (authkey + AWS creds) → provision
     an isolated AWS fleet via `prepare_cloud_pool` → dispatch matchups →
     write JSON outputs → teardown fleet. The honest-eval fleet is
-    namespaced `honest-eval-{first-campaign}-{utc}` so it cannot collide
-    with the source campaign's still-existing AWS resources. See spec 30
+    namespaced `starsector-honest-eval-{first-campaign}-{utc}` so it
+    cannot collide with the source campaign's still-existing AWS
+    resources, and so `scripts/cloud/teardown.sh` (which prepends
+    `starsector-`) finds it. See spec 30
     §CLI entry point and methodology §Replication count.
     """
     import argparse
@@ -557,6 +827,41 @@ def main(argv: list[str] | None = None) -> int:
                              "(authkey + STS), then exit without "
                              "provisioning any AWS resources. Useful for "
                              "validating inputs before paying.")
+    parser.add_argument(
+        "--resume-from", default=None,
+        help="Reuse a prior eval_tag and resume from its ledger. The "
+             "ledger lives at `{out_root}/honest_eval/{eval_tag}/results.jsonl`; "
+             "matchups already present skip dispatch and their fitness "
+             "folds into the in-memory aggregation. Use this to recover "
+             "from a SIGTERM / OOM / network partition mid-run. Reuses "
+             "the eval_tag for AWS resource naming, so any prior fleet "
+             "must be torn down first (run scripts/cloud/teardown.sh).",
+    )
+    parser.add_argument(
+        "--random-baseline-n", type=int, default=0,
+        help="Number of random-feasible builds to add as a baseline cell "
+             "(source_campaign='random-baseline'). Without this, the "
+             "honest-eval can rank cells against each other but cannot "
+             "answer 'does any optimization machinery beat random "
+             "sampling?'. Recommended: same as top_k×n_seeds (= 9 for "
+             "Wave 1 with --top-k 3 × 3 seeds). Adds ~$0.001×n×pool×reps "
+             "to the run.",
+    )
+    parser.add_argument(
+        "--random-baseline-seed", type=int, default=0,
+        help="RNG seed for synthesize_random_baseline_builds. Deterministic: "
+             "re-running with the same seed re-generates the same baseline "
+             "builds, so --resume-from still works.",
+    )
+    parser.add_argument(
+        "--ranking-method", default="twfe_eb", choices=list(RANKING_METHODS),
+        help="Estimator used to pick top-K candidates from each study's "
+             "evaluation_log.jsonl. Default `twfe_eb` (TWFE + EB shrinkage; "
+             "phase5a + phase5d-without-X). `raw_mean` was the pre-2026-05-10 "
+             "default but has 0/5 top-5 overlap with principled methods on "
+             "Wave 1 — kept here only for ablation. See "
+             "docs/reports/2026-05-10-posthoc-ranker-research.md.",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -579,32 +884,63 @@ def main(argv: list[str] | None = None) -> int:
 
     builds_with_provenance: list[_BuildWithProvenance] = []
     for name in args.campaign_name:
-        db_dir = Path("data/study_dbs") / name
-        if not db_dir.exists():
-            raise ValueError(f"no study_dbs dir for campaign '{name}': {db_dir}")
-        for db_path in sorted(db_dir.glob("*.db")):
-            stem = db_path.stem
+        # Per-study evaluation_log.jsonl is the candidate-selection input
+        # (SQLite `intermediate_values` lacks opponent identity, which
+        # TWFE/EB need). Wave 1 logs were migrated to this layout via
+        # scripts/migrate_wave1_eval_logs.py; Wave 2+ writes natively.
+        log_root = Path("data/logs") / name
+        if not log_root.exists():
+            raise ValueError(
+                f"no eval-log dir for campaign '{name}': {log_root}. "
+                f"Wave 1 cells must be migrated via "
+                f"scripts/migrate_wave1_eval_logs.py before honest-eval; "
+                f"Wave 2+ writes per-study logs natively (task #90)."
+            )
+        for jsonl_path in sorted(log_root.glob("*/evaluation_log.jsonl")):
+            stem = jsonl_path.parent.name
             try:
                 seed_part = stem.rsplit("__seed", 1)[1]
                 seed_idx = int(seed_part)
             except (IndexError, ValueError) as exc:
                 # Spec 30 §Error conditions / methodology §Why fail-loud:
-                # data-integrity signals must not be silently skipped.
-                # An unrecognized DB filename in the campaign dir means
-                # the operator's directory layout has drifted from the
-                # convention `{hull}__{regime}__{sampler}__seed{N}.db`
-                # — e.g. a stray .db copy, a mid-rename leftover, or a
-                # legacy filename. Warn-and-skip would silently change
-                # which builds the oracle considers; raising stops the
-                # operator before they spend money on a partial set.
+                # an unrecognized study-dir name is a data-integrity
+                # signal — e.g. a stray copy, a mid-rename leftover, or
+                # a legacy layout. Silently skipping would change which
+                # builds the oracle considers without telling the operator.
                 raise RuntimeError(
-                    f"unrecognized DB filename: {db_path}. Expected "
-                    f"`{{hull}}__{{regime}}__{{sampler}}__seed{{N}}.db` "
-                    f"per spec 22 §Per-study SQLite layout. Move or "
-                    f"rename before re-running."
+                    f"unrecognized log dir: {jsonl_path.parent}. Expected "
+                    f"`{{hull}}__{{regime}}__{{sampler}}__seed{{N}}/"
+                    f"evaluation_log.jsonl`. Move or rename before "
+                    f"re-running."
                 ) from exc
+            disagreement = report_method_disagreement(
+                jsonl_path, top_k=config.top_k_per_seed,
+            )
+            primary = disagreement[args.ranking_method]
+            others = {m: l for m, l in disagreement.items()
+                      if m != args.ranking_method}
+            consensus_count = max(
+                (sum(1 for m in others.values() if h in m) for h in primary),
+                default=0,
+            )
+            logger.info(
+                "honest_eval ranking [%s/%s]: method=%s top-%d=%s; "
+                "other-method picks: %s",
+                name, stem, args.ranking_method, config.top_k_per_seed,
+                primary, others,
+            )
+            if consensus_count == 0 and len(primary) > 0:
+                logger.warning(
+                    "honest_eval [%s/%s]: ZERO agreement between "
+                    "method=%s and the other estimators on top-%d. "
+                    "Likely cause: heavy opponent confounding or a "
+                    "near-tied top region. Inspect the JSONL before "
+                    "spending budget.",
+                    name, stem, args.ranking_method, config.top_k_per_seed,
+                )
             tops = extract_top_builds(
-                db_path, hull, game_data, manifest, config.top_k_per_seed,
+                jsonl_path, hull, game_data, manifest,
+                config.top_k_per_seed, method=args.ranking_method,
             )
             for rank, value, build in tops:
                 builds_with_provenance.append(_BuildWithProvenance(
@@ -613,6 +949,23 @@ def main(argv: list[str] | None = None) -> int:
                     source_seed_idx=seed_idx, source_rank=rank,
                     source_value=value,
                 ))
+
+    # Random-feasible baseline cell — answers the existence question
+    # "does any of our optimization machinery beat random sampling?".
+    # Without it, all-cells-tied on the oracle is uninterpretable.
+    if args.random_baseline_n > 0:
+        baseline = synthesize_random_baseline_builds(
+            hull, game_data, manifest,
+            n=args.random_baseline_n,
+            seed=args.random_baseline_seed,
+        )
+        builds_with_provenance.extend(baseline)
+        logger.info(
+            "honest_eval: added %d random-feasible baseline builds "
+            "(source_campaign=%s, seed=%d)",
+            len(baseline), RANDOM_BASELINE_SOURCE_CAMPAIGN,
+            args.random_baseline_seed,
+        )
 
     eval_pool = discover_evaluation_pool(args.game_dir, game_data, hull)
     if not eval_pool:
@@ -669,14 +1022,76 @@ def main(argv: list[str] | None = None) -> int:
 
     started_at = datetime.now(timezone.utc)
     stamp = started_at.strftime("%Y%m%dT%H%M%SZ")
-    eval_tag = f"honest-eval-{args.campaign_name[0]}-{stamp}"
-    _validate_eval_tag_length(eval_tag)
+    if args.resume_from:
+        eval_tag = args.resume_from
+        # Reused tags are still subject to the AWS LT length cap, in
+        # case the operator hand-typed a too-long string.
+        _validate_eval_tag_length(eval_tag)
+        ledger_preview = _ledger_path(args.out_root, eval_tag)
+        if not ledger_preview.exists():
+            raise ValueError(
+                f"--resume-from {eval_tag!r}: ledger {ledger_preview} "
+                f"does not exist. Either the prior run wrote no "
+                f"ledger or the path drifted. Re-run without "
+                f"--resume-from to start fresh."
+            )
+        # Refuse if the prior fleet is still up — `prepare_cloud_pool`
+        # would otherwise silently double the fleet (existing instances
+        # remain tagged with the eval_tag while new ones boot
+        # alongside), and the operator pays for both. Telling the
+        # operator to run teardown.sh first is the safe default.
+        provider_for_preflight = AWSProvider(regions=campaign.regions)
+        active = provider_for_preflight.list_active(eval_tag)
+        if active:
+            sample = ", ".join(
+                f"{a['id']}@{a['region']}({a['state']})" for a in active[:5]
+            )
+            raise ValueError(
+                f"--resume-from {eval_tag!r}: {len(active)} instance(s) "
+                f"still tagged Project={eval_tag} are pending/running "
+                f"(e.g. {sample}). Tear down the prior fleet first: "
+                f"`scripts/cloud/teardown.sh {eval_tag}`. Resuming "
+                f"with the prior fleet still up would double-bill "
+                f"and confuse the orchestrator's heartbeat scan."
+            )
+    else:
+        # `starsector-` prefix matches CampaignManager.project_tag and
+        # scripts/cloud/teardown.sh, which prepends `starsector-` to its
+        # argument. Without the prefix, teardown.sh silently misses
+        # honest-eval fleets — exactly the leak that stranded 16
+        # instances on 2026-05-10.
+        eval_tag = f"starsector-honest-eval-{args.campaign_name[0]}-{stamp}"
+        _validate_eval_tag_length(eval_tag)
+    ledger_path = _ledger_path(args.out_root, eval_tag)
 
-    # Required env vars (same set spec 22 _require_env loads, minus
-    # STARSECTOR_PROJECT_TAG which honest-eval derives locally).
-    tailnet_ip = _require_env("STARSECTOR_WORKSTATION_TAILNET_IP")
-    bearer_token = _require_env("STARSECTOR_BEARER_TOKEN")
-    tailscale_authkey = _require_env("STARSECTOR_TAILSCALE_AUTHKEY")
+    # Auto-resolve env vars rather than requiring the operator to export
+    # them by hand. CampaignManager generates these per study; the
+    # standalone honest-eval CLI has no manager to do that, so we
+    # resolve from the same primitive sources:
+    #   - STARSECTOR_WORKSTATION_TAILNET_IP: shell out to `tailscale ip -4`
+    #   - STARSECTOR_BEARER_TOKEN: fresh per-run UUID (auth is per-run anyway)
+    #   - STARSECTOR_TAILSCALE_AUTHKEY: `.env` typically exports it as
+    #     `TAILSCALE_AUTHKEY`; we accept either name.
+    # Operator-supplied values still win — env vars are checked first.
+    from .campaign import _resolve_tailnet_ip
+    import uuid
+    tailnet_ip = (
+        os.environ.get("STARSECTOR_WORKSTATION_TAILNET_IP", "").strip()
+        or _resolve_tailnet_ip()
+    )
+    bearer_token = (
+        os.environ.get("STARSECTOR_BEARER_TOKEN", "").strip()
+        or uuid.uuid4().hex
+    )
+    tailscale_authkey = (
+        os.environ.get("STARSECTOR_TAILSCALE_AUTHKEY", "").strip()
+        or os.environ.get("TAILSCALE_AUTHKEY", "").strip()
+    )
+    if not tailscale_authkey:
+        raise ValueError(
+            "Tailscale auth key not found. Set STARSECTOR_TAILSCALE_AUTHKEY "
+            "or TAILSCALE_AUTHKEY (.env exports the latter by convention)."
+        )
     debug_ssh_pubkey = os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip()
     mod_jar_override_url = os.environ.get(
         "STARSECTOR_MOD_JAR_OVERRIDE_URL", "",
@@ -725,6 +1140,7 @@ def main(argv: list[str] | None = None) -> int:
     ) as pool:
         evaluated = evaluate_builds(
             builds_with_provenance, eval_pool, pool, config, hull,
+            ledger_path=ledger_path,
         )
 
     finished_at = datetime.now(timezone.utc)

@@ -3,11 +3,11 @@ top builds. Spec: docs/specs/30-honest-evaluator.md."""
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import optuna
 import pytest
 
 from starsector_optimizer.evaluator_pool import EvaluatorPool
@@ -28,12 +28,6 @@ from starsector_optimizer.models import (
     LoadoutDiagnostic,
     ShipCombatResult,
 )
-from starsector_optimizer.optimizer import (
-    build_to_trial_params,
-    define_distributions,
-    trial_params_to_build,
-)
-from starsector_optimizer.search_space import build_search_space
 
 
 # ---- Fixtures ----------------------------------------------------------------
@@ -45,39 +39,76 @@ def hammerhead_hull(game_data):
 
 
 @pytest.fixture
-def study_db_with_n_completed(tmp_path, hammerhead_hull, game_data, manifest):
-    """Factory: creates a per-study SQLite DB seeded with N completed trials
-    of distinct values + valid params (round-trips through repair_build)."""
-    def _make(n: int, db_name: str = "test.db", values: list[float] | None = None):
-        db_path = tmp_path / db_name
-        storage = f"sqlite:///{db_path}"
-        from starsector_optimizer.models import REGIME_PRESETS
-        space = build_search_space(
-            hammerhead_hull, game_data, REGIME_PRESETS["early"], manifest,
-        )
-        distributions = define_distributions(space)
-        study = optuna.create_study(
-            study_name="hammerhead__early", storage=storage, direction="maximize",
-        )
-        # Generate n distinct trials by mutating one weapon slot index.
+def study_jsonl_with_n_completed(tmp_path, hammerhead_hull, game_data, manifest):
+    """Factory: writes a per-study `evaluation_log.jsonl` with N completed
+    trials, mirroring the optimizer's row schema.
+
+    `intermediate_means` controls the per-trial mean of per-match
+    `hp_differential` — which is what `extract_top_builds` ranks by
+    post-2026-05-10 (TWFE+EB on the [build × opponent] matrix). If
+    omitted, defaults to a descending sequence so the highest-ranked
+    trial is index 0.
+    """
+    def _make(
+        n: int,
+        log_subdir: str = "test_campaign/hammerhead__early__tpe__seed0",
+        intermediate_means: list[float] | None = None,
+        n_opps_per_trial: int = 4,
+    ):
+        log_path = tmp_path / "data" / "logs" / log_subdir / "evaluation_log.jsonl"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
         from starsector_optimizer.calibration import generate_random_build
+        from starsector_optimizer.models import REGIME_PRESETS
+        from starsector_optimizer.repair import repair_build
         import numpy as np
         rng = np.random.default_rng(42)
-        for i in range(n):
-            build = generate_random_build(
-                hammerhead_hull, game_data, manifest,
-                rng=rng, regime=REGIME_PRESETS["early"],
-            )
-            from starsector_optimizer.repair import repair_build
-            repaired = repair_build(build, hammerhead_hull, game_data, manifest)
-            params = build_to_trial_params(repaired, space)
-            value = (values[i] if values else float(n - i))
-            study.add_trial(optuna.create_trial(
-                params=params,
-                distributions=distributions,
-                value=value,
-            ))
-        return db_path
+        with log_path.open("w") as f:
+            for i in range(n):
+                build = generate_random_build(
+                    hammerhead_hull, game_data, manifest,
+                    rng=rng, regime=REGIME_PRESETS["early"],
+                )
+                repaired = repair_build(build, hammerhead_hull, game_data, manifest)
+                mean = (
+                    float(intermediate_means[i])
+                    if intermediate_means is not None else float(n - i)
+                )
+                # Synthesize n_opps_per_trial opponents, each with the same
+                # hp_differential = mean. Ranking by per-build mean ⇒ exactly
+                # `mean`. Winner inferred from sign of mean for BT compatibility.
+                if mean > 0.1:
+                    winner = "PLAYER"
+                elif mean < -0.1:
+                    winner = "ENEMY"
+                else:
+                    winner = "TIMEOUT"
+                results = [
+                    {
+                        "opponent": f"opp_{j}",
+                        "winner": winner,
+                        "duration_seconds": 30.0,
+                        "hp_differential": mean,
+                    }
+                    for j in range(n_opps_per_trial)
+                ]
+                row = {
+                    "trial_number": i,
+                    "build": {
+                        "hull_id": repaired.hull_id,
+                        "weapon_assignments": dict(repaired.weapon_assignments),
+                        "hullmods": list(repaired.hullmods),
+                        "flux_vents": repaired.flux_vents,
+                        "flux_capacitors": repaired.flux_capacitors,
+                    },
+                    "opponent_results": results,
+                    "pruned": False,
+                    "cache_hit": False,
+                    "invalid_spec": False,
+                    "raw_fitness": mean,
+                    "fitness": mean,
+                }
+                f.write(json.dumps(row) + "\n")
+        return log_path
     return _make
 
 
@@ -106,66 +137,88 @@ class TestHonestEvaluationConfigValidation:
 
 
 class TestExtractTopBuilds:
-    def test_returns_top_k_in_descending_value_order(
-        self, study_db_with_n_completed, hammerhead_hull, game_data, manifest,
+    def test_returns_top_k_in_descending_score_order(
+        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
     ):
-        db = study_db_with_n_completed(n=5, values=[0.1, 0.9, 0.5, 0.3, 0.7])
-        tops = extract_top_builds(db, hammerhead_hull, game_data, manifest, top_k=3)
+        log = study_jsonl_with_n_completed(
+            n=5, intermediate_means=[0.1, 0.9, 0.5, 0.3, 0.7],
+        )
+        tops = extract_top_builds(
+            log, hammerhead_hull, game_data, manifest, top_k=3,
+            method="raw_mean",
+        )
         assert len(tops) == 3
         ranks = [t[0] for t in tops]
-        values = [t[1] for t in tops]
+        scores = [t[1] for t in tops]
         assert ranks == [1, 2, 3]
-        assert values == sorted(values, reverse=True)
-        assert values[0] == pytest.approx(0.9)
-        assert values[1] == pytest.approx(0.7)
-        assert values[2] == pytest.approx(0.5)
+        assert scores == sorted(scores, reverse=True)
+        assert scores[0] == pytest.approx(0.9)
+        assert scores[1] == pytest.approx(0.7)
+        assert scores[2] == pytest.approx(0.5)
 
-    def test_raises_when_fewer_than_top_k_completed(
-        self, study_db_with_n_completed, hammerhead_hull, game_data, manifest,
+    def test_twfe_eb_default_orders_by_residual(
+        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
     ):
-        db = study_db_with_n_completed(n=2)
-        with pytest.raises(ValueError, match="only 2 completed"):
-            extract_top_builds(db, hammerhead_hull, game_data, manifest, top_k=3)
+        """With identical opponents per build (no confounding), TWFE+EB
+        recovers the same ordering as raw mean — the regression to the
+        mean is a magnitude rescale, not a re-rank. Verifies the default
+        `method` works end-to-end on a JSONL fixture."""
+        log = study_jsonl_with_n_completed(
+            n=5, intermediate_means=[0.1, 0.9, 0.5, 0.3, 0.7],
+        )
+        tops = extract_top_builds(
+            log, hammerhead_hull, game_data, manifest, top_k=3,
+        )  # method='twfe_eb' default
+        assert len(tops) == 3
+        # Same trial-index ordering as raw mean (build i=1 with mean=0.9 first).
+        # Magnitudes shrink toward zero relative to raw means.
+        scores = [t[1] for t in tops]
+        assert scores == sorted(scores, reverse=True)
 
-    def test_rejects_zero_top_k(
-        self, study_db_with_n_completed, hammerhead_hull, game_data, manifest,
-    ):
-        db = study_db_with_n_completed(n=1)
-        with pytest.raises(ValueError, match="top_k must be >= 1"):
-            extract_top_builds(db, hammerhead_hull, game_data, manifest, top_k=0)
-
-    def test_raises_loud_on_stale_params(
+    def test_raises_when_log_path_missing(
         self, tmp_path, hammerhead_hull, game_data, manifest,
     ):
-        """Stale params (not in current search space) is a data-corruption
-        signal. Must raise RuntimeError, NOT silently skip — silently
-        skipping would alter 'top-k' meaning and break cross-cell comparison."""
-        db_path = tmp_path / "stale.db"
-        storage = f"sqlite:///{db_path}"
-        from starsector_optimizer.models import REGIME_PRESETS
-        space = build_search_space(
-            hammerhead_hull, game_data, REGIME_PRESETS["early"], manifest,
-        )
-        distributions = define_distributions(space)
-        study = optuna.create_study(
-            study_name="hammerhead__early", storage=storage, direction="maximize",
-        )
-        # Stale param: a weapon-slot key that doesn't exist in current
-        # search space. trial_params_to_build will accept it (just dumps
-        # into Build.weapons), but repair_build will reject the slot
-        # because the hull has no such slot id.
-        bad_distrib = optuna.distributions.CategoricalDistribution(
-            choices=["empty", "phantom_weapon_id_does_not_exist"],
-        )
-        study.add_trial(optuna.create_trial(
-            params={"weapon_NONEXISTENT_SLOT_999": "phantom_weapon_id_does_not_exist"},
-            distributions={"weapon_NONEXISTENT_SLOT_999": bad_distrib},
-            value=1.0,
-        ))
-        # A trial with a non-string weapon-id triggers repair_build's
-        # type/lookup paths reliably; if even that doesn't trip repair, fall
-        # through and just verify the fail-loud contract via patching.
-        # Cleaner: monkeypatch repair_build to raise.
+        with pytest.raises(FileNotFoundError, match="no evaluation_log.jsonl"):
+            extract_top_builds(
+                tmp_path / "nonexistent.jsonl",
+                hammerhead_hull, game_data, manifest, top_k=1,
+            )
+
+    def test_raises_when_fewer_than_top_k_completed(
+        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+    ):
+        log = study_jsonl_with_n_completed(n=2)
+        with pytest.raises(ValueError, match="only 2 completed"):
+            extract_top_builds(
+                log, hammerhead_hull, game_data, manifest, top_k=3,
+            )
+
+    def test_rejects_zero_top_k(
+        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+    ):
+        log = study_jsonl_with_n_completed(n=1)
+        with pytest.raises(ValueError, match="top_k must be >= 1"):
+            extract_top_builds(
+                log, hammerhead_hull, game_data, manifest, top_k=0,
+            )
+
+    def test_rejects_unknown_method(
+        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+    ):
+        log = study_jsonl_with_n_completed(n=3)
+        with pytest.raises(ValueError, match="unknown ranking method"):
+            extract_top_builds(
+                log, hammerhead_hull, game_data, manifest, top_k=1,
+                method="bogus",
+            )
+
+    def test_raises_loud_on_repair_failure(
+        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+    ):
+        """Stale build spec (e.g. a hullmod that no longer exists in the
+        current manifest) is a data-corruption signal. Must raise
+        RuntimeError, not silently skip."""
+        log = study_jsonl_with_n_completed(n=3)
         with pytest.MonkeyPatch.context() as mp:
             def fail_repair(*a, **kw):
                 raise ValueError("synthetic repair failure")
@@ -175,50 +228,59 @@ class TestExtractTopBuilds:
             )
             with pytest.raises(RuntimeError, match="failed repair_build"):
                 extract_top_builds(
-                    db_path, hammerhead_hull, game_data, manifest, top_k=1,
+                    log, hammerhead_hull, game_data, manifest, top_k=1,
                 )
 
-    def test_ignores_pruned_and_running_trials(
+    def test_skips_pruned_and_invalid_rows(
         self, tmp_path, hammerhead_hull, game_data, manifest,
     ):
-        """Only COMPLETE trials with non-None value count toward top_k."""
-        db_path = tmp_path / "mixed_states.db"
-        storage = f"sqlite:///{db_path}"
-        from starsector_optimizer.models import REGIME_PRESETS
+        """Pruned, cache-hit, and invalid-spec rows must not count toward
+        top_k. Only completed rows (with non-empty opponent_results) are
+        legal candidates."""
         from starsector_optimizer.calibration import generate_random_build
+        from starsector_optimizer.models import REGIME_PRESETS
         from starsector_optimizer.repair import repair_build
         import numpy as np
-        space = build_search_space(
-            hammerhead_hull, game_data, REGIME_PRESETS["early"], manifest,
+        log_path = tmp_path / "evaluation_log.jsonl"
+        rng = np.random.default_rng(11)
+
+        def _row(i, **flags):
+            build = generate_random_build(
+                hammerhead_hull, game_data, manifest,
+                rng=rng, regime=REGIME_PRESETS["early"],
+            )
+            repaired = repair_build(
+                build, hammerhead_hull, game_data, manifest,
+            )
+            base = {
+                "trial_number": i,
+                "build": {
+                    "hull_id": repaired.hull_id,
+                    "weapon_assignments": dict(repaired.weapon_assignments),
+                    "hullmods": list(repaired.hullmods),
+                    "flux_vents": repaired.flux_vents,
+                    "flux_capacitors": repaired.flux_capacitors,
+                },
+                "opponent_results": [{
+                    "opponent": "opp_0", "winner": "PLAYER",
+                    "duration_seconds": 30.0, "hp_differential": 0.5,
+                }],
+                "pruned": False, "cache_hit": False, "invalid_spec": False,
+            }
+            base.update(flags)
+            return json.dumps(base) + "\n"
+
+        log_path.write_text(
+            _row(0)
+            + _row(1, pruned=True)
+            + _row(2, cache_hit=True)
+            + _row(3, invalid_spec=True),
         )
-        distributions = define_distributions(space)
-        study = optuna.create_study(
-            study_name="hammerhead__early", storage=storage, direction="maximize",
-        )
-        rng = np.random.default_rng(7)
-        # Add one COMPLETE trial.
-        b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
-        )
-        study.add_trial(optuna.create_trial(
-            params=build_to_trial_params(b, space),
-            distributions=distributions,
-            value=0.5,
-        ))
-        # Add a PRUNED trial — should NOT count toward top_k.
-        b2 = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
-        )
-        study.add_trial(optuna.create_trial(
-            params=build_to_trial_params(b2, space),
-            distributions=distributions,
-            state=optuna.trial.TrialState.PRUNED,
-        ))
-        # Asking for top_k=2 must raise (only 1 COMPLETE).
+        # Only 1 completed row — top_k=2 must raise.
         with pytest.raises(ValueError, match="only 1 completed"):
-            extract_top_builds(db_path, hammerhead_hull, game_data, manifest, top_k=2)
+            extract_top_builds(
+                log_path, hammerhead_hull, game_data, manifest, top_k=2,
+            )
 
 
 # ---- discover_evaluation_pool -----------------------------------------------
@@ -448,6 +510,247 @@ class TestEvaluateBuilds:
             evaluate_builds([], ("opp_a",), _MockPool(), cfg, hammerhead_hull)
 
 
+class TestRandomBaseline:
+    """Auditor C (2026-05-10): without a random-feasible baseline cell,
+    even successful Wave 1 honest-eval can't answer 'does any optimization
+    machinery beat random sampling?'. The synthesized baseline gives the
+    cross-cell ranking an existence check."""
+
+    def test_synthesizes_n_distinct_feasible_builds(
+        self, hammerhead_hull, game_data, manifest,
+    ):
+        from starsector_optimizer.honest_evaluator import (
+            RANDOM_BASELINE_SOURCE_CAMPAIGN, synthesize_random_baseline_builds,
+        )
+        from starsector_optimizer.repair import is_feasible
+        builds = synthesize_random_baseline_builds(
+            hammerhead_hull, game_data, manifest, n=5, seed=42,
+        )
+        assert len(builds) == 5
+        for bp in builds:
+            assert bp.source_campaign == RANDOM_BASELINE_SOURCE_CAMPAIGN
+            assert is_feasible(bp.build, hammerhead_hull, game_data, manifest)
+        # Ranks should be 1..5 (deterministic order from rng).
+        assert [bp.source_rank for bp in builds] == [1, 2, 3, 4, 5]
+
+    def test_deterministic_in_seed(
+        self, hammerhead_hull, game_data, manifest,
+    ):
+        """Resume contract: re-running with the same seed produces the
+        same baseline builds, so the ledger's (build_id, opp, rep) keys
+        match across a resume."""
+        from starsector_optimizer.honest_evaluator import (
+            synthesize_random_baseline_builds,
+        )
+        a = synthesize_random_baseline_builds(
+            hammerhead_hull, game_data, manifest, n=3, seed=7,
+        )
+        b = synthesize_random_baseline_builds(
+            hammerhead_hull, game_data, manifest, n=3, seed=7,
+        )
+        for bp_a, bp_b in zip(a, b):
+            assert bp_a.build == bp_b.build
+
+    def test_different_seeds_produce_different_builds(
+        self, hammerhead_hull, game_data, manifest,
+    ):
+        from starsector_optimizer.honest_evaluator import (
+            synthesize_random_baseline_builds,
+        )
+        a = synthesize_random_baseline_builds(
+            hammerhead_hull, game_data, manifest, n=3, seed=0,
+        )
+        b = synthesize_random_baseline_builds(
+            hammerhead_hull, game_data, manifest, n=3, seed=1,
+        )
+        # Should not all be the same.
+        assert any(bp_a.build != bp_b.build for bp_a, bp_b in zip(a, b))
+
+
+class TestLedgerResume:
+    """The ledger is the data-loss fix: every successful matchup result
+    is appended to JSONL with fsync, and a future run with the same
+    eval_tag replays the ledger to skip already-completed matchups
+    instead of redoing the work.
+    """
+
+    def _make_build(self, hull, game_data, manifest, seed=0):
+        from starsector_optimizer.calibration import generate_random_build
+        from starsector_optimizer.repair import repair_build
+        from starsector_optimizer.models import REGIME_PRESETS
+        import numpy as np
+        rng = np.random.default_rng(seed)
+        return repair_build(
+            generate_random_build(hull, game_data, manifest, rng=rng,
+                                  regime=REGIME_PRESETS["early"]),
+            hull, game_data, manifest,
+        )
+
+    def test_writes_ledger_line_per_successful_matchup(
+        self, hammerhead_hull, game_data, manifest, tmp_path,
+    ):
+        from starsector_optimizer.honest_evaluator import (
+            LEDGER_SCHEMA_VERSION, evaluate_builds,
+        )
+        b = self._make_build(hammerhead_hull, game_data, manifest, seed=10)
+        pool = _MockPool()
+        eval_pool = ("opp_a", "opp_b")
+        cfg = HonestEvaluationConfig(
+            replicates_per_matchup=2, max_retries_per_matchup=0,
+        )
+        ledger_path = tmp_path / "results.jsonl"
+        evaluate_builds(
+            [_bp(b)], eval_pool, pool, cfg, hammerhead_hull,
+            ledger_path=ledger_path,
+        )
+        # 1 build × 2 opps × 2 reps = 4 dispatched ⇒ 4 ledger lines
+        assert ledger_path.exists()
+        lines = [ln for ln in ledger_path.read_text().splitlines() if ln]
+        assert len(lines) == 4
+        for ln in lines:
+            data = json.loads(ln)
+            assert data["schema_version"] == LEDGER_SCHEMA_VERSION
+            assert "build_id" in data
+            assert "opponent_variant_id" in data
+            assert "replicate_idx" in data
+            assert isinstance(data["fitness"], float)
+            assert "completed_at" in data
+
+    def test_resume_skips_completed_and_dispatches_only_remaining(
+        self, hammerhead_hull, game_data, manifest, tmp_path,
+    ):
+        """Ledger replay: first run writes 4 entries, then a fresh pool
+        with the same ledger should dispatch ZERO matchups (all already
+        completed) and still return aggregated results."""
+        from starsector_optimizer.honest_evaluator import evaluate_builds
+        b = self._make_build(hammerhead_hull, game_data, manifest, seed=11)
+        eval_pool = ("opp_a", "opp_b")
+        cfg = HonestEvaluationConfig(
+            replicates_per_matchup=2, max_retries_per_matchup=0,
+        )
+        ledger_path = tmp_path / "results.jsonl"
+
+        # First run — writes ledger.
+        pool1 = _MockPool()
+        evaluate_builds(
+            [_bp(b)], eval_pool, pool1, cfg, hammerhead_hull,
+            ledger_path=ledger_path,
+        )
+        assert len(pool1.dispatched) == 4
+
+        # Second run with same ledger — must skip everything.
+        pool2 = _MockPool()
+        result = evaluate_builds(
+            [_bp(b)], eval_pool, pool2, cfg, hammerhead_hull,
+            ledger_path=ledger_path,
+        )
+        assert pool2.dispatched == [], (
+            "ledger replay must skip dispatch for already-completed matchups"
+        )
+        # The aggregation still produces a result.
+        assert result[0].n_matchups_succeeded == 4
+
+    def test_resume_dispatches_only_missing_matchups(
+        self, hammerhead_hull, game_data, manifest, tmp_path,
+    ):
+        """Partial ledger: pre-seed 2 entries, then run; expect only the
+        OTHER 2 matchups (4 total - 2 seeded) to be dispatched."""
+        from starsector_optimizer.honest_evaluator import (
+            LEDGER_SCHEMA_VERSION, _LedgerWriter, LedgerEntry, evaluate_builds,
+        )
+        b = self._make_build(hammerhead_hull, game_data, manifest, seed=12)
+        bp = _bp(b)
+        eval_pool = ("opp_a", "opp_b")
+        cfg = HonestEvaluationConfig(
+            replicates_per_matchup=2, max_retries_per_matchup=0,
+        )
+        ledger_path = tmp_path / "results.jsonl"
+        # Pre-seed: opp_a × rep0 + opp_a × rep1.
+        bid = (
+            f"honest__{bp.source_campaign}__s{bp.source_study_idx}"
+            f"__seed{bp.source_seed_idx}__rank{bp.source_rank}"
+        )
+        writer = _LedgerWriter(ledger_path)
+        for rep in range(2):
+            writer.append(LedgerEntry(
+                schema_version=LEDGER_SCHEMA_VERSION,
+                matchup_id=f"{bid}_vs_opp_a_rep{rep}",
+                build_id=bid,
+                opponent_variant_id="opp_a",
+                replicate_idx=rep,
+                fitness=0.5,
+                completed_at="2026-05-10T00:00:00+00:00",
+            ))
+
+        pool = _MockPool()
+        result = evaluate_builds(
+            [bp], eval_pool, pool, cfg, hammerhead_hull,
+            ledger_path=ledger_path,
+        )
+        # Only opp_b × {rep0, rep1} should dispatch.
+        assert len(pool.dispatched) == 2
+        for mid in pool.dispatched:
+            assert "opp_b" in mid
+        # Final aggregation: 2 from ledger + 2 fresh = 4.
+        assert result[0].n_matchups_succeeded == 4
+
+    def test_unknown_build_id_in_ledger_raises(
+        self, hammerhead_hull, game_data, manifest, tmp_path,
+    ):
+        """A ledger entry whose build_id no longer maps to any current
+        build means --top-k or campaign DBs changed. Refuse to mix old
+        and new scores silently."""
+        from starsector_optimizer.honest_evaluator import (
+            LEDGER_SCHEMA_VERSION, _LedgerWriter, LedgerEntry, evaluate_builds,
+        )
+        b = self._make_build(hammerhead_hull, game_data, manifest, seed=13)
+        ledger_path = tmp_path / "results.jsonl"
+        writer = _LedgerWriter(ledger_path)
+        writer.append(LedgerEntry(
+            schema_version=LEDGER_SCHEMA_VERSION,
+            matchup_id="ghost__vs_opp_a_rep0",
+            build_id="ghost__c_z__s9__seed9__rank9",
+            opponent_variant_id="opp_a",
+            replicate_idx=0,
+            fitness=0.1,
+            completed_at="2026-05-10T00:00:00+00:00",
+        ))
+        cfg = HonestEvaluationConfig(
+            replicates_per_matchup=1, max_retries_per_matchup=0,
+        )
+        with pytest.raises(RuntimeError, match="unknown build_id"):
+            evaluate_builds(
+                [_bp(b)], ("opp_a",), _MockPool(), cfg, hammerhead_hull,
+                ledger_path=ledger_path,
+            )
+
+    def test_corrupt_ledger_line_raises(self, tmp_path):
+        from starsector_optimizer.honest_evaluator import read_ledger
+        ledger_path = tmp_path / "results.jsonl"
+        # Valid first line, garbage second.
+        ledger_path.write_text(
+            '{"schema_version": 1, "matchup_id": "m1", "build_id": "ok", '
+            '"opponent_variant_id": "o", "replicate_idx": 0, '
+            '"fitness": 0.1, "completed_at": "2026-05-10T00:00:00+00:00"}\n'
+            'not-json garbage\n'
+        )
+        with pytest.raises(RuntimeError, match="corrupt ledger line"):
+            read_ledger(ledger_path)
+
+    def test_old_schema_version_skipped_with_warning(self, tmp_path, caplog):
+        from starsector_optimizer.honest_evaluator import read_ledger
+        ledger_path = tmp_path / "results.jsonl"
+        ledger_path.write_text(
+            '{"schema_version": 999, "build_id": "x", '
+            '"opponent_variant_id": "o", "replicate_idx": 0, '
+            '"fitness": 0.1}\n'
+        )
+        with caplog.at_level("WARNING"):
+            completed = read_ledger(ledger_path)
+        assert completed == {}
+        assert any("schema_version=999" in r.message for r in caplog.records)
+
+
 # ---- summarize_by_cell -------------------------------------------------------
 
 
@@ -544,19 +847,28 @@ class TestMainCLIWiring:
       - missing source-campaign YAML raises ValueError
     """
 
-    def _seed_campaign_dbs(
-        self, db_root, campaign_name, study_db_factory, n_seeds=1, n_trials=3,
+    def _seed_campaign_logs(
+        self, log_root, campaign_name, study_jsonl_factory,
+        n_seeds=1, n_trials=3,
     ):
-        cdir = db_root / campaign_name
+        """Seed `data/logs/<campaign>/<study-stem>/evaluation_log.jsonl`
+        for each seed. Mirrors the path layout main() globs.
+
+        Returns the campaign log dir (e.g. `data/logs/<campaign>/`).
+        """
+        cdir = log_root / campaign_name
         cdir.mkdir(parents=True, exist_ok=True)
         for seed_idx in range(n_seeds):
-            db = study_db_factory(
-                n=n_trials,
-                db_name=f"hammerhead__early__tpe__seed{seed_idx}.db",
+            stem = f"hammerhead__early__tpe__seed{seed_idx}"
+            log = study_jsonl_factory(
+                n=n_trials, log_subdir=f"{campaign_name}/{stem}",
             )
-            # Move the file into the campaign dir.
-            target = cdir / db.name
-            target.write_bytes(db.read_bytes())
+            # study_jsonl_factory writes under tmp_path/data/logs/...; copy
+            # to the test's chosen log_root if different.
+            target = cdir / stem / "evaluation_log.jsonl"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if log != target:
+                target.write_bytes(log.read_bytes())
         return cdir
 
     def _patch_manifest_load(self, monkeypatch, manifest):
@@ -579,17 +891,17 @@ class TestMainCLIWiring:
         )
 
     def test_dry_run_skips_provisioning(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """--dry-run exits 0 without touching AWSProvider / CloudWorkerPool."""
         from starsector_optimizer import honest_evaluator
-        # Seed a per-study DB under data/study_dbs/<name>/
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        # Seed a per-study evaluation_log.jsonl under data/logs/<name>/<study-stem>/
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
-        # honest_evaluator.main hardcodes Path("data/study_dbs") — chdir +
+        # honest_evaluator.main hardcodes Path("data/logs") — chdir +
         # patch GameManifest.load (relative path won't resolve under tmp).
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -618,18 +930,19 @@ class TestMainCLIWiring:
         sentinel.assert_not_called()
 
     def test_full_run_uses_honest_eval_namespace(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
-        """The honest-eval fleet is tagged honest-eval-* — distinct from any
-        source-campaign fleet's project_tag/study_id/fleet_name. This is
-        the contract that prevents `terminate_all_tagged` from reaching the
-        wrong fleet."""
+        """The honest-eval fleet is tagged starsector-honest-eval-* —
+        distinct from any source-campaign fleet's project_tag/study_id/
+        fleet_name. The `starsector-` prefix matches CampaignManager and
+        teardown.sh; the `honest-eval-` segment prevents
+        `terminate_all_tagged` from reaching the wrong fleet."""
         from starsector_optimizer import honest_evaluator
         # Seed dbs.
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -671,21 +984,24 @@ class TestMainCLIWiring:
         ])
         assert rc == 0
         # Honest-eval namespace: all four naming fields must be the same
-        # honest-eval-{name}-{stamp} string and must NOT match the source
-        # campaign's project_tag.
-        assert captured["study_id"].startswith("honest-eval-ut-honest-eval-source-")
+        # starsector-honest-eval-{name}-{stamp} string and must NOT match
+        # the source campaign's project_tag. The `starsector-` prefix is
+        # required for teardown.sh to find the fleet.
+        assert captured["study_id"].startswith(
+            "starsector-honest-eval-ut-honest-eval-source-"
+        )
         assert captured["project_tag"] == captured["study_id"]
         assert captured["fleet_name"] == captured["study_id"]
         assert captured["project_tag"] != smoke_env["STARSECTOR_PROJECT_TAG"]
 
     def test_workers_override_changes_target(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -725,7 +1041,7 @@ class TestMainCLIWiring:
         assert captured["total_matchup_slots"] == 6
 
     def test_default_flask_port_is_inside_acl_range(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """V1 regression — earlier default `base_flask_port - 1` (= 8999)
@@ -733,9 +1049,9 @@ class TestMainCLIWiring:
         POST to silently time out while the fleet billed. The default must
         be in [base, base + flask_ports_per_study)."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -775,16 +1091,16 @@ class TestMainCLIWiring:
         assert 9000 <= captured["flask_port"] <= 9099
 
     def test_out_of_range_flask_port_raises_pre_provision(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """Operator-supplied --flask-port outside [base, base + ports_per_study)
         must fail BEFORE provisioning any AWS resources — workers can't
         POST through the ACL otherwise."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -809,25 +1125,32 @@ class TestMainCLIWiring:
             ])
         sentinel.assert_not_called()
 
-    def test_unrecognized_db_filename_raises_loud(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+    def test_unrecognized_log_dir_raises_loud(
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
-        """IG3 — unrecognized DB filename in the campaign dir is a
-        data-integrity signal (drift from the per-study layout). Must
-        raise, not warn-and-skip."""
+        """IG3 — unrecognized study-dir name in `data/logs/<campaign>/`
+        is a data-integrity signal (drift from the per-study layout).
+        Must raise, not warn-and-skip."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        cdir = self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        cdir = self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
-        # Drop a misnamed file alongside the valid one.
-        (cdir / "stray.db").write_bytes((cdir / "hammerhead__early__tpe__seed0.db").read_bytes())
+        # Drop a misnamed study dir (no `__seedN` suffix) alongside the
+        # valid one. The glob `*/evaluation_log.jsonl` will match it; the
+        # seed-parsing must raise loud rather than silently skip.
+        stray = cdir / "stray__no_seed_suffix"
+        stray.mkdir()
+        (stray / "evaluation_log.jsonl").write_bytes(
+            (cdir / "hammerhead__early__tpe__seed0" /
+             "evaluation_log.jsonl").read_bytes()
+        )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
 
-        with pytest.raises(RuntimeError, match="unrecognized DB filename"):
+        with pytest.raises(RuntimeError, match="unrecognized log dir"):
             honest_evaluator.main([
                 "--campaign-name", "ut-honest-eval-source",
                 "--hull", "hammerhead", "--game-dir", str(game_dir),
@@ -835,7 +1158,7 @@ class TestMainCLIWiring:
             ])
 
     def test_preflight_rejects_stale_ami_tag(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """Manifest+AMI tag drift = silent oracle corruption (workers run
@@ -843,9 +1166,9 @@ class TestMainCLIWiring:
         provisioning. Tests the real `_preflight_for_honest_eval`'s AMI
         check via injected fake provider."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -888,14 +1211,14 @@ class TestMainCLIWiring:
         sentinel.assert_not_called()
 
     def test_preflight_passes_when_ami_tags_match(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """Sanity: the AMI gate doesn't false-positive when tags match."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -945,15 +1268,15 @@ class TestMainCLIWiring:
         assert "study_id" in captured
 
     def test_preflight_rejects_bad_authkey(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """IG1 — malformed authkey should fail BEFORE provisioning. Tests
         the real `_preflight_for_honest_eval` (not the patched stub)."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -984,28 +1307,30 @@ class TestMainCLIWiring:
     def test_eval_tag_length_guard_rejects_overlong_name(
         self, monkeypatch, tmp_path,
     ):
-        """M2 — eval_tag = honest-eval-{name}-{16-char-stamp}; AWS Launch
-        Template names cap at 128 chars after AWSProvider doubles it.
-        Verify the guard fires."""
-        from starsector_optimizer.honest_evaluator import _validate_eval_tag_length
-        # 60-char tag is the boundary; 61 must raise.
-        ok = "x" * 60
+        """M2 — eval_tag = starsector-honest-eval-{name}-{16-char-stamp};
+        AWS Launch Template names cap at 128 chars after AWSProvider
+        doubles `{project_tag}__{fleet_name}` (= 2 × eval_tag + 2).
+        Boundary is `MAX_EVAL_TAG_LEN`."""
+        from starsector_optimizer.honest_evaluator import (
+            MAX_EVAL_TAG_LEN, _validate_eval_tag_length,
+        )
+        ok = "x" * MAX_EVAL_TAG_LEN
         _validate_eval_tag_length(ok)
-        bad = "x" * 61
+        bad = "x" * (MAX_EVAL_TAG_LEN + 1)
         with pytest.raises(ValueError, match="overflow AWS Launch Template"):
             _validate_eval_tag_length(bad)
 
     def test_empty_eval_pool_raises_pre_provision(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         """An empty eval pool would otherwise be discovered AFTER fleet
         boot (when evaluate_builds runs inside the `with` block); the
         pre-provision check saves ~30s of fleet-boot cost."""
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -1029,13 +1354,13 @@ class TestMainCLIWiring:
         sentinel.assert_not_called()
 
     def test_missing_campaign_yaml_raises_clear_error(
-        self, monkeypatch, tmp_path, smoke_env, study_db_with_n_completed,
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
         game_dir, manifest,
     ):
         from starsector_optimizer import honest_evaluator
-        db_root = tmp_path / "data" / "study_dbs"
-        self._seed_campaign_dbs(
-            db_root, "ut-honest-eval-source", study_db_with_n_completed,
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)

@@ -42,14 +42,20 @@ max_concurrent_workers: 96
 min_workers_to_start: 48
 partial_fleet_policy: proceed_half_speed
 
-# AMIs from 2026-04-19 bake — STALE for Wave 3. These are pre-V2-loadout-fix
-# (commit c813561) and pre-multi-worker-LOADOUT_MISMATCH-fix. A fresh re-bake
-# baking in 8a5b968 (V2 loadout) + c2d5150 (variant filter) + 722afd2
-# (V2_SETUP_TIMEOUT helper) is required before Wave 3 launch.
-# `scripts/cloud/bake_image.sh` produces both region IDs in one go.
+# AMIs updated 2026-05-10 to the post-V2-loadout-fix Wave 1 AMIs
+# (ModCommitSha=dc71e3b, baked 2026-05-09). Use the `serve_mod_jar.sh`
+# tailnet override to overlay the cross-matchup variant cache fix
+# (task #89, VariantBuilder.uniqueVariantId, 2026-05-10): run
+# `scripts/cloud/deploy_java_fix_for_wave2.sh` then source
+# `data/.mod_jar_env` before invoking `launch_campaign.sh`. Without the
+# override workers will run with the variant-cache-pollution bug
+# (~5-19 % LOADOUT_MISMATCH rate; band-aid retries cleanly so fitness
+# is still uncontaminated, but adds 7-19 % wall-clock + AWS overhead).
+# A fresh re-bake baking the Java fix directly is recommended after
+# Wave 3 if the project continues.
 ami_ids_by_region:
-  us-east-1: ami-0a9cb6be884488352
-  us-east-2: ami-0e60f66b6e3799758
+  us-east-1: ami-0a434660884e985e3
+  us-east-2: ami-058e7a119eb656d45
 
 ssh_key_name: starsector-probe
 

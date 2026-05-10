@@ -42,8 +42,8 @@ class EvaluatedBuild:
     source_campaign: str            # e.g. "wave1-c0a"
     source_study_idx: int
     source_seed_idx: int
-    source_rank: int                # 1 = best in that seed by Optuna's value
-    source_value: float             # the within-cell shaped score (for diagnostic only)
+    source_rank: int                # 1 = best in that seed by `--ranking-method` (default `twfe_eb`)
+    source_value: float             # the chosen ranker's score for this trial (α̂_EB by default; NaN for synthetic baselines)
     oracle_score: float             # mean fitness across pool × replicates
     oracle_se: float                # standard error of the mean
     n_matchups_succeeded: int       # = pool_size × replicates_per_matchup (always; failures retried)
@@ -71,32 +71,96 @@ class HonestEvaluationResult:
 ### Functions
 
 ```python
+RANKING_METHODS = ("twfe_eb", "twfe", "raw_mean", "bradley_terry")
+
 def extract_top_builds(
-    study_db_path: Path,
+    eval_log_path: Path,
     hull: ShipHull,
     game_data: GameData,
     manifest: GameManifest,
     top_k: int,
+    *,
+    method: str = "twfe_eb",
 ) -> tuple[tuple[int, float, Build], ...]:
-    """Open per-study SQLite, return (rank, value, Build) for top_k completed
-    trials in descending value order.
+    """Read per-study `evaluation_log.jsonl`, return (rank, score, Build) for
+    top_k completed trials under the chosen ranking estimator.
 
-    Implementation mirrors `optimizer._enqueue_warm_start_from_regime`'s
-    extraction pattern (`optimizer.py:1233-1255`):
+    **Default `twfe_eb` (2026-05-10 revision)**. Trials are ranked by
+    α̂_EB from the post-hoc TWFE + EB pipeline (`posthoc_ranker.rank_twfe_eb`,
+    which reuses `deconfounding.twfe_decompose` and `eb_shrinkage`).
+    Phase5a + phase5d-without-X — see
+    `docs/reports/2026-05-10-posthoc-ranker-research.md` for the
+    empirical comparison and rationale.
 
-        completed = [t for t in study.trials
-                     if t.state == TrialState.COMPLETE and t.value is not None]
-        completed.sort(key=lambda t: t.value, reverse=True)
-        for t in completed[:top_k]:
-            build = repair_build(trial_params_to_build(t.params, ...), ...)
+    **Why JSONL, not SQLite.** TWFE / EB / Bradley-Terry all need the
+    (build × opponent) score matrix. SQLite's `intermediate_values`
+    keys per-opponent fitnesses by opaque step-index, which loses
+    opponent identity. The JSONL row carries `opponent_results`
+    (opponent id + winner + hp_differential per match) — the only data
+    source that supports principled deconfounded ranking.
+
+    **Why not raw mean (the prior default).** Raw mean has 0/5 top-5
+    overlap with TWFE / EB / BT on Wave 1 (pooled and per-cell). The
+    bias comes from opponent confounding: TPE+pruner schedules
+    different builds against different opponent subsets, so per-trial
+    means are contaminated by which opponents a build happened to face.
+    `raw_mean` is kept as a `method=` choice for ablation only.
+
+    **`method` choices** (one of `RANKING_METHODS`):
+      - `twfe_eb`        — default; α̂ + EB shrinkage on residuals.
+      - `twfe`           — α̂ without shrinkage (EB-off ablation).
+      - `raw_mean`       — pre-2026-05-10 default; biased; ablation only.
+      - `bradley_terry`  — logistic skill model; secondary signal.
+        Disagreement vs `twfe_eb` is informative
+        (TWFE = magnitude-of-victory; BT = did you win) and surfaces
+        as a WARN in `main()` pre-dispatch via
+        `report_method_disagreement`.
 
     Raises:
-      ValueError if the study has fewer than top_k completed trials.
-      RuntimeError if any selected trial's params fail repair_build —
-        stale params are a data-corruption signal (search-space changed
-        without migration, or repair operator regressed); they must NOT
-        be silently skipped because doing so quietly alters what "top-k"
-        means and breaks cross-cell comparison.
+      FileNotFoundError if the log path does not exist (Wave 1 logs
+        must be migrated via `scripts/migrate_wave1_eval_logs.py`;
+        Wave 2+ writes natively per task #90).
+      ValueError if the study has fewer than top_k completed (non-
+        pruned, non-cache-hit, non-invalid-spec) trials, or the method
+        is unrecognized.
+      RuntimeError if any selected build's spec fails `repair_build`
+        — stale spec is a data-corruption signal (search-space drift,
+        manifest change), must NOT be silently skipped because doing so
+        quietly alters "top-k" and breaks cross-cell comparison.
+    """
+
+
+def report_method_disagreement(
+    eval_log_path: Path,
+    top_k: int,
+    methods: tuple[str, ...] = RANKING_METHODS,
+) -> dict[str, list[str]]:
+    """Diagnostic helper. Returns each estimator's top-K build hashes so
+    `main()` can WARN when methods disagree before paying for the
+    oracle pass."""
+
+
+def synthesize_random_baseline_builds(
+    hull: ShipHull,
+    game_data: GameData,
+    manifest: GameManifest,
+    n: int,
+    seed: int = 0,
+    regime: str = "early",
+) -> tuple[_BuildWithProvenance, ...]:
+    """Generate `n` random feasible builds tagged with
+    `source_campaign='random-baseline'` so they ride alongside campaign-
+    derived cells through evaluate_builds + summarize_by_cell.
+
+    Without this baseline cell, even successful Wave 1 honest-eval cell
+    rankings cannot answer the existence question: "does ANY of the
+    optimization machinery beat random feasible sampling?". With it,
+    the cross-cell summary includes a `random-baseline` row whose
+    `mean_top_k_oracle` provides the floor that any cell must clear
+    to claim it added signal.
+
+    Deterministic in `seed` so `--resume-from` re-generates the same
+    baseline builds and the ledger keys still match.
     """
 
 def discover_evaluation_pool(
@@ -185,6 +249,28 @@ module exposes a `main(argv)` that takes:
 - `--dry-run` — extract top builds + load campaign config + enumerate
   pool + run lightweight preflight (authkey + STS), then exit without
   provisioning AWS resources
+- `--resume-from <eval_tag>` — reuse a prior eval_tag and replay its
+  ledger. Matchups already present in `{out_root}/honest_eval/{eval_tag}/results.jsonl`
+  skip dispatch; the stored fitness folds straight into the in-memory
+  aggregation. Use this to recover from a SIGTERM / OOM / network
+  partition mid-run. Reuses the eval_tag for AWS resource naming, so
+  any prior fleet must be torn down first
+  (`scripts/cloud/teardown.sh <eval_tag>`).
+
+**Resume ledger.** During every run, `evaluate_builds` appends one JSON
+line per successful matchup to `{out_root}/honest_eval/{eval_tag}/results.jsonl`
+with `flush()` + `os.fsync()` (mirrors the spec 22 cost-ledger pattern).
+Each line contains `schema_version`, `matchup_id`, `build_id`,
+`opponent_variant_id`, `replicate_idx`, `fitness`, `completed_at`. The
+triple `(build_id, opponent_variant_id, replicate_idx)` is the resume
+key — `--resume-from` reads the ledger, populates the skip-set, and
+pre-loads `scores_per_build` so aggregation matches a fresh full run.
+A ledger entry referencing an unknown `build_id` (because operator
+changed `--top-k` or campaign DBs between runs) raises rather than
+silently mixing scores. Unknown `schema_version` lines are skipped with
+a warning. Corrupt JSON lines raise. The ledger is only the resume
+substrate — final outputs (`honest_eval.json`, the cross-cell summary)
+remain in `{out_root}/campaigns/`.
 
 Writes `data/campaigns/<name>/honest_eval.json` per input campaign plus
 a single `data/campaigns/honest_eval_summary_YYYY-MM-DD.json` covering
@@ -194,14 +280,16 @@ and the resolved `config` dict for downstream tooling.
 **Cloud-pool lifecycle.** `main()` provisions an isolated AWS fleet via
 `cloud_runner.prepare_cloud_pool` (the shared context-manager helper
 that also backs `run_cloud_study`). The honest-eval fleet uses a
-distinct namespace `honest-eval-{first-campaign-name}-{utc-stamp}` for
-all four name-bearing fields (`study_id`, `project_tag`, `fleet_name`,
-plus the Flask port reserved at the top of the ACL range). This
-isolation is mandatory: the source campaign's `terminate_all_tagged`
-key must NOT match honest-eval's, or post-run teardown could sweep the
-wrong fleet. `eval_tag` is capped at 60 chars so the doubled
-`{project_tag}__{fleet_name}` form fits the AWS Launch Template name
-limit (128 chars).
+distinct namespace `starsector-honest-eval-{first-campaign-name}-{utc-stamp}`
+for all four name-bearing fields (`study_id`, `project_tag`, `fleet_name`,
+plus the Flask port reserved at the top of the ACL range). The
+`starsector-` prefix matches `CampaignManager.project_tag` and
+`scripts/cloud/teardown.sh` (which prepends `starsector-`), so a single
+teardown convention covers every fleet we provision; the
+`honest-eval-{campaign}-{stamp}` segment ensures the source campaign's
+`terminate_all_tagged` key does NOT match honest-eval's. `eval_tag` is
+capped at 63 chars so the doubled `{project_tag}__{fleet_name}` form
+fits the AWS Launch Template 128-char name limit.
 
 **Inherited fields from the source campaign YAML** (read via
 `load_campaign_config(args.campaign_config)` and forwarded through
@@ -214,12 +302,23 @@ limit (128 chars).
 `studies` (it spins one fleet, not N) or `budget_usd` (no per-eval
 budget cap; operator controls cost via `--workers` + `--replicates`).
 
-**Required env vars** (subset of `run_cloud_study`; loaded via
-`_require_env`): `STARSECTOR_WORKSTATION_TAILNET_IP`,
-`STARSECTOR_BEARER_TOKEN`, `STARSECTOR_TAILSCALE_AUTHKEY`. Optional:
-`STARSECTOR_DEBUG_SSH_PUBKEY`, `STARSECTOR_MOD_JAR_OVERRIDE_URL`,
-`STARSECTOR_MOD_JAR_OVERRIDE_SHA256`. Notably, `STARSECTOR_PROJECT_TAG`
-is NOT required — honest-eval derives its own tag.
+**Env vars (auto-resolved)**: `honest_evaluator.main` resolves the same
+inputs `CampaignManager` generates per study, but from primitive sources
+so the standalone CLI doesn't require manual exports.
+
+| Var | Source (in order of precedence) |
+|---|---|
+| `STARSECTOR_WORKSTATION_TAILNET_IP` | env var, else shell out to `tailscale ip -4` (`_resolve_tailnet_ip`) |
+| `STARSECTOR_BEARER_TOKEN` | env var, else fresh `uuid.uuid4().hex` per run |
+| `STARSECTOR_TAILSCALE_AUTHKEY` | env var, else `TAILSCALE_AUTHKEY` (the name `.env` exports) |
+| `STARSECTOR_DEBUG_SSH_PUBKEY` | optional; env var only |
+| `STARSECTOR_MOD_JAR_OVERRIDE_URL` / `..._SHA256` | optional; env var only (set by `serve_mod_jar.sh`) |
+
+`STARSECTOR_PROJECT_TAG` is NOT consumed — honest-eval derives its own
+namespace `starsector-honest-eval-{first-campaign}-{utc_stamp}`
+(separate from the source campaign's project_tag to prevent
+fleet-resource collision). Operator-supplied env vars still win over
+auto-resolution.
 
 **Preflight (`_preflight_for_honest_eval`)** runs after env-var loading
 and before `prepare_cloud_pool`. All three gates delegate to public
@@ -261,17 +360,24 @@ human-authored frontmatter + narrative + cross-references).
 ## Algorithm
 
 ```
-honest_evaluate(campaign_names, config):
-    # 1. Load each campaign's per-study DBs from data/study_dbs/<name>/
+honest_evaluate(campaign_names, config, ranking_method="twfe_eb"):
+    # 1. Load each campaign's per-study eval logs from data/logs/<name>/
+    #    (post-task-#90 layout; Wave 1 logs were migrated via #101).
     builds_with_provenance = []
     for name in campaign_names:
-        for db_path in sorted(glob("data/study_dbs/<name>/*.db")):
-            study_idx, seed_idx = parse_filename(db_path)
-            tops = extract_top_builds(db_path, hull, game_data, manifest, config.top_k_per_seed)
+        for jsonl_path in sorted(glob("data/logs/<name>/*/evaluation_log.jsonl")):
+            seed_idx = parse_seed_from_dirname(jsonl_path.parent.name)
+            # Diagnostic — WARN if methods disagree on top-K (heavy
+            # opponent confounding or near-tied top region).
+            disagreement = report_method_disagreement(jsonl_path, config.top_k_per_seed)
+            tops = extract_top_builds(
+                jsonl_path, hull, game_data, manifest,
+                config.top_k_per_seed, method=ranking_method,
+            )
             for rank, value, build in tops:
                 builds_with_provenance.append(BuildWithProvenance(
                     build=build, source_campaign=name,
-                    source_study_idx=study_idx, source_seed_idx=seed_idx,
+                    source_study_idx=0, source_seed_idx=seed_idx,
                     source_rank=rank, source_value=value,
                 ))
 
@@ -292,8 +398,11 @@ honest_evaluate(campaign_names, config):
 
 | Condition | Behavior |
 |---|---|
-| Study DB has < `top_k_per_seed` completed trials | `extract_top_builds` raises ValueError. Operator must lower top_k or rerun with more budget. |
-| Selected trial's params fail `repair_build` | `extract_top_builds` raises RuntimeError. Investigate: search-space drift, repair regression. Do NOT silently skip. |
+| Eval log path missing | `extract_top_builds` raises FileNotFoundError. Wave 1 needs `scripts/migrate_wave1_eval_logs.py`; Wave 2+ writes natively per task #90. |
+| Eval log has < `top_k_per_seed` completed (non-pruned, non-cache-hit, non-invalid-spec) trials | `extract_top_builds` raises ValueError. Operator must lower top_k or rerun with more budget. |
+| Unknown `--ranking-method` | `extract_top_builds` raises ValueError listing valid choices. |
+| Selected trial's build fails `repair_build` | `extract_top_builds` raises RuntimeError. Investigate: search-space drift, manifest change, repair regression. Do NOT silently skip. |
+| Methods disagree on top-K (zero overlap) | `main()` logs WARN via `report_method_disagreement` but proceeds. Operator inspects the JSONL before paying. |
 | `replicates_per_matchup < 1` | `HonestEvaluationConfig.__post_init__` raises ValueError. |
 | `top_k_per_seed < 1` | Same. |
 | `max_retries_per_matchup < 0` | Same. |

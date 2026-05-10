@@ -219,9 +219,9 @@ class TestHeartbeat:
     """Heartbeat exposes CPU load so the orchestrator can verify the configured
     matchup_slots_per_worker matches the VM's capacity."""
 
-    def test_heartbeat_writes_load_avg_and_cpu_count(self, worker_config, fake_redis):
+    def test_heartbeat_writes_load_avg_and_cpu_count(self, worker_config, fake_redis, tmp_path):
         from starsector_optimizer.worker_agent import heartbeat
-        heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id)
+        heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path)
         key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
         hb = fake_redis.hgetall(key)
         # fake_redis returns bytes by default; decode_responses may or may not
@@ -240,11 +240,11 @@ class TestHeartbeat:
         assert float(normalized["load_avg_1min"]) >= 0.0
         assert int(normalized["cpu_count"]) >= 1
 
-    def test_heartbeat_key_is_scoped_by_project_tag(self, worker_config, fake_redis):
+    def test_heartbeat_key_is_scoped_by_project_tag(self, worker_config, fake_redis, tmp_path):
         """Two campaigns with the same worker_id must not collide."""
         from starsector_optimizer.worker_agent import heartbeat
-        heartbeat(fake_redis, "starsector-smokeA", worker_config.worker_id)
-        heartbeat(fake_redis, "starsector-smokeB", worker_config.worker_id)
+        heartbeat(fake_redis, "starsector-smokeA", worker_config.worker_id, game_dir=tmp_path)
+        heartbeat(fake_redis, "starsector-smokeB", worker_config.worker_id, game_dir=tmp_path)
         assert fake_redis.exists(f"worker:starsector-smokeA:{worker_config.worker_id}:heartbeat")
         assert fake_redis.exists(f"worker:starsector-smokeB:{worker_config.worker_id}:heartbeat")
 
@@ -266,7 +266,7 @@ class TestHeartbeat:
         monkeypatch.setattr(
             wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log")
         )
-        wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id)
+        wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path)
         key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
         hb = fake_redis.hgetall(key)
         normalized = {
@@ -308,7 +308,7 @@ class TestHeartbeat:
         assert "no logs at glob" in result
 
     def test_heartbeat_payload_includes_region_and_instance_type(
-        self, worker_config, fake_redis,
+        self, worker_config, fake_redis, tmp_path,
     ):
         """Phase-7-prep: heartbeat carries IMDSv2-derived region + instance_type
         so the orchestrator's _tick_ledger can attribute cost per (region,
@@ -321,7 +321,7 @@ class TestHeartbeat:
             "region": "us-east-1", "instance_type": "c7a.2xlarge",
         })
         try:
-            wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id)
+            wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path)
             key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
             hb = fake_redis.hgetall(key)
             normalized = {

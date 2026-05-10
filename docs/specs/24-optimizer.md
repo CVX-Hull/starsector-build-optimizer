@@ -331,11 +331,13 @@ Checks:
 2. Every hullmod ID in `spec.hullmods` exists in `game_data.hullmods`
 3. Every weapon ID in `spec.weapon_assignments` values exists in `game_data.weapons`
 
-### `optimize_hull(hull_id, game_data, instance_pool, opponent_pool, config) -> Study`
+### `optimize_hull(hull_id, game_data, pool, opponent_pool, config, manifest, game_dir=None) -> Study`
 
 Main entry point.
 
-1. `preflight_check(hull_id, game_data, instance_pool, opponent_pool)` — fail fast
+The `manifest: GameManifest` parameter is required (used for stock-build seeding repair). The `game_dir: Path | None` parameter is the directory whose `data/variants/<hull>/` provides stock builds for `warm_start`'s Phase 1 seeding. It is required when stock-build seeding is desired; the previous fallback `getattr(pool, "game_dir", None)` was removed 2026-05-10 because `CloudWorkerPool` has no `game_dir` attribute, so the fallback silently disabled stock-build seeding (mech 3 broken, see issue #91). Callers must pass `game_dir` explicitly.
+
+1. `preflight_check(hull_id, game_data, pool, opponent_pool)` — fail fast
 2. Look up `hull = game_data.hulls[hull_id]`
 3. `space = build_search_space(hull, game_data, config.regime)` — regime mask applied at catalogue-construction boundary
 4. `distributions = define_distributions(space, fixed_params=config.fixed_params)`
@@ -344,7 +346,7 @@ Main entry point.
 7. `pruner = _create_pruner(config)` — WilcoxonPruner with configured p-threshold and startup steps.
 8. `study = optuna.create_study(sampler=sampler, pruner=pruner, direction="maximize", storage=config.study_storage, study_name=f"{hull_id}__{config.regime.name}", load_if_exists=True)` — one study per `(hull, regime)`
 8a. If `config.warm_start_from_regime is not None`: load the prior-regime study from the same storage, filter its top-M trials through the current regime's mask + `repair_build` + `is_feasible()`, `study.enqueue_trial()` the feasible ones.
-9. `warm_start(study, hull, game_data, config, game_dir=instance_pool.game_dir)`
+9. `warm_start(study, hull, game_data, config, game_dir=game_dir)`
 10. `cache = BuildCache()`
 11. Create `StagedEvaluator(study, hull, hull_id, game_data, instance_pool, opponent_pool, cache, config, distributions, eval_log_path)`
 12. `evaluator.run()` — staged evaluation loop until `sim_budget` exhausted
@@ -352,7 +354,7 @@ Main entry point.
 
 ## JSONL Evaluation Log
 
-One line per build evaluation, appended to `data/logs/{hull}__{regime}__{sampler}__seed_idx{N}/evaluation_log.jsonl` (per-subprocess directory). The row schema does not carry `study_id` or `sampler`, so N concurrent study subprocesses sharing a single file would destroy per-sampler attribution — `scripts/run_optimizer.py` emits a per-study directory unconditionally (local and cloud both) to preserve it. Legacy `data/evaluation_log.jsonl` snapshots under `experiments/*/` remain readable in the same schema.
+One line per build evaluation, appended to `data/logs/{campaign}/{hull}__{regime}__{sampler}__seed{N}/evaluation_log.jsonl` (per-study directory). The row schema does not carry `study_id` or `sampler`, so N concurrent study subprocesses sharing a single file would destroy per-sampler attribution — `scripts/run_optimizer.py` emits a per-study directory unconditionally (local and cloud both) to preserve it. The `{campaign}` segment was added by task #90 for cloud campaigns; legacy local runs (without `{campaign}`) and `experiments/*/data/evaluation_log.jsonl` snapshots remain readable in the same schema.
 
 ```json
 {
@@ -410,6 +412,19 @@ Schema:
 - `shape_passthrough_reason`: one of `"n<1"`, `"n<min_samples"`, `"constant"` when A3 fell back to min-max scaling, or `null` when Box-Cox ran. Added in 5E.
 - `regime`: string, always present on both completed and pruned rows. The name of the loadout regime under which this build was evaluated — one of `"early"` / `"mid"` / `"late"` / `"endgame"`. Logged per trial so post-hoc analysis can filter cross-regime studies without joining against config state. Added in 5F.
 - For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector`, `eb_diagnostics`, `shape_lambda`, `shape_passthrough_reason` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
+
+### Trial-row taxonomy (post-2026-05-10)
+
+Every JSONL row is exactly one of four kinds, distinguished by the always-present `pruned`, `cache_hit`, `invalid_spec` boolean flags. Pre-2026-05-10 the cache-hit and invalid-spec dispatch paths silently completed in SQLite without emitting any JSONL row, leaving ~3% of completed trials un-logged (Wave 1 surfaced this). The fix: every dispatch path that calls `study.tell` also emits exactly one JSONL row, with the kind explicit in the flags.
+
+| Kind | Flags | Has eb/twfe? | opponent_results | Meaning |
+|---|---|---|---|---|
+| Real completed | all False | yes (computed) | populated | A trial that ran the full matchup set and computed the EB pipeline. The 95%+ case. |
+| Pruned | `pruned=True` | no | partial (up to prune step) | WilcoxonPruner killed the trial early; raw mean of partial results is logged for diagnostic value but no shrinkage / shape applies. |
+| Cache hit | `cache_hit=True`, `cache_hit_origin_trial=<int>` | yes (copied from origin) | **EMPTY** | TPE proposed a Build identical to a prior trial. The cached `shaped_fitness` is reported to Optuna; the JSONL row carries the origin's eb/twfe values so honest-eval ranking still works, but `opponent_results` is empty because no matchups ran for THIS trial. |
+| Invalid spec | `invalid_spec=True`, `invalid_spec_errors=[...]` | no | empty | The build failed `validate_build_spec` before any matchup dispatched. `fitness=failure_score` (sentinel — never mix with real fitness). `eb_fitness` / `twfe_fitness` are omitted (never computed). |
+
+**Aggregator contract**: post-hoc analyses that re-fit TWFE / EB / opponent FE must filter on `not pruned and not cache_hit and not invalid_spec` to get only rows whose `opponent_results` are this trial's own. honest-eval candidate ranking by `eb_fitness` may include cache-hit rows (their copied eb_fitness IS the build's true fitness, just observed once and cached), but should always skip `invalid_spec` rows. Pruners' raw means are diagnostic only — never enter top-K.
 
 ## Study Naming
 
