@@ -10,7 +10,7 @@ last-validated: 2026-05-10
 
 ## Abstract
 
-Across the 15 Wave 1 studies (5 cells × 3 seeds × hammerhead × early × time-budget ≈ 2 h), 2,374 trial rows were emitted (1,747 finalized + 627 pruned; 0 cache-hit + 0 invalid-spec). At matched trial budgets the cells rank — by per-seed median best raw fitness $\hat{r}^{\max}_{T}$ — as **c3 (warm-start) > c1 ≈ c0b > c2 > c0a** at every checkpoint $T \in \{50, 100, 150, 200\}$. c3's heuristic-warm-start advantage is visible from $T = 50$ ($\hat{r}^{\max}_{50}^{\mathrm{med}} = 0.674$ vs c0a's $0.380$) and persists to the budget end. But the *cross-seed CV* of $\hat{r}^{\max}$ at the last finite checkpoint is high in the two cells with the strongest ceilings (c1: $0.236$, c3: $0.219$), showing 3-seed medians are not yet rank-stable; c0b is the most reproducible (CV $= 0.072$). Best-so-far curves are still climbing in $\sim 60\,\%$ of seeds at the time-budget cutoff, with $11/15$ seeds first reaching $0.9 \cdot \hat{r}^{\max}_{\mathrm{final}}$ in the last 30 % of their trial axis, indicating **not-yet-converged** rather than plateaued. Pruner-fire rate drops monotonically across the c0a → c2 design axis ($35.4\,\% \to 12.2\,\%$), confirming EB + Box-Cox produces less prunable signal as designed. Mean Jaccard distance between consecutive proposals' hullmod sets stays at $\sim 0.67\text{–}0.72$ throughout each study — TPE's posterior never concentrates, consistent with under-budget. This report does **not** evaluate which build is best (see the comprehensive-analysis report) or whether honest-eval validates these picks (Wave 1 honest-eval pass is in flight at tag `starsector-honest-eval-wave1-c0a-20260510T170431Z`).
+Across the 15 Wave 1 studies (5 cells × 3 seeds × hammerhead × early × time-budget ≈ 2 h), 2,374 trial rows were emitted (1,747 finalized + 627 pruned; 0 cache-hit + 0 invalid-spec). At matched trial budgets the cells rank — by per-seed median best **per-study EB-shrunk TWFE α̂** (the misleadingly-named `raw_fitness` ledger field; see §1.5) — as **c3 (warm-start) > c1 ≈ c0b > c2 > c0a** at every checkpoint $T \in \{50, 100, 150, 200\}$. c3's heuristic-warm-start advantage is visible from $T = 50$ ($\hat{\alpha}^{\max}_{50}^{\mathrm{med}} = 0.674$ vs c0a's $0.380$) and persists to the budget end. The direction is robust across all three deconfounding axes available in the ledger (naive opponent-mean / TWFE α̂ / EB-shrunk α̂; see §11): on the naive mean axis c3 still leads c0a at $T = 200$ (0.322 vs 0.282). The cross-seed CV of $\hat{\alpha}^{\max}$ at the last finite checkpoint is high in the two cells with the strongest ceilings (c1: $0.236$, c3: $0.219$), showing 3-seed medians are not yet rank-stable; c0b is the most reproducible (CV $= 0.072$). Best-so-far curves are still climbing in $\sim 60\,\%$ of seeds at the time-budget cutoff, with $11/15$ seeds first reaching $0.9 \cdot \hat{\alpha}^{\max}_{\mathrm{final}}$ in the last 30 % of their trial axis, indicating **not-yet-converged** rather than plateaued. Pruner-fire rate drops monotonically across the c0a → c2 design axis ($35.4\,\% \to 12.2\,\%$). Mean Jaccard distance between consecutive proposals' hullmod sets stays at $\sim 0.67\text{–}0.72$ — TPE's posterior never concentrates. **A3 shape-transform fidelity (Q4, §12)** is high in c2 (Spearman ρ between deconfounded α̂ and the TPE-objective `fitness` = $0.948$ pooled, top-5 overlap 3/5) but materially degraded in c3 (ρ = $0.868$, top-5 overlap 1/5) — the warm-start × Box-Cox interaction caused TPE to optimise a signal that disagreed with the deconfounded ranking on the most consequential builds. **Slope-based early-stop (Q3, §13)** captures only $\sim 0.65\text{–}0.87$ of final-best at any tested threshold, with c3 capping at $0.669$ — confirming that an early-stop policy on the current 200-trial budget would systematically forfeit c3's late-stage gains. This report does **not** evaluate which build is best (see the comprehensive-analysis report) or whether honest-eval validates these picks (Wave 1 honest-eval pass is in flight at tag `starsector-honest-eval-wave1-c0a-20260510T170431Z`).
 
 ## 1 — Methods
 
@@ -22,9 +22,12 @@ Per-trial records from `data/logs/wave1-{cell}/hammerhead__early__tpe__seed{seed
 |---|---|---|
 | `trial_number` | int | Optuna trial index within the (cell, seed) study. Includes pruned trials. |
 | `pruned` / `cache_hit` / `invalid_spec` | bool | Trial-disposition flags. **Wave 1 ran before [task #102](.) shipped, so `cache_hit` and `invalid_spec` rows are absent.** |
-| `raw_fitness` | float | Mean hp-differential across opponents (the underlying signal, identical objective across cells). |
-| `fitness` | float | The objective TPE actually saw — equal to `raw_fitness` in c0a/c0b/c1, possibly Box-Cox-transformed in c2/c3 if the shape gate is hit. |
+| `raw_fitness` | float | **Misnamed.** For finalized rows the writer at [`optimizer.py:962`](../../src/starsector_optimizer/optimizer.py#L962) passes `raw_fitness=eb_fitness` — i.e., this field is the post-EB-shrinkage TWFE α̂ (when the EB gate fires) or the pre-shrinkage TWFE α̂ (when EB passes through, see §1.5). It is **not** the unconditioned mean across opponents. For pruned rows it is the partial-result raw mean. |
+| `fitness` | float | The post-A3 shaped value TPE actually optimized against — Box-Cox-transformed when the shape gate fires, else min-max-clamped to $[0, 1]$. Diverges from `eb_fitness` in c2 and c3 (where the gate fires); equals the running-window's max in shape-passthrough trials. |
+| `twfe_fitness` | float | Pre-shrinkage TWFE α̂ from the running A1 decomposition over this study's finalized trials only. |
+| `eb_fitness` | float | Post-shrinkage TWFE α̂ (== ledger `raw_fitness` for finalized rows). When EB passes through (c0a, c0b — see §1.5) this equals `twfe_fitness`. |
 | `build` | dict | Hull, weapon assignments, hullmods, vents, capacitors. Used to compute `build_id` consistently with the post-hoc ranker (`posthoc_ranker._BuildId`). |
+| `opponent_results[*].hp_differential` | float | Per-opponent normalised hp differential. The naive mean across these is the unconditioned signal — derived in [`wave1_optimization_trajectory.py:_load_cell_seed`](../../scripts/analysis/wave1_optimization_trajectory.py) as `raw_mean_hp_diff`. |
 
 Per-study row counts (table 1) range from 131 to 213, reflecting the YAML's time-budget (`max_lifetime_hours: 2.0`) rather than a fixed-trial budget. The design intent was 250 trials per seed (`budget_per_study: 250`); none of the seeds reached that ceiling.
 
@@ -32,29 +35,29 @@ Per-study row counts (table 1) range from 131 to 213, reflecting the YAML's time
 
 All trajectory metrics are functions of the per-trial sequence ordered by `trial_number`.
 
-**Best-so-far** (§2). For a sequence of trials $\{t\}$ with finalized raw fitness $r_t$,
+**Best-so-far** (§3). For a sequence of trials $\{t\}$ with finalized fitness $r_t$ (the per-study EB-shrunk TWFE α̂; see §1.5),
 
 $$\hat{r}^{\max}_T \;=\; \max\{\, r_t : t \le T,\; t \in \text{finalized}\,\}.$$
 
 Pruned / cache / invalid rows occupy the trial-number axis but do not update the running max. Implementation: `_best_so_far()`.
 
-**Sample efficiency at $T$** (§3). $\hat{r}^{\max}_T$ evaluated at the fixed checkpoints $T \in \{50, 100, 150, 200\}$. Reported per-cell median + min/max over the 3 seeds. This is the fairer cross-cell comparison than final-best, because cells reached different totals (median $n_{\mathrm{finalized}}$ ranges 117 → 132). Implementation: `_best_at()`.
+**Sample efficiency at $T$** (§4). $\hat{r}^{\max}_T$ evaluated at the fixed checkpoints $T \in \{50, 100, 150, 200\}$. Reported per-cell median + min/max over the 3 seeds. This is the fairer cross-cell comparison than final-best, because cells reached different totals (median $n_{\mathrm{finalized}}$ ranges 117 → 132). Implementation: `_best_at()`.
 
-**Time-to-90 %** (§4). The first trial number at which $\hat{r}^{\max}_T \ge 0.9 \cdot \hat{r}^{\max}_{\mathrm{final}}$, where $\hat{r}^{\max}_{\mathrm{final}}$ is the last value of the best-so-far curve. We also report `frac_used = trial_number / n_finalized` to ask whether the seed converged early (frac ≪ 1) or reached its final-best near the budget end (frac ≈ 1). Implementation: `_time_to_target()`.
+**Time-to-90 %** (§5). The first trial number at which $\hat{r}^{\max}_T \ge 0.9 \cdot \hat{r}^{\max}_{\mathrm{final}}$, where $\hat{r}^{\max}_{\mathrm{final}}$ is the last value of the best-so-far curve. We also report `frac_used = trial_number / n_finalized` to ask whether the seed converged early (frac ≪ 1) or reached its final-best near the budget end (frac ≈ 1). Implementation: `_time_to_target()`.
 
-**Cross-seed coefficient of variation** (§5). At each $T$, take the 3-seed values $\{\hat{r}^{\max}_{T,s}\}$ and compute
+**Cross-seed coefficient of variation** (§6). At each $T$, take the 3-seed values $\{\hat{r}^{\max}_{T,s}\}$ and compute
 
 $$\mathrm{CV}_T \;=\; \frac{\sigma\bigl(\hat{r}^{\max}_{T,s}\bigr)}{\mu\bigl(\hat{r}^{\max}_{T,s}\bigr)},$$
 
 with $\sigma$ the sample standard deviation ($\mathrm{ddof} = 1$). Higher CV ⇒ less reproducible across seeds ⇒ more seeds needed for a stable rank.
 
-**Pruner-rate trajectory** (§6). Trials are pooled across seeds within a cell, bucketed into 25-trial windows on the trial-number axis. Per bucket: $N_{\mathrm{pruned}} / N_{\mathrm{total}}$.
+**Pruner-rate trajectory** (§7). Trials are pooled across seeds within a cell, bucketed into 25-trial windows on the trial-number axis. Per bucket: $N_{\mathrm{pruned}} / N_{\mathrm{total}}$.
 
-**Cache + invalid trajectory** (§7). Same bucketing on `cache_hit` and `invalid_spec` rows. Wave 1 returns null (no rows of those kinds); this section is a *placeholder* for post-task-#102 campaigns.
+**Cache + invalid trajectory** (§8). Same bucketing on `cache_hit` and `invalid_spec` rows. Wave 1 returns null (no rows of those kinds); this section is a *placeholder* for post-task-#102 campaigns.
 
-**Unique-builds-in-window** (§8). At $T$, distinct `build_id` count in the sliding window $(T - 50, T]$. Mean across the 3 seeds reported.
+**Unique-builds-in-window** (§9). At $T$, distinct `build_id` count in the sliding window $(T - 50, T]$. Mean across the 3 seeds reported.
 
-**Proposal-to-prior Jaccard distance** (§9). Between consecutive trials $t-1$ and $t$ within a study, distance between hullmod-sets:
+**Proposal-to-prior Jaccard distance** (§10). Between consecutive trials $t-1$ and $t$ within a study, distance between hullmod-sets:
 
 $$J_{\mathrm{dist}}(\mathrm{HM}_{t-1}, \mathrm{HM}_t) \;=\; 1 \;-\; \frac{|\mathrm{HM}_{t-1} \cap \mathrm{HM}_t|}{|\mathrm{HM}_{t-1} \cup \mathrm{HM}_t|}.$$
 
@@ -75,6 +78,26 @@ Wave 1's 5 ablation cells. Full design rationale: [`2026-05-10-validation-plan.m
 ### 1.4 Reference thresholds
 
 The trajectory report does not introduce its own gates; it surfaces information for the Wave-3 budget / seed-count decision (task #65) and for the per-cell verdicts in the upcoming Wave 1 report (task #85). Where conventional thresholds apply they are flagged inline.
+
+### 1.5 Caveat — what `raw_fitness` actually is, and why it depends on the cell
+
+The ledger field name is misleading. Three points must be stated precisely so §3–§7 are read correctly, and so this report's findings line up with the [comprehensive-analysis report](2026-05-10-wave1-comprehensive-analysis.md):
+
+**(a) `raw_fitness` for finalized trials is the per-study EB-shrunk TWFE α̂, not the naive opponent-mean.** The optimizer writes `raw_fitness=eb_fitness` at [`optimizer.py:962`](../../src/starsector_optimizer/optimizer.py#L962). The actual unconditioned cross-opponent mean is recoverable only by averaging `opponent_results[*].hp_differential` (the producer surfaces it as `raw_mean_hp_diff`).
+
+**(b) Whether the shrinkage actually applied differs by cell.** `_apply_eb_shrinkage` ([`optimizer.py:976`](../../src/starsector_optimizer/optimizer.py#L976)) returns `(twfe_fitness, None)` whenever `len(_completed_records) < eb_min_builds`. Cell knobs (verified against `examples/wave1-{cell}.yaml`):
+
+| cell | `eb_min_builds` | finalized in study | EB shrinkage | so ledger `raw_fitness` is … |
+|---|---:|---:|---|---|
+| c0a | 251 | 113 / 129 / 117 | passes through | TWFE α̂ (== `twfe_fitness`) |
+| c0b | 251 |  90 / 141 /  97 | passes through | TWFE α̂ (== `twfe_fitness`) |
+| c1  | (default, < 137) | 137 / 109 / 117 | active | EB-shrunk TWFE α̂ |
+| c2  | (default) | 113 / 132 / 145 | active | EB-shrunk TWFE α̂ |
+| c3  | (default) |  89 / 121 /  94 | active | EB-shrunk TWFE α̂ |
+
+In every cell the field is **at least TWFE-deconfounded** (the A1 decomposition runs unconditionally), so the trajectory metrics in §3–§6 — best-so-far on `raw_fitness`, sample efficiency, time-to-90 %, cross-seed CV — are on a deconfounded axis, *not* the naive raw mean. The "raw mean has 0/5 overlap with twfe_eb" finding from the [comprehensive-analysis report](2026-05-10-wave1-comprehensive-analysis.md#2--pooled-top-k-stability) §2 is about the comparison of *pooled raw_mean(opponent_results)* vs *pooled twfe_eb* over 1,744 trials — a separate axis from the per-study running α̂ stored in the ledger.
+
+**(c) Per-study TWFE / EB ≠ pooled TWFE / EB.** The per-trial `twfe_fitness` and `eb_fitness` are running estimates fit only over the current study's finalized records (~113–145 trials per study). The comprehensive-analysis report's deconfounded ranking is a *pooled* fit over all 1,744 finalized rows across all 5 cells × 3 seeds, with correspondingly tighter posteriors. **Cross-cell magnitude comparisons in this report's per-study axes are noisier than the pooled view by a factor of ~3.5×** ($\sqrt{1{,}744 / 113}$ on the standard error). Direction (e.g., c3 > c0a) is robust across the per-study and pooled views (see §11 and the comprehensive-analysis report's section 2); cross-cell *magnitudes* on per-study axes should be reported with that caveat.
 
 ## 2 — Per-study trial counts
 
@@ -104,7 +127,7 @@ The trajectory report does not introduce its own gates; it surfaces information 
 
 ## 3 — Best-so-far convergence
 
-**Method (§1.2 — best-so-far).** Cumulative max of `raw_fitness` over the trial-number axis, per (cell, seed).
+**Method (§1.2 — best-so-far).** Cumulative max of the ledger `raw_fitness` field (= per-study EB-shrunk TWFE α̂ for c1/c2/c3, == TWFE α̂ for c0a/c0b — see §1.5) over the trial-number axis, per (cell, seed). The symbol $\hat{r}^{\max}_T$ in the figures and tables refers to this per-study deconfounded α̂, not the naive opponent-mean.
 
 ![Best-so-far curves: 5 cell panels, 3 seed lines per panel, x = trial number, y = best-so-far raw fitness](../../data/wave1-trajectory/charts/01_best_so_far.png)
 
@@ -271,15 +294,81 @@ The trajectory report does not introduce its own gates; it surfaces information 
 
 **Reading.** **No cell shows TPE narrowing the hullmod-set search.** All cells sit at $\sim 0.67\text{–}0.72$ — meaning each consecutive proposal differs from the previous by $\sim$ 70 % of their union. For reference, two random feasible 9-hullmod builds with $\sim$ 80 candidate hullmods have expected Jaccard distance $\approx 0.76$, so TPE is *barely* inside the random-search baseline. c3 (warm-start) is the *most* localized cell at $0.670$, consistent with warm-start anchoring the search around the heuristic top-50. c2 is the most exploratory at $0.720$ — the Box-Cox smoothing flattens the local fitness landscape from TPE's perspective, weakening the gradient signal and pushing the sampler toward new regions. Combined with §3's still-climbing best-so-far, this is the strongest signal that **$T = 200$ is the wrong end of the budget**: TPE has not yet entered exploit-phase.
 
-## 11 — Synthesis
+## 11 — Best-so-far across deconfounding stages
 
-The optimization-trajectory data tells one story consistently across §3–§10: **Wave 1's trial budget was too small for TPE to converge.** The five most load-bearing observations:
+**Method (§1.2 — best-so-far).** For each cell, plot the median (across seeds) best-so-far on three axes simultaneously: (i) **naive mean** of `opponent_results[*].hp_differential` (the unconditioned signal); (ii) **TWFE α̂** (per-study A1 schedule-adjustment, `twfe_fitness`); (iii) **EB-shrunk α̂** (per-study A2′, `eb_fitness` ≡ ledger `raw_fitness` for finalized rows). For c0a / c0b — where the EB gate passes through (§1.5) — TWFE α̂ and EB-shrunk α̂ overlap exactly; for c1 / c2 / c3 they diverge once the gate fires.
 
-1. **Sample efficiency (§4) places c3 first by a wide margin at every checkpoint.** The +0.6 final-best gap over c0a is far larger than the +0.05 cross-method ranking gap reported in the comprehensive analysis — implying the *training* benefit of warm-start dwarfs the post-hoc ranker choice for this hull/regime. **For Wave 3, warm-start should be the default.**
-2. **Cross-seed CV (§6) is high in the highest-ceiling cells (c1, c3 at $\sim 0.22$).** With 3 seeds, the c1-vs-c3 ordering is not statistically distinguishable. **Wave 3 should run ≥ 5 seeds per study, ideally 8.**
-3. **Time-to-90 % (§5) is concentrated in the last 30 % of the trial axis for $7/15$ seeds.** **Wave 3 should run ≥ 400 trials per seed, not 250**, or accept that the picked top-K is a non-converged read on the posterior.
-4. **Pruner rate (§7) drops monotonically from c0a to c2** as designed. The c3 spike is a warm-start side-effect (heuristic-seeded builds are pruner-friction-heavy); this is recoverable with `--no-pruner` for the warm-start segment.
-5. **Local-search locality (§10) never falls below $\sim 0.67$.** TPE never enters exploit phase on this budget. This is a *quantitative* argument for the "increase the budget" recommendation in (3).
+![Five panels (one per cell), three lines per panel: naive mean / TWFE α̂ / EB-shrunk α̂, all best-so-far over trial number, median across seeds](../../data/wave1-trajectory/charts/09_axis_comparison.png)
+
+*Figure 9 — Best-so-far on the three deconfounding-stage axes (median across seeds). Identity of TWFE and EB-shrunk lines in c0a/c0b confirms the EB pass-through; their separation in c1/c2/c3 visualises EB shrinkage's effect on the running optimum.*
+
+| axis | c0a | c0b | c1 | c2 | c3 |
+|---|---:|---:|---:|---:|---:|
+| naive mean (`raw_mean_hp_diff`) | 0.282 | 0.256 | 0.257 | 0.092 | **0.322** |
+| TWFE α̂ (`twfe_fitness`) | 0.635 | 0.893 | 1.071 | 0.839 | **1.238** |
+| EB-shrunk α̂ (`eb_fitness`, == ledger `raw_fitness`) | 0.635 | 0.893 | 1.071 | 0.843 | **1.238** |
+
+*Table 8 — Best-so-far at $T = 200$ (median across seeds), per axis. Bold = leader. The c3 lead direction is robust on every axis; c2 underperforms on the naive mean (0.092) despite a strong TWFE α̂ (0.839), reflecting that c2's per-study TWFE adjustment is finding genuine schedule-corrected signal in builds whose unconditioned mean looks weak.*
+
+**Reading.** Three load-bearing observations:
+
+1. **The cell ranking is robust to the deconfounding stage.** c3 leads on all three axes; c0a is bottom on TWFE / EB-shrunk and middle on naive mean. The "c3 has +0.6 over c0a at $T = 200$" claim from §4 holds qualitatively when re-stated on the naive opponent-mean axis (+0.04, much smaller in absolute terms but still positive) and on the TWFE α̂ axis before EB shrinkage (+0.6).
+2. **EB shrinkage barely moves the per-study optimum in Wave 1.** The TWFE-α̂ and EB-shrunk-α̂ columns differ by ≤ 0.005 at $T = 200$ in every cell where shrinkage fired (c1: identical; c2: 0.839 → 0.843; c3: identical). This is consistent with the comprehensive analysis's observation (§4) that the EB shrinkage slope is moderate ($0.32\text{–}0.46$) and that a build's pre- and post-shrinkage rank in the top-3 rarely changes within a single study. **The pooled-vs-per-study distinction (§1.5(c)) matters more for the *between-study* fit than for the *within-study* best-so-far.**
+3. **c2's naive-mean / TWFE-α̂ disagreement is the largest in the campaign** (naive 0.092 vs TWFE 0.839 — a 9.1× gap). c2 is finding builds whose schedule-adjusted quality is high, but whose unconditioned opponent-mean is mediocre. This is exactly the failure mode TWFE is designed to fix: opponent-panel composition rotates, and the c2 best-of-run was evaluated against opponents harder than the campaign average. The TWFE column is the principled cross-cell comparison; the naive column would be misleading.
+
+## 12 — Q4 — A3 shape-transform fidelity
+
+**Method.** Box-Cox-transformed-then-clamped `fitness` saturates at 1.0 once the running max is hit, so the best-so-far overlay on `fitness` is uninformative. The principled diagnostic is rank-correlation: for each cell with the A3 shape gate active (c2, c3), compute Spearman ρ between per-trial `fitness` (the TPE objective) and `eb_fitness` (the deconfounded α̂) over all finalized trials, plus top-K overlap. ρ ≈ 1 ⇒ shape is a monotone transform of α̂ (TPE saw the same ordering); ρ < 1 ⇒ the shape gate's smoothing reordered builds.
+
+![Two panels (c2, c3), scatter of fitness vs eb_fitness with rank-CDF reference line; pooled n and Spearman ρ in titles](../../data/wave1-trajectory/charts/10_q4_shape_fidelity.png)
+
+*Figure 10 — Pooled scatter of TPE objective (`fitness`) against deconfounded α̂ (`eb_fitness`) on finalized trials. Dashed orange line = the rank-CDF of `eb_fitness` mapped to $[0, 1]$ — i.e., what `fitness` would equal if the shape gate were a perfectly monotone rank transform. Departures from that line are A3 fidelity loss.*
+
+| cell | finalized n (pooled) | $\rho_{\mathrm{Spearman}}$ (pooled) | top-5 overlap | top-10 overlap | per-seed ρ |
+|---|---:|---:|---:|---:|---|
+| c2 | 390 | **0.948** | 3/5 | 4/10 | 0.944 / 0.928 / 0.971 |
+| c3 | 304 | **0.868** | 1/5 | 3/10 | 0.859 / 0.890 / 0.881 |
+
+*Table 9 — Q4 shape-fidelity numbers. c3's top-5 overlap of 1/5 is the load-bearing finding: TPE's best-5 builds by its own objective share only one entry with the deconfounded best-5.*
+
+**Reading.** **A3 in c3 materially distorted the gradient TPE saw.** The pooled Spearman ρ of $0.868$ would normally be considered "high" but the rank disagreement concentrates on the top end: top-5 overlap of $1/5$ means TPE's "this trial is the best so far" decisions for the most consequential 5 builds disagreed with the deconfounded ranking 4 times out of 5. In c2 the same comparison shows ρ = $0.948$ and top-5 overlap = $3/5$ — A3 is mostly monotone there. The c2 / c3 difference is consistent with c3's warm-start adding 50 heuristic-seeded builds whose `eb_fitness` sits in a non-Gaussian tail that the running A3 fit (over the same study's trials) cannot stabilise. **Practical consequence: c3's strong best-so-far in §3 is partly the warm-start putting good builds in the population, not TPE successfully exploiting the α̂ gradient — the gradient TPE saw was a noisier signal.** This is independent confirmation of §10's finding that c3's posterior never narrowed.
+
+This **resolves Q4** (§12 in the previous open-questions list, now §15).
+
+## 13 — Q3 — slope-based early-stop simulation
+
+**Method.** For each (cell, seed) trajectory, simulate the policy: *stop at the first trial $T$ where the best-so-far slope over the prior $W = 25$-trial window has been below $\varepsilon$ for $K = 10$ consecutive trials.* The stopped run's captured fraction is $\hat{r}^{\max}_{\mathrm{stop}} / \hat{r}^{\max}_{\mathrm{final}}$. Run for $\varepsilon \in \{10^{-3}, 2.5\!\cdot\!10^{-3}, 5\!\cdot\!10^{-3}, 10^{-2}, 2\!\cdot\!10^{-2}\}$ on the `eb_fitness` axis (the principled deconfounded signal — see §1.5 (b)).
+
+![Captured-fraction curves per cell over the 5 ε thresholds, with a 0.9-of-final reference line](../../data/wave1-trajectory/charts/11_early_stop.png)
+
+*Figure 11 — Captured fraction of final-best vs slope threshold. Mean over seeds. The 0.9-of-final reference is the de-facto "good enough" threshold from §5; no cell achieves it at any ε in $\{10^{-3}, \ldots, 2\!\cdot\!10^{-2}\}$.*
+
+| cell | best mean captured @ any ε | min over seeds | median stop $T$ at best ε |
+|---|---:|---:|---:|
+| c0a | 0.727 | 0.321 | 45 |
+| c0b | **0.708** | **0.645** | 44 |
+| c1 | 0.540 | 0.356 | 59 |
+| c2 | **0.870** | 0.774 | 71 |
+| c3 | 0.669 | 0.610 | 108 |
+
+*Table 10 — Best mean-captured-fraction across the tested ε grid, per cell. Bold rows mark cells where the policy is **viable** (captures ≥ 65 % with min-seed ≥ 60 %); the others fail because at least one seed's eventual best landed past the slope-window's view.*
+
+**Reading.** **No tested threshold achieves the 0.9-of-final reference for any cell.** The best-case is c2 at 0.87 mean / 0.77 min, achieved at $\varepsilon = 10^{-3}$ with median stop $T = 71$. c1 is worst at 0.54 mean (one seed lands its eventual best at $T = 128$, after the slope had been < $\varepsilon$ for K = 10 consecutive trials). c3 — the highest-ceiling cell — caps at 0.669: the warm-start-driven late-stage gains are exactly the gains a slope criterion forfeits. The headline conclusion is that **a slope-based early-stop on the present 200-trial budget would systematically truncate the highest-fitness cells**; running a longer budget with the goal of *seeing the slope flatten* before stopping is the alternative.
+
+This **resolves Q3** (no, slope-based early-stop is not viable on a 200-trial Wave-1-class budget; tighter ε does not help because the late jumps are step-function-large rather than slope-driven).
+
+## 14 — Synthesis
+
+The optimization-trajectory data tells one story consistently across §3–§13: **Wave 1's trial budget was too small for TPE to converge, and one of the design knobs — A3 in c3 — fed TPE a distorted gradient on top of that.** The seven most load-bearing observations:
+
+1. **Sample efficiency (§4) places c3 first by a wide margin at every checkpoint.** The +0.6 gap at $T = 200$ over c0a holds on the per-study TWFE α̂ axis and shrinks (but stays positive at +0.04) on the naive opponent-mean axis (§11). **For Wave 3, warm-start should be the default.**
+2. **The cell ranking is robust across deconfounding stages (§11).** Naive mean / TWFE α̂ / EB-shrunk α̂ all put c3 first and c0a last at $T = 200$. The headline reads on the per-study EB-shrunk axis; the magnitude is noisier than the comprehensive-analysis pooled fit (§1.5 (c)) but the direction is stable.
+3. **A3 in c3 distorted the gradient TPE saw (§12, Q4).** Pooled Spearman $\rho$ between TPE objective and deconfounded α̂ is $0.868$ in c3 with top-5 overlap of $1/5$; in c2 the same ρ is $0.948$ with top-5 = $3/5$. **c3's strong best-so-far is partly the warm-start putting good builds in the population, not TPE successfully exploiting the gradient.** For Wave 3, either widen `shape_min_samples` (so A3 fits on more data before firing) or skip A3 altogether for the warm-start segment.
+4. **Cross-seed CV (§6) is high in the highest-ceiling cells (c1, c3 at $\sim 0.22$).** With 3 seeds, the c1-vs-c3 ordering is not statistically distinguishable. **Wave 3 should run ≥ 5 seeds per study, ideally 8.**
+5. **Time-to-90 % (§5) is concentrated in the last 30 % of the trial axis for $7/15$ seeds.** **Wave 3 should run ≥ 400 trials per seed, not 250**, or accept that the picked top-K is a non-converged read on the posterior.
+6. **Slope-based early-stop is not viable on the present budget (§13, Q3).** Best-case captured fraction is 0.87 in c2 and 0.67 in c3 at $\varepsilon = 10^{-3}$. The late jumps are step-function-large (single trials moving the running max by $> 0.2$), not slope-detectable.
+7. **Pruner rate (§7) drops monotonically from c0a to c2** as designed. The c3 spike is a warm-start side-effect (heuristic-seeded builds are pruner-friction-heavy); this is recoverable with `--no-pruner` for the warm-start segment.
+8. **Local-search locality (§10) never falls below $\sim 0.67$.** TPE never enters exploit phase on this budget. This is a *quantitative* argument for the "increase the budget" recommendation in (5).
 
 ### Recommendations for Wave 3
 
@@ -291,22 +380,28 @@ These are inferences from this report alone; the Wave-1 report (task #85) consol
 | seeds per study | 3 | **5** (minimum) |
 | warm-start | optional (c3 only) | **default** |
 | pruner with warm-start | on | off for warm-start segment |
+| A3 shape gate with warm-start | `shape_min_samples = 251` (fires mid-run on warm-start population) | either `shape_min_samples ≥ N_warmstart + 200` so A3 fits on TPE-explored builds only, or A3 disabled — re-decide after the §12 finding |
 
 Cost implication for the 8-hull × Wave-3 production run: $5 \cdot 8 \cdot 400 = 16{,}000$ trials. At $122$ matchups/hour/VM (the V1-pending-validation throughput baseline; revising under V2 as part of this campaign), and 10 opponents/trial = $1.6\,\mathrm{M}$ matchups → $\sim 13{,}000$ VM-hours. At spot $\$0.06$/VM-hour → $\$780$. **This significantly exceeds the previously-modelled $\$85$ Wave 3 budget** ([phase6](../reference/phase6-cloud-worker-federation.md), [throughput-optimization](../reference/throughput-optimization.md)) — a re-budget conversation is required before launch.
 
-## 12 — Open questions
+## 15 — Open questions
 
-1. **Is the high cross-seed CV for c1 and c3 driven by a small number of "outlier" trial-number-position lucky finds, or by genuine multi-modality of the posterior?** Diagnostic: sample-efficiency curves at finer resolution ($T \in \{25, 50, ..., 200\}$) for a 10-seed run on one cell.
-2. **How much of c3's lead is the warm-start picks themselves vs. TPE-on-top?** Diagnostic: ablate warm-start at $N \in \{0, 25, 50, 100\}$ across 5 seeds; measure $\hat{r}^{\max}_{200}$.
-3. **Does the optimizer benefit from early-stopping on a $\hat{r}^{\max}_T$ slope criterion?** §5 says no with current 200-trial axes; revisit at 400.
-4. **Box-Cox $\lambda$ during the search vs at the final ranker step.** The objective TPE saw in c2/c3 (`fitness`, possibly Box-Cox-transformed mid-run) is a different signal from `raw_fitness`; we should plot $\hat{r}^{\max}_T$ on both axes side-by-side to see whether c2's lower raw-fitness ceiling reflects a Box-Cox-induced gradient distortion or genuinely different search.
-5. **What does this look like for non-hammerhead hulls?** Wave 2 (cross-hull) will produce the data; this template can be re-run unchanged once the Wave 2 ledgers are in.
+The original question list had five entries; §12 resolves Q4 and §13 resolves Q3. The three remaining open questions:
+
+1. **Is the high cross-seed CV for c1 and c3 driven by a small number of "outlier" trial-number-position lucky finds, or by genuine multi-modality of the posterior?** Diagnostic: sample-efficiency curves at finer resolution ($T \in \{25, 50, ..., 200\}$) for a 10-seed run on one cell. *Not addressable from Wave 1 data; deferred to Wave 3 budget.*
+2. **How much of c3's lead is the warm-start picks themselves vs. TPE-on-top?** Diagnostic: ablate warm-start at $N \in \{0, 25, 50, 100\}$ across 5 seeds; measure $\hat{\alpha}^{\max}_{200}$. *Sharpened by §12: the answer is now expected to lean towards "the warm-start picks themselves", since the post-warm-start TPE saw a noisy gradient (ρ = 0.868 with the deconfounded α̂).*
+3. **What does this look like for non-hammerhead hulls?** Wave 2 (cross-hull) will produce the data; this template can be re-run unchanged once the Wave 2 ledgers are in.
+
+### Resolved (this revision)
+
+- **(Q3) slope-based early-stop on $\hat{\alpha}^{\max}_T$.** §13 — best-case captured fraction is 0.87 (c2) / 0.67 (c3) at $\varepsilon = 10^{-3}$; no tested ε reaches the 0.9-of-final reference for any cell. Late jumps are step-function-large, not slope-detectable.
+- **(Q4) Box-Cox shape-transform fidelity.** §12 — pooled $\rho$ = 0.948 in c2 (mostly monotone), 0.868 in c3 with top-5 overlap = 1/5. A3 distorted the gradient TPE saw in c3.
 
 ## Appendix A — file map
 
 - **producer**: [`scripts/analysis/wave1_optimization_trajectory.py`](../../scripts/analysis/wave1_optimization_trajectory.py)
 - **headline numbers**: [`data/wave1-trajectory/headline_numbers.json`](../../data/wave1-trajectory/headline_numbers.json) (tracked)
-- **charts**: [`data/wave1-trajectory/charts/`](../../data/wave1-trajectory/charts/) — `0[1-8]_*.png` (tracked, 200 dpi)
+- **charts**: [`data/wave1-trajectory/charts/`](../../data/wave1-trajectory/charts/) — `0[1-9]_*.png`, `1[0-1]_*.png` (tracked, 200 dpi). Charts 09 (multi-axis convergence), 10 (Q4 shape fidelity), 11 (Q3 early-stop simulation) added in this revision.
 - **input ledgers**: `data/logs/wave1-{c0a,c0b,c1,c2,c3}/hammerhead__early__tpe__seed{0,1,2}/evaluation_log.jsonl` (gitignored — too large)
 - **input study DBs** (unused in this analysis but available for follow-ups on per-trial timing): `data/study_dbs/wave1-{cell}/hammerhead__early__tpe__seed{seed}.db` (gitignored — too large)
 - **companion report**: [`2026-05-10-wave1-comprehensive-analysis.md`](2026-05-10-wave1-comprehensive-analysis.md)

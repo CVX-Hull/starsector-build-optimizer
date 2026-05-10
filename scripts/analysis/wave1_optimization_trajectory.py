@@ -25,6 +25,9 @@ Outputs:
   data/wave1-trajectory/charts/06_invalid_cache_trajectory.png
   data/wave1-trajectory/charts/07_unique_builds_window.png
   data/wave1-trajectory/charts/08_proposal_distance.png
+  data/wave1-trajectory/charts/09_axis_comparison.png       (naive / TWFE / EB)
+  data/wave1-trajectory/charts/10_q4_boxcox.png             (Q4 — A3 distortion)
+  data/wave1-trajectory/charts/11_early_stop.png            (Q3 — slope policy)
 
 … and `data/wave1-trajectory/headline_numbers.json` containing the exact
 numeric values cited by `docs/reports/2026-05-10-wave1-optimization-
@@ -108,13 +111,38 @@ log = logging.getLogger("wave1-trajectory")
 
 @dataclass(frozen=True)
 class TrialRow:
-    """One row from an evaluation_log.jsonl, with kind tag."""
+    """One row from an evaluation_log.jsonl, with kind tag.
+
+    Fitness-field semantics (audited against `optimizer.py:962`, `:1422`):
+
+      - `raw_fitness` (ledger field): for **finalized** trials this is
+        `eb_fitness` (the EB-shrunk TWFE α — see optimizer.py:962 where
+        `raw_fitness=eb_fitness` is passed). For **pruned** trials this
+        is the raw mean of partial opponent results. The field name
+        is misleading; use `raw_mean_hp_diff` for the unconditioned
+        cross-opponent mean.
+      - `fitness` (ledger field): the post-A3 Box-Cox-shaped value TPE
+        actually optimized against. Falls back to a [0, 1] min-max
+        scale before the shape gate fires (`shape_passthrough_reason`).
+      - `twfe_fitness`: pre-shrinkage TWFE α (schedule-adjusted build
+        quality). None for pruned / invalid-spec rows.
+      - `eb_fitness`: post-shrinkage TWFE α (== ledger `raw_fitness`
+        for finalized rows; redundant in the ledger but kept for
+        backward-compat). None for pruned / invalid-spec rows.
+      - `raw_mean_hp_diff`: derived in this loader from
+        `opponent_results[*].hp_differential` — the actual unconditioned
+        mean across opponents. None when `opponent_results` is empty
+        (cache-hit and invalid-spec rows).
+    """
     cell: str
     seed: str
     trial_number: int
     kind: str          # "finalized" | "pruned" | "cache_hit" | "invalid_spec"
-    raw_fitness: float | None
-    fitness: float | None
+    raw_fitness: float | None     # ledger field — see docstring
+    fitness: float | None         # ledger field — post-A3 shaped value
+    twfe_fitness: float | None
+    eb_fitness: float | None
+    raw_mean_hp_diff: float | None  # derived: mean(opponent_results[i].hp_differential)
     build_id: tuple | None
     timestamp: str | None
 
@@ -156,12 +184,21 @@ def _load_cell_seed(cell: str, seed: str) -> list[TrialRow]:
                 continue
             b = d.get("build")
             bid = _build_id(b) if b else None
+            opp_results = d.get("opponent_results") or []
+            hp_diffs = [r["hp_differential"] for r in opp_results
+                        if r.get("hp_differential") is not None]
+            raw_mean_hp_diff = (
+                sum(hp_diffs) / len(hp_diffs) if hp_diffs else None
+            )
             out.append(TrialRow(
                 cell=cell, seed=seed,
                 trial_number=trial_number,
                 kind=kind,
                 raw_fitness=d.get("raw_fitness"),
                 fitness=d.get("fitness"),
+                twfe_fitness=d.get("twfe_fitness"),
+                eb_fitness=d.get("eb_fitness"),
+                raw_mean_hp_diff=raw_mean_hp_diff,
                 build_id=bid,
                 timestamp=d.get("timestamp"),
             ))
@@ -637,6 +674,264 @@ def section_08_proposal_distance(data: dict[tuple[str, str], list[TrialRow]]) ->
     return out
 
 
+def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
+    """Best-so-far on three deconfounding-stage axes side-by-side.
+
+    The ledger field `raw_fitness` for finalized trials is **eb_fitness**
+    (post-shrinkage TWFE α — see optimizer.py:962). This function makes
+    the deconfounding stack explicit by plotting best-so-far on three
+    axes simultaneously, normalised to each cell's overall maximum so
+    the *shapes* are comparable across axes:
+
+      - raw_mean_hp_diff: unconditioned mean of opponent hp-differentials
+                          (the naive metric)
+      - twfe_fitness:     schedule-adjusted α (TWFE decomposition, A1)
+      - eb_fitness:       post-shrinkage α toward γ̂ᵀX prior (A2′)
+
+    If the cell ranking is robust across these three axes, the headline
+    `c3 > c0a` finding doesn't depend on the deconfounding stage.
+    """
+    log.info("[09] Best-so-far on naive / TWFE / EB axes")
+    fig, axes = plt.subplots(1, 5, figsize=(20, 4.6), sharey=True)
+    out: dict[str, dict] = {}
+    AXES = [
+        ("raw_mean_hp_diff", "naive mean", "#006BA4", "-"),
+        ("twfe_fitness",     "TWFE α",     "#FF800E", "--"),
+        ("eb_fitness",       "EB-shrunk α", "#C85200", ":"),
+    ]
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+        cell_out: dict[str, dict] = {}
+        for field, label, color, ls in AXES:
+            stacked: list[np.ndarray] = []
+            grids: list[np.ndarray] = []
+            finals: list[float] = []
+            for seed in SEEDS:
+                rows = data.get((cell, seed), [])
+                xs, ys = _best_so_far(rows, field)
+                if len(xs) == 0:
+                    continue
+                ys_clean = np.where(np.isfinite(ys), ys, np.nan)
+                grids.append(xs)
+                stacked.append(ys_clean)
+                if np.isfinite(ys[-1]):
+                    finals.append(float(ys[-1]))
+            if not stacked:
+                continue
+            T_max = max(g[-1] for g in grids)
+            grid = np.arange(0, T_max + 1, 5)
+            interp_curves = []
+            for xs, ys in zip(grids, stacked):
+                yi = np.interp(grid, xs, ys, left=np.nan, right=np.nan)
+                interp_curves.append(yi)
+            curve = np.nanmedian(np.array(interp_curves), axis=0)
+            ax.plot(grid, curve, label=label, color=color,
+                    linewidth=1.5, linestyle=ls)
+            cell_out[field] = {
+                "final_best_per_seed": finals,
+                "median_final_best": (
+                    float(np.median(finals)) if finals else None),
+            }
+        ax.set_xlabel("trial number")
+        if ax_i == 0:
+            ax.set_ylabel("best-so-far  (per-axis absolute scale)")
+        ax.set_title(f"({chr(97 + ax_i)}) {cell}")
+        ax.legend(loc="lower right")
+        ax.axhline(0, color="#cccccc", linewidth=0.6, zorder=0)
+        out[cell] = cell_out
+    fig.suptitle("Best-so-far across deconfounding stages — naive opponent-mean / "
+                 "TWFE α / EB-shrunk α (median across seeds)")
+    fig.savefig(CHARTS_DIR / "09_axis_comparison.png")
+    plt.close(fig)
+
+    # T = 200 cross-axis comparison table (does the cell ranking hold?)
+    cross_table: dict[str, dict[str, float | None]] = {}
+    for field, label, _, _ in AXES:
+        cross_table[label] = {}
+        for cell in CELLS:
+            vals = []
+            for seed in SEEDS:
+                rows = data.get((cell, seed), [])
+                v = _best_at(rows, 200, field)
+                if v is not None:
+                    vals.append(v)
+            cross_table[label][cell] = (
+                float(np.median(vals)) if vals else None)
+    out["T200_per_axis"] = cross_table
+    return out
+
+
+def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
+    """Q4 — does the A3 shape transform (Box-Cox + min-max clamp) distort
+    the ranking that TPE saw relative to the underlying EB-shrunk α?
+
+    The TPE objective `fitness` is a per-window-clamped, possibly Box-Cox-
+    transformed view of `eb_fitness`. A best-so-far overlay is uninformative
+    here because `fitness` saturates near 1.0 once any trial hits the
+    running max (min-max normalisation). The principled diagnostic is
+    rank-correlation: if ρ(eb_fitness, fitness) ≈ 1, the shaping is a
+    monotone transform and TPE saw the same ordering as the deconfounded
+    α; if ρ is below 1, the shape gate's smoothing reordered builds.
+
+    Done on c2 and c3 only (cells where the A3 gate fires). Reports per-
+    seed and pooled Spearman ρ, plus top-5 / top-10 overlap between
+    rankings under each axis.
+    """
+    log.info("[10] Q4 — shape transform fidelity ρ(eb, fitness)")
+    from scipy.stats import spearmanr  # type: ignore[import-untyped]
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    out: dict[str, dict] = {}
+    for ax, cell in zip(axes, ["c2", "c3"]):
+        cell_out: dict[str, dict] = {"per_seed": {}}
+        ebs_pool: list[float] = []
+        fits_pool: list[float] = []
+        for seed in SEEDS:
+            rows = data.get((cell, seed), [])
+            ebs = [r.eb_fitness for r in rows
+                   if r.kind == "finalized"
+                   and r.eb_fitness is not None
+                   and r.fitness is not None]
+            fits = [r.fitness for r in rows
+                    if r.kind == "finalized"
+                    and r.eb_fitness is not None
+                    and r.fitness is not None]
+            if len(ebs) >= 5:
+                rho_s, _ = spearmanr(ebs, fits)
+                cell_out["per_seed"][seed] = {
+                    "n_finalized": len(ebs),
+                    "spearman_rho": float(rho_s),
+                }
+            ebs_pool.extend(ebs)
+            fits_pool.extend(fits)
+        if ebs_pool:
+            rho_pool, _ = spearmanr(ebs_pool, fits_pool)
+            ax.scatter(ebs_pool, fits_pool, s=12, alpha=0.55,
+                       color="#006BA4", edgecolors="none")
+            # Reference line: a perfect monotone CDF-like map from eb to [0,1]
+            eb_arr = np.array(ebs_pool)
+            ranks = np.argsort(np.argsort(eb_arr))
+            cdf = ranks / max(len(eb_arr) - 1, 1)
+            order = np.argsort(eb_arr)
+            ax.plot(eb_arr[order], cdf[order], color="#C85200",
+                    linewidth=1.2, linestyle="--",
+                    label="rank-CDF(eb) reference")
+            # Top-K overlap (pooled)
+            n = len(ebs_pool)
+            order_eb = np.argsort(-eb_arr)
+            order_fit = np.argsort(-np.array(fits_pool))
+            topk_overlaps: dict[str, int] = {}
+            for K in (5, 10):
+                if n >= K:
+                    overlap = len(set(order_eb[:K].tolist())
+                                  & set(order_fit[:K].tolist()))
+                    topk_overlaps[f"top{K}"] = int(overlap)
+            cell_out["pooled"] = {
+                "n_finalized": n,
+                "spearman_rho": float(rho_pool),
+                "topk_overlap": topk_overlaps,
+            }
+            ax.set_title(f"{cell} — pooled  n = {n},  "
+                         r"$\rho_{\mathrm{Spearman}}$ = "
+                         f"{rho_pool:.3f}")
+            ax.legend(loc="lower right")
+        ax.set_xlabel(r"eb_fitness  (post-EB-shrinkage TWFE $\hat{\alpha}$)")
+        ax.set_ylabel("fitness  (TPE objective: shaped + clamped to [0, 1])")
+        out[cell] = cell_out
+    fig.suptitle("Q4 — A3 shape-transform fidelity:  ρ between deconfounded α "
+                 "and the TPE objective TPE actually saw")
+    fig.savefig(CHARTS_DIR / "10_q4_shape_fidelity.png")
+    plt.close(fig)
+    return out
+
+
+def section_11_early_stop(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
+    """Q3 — slope-based early-stop simulation.
+
+    For each (cell, seed) trajectory, simulate the policy: 'stop at first
+    trial T where the best-so-far slope over the prior SLOPE_W trials
+    has been < ε for K_CONSEC consecutive evaluations'. Report the
+    fraction of the eventual final-best that the stopped run captured,
+    averaged over seeds. A high captured-fraction means the policy
+    safely truncates; a low one means premature stops.
+    """
+    log.info("[11] Q3 — slope-based early-stop simulation")
+    SLOPE_W = 25
+    K_CONSEC = 10
+    THRESHOLDS = [1e-3, 2.5e-3, 5e-3, 1e-2, 2e-2]
+
+    fig, ax = plt.subplots(figsize=(10, 4.8))
+    out: dict[str, dict] = {"slope_window_W": SLOPE_W,
+                            "k_consec": K_CONSEC,
+                            "thresholds": THRESHOLDS,
+                            "per_cell": {}}
+    for cell in CELLS:
+        cell_results: dict[float, dict] = {}
+        for thresh in THRESHOLDS:
+            captured: list[float] = []
+            stopped_T: list[int] = []
+            for seed in SEEDS:
+                rows = data.get((cell, seed), [])
+                xs, ys = _best_so_far(rows, "eb_fitness")
+                if len(xs) < SLOPE_W + K_CONSEC + 1:
+                    continue
+                ys_clean = np.where(np.isfinite(ys), ys, 0.0)
+                final_best = float(ys_clean[-1])
+                if final_best <= 0:
+                    continue
+                stop_idx = None
+                consec = 0
+                for i in range(SLOPE_W, len(ys_clean)):
+                    slope = (ys_clean[i] - ys_clean[i - SLOPE_W]) / SLOPE_W
+                    if slope < thresh:
+                        consec += 1
+                        if consec >= K_CONSEC:
+                            stop_idx = i
+                            break
+                    else:
+                        consec = 0
+                if stop_idx is None:
+                    captured.append(1.0)
+                    stopped_T.append(int(xs[-1]))
+                else:
+                    captured.append(float(ys_clean[stop_idx] / final_best))
+                    stopped_T.append(int(xs[stop_idx]))
+            if captured:
+                cell_results[thresh] = {
+                    "mean_captured_frac": float(np.mean(captured)),
+                    "min_captured_frac": float(np.min(captured)),
+                    "median_stop_T": int(np.median(stopped_T)),
+                    "per_seed_captured": [float(c) for c in captured],
+                    "per_seed_stop_T": stopped_T,
+                }
+        out["per_cell"][cell] = cell_results
+        thresh_xs = []
+        cap_ys = []
+        for thresh in THRESHOLDS:
+            entry = cell_results.get(thresh)
+            if entry is None:
+                continue
+            thresh_xs.append(thresh)
+            cap_ys.append(entry["mean_captured_frac"])
+        if thresh_xs:
+            ax.plot(thresh_xs, cap_ys, marker="o", markersize=5,
+                    label=cell, linewidth=1.6)
+
+    ax.axhline(0.9, color="#595959", linestyle=":", linewidth=0.8)
+    ax.text(THRESHOLDS[0], 0.905, "0.9-of-final reference",
+            color="#595959", fontsize=8)
+    ax.set_xscale("log")
+    ax.set_xlabel(r"slope threshold $\varepsilon$  (best-so-far slope over "
+                  f"{SLOPE_W}-trial window)")
+    ax.set_ylabel(r"$\hat{r}^{\max}_{\mathrm{stop}} \,/\, "
+                  r"\hat{r}^{\max}_{\mathrm{final}}$  (mean over seeds)")
+    ax.set_title(f"Q3 — slope-based early-stop: stop when slope < ε for "
+                 f"{K_CONSEC} consecutive trials")
+    ax.legend(ncol=5, loc="lower right")
+    ax.set_ylim(0, 1.05)
+    fig.savefig(CHARTS_DIR / "11_early_stop.png")
+    plt.close(fig)
+    return out
+
+
 # -------------------------------------------------------------- top-level ---
 
 
@@ -666,6 +961,9 @@ def main() -> None:
     out["s06_invalid_cache_trajectory"] = section_06_invalid_cache_trajectory(data)
     out["s07_unique_builds_window"] = section_07_unique_builds_window(data)
     out["s08_proposal_distance"] = section_08_proposal_distance(data)
+    out["s09_axis_comparison"] = section_09_axis_comparison(data)
+    out["s10_q4_boxcox"] = section_10_q4_boxcox(data)
+    out["s11_early_stop"] = section_11_early_stop(data)
 
     HEADLINES_PATH.parent.mkdir(parents=True, exist_ok=True)
     HEADLINES_PATH.write_text(json.dumps(out, indent=2, default=str))
