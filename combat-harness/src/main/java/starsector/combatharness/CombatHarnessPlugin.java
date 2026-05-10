@@ -93,6 +93,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     // mutation actually took effect on the deployed ShipAPI. Cleared at the
     // start of every doSetup() so a stale entry can't leak across matchups.
     private JSONArray currentLoadoutDiagnosticPlayer = new JSONArray();
+    private String currentPluginQueueHash = "<unset>";
     // Per-matchup accumulator for [SHIP_DUMP] / [FIGHT_TICK] / [WIN_DUMP]
     // lines. Shipped back via the result JSON so the orchestrator logs the
     // ship-state trail even when the worker terminates faster than the
@@ -148,7 +149,9 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
 
         try {
-            queue = MatchupQueue.loadFromCommon();
+            String rawQueue = MatchupQueue.readRawFromCommon();
+            currentPluginQueueHash = MatchupQueue.fingerprint(rawQueue);
+            queue = MatchupQueue.fromJSON(new JSONArray(rawQueue));
         } catch (Exception e) {
             log.error("Failed to load matchup queue", e);
             System.exit(1);
@@ -156,7 +159,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         }
 
         engine.setDoNotEndCombat(true);
-        log.info("Combat Harness: loaded queue with " + queue.size() + " matchups");
+        log.info("Combat Harness: loaded queue with " + queue.size()
+                + " matchups; " + HarnessTraceContext.summary(currentPluginQueueHash));
         state = State.SETUP;
     }
 
@@ -505,6 +509,10 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private void doSetup() {
         currentConfig = queue.get(0);  // Single matchup per mission
+        currentLoadoutDiagnosticPlayer = new JSONArray();
+        currentDebugDumps = new JSONArray();
+        recordDebug("[TRACE_CONTEXT] matchup=" + currentConfig.matchupId
+                + " " + HarnessTraceContext.summary(currentPluginQueueHash));
 
         // Match deployed player ships by spec.variantId. The naive
         // "every owner==0 ship in engine.getShips()" path was caught
@@ -531,6 +539,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             if (owner == 0) {
                 ShipVariantAPI v = ship.getVariant();
                 String vid = (v == null) ? null : safeShipVariantId(v);
+                recordDebug("[TRACE_CANDIDATE] matchup=" + currentConfig.matchupId
+                        + " owner=0 ship_id=" + safeShipId(ship)
+                        + " fleet_member_id=" + safeFleetMemberId(ship)
+                        + " variant_id=" + vid
+                        + " static_weapons=" + staticVariantWeaponMap(v)
+                        + " physical_weapons=" + physicalWeaponMap(ship)
+                        + " static_hullmods=" + staticVariantHullmods(v)
+                        + " physical_count=" + physicalWeaponCount(ship));
                 if (matchesAnyExpectedVariantId(vid, expectedVariantIds)) {
                     matchedPlayerShips.add(ship);
                 } else {
@@ -631,8 +647,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             String physW2 = physicalWeaponIdAtSlot(s, "WS 002");
             String physW3 = physicalWeaponIdAtSlot(s, "WS 003");
             log.info("[V2_SETUP_VARIANT] matchup=" + currentConfig.matchupId
+                    + " mission_uuid=" + HarnessTraceContext.missionUuid()
+                    + " mission_queue_hash=" + HarnessTraceContext.missionQueueHash()
+                    + " plugin_queue_hash=" + currentPluginQueueHash
                     + " idx=" + i + " ship_id=" + s.getId()
                     + " variant_id=" + vid
+                    + " static_weapons=" + staticVariantWeaponMap(s.getVariant())
+                    + " physical_weapons=" + physicalWeaponMap(s)
+                    + " static_hullmods=" + staticVariantHullmods(s.getVariant())
                     + " phys_w1=" + physW1 + " phys_w2=" + physW2 + " phys_w3=" + physW3);
         }
 
@@ -642,8 +664,6 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         // The orchestrator fail-loud-WARNs any matchup whose `weapons_match` or
         // `hullmods_match` is false — this is the only way the system catches a
         // silent regression in MissionDefinition's pre-deploy build path.
-        currentLoadoutDiagnosticPlayer = new JSONArray();
-        currentDebugDumps = new JSONArray();
         for (int i = 0; i < playerShips.size() && i < currentConfig.playerBuilds.length; i++) {
             ShipAPI ship = playerShips.get(i);
             MatchupConfig.BuildSpec spec = currentConfig.playerBuilds[i];
@@ -830,7 +850,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
                     currentEffHullHpPct, currentBallisticRangeBonus,
                     currentShieldDamageTakenMult,
                     currentLoadoutDiagnosticPlayer,
-                    currentDebugDumps));
+                    currentDebugDumps,
+                    HarnessTraceContext.toJSON(currentPluginQueueHash)));
             ResultWriter.writeAllResults(results);
             ResultWriter.writeDoneSignal();
             log.info("Matchup " + currentConfig.matchupId
@@ -1136,6 +1157,68 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
             if (allHex) return true;
         }
         return false;
+    }
+
+    private static String safeShipId(ShipAPI ship) {
+        try { return ship.getId(); }
+        catch (Throwable t) { return "<error:" + t.getClass().getSimpleName() + ">"; }
+    }
+
+    private static String safeFleetMemberId(ShipAPI ship) {
+        try { return ship.getFleetMemberId(); }
+        catch (Throwable t) { return "<error:" + t.getClass().getSimpleName() + ">"; }
+    }
+
+    private static String staticVariantWeaponMap(ShipVariantAPI variant) {
+        if (variant == null) return "<null>";
+        try {
+            java.util.List<String> slots = new java.util.ArrayList<String>(
+                    variant.getFittedWeaponSlots());
+            java.util.Collections.sort(slots);
+            java.util.TreeMap<String, String> out = new java.util.TreeMap<String, String>();
+            for (String slotId : slots) {
+                out.put(slotId, String.valueOf(variant.getWeaponId(slotId)));
+            }
+            return out.toString();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    private static String staticVariantHullmods(ShipVariantAPI variant) {
+        if (variant == null) return "<null>";
+        try {
+            java.util.List<String> mods = new java.util.ArrayList<String>(
+                    variant.getNonBuiltInHullmods());
+            java.util.Collections.sort(mods);
+            return mods.toString();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    private static String physicalWeaponMap(ShipAPI ship) {
+        try {
+            java.util.TreeMap<String, String> out = new java.util.TreeMap<String, String>();
+            List<WeaponAPI> mounted = ship.getAllWeapons();
+            if (mounted == null) return "<null>";
+            for (WeaponAPI w : mounted) {
+                if (w == null || w.getSlot() == null) continue;
+                out.put(w.getSlot().getId(), String.valueOf(w.getId()));
+            }
+            return out.toString();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    private static int physicalWeaponCount(ShipAPI ship) {
+        try {
+            List<WeaponAPI> mounted = ship.getAllWeapons();
+            return mounted == null ? -1 : mounted.size();
+        } catch (Throwable t) {
+            return -1;
+        }
     }
 
     /** Return the weapon id physically mounted at the given slot on the

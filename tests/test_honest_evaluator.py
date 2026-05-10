@@ -1157,6 +1157,9 @@ class TestMainCLIWiring:
         assert signal.SIGHUP in installed
         with pytest.raises(KeyboardInterrupt, match="received signal"):
             installed[signal.SIGTERM](signal.SIGTERM, None)
+        # A repeated signal during cleanup must not interrupt the teardown
+        # path that the first signal triggered.
+        installed[signal.SIGTERM](signal.SIGTERM, None)
 
     def test_keyboard_interrupt_returns_130_after_cloud_context_unwinds(
         self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,

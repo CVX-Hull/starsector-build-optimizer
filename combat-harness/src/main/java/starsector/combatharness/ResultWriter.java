@@ -36,6 +36,29 @@ public class ResultWriter {
                                                  JSONArray loadoutDiagnosticPlayer,
                                                  JSONArray debugDumps)
             throws JSONException {
+        return buildMatchupResult(
+                config, playerShips, enemyShips, tracker, winner, duration,
+                effMaxFlux, effFluxDissipation, effArmorRating, effHullHpPct,
+                ballisticRangeBonus, shieldDamageTakenMult,
+                loadoutDiagnosticPlayer, debugDumps, null);
+    }
+
+    public static JSONObject buildMatchupResult(MatchupConfig config,
+                                                 List<ShipAPI> playerShips,
+                                                 List<ShipAPI> enemyShips,
+                                                 DamageTracker tracker,
+                                                 String winner,
+                                                 float duration,
+                                                 float effMaxFlux,
+                                                 float effFluxDissipation,
+                                                 float effArmorRating,
+                                                 float effHullHpPct,
+                                                 float ballisticRangeBonus,
+                                                 float shieldDamageTakenMult,
+                                                 JSONArray loadoutDiagnosticPlayer,
+                                                 JSONArray debugDumps,
+                                                 JSONObject traceContext)
+            throws JSONException {
         JSONArray playerArr = new JSONArray();
         JSONArray enemyArr = new JSONArray();
 
@@ -70,6 +93,9 @@ public class ResultWriter {
         result.put("enemy_ships", enemyArr);
         result.put("aggregate", aggregateToJSON(playerTotalDealt, enemyTotalDealt,
                 playerDestroyed, enemyDestroyed, 0, 0));
+        if (traceContext != null) {
+            result.put("trace_context", traceContext);
+        }
         // Phase 5D + Phase-7-prep: emit 6 engine-truth player SETUP stats
         // only when all reads succeeded. The game's bundled org.json rejects
         // NaN in put(), so on a failed read (any value is NaN — should never

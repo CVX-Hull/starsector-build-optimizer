@@ -103,4 +103,14 @@ class MatchupQueueTest {
         assertEquals(5.0f, config.timeMult, 0.01f);
         assertEquals(120.0f, config.timeLimitSeconds, 0.01f);
     }
+
+    @Test
+    void fingerprintIsStableAndContentSensitive() {
+        String a1 = MatchupQueue.fingerprint("[{\"matchup_id\":\"a\"}]");
+        String a2 = MatchupQueue.fingerprint("[{\"matchup_id\":\"a\"}]");
+        String b = MatchupQueue.fingerprint("[{\"matchup_id\":\"b\"}]");
+
+        assertEquals(a1, a2);
+        assertNotEquals(a1, b);
+    }
 }

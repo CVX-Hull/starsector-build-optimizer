@@ -44,6 +44,7 @@ from .parser import GameData, load_game_data
 from .repair import repair_build
 
 logger = logging.getLogger(__name__)
+_shutdown_signal_seen = threading.Event()
 
 HONEST_EVAL_SCHEMA_VERSION = 1
 
@@ -534,7 +535,8 @@ def evaluate_builds(
     completed = 0
     total = len(jobs)
 
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+    executor = ThreadPoolExecutor(max_workers=num_workers)
+    try:
         while queue or pending:
             while queue and len(pending) < num_workers:
                 job = queue.pop(0)
@@ -587,6 +589,13 @@ def evaluate_builds(
                         "honest_eval: %d/%d matchups complete (%.0f%%)",
                         completed, total, 100.0 * completed / total,
                     )
+    except BaseException:
+        for fut in pending:
+            fut.cancel()
+        executor.shutdown(wait=False, cancel_futures=True)
+        raise
+    else:
+        executor.shutdown(wait=True)
 
     # Aggregate per-build mean + SEM.
     out: list[EvaluatedBuild] = []
@@ -757,7 +766,17 @@ def _install_signal_handlers() -> None:
     the process-default SIGTERM action and can bypass the `with
     prepare_cloud_pool(...)` unwinder, leaving AWS workers alive.
     """
+    _shutdown_signal_seen.clear()
+
     def handler(signum, _frame):
+        if _shutdown_signal_seen.is_set():
+            logger.warning(
+                "received signal %s while shutdown is already in progress; "
+                "continuing cleanup",
+                signum,
+            )
+            return
+        _shutdown_signal_seen.set()
         raise KeyboardInterrupt(f"received signal {signum}")
 
     signal.signal(signal.SIGTERM, handler)

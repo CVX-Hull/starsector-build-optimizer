@@ -101,7 +101,7 @@ not choose a worker count without checking quota, current run scope, and the
 latest dated cost/throughput report. Campaign-specific worker counts and cost
 forecasts belong in reports or launch scripts, not in this general SOP.
 
-**Resume on interrupt**: ledger at `data/honest_eval/<eval_tag>/results.jsonl` survives SIGTERM/OOM/network partition. Tear down the fleet (`scripts/cloud/teardown.sh <eval_tag>`) then re-run with `--resume-from <eval_tag>`. Already-completed matchups skip dispatch; aggregation is identical to a clean run.
+**Resume on interrupt**: ledger at `data/honest_eval/<eval_tag>/results.jsonl` survives SIGTERM/OOM/network partition. Normal stop path is Ctrl-C or `kill <wrapper-pid>`; the wrapper forwards the signal to the evaluator process group, Python unwinds `CloudWorkerPool`, wakes blocked dispatch threads, terminates AWS resources, and runs final audit. If the wrapper is gone or audit reports survivors, tear down explicitly (`scripts/cloud/teardown.sh <eval_tag>`) before re-running with `--resume-from <eval_tag>`. Already-completed matchups skip dispatch; aggregation is identical to a clean run.
 
 ### Outputs
 

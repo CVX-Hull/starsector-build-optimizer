@@ -25,13 +25,33 @@ public class MatchupQueue {
     /** Load queue from saves/common/combat_harness_queue.json via SettingsAPI. */
     public static MatchupQueue loadFromCommon() throws JSONException {
         try {
-            String content = Global.getSettings().readTextFileFromCommon(QUEUE_FILE);
+            String content = readRawFromCommon();
             return fromJSON(new JSONArray(content));
         } catch (JSONException e) {
             throw e;
         } catch (Exception e) {
             throw new RuntimeException("Failed to read matchup queue from saves/common/" + QUEUE_FILE, e);
         }
+    }
+
+    /** Read the raw queue file from saves/common/. */
+    public static String readRawFromCommon() {
+        try {
+            return Global.getSettings().readTextFileFromCommon(QUEUE_FILE);
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to read matchup queue from saves/common/" + QUEUE_FILE, e);
+        }
+    }
+
+    /** Stable non-cryptographic fingerprint for queue-read skew diagnostics. */
+    public static String fingerprint(String content) {
+        if (content == null) return "<null>";
+        long hash = 0xcbf29ce484222325L;
+        for (int i = 0; i < content.length(); i++) {
+            hash ^= content.charAt(i);
+            hash *= 0x100000001b3L;
+        }
+        return Long.toHexString(hash);
     }
 
     /** Check if queue file exists in saves/common/. */

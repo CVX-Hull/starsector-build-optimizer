@@ -87,6 +87,10 @@ class LoadoutMismatchRejected(RetryableMatchupError):
     """A posted result had a corrupt live loadout and was discarded."""
 
 
+class PoolShuttingDown(RetryableMatchupError):
+    """A pending matchup was interrupted because the pool is tearing down."""
+
+
 def _source_key(project_tag: str, study_id: str) -> str:
     return f"queue:{project_tag}:{study_id}:source"
 
@@ -447,12 +451,30 @@ class CloudWorkerPool(EvaluatorPool):
 
     def teardown(self) -> None:
         self._stop_event.set()
+        self._fail_pending_matchups(PoolShuttingDown(
+            f"CloudWorkerPool study={self._study_id} is shutting down"
+        ))
         if self._server is not None:
             self._server.shutdown()
         if self._janitor_thread is not None:
             self._janitor_thread.join(timeout=self._teardown_thread_join_seconds)
         if self._server_thread is not None:
             self._server_thread.join(timeout=self._teardown_thread_join_seconds)
+
+    def _fail_pending_matchups(self, failure: Exception) -> None:
+        """Wake run_matchup callers blocked on result events during teardown.
+
+        `event.wait(result_timeout_seconds)` can otherwise keep
+        ThreadPoolExecutor worker threads alive for the full timeout after
+        the orchestrator has already decided to exit. Python waits for those
+        non-daemon executor threads during interpreter shutdown, which makes
+        an interrupted cloud run look hung even after AWS teardown completed.
+        """
+        with self._results_lock:
+            events = list(self._result_events.items())
+            for matchup_id, event in events:
+                self._failures.setdefault(matchup_id, failure)
+                event.set()
 
     # ---- run_matchup ----
 

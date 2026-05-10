@@ -202,6 +202,31 @@ This is consistent with hypothesis 1 (worker-pool degradation) but sharpens it:
 
 Both findings are investigation leads that belong in the post-mortem (and possibly a new task) — they would not have surfaced from the ledger alone.
 
+### Second shutdown rehearsal: shell orphan + local thread hang
+
+The resumed run
+`starsector-honest-eval-wave1-c0a-20260510T170431Z` was interrupted again
+on 2026-05-10 while investigating the mismatch rate. This surfaced two
+additional shutdown defects:
+
+- `scripts/cloud/evaluate_campaign.sh` ran the evaluator as
+  `uv ... 2>&1 | tee ...`. SIGTERM sent to the wrapper killed the shell
+  side but did not forward the signal to the `uv`/Python child process
+  group. The evaluator orphaned under PID 1 and continued until a direct
+  SIGTERM was sent to the Python side.
+- After direct SIGTERM, Python did complete cloud cleanup:
+  31 instances in us-east-1, 32 instances in us-east-2, both launch
+  templates, and both security groups were deleted by 17:48:48. A final
+  audit confirmed zero live resources for the Project tag. The local
+  process still remained because interpreter finalization was waiting on
+  non-daemon worker threads blocked in `run_matchup()` result waits.
+
+This means the paid-resource cleanup path worked after the signal reached
+Python, but the local shutdown contract was incomplete: wrapper signals
+must reach the evaluator process group, and pool teardown must wake blocked
+dispatch threads so interpreter exit is not held hostage by
+`result_timeout_seconds`.
+
 ## Recommended next steps
 
 1. ✅ Kill orchestrator (PID 17167) — done.
@@ -235,11 +260,25 @@ orchestrator cleanup gap. The cleanup gap has been addressed:
   before launch/resume; the JSONL ledger remains the only resume substrate.
 - `scripts/cloud/evaluate_campaign.sh` now runs a final audit on shell
   exit after it can parse the concrete eval tag from the orchestrator log.
+- `scripts/cloud/evaluate_campaign.sh` no longer pipes the evaluator
+  through `tee`. It redirects through process substitution, owns a direct
+  child process, forwards INT/TERM/HUP to the evaluator process group, and
+  waits for the child to finish cleanup before exiting.
+- `CloudWorkerPool.teardown()` now wakes pending `run_matchup()` callers
+  with `PoolShuttingDown` before shutting down the listener/janitor. This
+  prevents non-daemon dispatch threads from blocking Python finalization
+  after an interrupted run.
+- `honest_evaluator.evaluate_builds()` cancels pending futures and avoids
+  a blocking executor shutdown on interrupt, letting the surrounding
+  cloud-pool context proceed to teardown immediately.
+- Repeated SIGTERM/SIGHUP during shutdown is logged and ignored after the
+  first signal so it cannot interrupt AWS cleanup halfway through.
 - `scripts/cloud/teardown.sh` and `scripts/cloud/final_audit.sh` now accept
   either `honest-eval-...` or the full `starsector-honest-eval-...` tag,
   removing the operator foot-gun documented in the snapshot.
 - Regression tests cover the opt-in project sweep, retry behavior, signal
-  handler installation, and the interrupted-main exit path.
+  handler installation, interrupted-main exit path, and pool teardown
+  waking a blocked `run_matchup()`.
 
 Validated with:
 

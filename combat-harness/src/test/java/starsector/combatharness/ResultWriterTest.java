@@ -172,4 +172,28 @@ class ResultWriterTest {
         JSONObject diag = result.getJSONObject("loadout_diagnostic");
         assertEquals(0, diag.getJSONArray("player").length());
     }
+
+    @Test
+    void buildMatchupResultEmbedsTraceContextWhenProvided() throws Exception {
+        JSONObject trace = new JSONObject()
+                .put("mission_uuid", "mission-1")
+                .put("mission_queue_hash", "abc")
+                .put("plugin_queue_hash", "abc")
+                .put("mission_matchup_id", "stub_matchup");
+
+        JSONObject result = ResultWriter.buildMatchupResult(
+                _stubConfig(),
+                java.util.Collections.emptyList(),
+                java.util.Collections.emptyList(),
+                new DamageTracker(),
+                "TIMEOUT", 30.0f,
+                12000f, 800f, 1050f, 1.0f, 0f, 1.0f,
+                null, null, trace);
+
+        assertTrue(result.has("trace_context"));
+        JSONObject embedded = result.getJSONObject("trace_context");
+        assertEquals("mission-1", embedded.getString("mission_uuid"));
+        assertEquals("abc", embedded.getString("mission_queue_hash"));
+        assertEquals("abc", embedded.getString("plugin_queue_hash"));
+    }
 }

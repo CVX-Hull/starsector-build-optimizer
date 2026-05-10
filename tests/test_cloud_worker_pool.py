@@ -95,6 +95,37 @@ class TestPoolHappyPath:
         t.join(timeout=3.0)
         assert holder["result"].matchup_id == "m1"
 
+    def test_teardown_wakes_pending_run_matchup(self, pool):
+        """Interrupted orchestrators must not wait for full result timeout.
+
+        `run_matchup()` callers block on per-matchup events. Teardown wakes
+        those events so ThreadPoolExecutor workers can exit promptly before
+        Python interpreter shutdown.
+        """
+        from starsector_optimizer.cloud_worker_pool import PoolShuttingDown
+
+        holder = {}
+
+        def _run():
+            try:
+                pool.run_matchup(_matchup("m-teardown"))
+            except Exception as exc:
+                holder["exc"] = exc
+
+        t = threading.Thread(target=_run)
+        t.start()
+        deadline = time.time() + 1.0
+        while time.time() < deadline:
+            with pool._results_lock:
+                if "m-teardown" in pool._result_events:
+                    break
+            time.sleep(0.01)
+        pool.teardown()
+        t.join(timeout=0.5)
+
+        assert not t.is_alive()
+        assert isinstance(holder["exc"], PoolShuttingDown)
+
 
 class TestDedup:
     def test_second_post_with_same_id_returns_409(self, pool, flask_test_client_factory):

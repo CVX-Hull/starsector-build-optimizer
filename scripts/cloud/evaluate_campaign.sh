@@ -56,6 +56,9 @@ ORCHESTRATOR_LOG="$LOG_DIR/orchestrator-$STAMP.log"
 echo "[evaluate_campaign] Full log: $ORCHESTRATOR_LOG"
 echo
 
+child_pid=""
+shutdown_requested=0
+
 audit_on_exit() {
     if [[ ! -f "$ORCHESTRATOR_LOG" ]]; then
         return 0
@@ -76,6 +79,44 @@ audit_on_exit() {
         echo "[evaluate_campaign]   scripts/cloud/teardown.sh $campaign_arg"
     fi
 }
-trap audit_on_exit EXIT
 
-uv run python -m starsector_optimizer.honest_evaluator "$@" 2>&1 | tee "$ORCHESTRATOR_LOG"
+forward_signal() {
+    local sig="$1"
+    shutdown_requested=1
+    if [[ -z "${child_pid:-}" ]]; then
+        return 0
+    fi
+    echo "[evaluate_campaign] Forwarding SIG$sig to evaluator pid=$child_pid"
+    # With job control enabled for this non-interactive shell, the
+    # backgrounded evaluator is the process-group leader. Signal the group
+    # first so both `uv` and its Python child see the interrupt; fall back to
+    # the direct child if process-group signalling is unavailable.
+    kill "-$sig" -- "-$child_pid" 2>/dev/null || kill "-$sig" "$child_pid" 2>/dev/null || true
+}
+
+trap audit_on_exit EXIT
+trap 'forward_signal TERM' TERM
+trap 'forward_signal INT' INT
+trap 'forward_signal HUP' HUP
+
+# Avoid `uv ... | tee`: killing the shell side of a pipeline can orphan the
+# evaluator under launchd/init. Process substitution keeps logging while the
+# wrapper owns a direct child it can signal and wait on.
+exec > >(tee "$ORCHESTRATOR_LOG") 2>&1
+set -m
+
+uv run python -m starsector_optimizer.honest_evaluator "$@" &
+child_pid=$!
+
+set +e
+while true; do
+    wait "$child_pid"
+    status=$?
+    if [[ "$shutdown_requested" == "1" ]] && kill -0 "$child_pid" 2>/dev/null; then
+        continue
+    fi
+    break
+done
+set -e
+child_pid=""
+exit "$status"

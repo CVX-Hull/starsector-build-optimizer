@@ -306,6 +306,31 @@ therefore unwind the Python context managers instead of relying on the
 process-default signal action. Interrupted honest-eval runs return exit
 code 130 after cleanup.
 
+**Shutdown sequence.** The intended interrupt path is:
+
+1. The wrapper receives SIGINT/SIGTERM/SIGHUP and forwards it to the
+   evaluator process group.
+2. The evaluator's first signal raises `KeyboardInterrupt`; repeated
+   signals while shutdown is already in progress are logged and ignored so
+   they cannot interrupt fleet cleanup midway.
+3. `evaluate_builds()` stops submitting work, cancels not-yet-started
+   futures, and returns control to the surrounding cloud-pool context.
+4. `CloudWorkerPool.teardown()` sets its stop event, wakes every
+   `run_matchup()` caller blocked on a result event with
+   `PoolShuttingDown`, shuts down the Flask listener, and joins the
+   janitor/listener threads within the configured bound.
+5. `prepare_cloud_pool.__exit__()` terminates the tagged fleet, deletes
+   launch templates/security groups, and, for honest-eval only, runs the
+   project-wide sweep/retry described below.
+6. The wrapper runs final audit for the concrete Project tag. A clean audit
+   must report zero live instances/resources before a resume starts.
+
+This ordering matters because `ThreadPoolExecutor` worker threads are
+non-daemon. If they remain blocked in `run_matchup()` until the full result
+timeout, Python interpreter finalization waits for them even after AWS
+resources have already been torn down; locally the run looks stuck while no
+paid work is still active.
+
 Because an honest-eval run has a unique `Project=<eval_tag>` tag, it
 passes `sweep_project_on_exit=True` to `prepare_cloud_pool`. The helper
 first runs the normal `terminate_fleet(fleet_name, project_tag)` path

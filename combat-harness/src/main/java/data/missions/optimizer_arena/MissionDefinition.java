@@ -13,6 +13,7 @@ import com.fs.starfarer.api.mission.MissionDefinitionPlugin;
 import org.apache.log4j.Logger;
 
 import starsector.combatharness.CombatHarnessPlugin;
+import starsector.combatharness.HarnessTraceContext;
 import starsector.combatharness.ManifestDumper;
 import starsector.combatharness.MatchupConfig;
 import starsector.combatharness.MatchupQueue;
@@ -83,8 +84,11 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         }
 
         MatchupQueue queue;
+        String queueHash;
         try {
-            queue = MatchupQueue.loadFromCommon();
+            String rawQueue = MatchupQueue.readRawFromCommon();
+            queueHash = MatchupQueue.fingerprint(rawQueue);
+            queue = MatchupQueue.fromJSON(new org.json.JSONArray(rawQueue));
         } catch (Exception e) {
             api.initFleet(FleetSide.PLAYER, "OPT", FleetGoal.ATTACK, true);
             api.initFleet(FleetSide.ENEMY, "ENM", FleetGoal.ATTACK, true);
@@ -121,6 +125,9 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         // FleetMember — which propagates to the deployed `ShipAPI` because
         // the swap happens BEFORE the deployment screen processes the fleet.
         MatchupConfig first = queue.get(0);
+        HarnessTraceContext.startMission(queueHash, first.matchupId);
+        log.info("[TRACE_MISSION] " + HarnessTraceContext.summary("<plugin-not-loaded>")
+                + " queue_size=" + queue.size());
 
         for (int i = 0; i < first.playerBuilds.length; i++) {
             MatchupConfig.BuildSpec spec = first.playerBuilds[i];
@@ -136,10 +143,18 @@ public class MissionDefinition implements MissionDefinitionPlugin {
                 member.setVariant(customVariant, false, true);
                 member.getRepairTracker().setCR(spec.cr);
                 log.info("[V2_DEPLOY] matchup=" + first.matchupId
+                        + " mission_uuid=" + HarnessTraceContext.missionUuid()
+                        + " mission_queue_hash=" + queueHash
                         + " spec=" + spec.variantId
                         + " placeholder=" + stockVariant
                         + " before_setvariant=" + beforeId
                         + " custom=" + safeVariantHullId(customVariant)
+                        + " custom_static_weapons="
+                        + staticVariantWeaponMap(customVariant, spec)
+                        + " custom_static_hullmods="
+                        + staticVariantHullmods(customVariant)
+                        + " custom_flux=(" + safeFluxVents(customVariant)
+                        + "," + safeFluxCaps(customVariant) + ")"
                         + " after_setvariant=" + safeVariantId(member)
                         + " member_id=" + safeMemberId(member));
             } catch (Throwable t) {
@@ -210,6 +225,41 @@ public class MissionDefinition implements MissionDefinitionPlugin {
         } catch (Throwable t) {
             return "<error:" + t.getClass().getSimpleName() + ">";
         }
+    }
+
+    private static String staticVariantWeaponMap(
+            ShipVariantAPI variant, MatchupConfig.BuildSpec spec) {
+        if (variant == null || spec == null) return "<null>";
+        java.util.TreeMap<String, String> out = new java.util.TreeMap<String, String>();
+        for (String slotId : spec.weaponAssignments.keySet()) {
+            try {
+                out.put(slotId, String.valueOf(variant.getWeaponId(slotId)));
+            } catch (Throwable t) {
+                out.put(slotId, "<error:" + t.getClass().getSimpleName() + ">");
+            }
+        }
+        return out.toString();
+    }
+
+    private static String staticVariantHullmods(ShipVariantAPI variant) {
+        try {
+            java.util.List<String> mods = new java.util.ArrayList<String>(
+                    variant.getNonBuiltInHullmods());
+            java.util.Collections.sort(mods);
+            return mods.toString();
+        } catch (Throwable t) {
+            return "<error:" + t.getClass().getSimpleName() + ">";
+        }
+    }
+
+    private static int safeFluxVents(ShipVariantAPI variant) {
+        try { return variant.getNumFluxVents(); }
+        catch (Throwable t) { return -1; }
+    }
+
+    private static int safeFluxCaps(ShipVariantAPI variant) {
+        try { return variant.getNumFluxCapacitors(); }
+        catch (Throwable t) { return -1; }
     }
 
     /**
