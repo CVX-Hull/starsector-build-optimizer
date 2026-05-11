@@ -58,7 +58,7 @@ Tool contract: [../../docs/specs/30-honest-evaluator.md](../../docs/specs/30-hon
 2. Verify per-study DBs exist: `ls data/study_dbs/<campaign>/*.db` returns
    N files (one per study × seed).
 3. Verify cloud preconditions per [`cloud-worker-ops`](cloud-worker-ops.md)
-   "The three rules of money" — honest evaluation IS a cloud campaign and
+   "The rules of money" — honest evaluation IS a cloud campaign and
    must respect them: budget ceiling, teardown command, final-audit at end.
 
 ### Execute
@@ -92,6 +92,21 @@ Default fleet size = max `workers_per_study` from the source campaign;
 override with `--workers N`. Source campaign config is read from
 `examples/{first-campaign-name}.yaml` by default; override with
 `--campaign-config <path>`.
+
+For an unattended honest-eval run, arm the cleanup watchdog after launch
+once the concrete `eval_tag` and evaluator PIDs are known:
+
+```
+pgrep -af 'honest_evaluator|evaluate_campaign'
+scripts/cloud/watch_eval_cleanup.sh <eval_tag> <uv-pid> <python-pid>
+```
+
+The watchdog waits for those evaluator PIDs to exit, gives the wrapper a
+short grace period to run its own final audit, then runs
+`scripts/cloud/final_audit.sh <eval_tag>` and automatically calls
+`scripts/cloud/teardown.sh <eval_tag>` if resources remain. Keep the
+wrapper's normal cleanup path as the primary path; the watchdog is the
+overnight/no-operator backstop.
 
 #### Fleet sizing
 

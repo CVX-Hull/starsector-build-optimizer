@@ -5,7 +5,7 @@
 # methodology in docs/reference/honest-evaluation-methodology.md, SOP in
 # .claude/skills/honest-evaluation.md.
 #
-# Per cloud-worker-ops "three rules of money", this IS a paid cloud run:
+# Per cloud-worker-ops "rules of money", this IS a paid cloud run:
 # every invocation prints the teardown command on first line, sources
 # .env via _env.sh, and runs final-audit on EXIT once the concrete
 # honest-eval tag has appeared in the orchestrator log.
@@ -75,8 +75,12 @@ audit_on_exit() {
     echo
     echo "[evaluate_campaign] Final audit for Project=$eval_tag"
     if ! scripts/cloud/final_audit.sh "$campaign_arg"; then
-        echo "[evaluate_campaign] Final audit found resources; run:"
+        echo "[evaluate_campaign] Final audit found resources or was inconclusive; running teardown:"
         echo "[evaluate_campaign]   scripts/cloud/teardown.sh $campaign_arg"
+        if scripts/cloud/teardown.sh "$campaign_arg"; then
+            echo "[evaluate_campaign] Re-running final audit after teardown"
+            scripts/cloud/final_audit.sh "$campaign_arg" || true
+        fi
     fi
 }
 

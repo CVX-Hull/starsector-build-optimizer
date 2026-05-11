@@ -11,11 +11,12 @@ disable-model-invocation: true
 
 Use this skill when the user asks you to run or debug a cloud campaign — anything involving multiple Starsector workers outside the local workstation. Built on the Phase 6 Cloud Worker Federation design (`docs/reference/phase6-cloud-worker-federation.md`). Empirical throughput numbers are pending re-validation under the V2 loadout fix; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
 
-## The three rules of money
+## The rules of money
 
 1. **Every launch sets a budget ceiling.** If you don't have a `budget_usd` figure, STOP and ask the user for one. Default "launch and see what happens" is a $200/day runaway pattern.
 2. **Every launch prints the teardown command as its first line of output.** Operator must be able to copy-paste to nuke resources in case the orchestrator dies.
 3. **Final-audit runs at the end of every session.** After ANY cloud work, `scripts/cloud/final_audit.sh <campaign-name>` must exit 0. Don't skip this step.
+4. **Unattended paid runs get a watchdog.** If a run is expected to finish while the operator is away, launch `scripts/cloud/watch_eval_cleanup.sh <eval_tag> <pid> [<pid> ...]` against the evaluator process ids. The watchdog waits for those PIDs, gives the wrapper time to run its built-in audit, then runs final audit and teardown automatically if tagged resources remain.
 
 ## Which provider
 
@@ -232,17 +233,36 @@ scripts/cloud/launch_campaign.sh <campaign.yaml>
 # 6. Monitor
 scripts/cloud/status.sh <campaign-name>
 
-# 7. On completion OR error — explicit teardown
+# 7. For unattended paid runs, arm a cleanup watchdog before walking away.
+# Use the evaluator/orchestrator PIDs from `pgrep -af`.
+scripts/cloud/watch_eval_cleanup.sh <project-tag-or-eval-tag> <pid> [<pid> ...]
+
+# 8. On completion OR error — explicit teardown
 scripts/cloud/teardown.sh <campaign-name>
 
-# 8. Final audit — MANDATORY (launch_campaign.sh EXIT trap also runs this)
+# 9. Final audit — MANDATORY (launch_campaign.sh EXIT trap also runs this)
 scripts/cloud/final_audit.sh <campaign-name>
 
-# 9. (optional, end of session) Stop the rootless dev env
+# 10. (optional, end of session) Stop the rootless dev env
 scripts/cloud/devenv-down.sh
 ```
 
-`launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that re-runs `teardown.sh` + `final_audit.sh` on any exit path (success, SIGKILL, crash). In-process, `CampaignManager.run()` has a `try/finally: terminate_all_tagged` sweep + `atexit.register(teardown)`. Each study subprocess also has its own `try/finally: terminate_fleet` for its own fleet. **Four layers of teardown belt-and-suspenders.**
+`launch_campaign.sh` wraps the Python invocation in a `trap EXIT` that
+re-runs `teardown.sh` + `final_audit.sh` on normal shell exit, crashes
+that still unwind the shell, and trappable signals. In-process,
+`CampaignManager.run()` has a `try/finally: terminate_all_tagged` sweep +
+`atexit.register(teardown)`. Each study subprocess also has its own
+`try/finally: terminate_fleet` for its own fleet. **Four layers of teardown
+belt-and-suspenders.**
+
+`watch_eval_cleanup.sh` is a fifth layer for unattended sessions. It is not a
+replacement for normal cleanup; it is an independent process that waits for
+the supplied evaluator PIDs to disappear, then audits the project tag and runs
+`teardown.sh` if audit reports survivors. Run it from the same trusted shell
+context as the campaign so it has AWS credentials and process visibility.
+For honest-eval tags, pass the full `starsector-honest-eval-...` tag or the
+teardown argument without the leading `starsector-`; both cleanup scripts
+normalize the prefix.
 
 ### Java JAR override (debug-only fast iteration)
 
@@ -482,9 +502,9 @@ Every re-bake should be followed by an audit + cleanup of the previous bake's AM
 scripts/cloud/final_audit.sh <campaign-name>
 ```
 
-Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instances / SGs / volumes tagged `Project=starsector-<campaign-name>`. Exit 0 if clean, 1 if any resource leaked. Use as the last command of every session.
+Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instances / SGs / volumes tagged `Project=starsector-<campaign-name>`. Exit 0 if clean, 1 if any resource leaked, 2 if AWS describe calls fail and the audit is inconclusive. Use as the last command of every session.
 
-`launch_campaign.sh` wraps its Python invocation in `trap EXIT` that re-runs `final_audit.sh` — so even a SIGKILL of the shell triggers the audit. Belt-and-suspenders with `CampaignManager.run()`'s in-process `try/finally` and `atexit`.
+`launch_campaign.sh` wraps its Python invocation in `trap EXIT` that re-runs `final_audit.sh` on normal shell exit or trappable signals. SIGKILL cannot run traps; use `watch_eval_cleanup.sh` for unattended paid sessions. Belt-and-suspenders with `CampaignManager.run()`'s in-process `try/finally` and `atexit`.
 
 **If you're ending a session with active campaigns running**: that's an explicit user decision. Confirm with the user before leaving resources alive. Default posture is "no active resources at session end."
 
@@ -504,5 +524,5 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 - **Cloud deployment spec**: `docs/specs/22-cloud-deployment.md`
 - **Empirical validation**: pending re-validation under V2 loadout fix; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). Re-validation reports as they land are tracked in [../../docs/reports/INDEX.md](../../docs/reports/INDEX.md).
 - **Cost model**: pre-V1-invalidation `experiments/phase6-planning/cost_model.py` was deleted alongside the rest of the V1 experiment artefacts; the next cost model lands as part of V2 re-validation.
-- **Scripts**: `scripts/cloud/{devenv-up,devenv-down,launch_campaign,status,teardown,final_audit,probe,bake_image}.sh` + `scripts/cloud/packer/aws.pkr.hcl`
+- **Scripts**: `scripts/cloud/{devenv-up,devenv-down,launch_campaign,status,teardown,final_audit,watch_eval_cleanup,probe,bake_image}.sh` + `scripts/cloud/packer/aws.pkr.hcl`
 - **LWJGL XRandR fix**: `src/starsector_optimizer/instance_manager.py::_start_xvfb`

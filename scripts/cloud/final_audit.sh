@@ -19,15 +19,20 @@ else
   TAG="starsector-$CAMPAIGN"
 fi
 LEAKED=0
+AUDIT_FAILED=0
 
 echo "=== AWS audit for Project=$TAG ==="
 
 for region in us-east-1 us-east-2 us-west-1 us-west-2; do
-  instances=$(aws ec2 describe-instances --region "$region" \
+  if ! instances=$(aws ec2 describe-instances --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
               "Name=instance-state-name,Values=pending,running,stopping,stopped" \
     --query 'Reservations[].Instances[].[InstanceId,State.Name]' \
-    --output text 2>/dev/null)
+    --output text); then
+    echo "AUDIT ERROR in $region: failed to describe instances" >&2
+    AUDIT_FAILED=1
+    continue
+  fi
   if [[ -n "$instances" ]]; then
     echo "LEAK in $region: instances:"
     echo "$instances" | sed 's/^/    /'
@@ -36,23 +41,39 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
     echo "  $region: no instances"
   fi
 
-  sgs=$(aws ec2 describe-security-groups --region "$region" \
+  if ! sgs=$(aws ec2 describe-security-groups --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
-    --query 'SecurityGroups[].GroupId' --output text 2>/dev/null)
+    --query 'SecurityGroups[].GroupId' --output text); then
+    echo "AUDIT ERROR in $region: failed to describe security groups" >&2
+    AUDIT_FAILED=1
+    continue
+  fi
   if [[ -n "$sgs" ]]; then
     echo "LEAK in $region: SGs: $sgs"
     LEAKED=1
   fi
 
-  volumes=$(aws ec2 describe-volumes --region "$region" \
+  if ! volumes=$(aws ec2 describe-volumes --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
               "Name=status,Values=available" \
-    --query 'Volumes[].VolumeId' --output text 2>/dev/null)
+    --query 'Volumes[].VolumeId' --output text); then
+    echo "AUDIT ERROR in $region: failed to describe volumes" >&2
+    AUDIT_FAILED=1
+    continue
+  fi
   if [[ -n "$volumes" ]]; then
     echo "LEAK in $region: volumes: $volumes"
     LEAKED=1
   fi
 done
+
+if [[ $AUDIT_FAILED -ne 0 ]]; then
+  echo
+  echo "FINAL AUDIT: INCONCLUSIVE. One or more AWS describe calls failed."
+  echo "Do not treat this as clean; rerun after fixing AWS credentials/network:"
+  echo "  scripts/cloud/final_audit.sh $CAMPAIGN"
+  exit 2
+fi
 
 if [[ $LEAKED -ne 0 ]]; then
   echo
