@@ -356,6 +356,13 @@ configuration from the source campaign YAML:
   `WorkerTimeout` at the caller level; the Redis janitor must not
   re-dispatch a slow-but-live matchup before that caller-level timeout
   has resolved.
+- `CloudWorkerPool` retains accepted late results by `matchup_id` even
+  when the original dispatcher thread has already timed out. A retry for
+  the same `matchup_id` must consume the retained result before enqueueing
+  duplicate work, and timeout cleanup must return a result if it arrived
+  during the wait/cleanup race. This keeps clean late results on the
+  normal `pool.run_matchup()` return path so `evaluate_builds` can append
+  them to the honest-eval ledger.
 - Stale Redis keys under `queue:<eval_tag>:*` and `worker:<eval_tag>:*`
   are flushed before launch/resume. The append-only ledger is the resume
   substrate; Redis queues are ephemeral in-flight state and must not

@@ -580,6 +580,17 @@ class CloudWorkerPool(EvaluatorPool):
         matchup_id = matchup.matchup_id
         event = threading.Event()
         with self._results_lock:
+            # A slow original attempt can POST after its caller has timed
+            # out and scheduled a retry. The Flask handler stores accepted
+            # results even when no dispatcher event is currently registered;
+            # consume that retained result here so the retry path can still
+            # write the honest-eval ledger instead of orphaning the result.
+            result = self._results.pop(matchup_id, None)
+            failure = self._failures.pop(matchup_id, None)
+            if failure is not None:
+                raise failure
+            if result is not None:
+                return result
             self._result_events[matchup_id] = event
 
         payload = {
@@ -596,12 +607,16 @@ class CloudWorkerPool(EvaluatorPool):
             failure = self._failures.pop(matchup_id, None)
         if failure is not None:
             raise failure
-        if not got or result is None:
+        if result is not None:
+            return result
+        if not got:
             raise WorkerTimeout(
                 f"matchup_id={matchup_id} did not receive result "
                 f"within {self._result_timeout_seconds}s"
             )
-        return result
+        raise WorkerTimeout(
+            f"matchup_id={matchup_id} result event fired without a result"
+        )
 
     # ---- Janitor ----
 

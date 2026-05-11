@@ -406,6 +406,30 @@ class _AlwaysFailPool(EvaluatorPool):
         raise RuntimeError("always fails")
 
 
+class _TimeoutThenLateResultPool(EvaluatorPool):
+    """First dispatch times out; retry returns the retained late result."""
+    def __init__(self):
+        self.attempts = 0
+        self.dispatched: list[str] = []
+
+    def setup(self) -> None: ...
+    def teardown(self) -> None: ...
+
+    @property
+    def num_workers(self) -> int:
+        return 1
+
+    def run_matchup(self, matchup):
+        from starsector_optimizer.cloud_worker_pool import WorkerTimeout
+        self.attempts += 1
+        self.dispatched.append(matchup.matchup_id)
+        if self.attempts == 1:
+            raise WorkerTimeout(
+                f"matchup_id={matchup.matchup_id} did not receive result"
+            )
+        return _make_combat_result(matchup.matchup_id, winner="PLAYER")
+
+
 def _bp(build: Build, campaign: str = "test", rank: int = 1) -> _BuildWithProvenance:
     return _BuildWithProvenance(
         build=build, source_campaign=campaign, source_study_idx=0,
@@ -488,6 +512,47 @@ class TestEvaluateBuilds:
         # 3 dispatches + 2 retries = 5 total attempts
         assert pool.attempts == 5
         assert result[0].n_matchups_succeeded == 3
+
+    def test_retry_returned_late_result_is_appended_to_ledger(
+        self, hammerhead_hull, game_data, manifest, tmp_path,
+    ):
+        """Regression for the c1 partial-panel race: if a pool retry returns
+        a retained late result after the first attempt timed out,
+        evaluate_builds must append that success to the honest-eval ledger.
+        """
+        from starsector_optimizer.calibration import generate_random_build
+        from starsector_optimizer.repair import repair_build
+        from starsector_optimizer.models import REGIME_PRESETS
+        import numpy as np
+        rng = np.random.default_rng(30)
+        b = repair_build(
+            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
+            hammerhead_hull, game_data, manifest,
+        )
+        pool = _TimeoutThenLateResultPool()
+        ledger_path = tmp_path / "results.jsonl"
+        cfg = HonestEvaluationConfig(
+            replicates_per_matchup=1,
+            max_retries_per_matchup=1,
+        )
+
+        result = evaluate_builds(
+            [_bp(b)], ("opp_a",), pool, cfg, hammerhead_hull,
+            ledger_path=ledger_path,
+        )
+
+        assert pool.attempts == 2
+        assert pool.dispatched == [
+            "honest__test__s0__seed0__rank1_vs_opp_a_rep0",
+            "honest__test__s0__seed0__rank1_vs_opp_a_rep0",
+        ]
+        assert result[0].n_matchups_succeeded == 1
+        rows = [json.loads(line) for line in ledger_path.read_text().splitlines()]
+        assert len(rows) == 1
+        assert rows[0]["matchup_id"] == pool.dispatched[0]
+        assert rows[0]["build_id"] == "honest__test__s0__seed0__rank1"
+        assert rows[0]["opponent_variant_id"] == "opp_a"
+        assert rows[0]["replicate_idx"] == 0
 
     def test_raises_when_matchup_fails_all_retries(
         self, hammerhead_hull, game_data, manifest,

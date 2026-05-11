@@ -635,6 +635,93 @@ class TestTimeout:
         finally:
             p.teardown()
 
+    def test_retry_consumes_late_result_from_prior_attempt(
+        self, fake_redis, flask_test_client_factory,
+    ):
+        """A result can arrive after the original dispatcher timed out but
+        before the retry has registered its event. The retry must consume
+        the retained result so the caller can append it to the honest-eval
+        ledger instead of orphaning a successful POST.
+        """
+        from starsector_optimizer.cloud_worker_pool import (
+            CloudWorkerPool, WorkerTimeout,
+        )
+        p = CloudWorkerPool(
+            study_id="wolf__early__seed0",
+            project_tag=PROJECT_TAG,
+            redis_client=fake_redis,
+            flask_port=0, bearer_token=BEARER,
+            total_matchup_slots=1,
+            result_timeout_seconds=0.05,
+            visibility_timeout_seconds=120.0,
+            janitor_interval_seconds=60.0,
+            max_requeues=5,
+        )
+        p.setup()
+        try:
+            with pytest.raises(WorkerTimeout):
+                p.run_matchup(_matchup("m-late"))
+            client = flask_test_client_factory(p.app)
+            resp = client.post("/result", json={
+                "matchup_id": "m-late",
+                "result": _combat_result_json("m-late"),
+                "bearer_token": BEARER,
+            })
+            assert resp.status_code == 200
+
+            result = p.run_matchup(_matchup("m-late"))
+
+            assert result.matchup_id == "m-late"
+            assert "m-late" not in p._results
+        finally:
+            p.teardown()
+
+    def test_timeout_race_returns_result_if_post_lands_before_cleanup(
+        self, fake_redis, flask_test_client_factory, monkeypatch,
+    ):
+        """If event.wait reports timeout but a result landed before cleanup,
+        return the result. This closes the narrow wait-timeout/result-store
+        race without treating a successful combat as WorkerTimeout.
+        """
+        from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
+
+        p = CloudWorkerPool(
+            study_id="wolf__early__seed0",
+            project_tag=PROJECT_TAG,
+            redis_client=fake_redis,
+            flask_port=0, bearer_token=BEARER,
+            total_matchup_slots=1,
+            result_timeout_seconds=0.05,
+            visibility_timeout_seconds=120.0,
+            janitor_interval_seconds=60.0,
+            max_requeues=5,
+        )
+        p.setup()
+        client = flask_test_client_factory(p.app)
+        original_wait = threading.Event.wait
+        posted = False
+
+        def _post_then_timeout(self, timeout=None):
+            nonlocal posted
+            if not posted:
+                posted = True
+                resp = client.post("/result", json={
+                    "matchup_id": "m-race",
+                    "result": _combat_result_json("m-race"),
+                    "bearer_token": BEARER,
+                })
+                assert resp.status_code == 200
+            return False
+
+        monkeypatch.setattr(threading.Event, "wait", _post_then_timeout)
+        try:
+            result = p.run_matchup(_matchup("m-race"))
+        finally:
+            monkeypatch.setattr(threading.Event, "wait", original_wait)
+            p.teardown()
+
+        assert result.matchup_id == "m-race"
+
 
 class TestAttackSurface:
     def test_rejects_get_on_result(self, pool, flask_test_client_factory):

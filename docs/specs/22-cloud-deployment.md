@@ -84,7 +84,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `tailscale_authkey_secret` | `str` | required | Injected into cloud-init; redacted from `__repr__`. Supports `${VAR}` env-substitution — if value starts with `${` and ends with `}`, `load_campaign_config` resolves via `os.environ`. Missing env var → `ValueError`. Substitution is SCOPED to this field only. |
 | `studies` | `tuple[StudyConfig, ...]` | required | |
 | `global_auto_stop` | `GlobalAutoStopConfig` | `GlobalAutoStopConfig()` | |
-| `max_lifetime_hours` | `float` | `6.0` | Worker self-terminates at this age; 6h covers prep's 4.1h run |
+| `max_lifetime_hours` | `float` | `6.0` | Worker self-terminates at this age; sized as an operational safety cap rather than a target runtime |
 | `visibility_timeout_seconds` | `float` | `120.0` | Redis processing-list timeout |
 | `janitor_interval_seconds` | `float` | `60.0` | How often the study subprocess sweeps stuck items |
 | `worker_poll_margin_seconds` | `float` | `5.0` | Subtract from `visibility_timeout_seconds` for worker BRPOPLPUSH timeout |
@@ -92,7 +92,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `result_timeout_seconds` | `float` | `900.0` | `CloudWorkerPool.run_matchup` blocks at most this long |
 | `ledger_heartbeat_interval_seconds` | `float` | `60.0` | How often `CampaignManager.monitor_loop` appends ledger rows |
 | `ledger_warn_thresholds` | `tuple[float, ...]` | `(0.5, 0.8, 0.95)` | Budget fractions at which a WARN log fires |
-| `base_flask_port` | `int` | `9000` | Study at `(study_idx, seed_idx)` listens on `base_flask_port + study_idx * len(seeds) + seed_idx` |
+| `base_flask_port` | `int` | `9000` | Base for per-study result listener ports; study at `(study_idx, seed_idx)` listens on `base_flask_port + study_idx * flask_ports_per_study + seed_idx` |
 | `redis_port` | `int` | `6379` | Workstation Redis port; shared by preflight ping and by `WorkerConfig.redis_port` in spawned children |
 | `redis_preflight_timeout_seconds` | `float` | `2.0` | `_preflight` Redis ping timeout — covers only the tailnet-binding-check, not campaign-wide connectivity |
 | `matchup_slots_per_worker` | `int` | `2` | Concurrent matchup slots per VM. The worker spawns this many Redis consumer threads sharing one `LocalInstancePool` so every JVM stays busy. Total pool concurrency = `workers_per_study × matchup_slots_per_worker`. c7a.2xlarge (8 vCPU) fits 2 JVMs (per-JVM core consumption pending V2 re-validation) |
@@ -198,7 +198,9 @@ Idempotency key is `MatchupConfig.matchup_id`, which `CampaignManager` sets to `
 
 ## HTTP protocol
 
-Per-study Flask listener on `config.base_flask_port + study_idx` exposes exactly one route:
+Per-study Flask listener on
+`config.base_flask_port + study_idx * config.flask_ports_per_study + seed_idx`
+exposes exactly one route:
 
 ```
 POST /result
@@ -235,7 +237,7 @@ No `GET`, no `PATCH`, no `PUT`, no admin route, no static files. Test `test_http
 
 ## Cost ledger
 
-Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is followed by `file.flush()` + `os.fsync(file.fileno())` to prevent torn lines on crash (~1ms overhead per row, negligible at 96 rows/min).
+Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is followed by `file.flush()` + `os.fsync(file.fileno())` to prevent torn lines on crash. The durability requirement is part of the contract; throughput and cost measurements belong in dated reports.
 
 Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown and **returns exit code 0** (designed termination, not failure — wrapper scripts running multiple budget-capped cells back-to-back depend on this to advance to the next cell). Other failure modes keep distinct non-zero exit codes: preflight failure → 2, KeyboardInterrupt / SIGTERM / SIGHUP → 130, unexpected exception → propagates.
 
@@ -290,8 +292,8 @@ in-flight matchup IDs (bounded to `STALLED_PROGRESS_INFLIGHT_SAMPLE_COUNT`
 (200) and discarded (422) `/result`, so any incoming POST counts as
 progress regardless of outcome. Debounced via `_stalled_warn_emitted`
 so a sustained stall logs once, not once per janitor tick. The
-detector caught the 2026-05-10 incident retroactively (workers idle
-for 1h20m before operator noticed manually).
+detector was added after the 2026-05-10 stall incident so future runs
+surface the condition in the orchestrator log.
 
 **Mod-jar fleet-consistency check.** Workers report `mod_jar_sha256`
 (SHA-256 of their loaded `combat-harness.jar`) in heartbeat. The
@@ -363,8 +365,8 @@ def check_ami_tags_against_manifest(
          back for the AMI tag; a missing value means the chain broke
          upstream and the AMI cannot be trusted).
       5. Read `provider.describe_ami_tag(ami_id, region, "WorkerSourceSha")`
-         and assert it equals the SHA-256 digest of committed worker-source
-         inputs copied into the AMI (`src`, `pyproject.toml`, `uv.lock`, and
+         and assert it equals the SHA-256 digest of the worker-source input
+         set copied into the AMI (`src`, `pyproject.toml`, `uv.lock`, and
          cloud bake/Packer scripts). Dirty debug launches with
          `STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH=1` expect `<digest>-dirty`.
          Documentation-only commits do not change the digest. This prevents
@@ -392,7 +394,7 @@ def check_authkey_syntax(authkey: str) -> None:
 The AWS AMI tags are set by the Packer template:
 `GameVersion`, `ManifestSha256`, and `ModCommitSha` are read from the committed
 manifest; `WorkerSourceSha` is passed by `scripts/cloud/bake_image.sh` from the
-committed worker-source input digest. The bake script refuses dirty AMI inputs
+current worker-source input digest. The bake script refuses dirty AMI inputs
 (`src`, `pyproject.toml`, `uv.lock`, `game/starsector/manifest.json`, and cloud
 Packer/bake scripts) unless `STARSECTOR_ALLOW_DIRTY_AMI_BAKE=1` is set. Dirty
 debug bakes are tagged
@@ -617,7 +619,7 @@ Raises `NotImplementedError` with message `"HetznerProvider is stubbed; implemen
 **Baked contents** (validated via post-build provisioner; AMI tag set only on zero exit code):
 - Starsector game files (551 MB) at pinned version
 - combat-harness mod (deployed, ready to run)
-- `uv` + project venv built from the committed worker-source input digest
+- `uv` + project venv built from the worker-source input digest
 - `x11-xserver-utils` (for `xrandr --query` warmup; see below)
 - `xvfb`, `xdotool`, OpenJDK
 - Tailscale client
