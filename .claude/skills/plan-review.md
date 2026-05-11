@@ -11,6 +11,10 @@ last-validated: 2026-05-10
 
 Run this **before approving a plan or moving from planning into implementation**. Validates the plan for correctness, completeness, and clarity.
 
+Plan review operates on a plan file path. Plans live under
+`.claude/plans/active/` while current and are managed by the
+`plan-lifecycle` skill. Do not review chat-only prose for non-trivial work.
+
 ## Phase 1: Writing Quality (self-review)
 
 Review the plan text for:

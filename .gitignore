@@ -54,10 +54,16 @@ experiments/**/orchestrator.log
 # Notebook outputs (re-generated on execution)
 notebooks/.ipynb_checkpoints/
 
+# Local literature corpora can contain large PDFs and extracted text. Track the
+# seed lists and synthesis docs; regenerate corpora with the literature skill.
+/_research/**/corpus/
+
 # Claude local state stays ignored, but repo workflow skills are tracked.
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+!.claude/plans/
+!.claude/plans/**
 
 # Cloud secrets (Starsector serial key, Tailscale authkey, bearer tokens)
 scripts/cloud/packer/prefs.xml

@@ -11,6 +11,11 @@ last-validated: 2026-05-10
 
 Follow this lifecycle for all non-trivial implementation work. See the root workflow file's "Workflow gates" section for the project rule.
 
+For non-trivial work, create or update an implementation plan under
+`.claude/plans/active/` first and manage it with the `plan-lifecycle` skill.
+The plan is the execution source of truth during implementation; specs and
+reference docs remain the durable design authority.
+
 ## Step 1: Specification
 
 Before writing any code:

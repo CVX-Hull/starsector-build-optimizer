@@ -25,6 +25,19 @@ dev = [
     "pytest",
     "pytest-cov",
 ]
+literature = [
+    "docling>=2.48",
+    "pymupdf4llm>=0.0.17",
+    "pypdf>=5.0",
+    "unstructured[pdf]>=0.16",
+]
+surrogate = [
+    "botorch>=0.14",
+    "catboost>=1.2",
+    "gpytorch>=1.14",
+    "pyro-ppl>=1.9",
+    "torch>=2.2",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

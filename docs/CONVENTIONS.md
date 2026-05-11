@@ -18,6 +18,7 @@ The system was formalized 2026-05-10 alongside the V1 loadout-bug invalidation c
 | **reference** | `docs/reference/<topic>.md` | Design rationale, research synthesis, theory, rejected alternatives. | **No internal-sim numbers.** Published-academic citations are fine. |
 | **report** | `docs/reports/YYYY-MM-DD-<slug>.md` | Dated empirical evidence: campaign results, validation outcomes, ablation tables, audit findings, retrospectives. | **Yes — reports own all dated measurements.** |
 | **skill** | repo-local skill directory | Repo-local procedural how-to / SOP. Step-by-step instructions for repeatable operations. | Operational thresholds OK; benchmark numbers go in reports. |
+| **plan** | `.claude/plans/active/`, `.claude/plans/archive/YYYY/` | Temporary execution records for non-trivial implementation work. Plans coordinate scope, review, verification, and retirement; they are not durable design authority. | No internal-sim measurements except links to owning reports. |
 | **always-loaded** | `AGENTS.md`, `combat-harness/AGENTS.md`, `docs/CONVENTIONS.md` | Cross-cutting context that must be in the model's window every turn. Status, conventions, invariants. | **No.** Status pointers + design decisions only; numbers link out to reports. |
 | **index** | `docs/project-overview.md`, `docs/reference/README.md`, `docs/reports/INDEX.md`, `experiments/INDEX.md`, `docs/specs/README.md` | Navigational entry points and concise orientation. | **No internal-sim measurements.** Route readers to owning docs and reports. |
 
@@ -58,6 +59,7 @@ When a reference doc previously asserted an internal-sim number, replace with on
 - **Reports**: `YYYY-MM-DD-kebab-case-slug.md`. The date is the date the evidence was gathered (or the date of the audit / retrospective for non-experimental reports). Reports are append-only; supersession is via frontmatter, not deletion.
 - **Repo-local skills**: `kebab-case.md` under the repo-local skill directory. These are local workflow files. They can wrap portable packaged skills, but they are not themselves portable packages.
 - **Portable packaged skills**: live outside this repo as `skill-name/SKILL.md` with optional `references/`, `scripts/`, and `assets/`. Do not promote a flat repo-local skill file verbatim; split generic workflow into `SKILL.md`, move long detail into `references/`, and leave repo paths/commands/invariants in the local wrapper.
+- **Plans**: `.claude/plans/active/YYYY-MM-DD-short-slug.md` while current; move to `.claude/plans/archive/YYYY/YYYY-MM-DD-short-slug.md` when implemented or superseded. Do not put dated implementation plans in `docs/reports/` unless the file is actually a dated empirical report.
 - **Always-loaded**: fixed paths (`AGENTS.md`, `combat-harness/AGENTS.md`, `docs/CONVENTIONS.md`). Do not add new always-loaded files casually — every new always-loaded file is a permanent context-window cost.
 - **Index**: fixed conventional paths (`docs/project-overview.md`, `docs/reference/README.md`, `docs/reports/INDEX.md`, `experiments/INDEX.md`, `docs/specs/README.md`).
 
@@ -73,6 +75,8 @@ Use one canonical owner per kind of truth:
 | Which reference docs exist? | `docs/reference/README.md` |
 | Which reports are current, draft, or historical? | `docs/reports/INDEX.md` |
 | Which repo-local operational procedure should an agent follow? | Repo-local skill directory |
+| What scope was approved for current implementation work? | Active plan under `.claude/plans/active/` |
+| What happened during a completed implementation? | Archived plan under `.claude/plans/archive/YYYY/`, plus owning commit/report |
 | Which generic workflow is portable across repos? | Portable packaged skill `skill-name/SKILL.md` outside this repo |
 
 When a doc changes category or authority, update the corresponding index in
@@ -133,6 +137,30 @@ are not frontmatter values.
 
 Frontmatter is parsed by humans, not tools — treat the schema as disciplined-but-flexible. If a field doesn't apply to a file, omit it; don't use null/N/A.
 
+### Plan Frontmatter
+
+Plans use plan-specific frontmatter instead of the durable-doc `type` schema:
+
+```
+---
+plan_type: implementation
+status: draft | approved | active | implemented | superseded
+created: YYYY-MM-DD
+approved: YYYY-MM-DD | null
+implemented: YYYY-MM-DD | null
+owner: agent
+related_docs: []
+implementation_commit: <hash> | not_committed | null
+post_impl_audit: passed | failed | <relative-link> | null
+superseded_by: <relative path> | null
+---
+```
+
+Plan frontmatter tracks execution state, not design authority. A plan reaching
+`implemented` means the implementation work and post-implementation audit are
+done; any durable contract changes must already be reflected in specs, reference
+docs, reports, skills, or code.
+
 ## Cross-references
 
 - Use relative-path Markdown links: `[name](relative/path.md)`.
@@ -148,8 +176,9 @@ When writing a new doc, ask:
 2. Is this design rationale or research that will outlast a specific run? → reference.
 3. Is this a measurement, a campaign log, an audit, or a retrospective? → report.
 4. Is this a step-by-step procedure? → skill.
-5. Is this status / conventions / cross-cutting context the model needs every turn? → always-loaded (and think hard before adding to this set — it's expensive).
-6. Is this navigation? → index.
+5. Is this temporary execution scope for implementation? → plan.
+6. Is this status / conventions / cross-cutting context the model needs every turn? → always-loaded (and think hard before adding to this set — it's expensive).
+7. Is this navigation? → index.
 
 When in doubt, write a report. Reports are cheap to add and cheap to deprecate.
 

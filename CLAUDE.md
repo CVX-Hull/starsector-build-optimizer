@@ -50,6 +50,7 @@ For every module: spec first, then tests, then implementation. Skills enforce qu
 
 | Gate | When | Skill |
 |---|---|---|
+| Plan lifecycle | Create/update/retire plan files for non-trivial implementation | [`plan-lifecycle`](.claude/skills/plan-lifecycle.md) |
 | Planning | Before non-trivial implementation | [`ddd-tdd`](.claude/skills/ddd-tdd.md) |
 | Plan review | Before implementation approval | [`plan-review`](.claude/skills/plan-review.md) |
 | Implementation | During coding | [`ddd-tdd`](.claude/skills/ddd-tdd.md) step 3 |
