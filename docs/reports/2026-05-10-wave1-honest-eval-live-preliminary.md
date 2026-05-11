@@ -1,10 +1,14 @@
 ---
 type: report
-status: draft
-last-validated: 2026-05-10
+status: superseded
+last-validated: 2026-05-11
 ---
 
 # Wave 1 Honest-Eval - Live Preliminary Snapshot
+
+> Superseded by
+> [2026-05-11-wave1-honest-eval-final.md](2026-05-11-wave1-honest-eval-final.md).
+> This file remains as the in-flight checkpoint for the resumed run.
 
 ## Abstract
 

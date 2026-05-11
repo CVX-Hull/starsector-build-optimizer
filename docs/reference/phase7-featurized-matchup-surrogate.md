@@ -319,7 +319,9 @@ generated DB is local data under:
 data/phase7/
 ```
 
-The implementation exposes:
+Current implementation entry points are listed here for orientation; the
+module contracts are owned by
+[../specs/31-phase7-matchup-data.md](../specs/31-phase7-matchup-data.md):
 
 - `src/starsector_optimizer/matchup_features.py` for flat player, opponent,
   and matchup feature rows.
@@ -383,3 +385,22 @@ Key paper families from the 2026-05-11 research pass:
 The immediate engineering conclusion is conservative: build the feature table
 and CatBoost baseline first. Use neural set/graph models only after the simple
 models establish a real signal and expose where flattened features fail.
+
+## Current Roadmap Position
+
+The staged roadmap is:
+
+1. Keep the completed honest-eval ledger and per-cell outputs materialized in
+   the Phase 7 matchup DB with zero unresolved build keys.
+2. Validate the feature substrate with grouped splits and trivial comparators.
+3. Promote CatBoost and sparse interaction baselines only after the smoke
+   baseline has clean transfer diagnostics.
+4. Feed validated predictions into online search as a prior mean, candidate
+   prefilter, or active-learning signal.
+5. Implement the custom structured BO sampler only after the cheaper
+   model-assisted-search gates show value.
+
+The current roadmap checkpoint is recorded in
+[2026-05-11-validation-to-phase7-roadmap.md](../reports/2026-05-11-validation-to-phase7-roadmap.md).
+That report owns dated measurements; final honest-eval verdict details live in
+[2026-05-11-wave1-honest-eval-final.md](../reports/2026-05-11-wave1-honest-eval-final.md).

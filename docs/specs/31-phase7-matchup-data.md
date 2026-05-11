@@ -32,7 +32,8 @@ Use this precedence when reconstructing prior-run builds:
 3. **Honest-eval ledgers** store `(build_id, opponent_variant_id,
    replicate_idx) -> fitness`. Build specs are reconstructed from the
    candidate-selection logs via the same `extract_top_builds(...)` path used by
-   the honest evaluator.
+   the honest evaluator, or from completed `honest_eval.json` outputs for
+   evaluator-generated builds such as random baselines.
 
 Never treat a DB-reconstructed build as an exact logged build unless it is
 cross-checked against a JSONL row.
@@ -44,6 +45,7 @@ class BuildSourceKind(StrEnum):
     EXACT_LOGGED_BUILD = "exact_logged_build"
     DB_RECONSTRUCTED_BUILD = "db_reconstructed_build"
     HONEST_EVAL_CANDIDATE_BUILD = "honest_eval_candidate_build"
+    HONEST_EVAL_OUTPUT_BUILD = "honest_eval_output_build"
     UNRESOLVED = "unresolved"
 ```
 
@@ -131,6 +133,8 @@ def recover_honest_eval_candidate_builds(
     top_k: int,
     method: str = "twfe_eb",
 ) -> tuple[RecoveredBuild, ...]: ...
+
+def recover_honest_eval_output_builds(paths: Sequence[Path]) -> tuple[RecoveredBuild, ...]: ...
 
 def honest_build_id_to_key(candidates: Sequence[RecoveredBuild]) -> dict[str, str]: ...
 

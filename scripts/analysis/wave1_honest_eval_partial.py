@@ -14,7 +14,6 @@ import math
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 
@@ -115,9 +114,11 @@ def log_health(path: Path | None) -> dict[str, object]:
     if path is None or not path.exists():
         return {}
     counts: Counter[str] = Counter()
-    bins: Counter[str] = Counter()
-    first_time: datetime | None = None
-    last_time: datetime | None = None
+    bins: Counter[int] = Counter()
+    first_minute: float | None = None
+    last_minute: float | None = None
+    previous_raw_minute: float | None = None
+    day_offset = 0.0
     with path.open(errors="replace") as f:
         for line in f:
             if '"POST /result HTTP/1.1" 200' in line:
@@ -133,28 +134,33 @@ def log_health(path: Path | None) -> dict[str, object]:
                     counts[f"pattern:{pattern}"] += 1
             match = re.match(r"(?P<h>\d\d):(?P<m>\d\d):(?P<s>\d\d) ", line)
             if match and '"POST /result HTTP/1.1" 200' in line:
-                stamp = datetime(
-                    2026, 5, 10,
-                    int(match.group("h")),
-                    int(match.group("m")),
-                    int(match.group("s")),
+                raw_minute = (
+                    int(match.group("h")) * 60.0
+                    + int(match.group("m"))
+                    + int(match.group("s")) / 60.0
                 )
-                first_time = stamp if first_time is None else min(first_time, stamp)
-                last_time = stamp if last_time is None else max(last_time, stamp)
-                minute = stamp.hour * 60 + stamp.minute
-                bucket_minute = minute - (minute % 15)
-                bucket = f"{bucket_minute // 60:02d}:{bucket_minute % 60:02d}"
-                bins[bucket] += 1
+                if previous_raw_minute is not None and raw_minute < previous_raw_minute:
+                    day_offset += 24.0 * 60.0
+                previous_raw_minute = raw_minute
+                adjusted_minute = raw_minute + day_offset
+                first_minute = (
+                    adjusted_minute if first_minute is None else min(first_minute, adjusted_minute)
+                )
+                last_minute = (
+                    adjusted_minute if last_minute is None else max(last_minute, adjusted_minute)
+                )
+                bucket_minute = int(adjusted_minute) - (int(adjusted_minute) % 15)
+                bins[bucket_minute] += 1
     elapsed_minutes = None
     rate_per_minute = None
-    if first_time is not None and last_time is not None and last_time > first_time:
-        elapsed_minutes = (last_time - first_time).total_seconds() / 60.0
+    if first_minute is not None and last_minute is not None and last_minute > first_minute:
+        elapsed_minutes = last_minute - first_minute
         rate_per_minute = counts["http_200"] / elapsed_minutes
     return {
         "counts": counts,
         "bins": bins,
-        "first_time": first_time,
-        "last_time": last_time,
+        "first_time": first_minute,
+        "last_time": last_minute,
         "elapsed_minutes": elapsed_minutes,
         "rate_per_minute": rate_per_minute,
     }
@@ -315,7 +321,9 @@ def render(
             out.append("| local time bucket | results | rate/min |")
             out.append("|---|---:|---:|")
             for bucket in sorted(bins):
-                out.append(f"| {bucket} | {bins[bucket]} | {bins[bucket] / 15.0:.1f} |")
+                minute_of_day = bucket % (24 * 60)
+                label = f"{minute_of_day // 60:02d}:{minute_of_day % 60:02d}"
+                out.append(f"| {label} | {bins[bucket]} | {bins[bucket] / 15.0:.1f} |")
             out.append("")
 
     return "\n".join(out)

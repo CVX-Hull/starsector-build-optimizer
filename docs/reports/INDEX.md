@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-05-10
+last-validated: 2026-05-11
 ---
 
 # Reports — Index
@@ -19,6 +19,8 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | shipped | [Wave 1 comprehensive analysis](2026-05-10-wave1-comprehensive-analysis.md) | Training-log ranker and diagnostic analysis, not the honest-eval verdict. c1 leads c2 by training-log TWFE+EB point estimate; c3 trips objective-fidelity and rank-stability warnings. |
 | 2026-05-10 | shipped | [Wave 1 optimization-trajectory analysis](2026-05-10-wave1-optimization-trajectory.md) | Training-log trajectory diagnostics. Warm-start is not justified as a default from this report alone; honest eval remains the oracle for cross-cell build quality. |
 | 2026-05-10 | shipped | [Wave 1 honest-eval stall checkpoint](2026-05-10-wave1-honest-eval-stall-checkpoint.md) | Snapshot of interrupted eval `…20260510T170431Z`; root causes, cleanup fixes, and resume path. The run is recoverable via `--resume-from` after teardown. |
+| 2026-05-11 | shipped | [Wave 1 honest-eval final](2026-05-11-wave1-honest-eval-final.md) | Final transform-free oracle verdict. c0a wins by mean top-K, c1 has the best individual build, c2 loses to both baselines, c3 warm-start remains quarantined, and all optimizer cells beat random-feasible. |
+| 2026-05-11 | shipped | [Validation-to-Phase-7 roadmap](2026-05-11-validation-to-phase7-roadmap.md) | Consolidates final honest-eval results, corrected Wave 1 analyses, Phase 7 feature-substrate findings, and the staged roadmap from validation completion through structured optimizer work. |
 | 2026-05-09 | shipped | [Wave 0 validation](2026-05-09-wave0-validation.md) | V2 re-validation Wave 0 preflight gate. All gates passed post-fix; multi-worker LOADOUT_MISMATCH root-caused and verified clean. |
 
 ## Draft / In-Flight Reports
@@ -27,7 +29,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 |---|---|---|---|
 | 2026-05-10 | draft | [Validation campaign plan](2026-05-10-validation-plan.md) | Re-validation campaign plan: hull selection, per-mechanism gates, 4-wave architecture, budget, and decision tree. |
 | 2026-05-10 | draft | [Wave 1 validation](2026-05-10-wave1-validation.md) | Partial Wave 1 training/gate draft. No final cross-cell build-quality verdict until the honest-eval run completes. |
-| 2026-05-10 | draft | [Wave 1 honest-eval live preliminary](2026-05-10-wave1-honest-eval-live-preliminary.md) | Read-only in-flight snapshot of resumed honest eval after the late-result retry fix and AMI rebake. c0a/c0b/c1/c2 are complete, c1 has the current top completed panel, c2 still trails both baselines, and c3/random-baseline remain unresolved. |
+| 2026-05-10 | superseded | [Wave 1 honest-eval live preliminary](2026-05-10-wave1-honest-eval-live-preliminary.md) | Read-only in-flight snapshot of resumed honest eval after the late-result retry fix and AMI rebake. Superseded by the final 2026-05-11 honest-eval report. |
 | 2026-05-10 | draft | [Post-hoc ranker — research and Wave 1 empirics](2026-05-10-posthoc-ranker-research.md) | Training-log candidate-selection study. `36538033d63b` is the strongest domain-vetted candidate in this draft, not the honest-eval winner. |
 | 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Pre-launch; fills in after `launch_wave2.sh` completes. |
 | 2026-05-11 | draft | [Phase 7 matchup surrogate preliminary](2026-05-11-phase7-matchup-surrogate-preliminary.md) | First generated SQLite materialization and scikit-learn grouped-split smoke baseline for the featurized matchup surrogate. |
@@ -47,9 +49,9 @@ that should link to the eventual shipped report.
 
 | Claim | Status | Design threshold | Reference doc to link from |
 |---|---|---|---|
-| Phase 5A TWFE A0/A1/A2/A3 ablation | partial V2 draft; honest eval pending | A2/A3 outperform A0/A1 on LOOO ρ | [phase5-signal-quality.md](../reference/phase5-signal-quality.md), [phase5a-deconfounding-theory.md](../reference/phase5a-deconfounding-theory.md) |
-| Phase 5D EB shrinkage vs A0/A | partial V2 draft; honest eval pending | Δρ ≥ +0.02 vs A0 and vs legacy A | [phase5d-covariate-adjustment.md](../reference/phase5d-covariate-adjustment.md), [28-deconfounding.md](../specs/28-deconfounding.md) |
-| Phase 5E Box-Cox A3 ceiling/overlap | partial V2 draft; honest eval pending | ceiling saturation ≤ 1%; top-5 overlap ≥ 0.40 | [phase5e-shape-revision.md](../reference/phase5e-shape-revision.md) |
+| Phase 5A TWFE A0/A1/A2/A3 ablation | Wave 1 honest-eval final complete; follow-up mechanism-specific gates still pending | A2/A3 outperform A0/A1 on LOOO ρ | [phase5-signal-quality.md](../reference/phase5-signal-quality.md), [phase5a-deconfounding-theory.md](../reference/phase5a-deconfounding-theory.md) |
+| Phase 5D EB shrinkage vs A0/A | Wave 1 honest-eval final disfavors c2 as default; mechanism-specific LOOO gate still pending | Δρ ≥ +0.02 vs A0 and vs legacy A | [phase5d-covariate-adjustment.md](../reference/phase5d-covariate-adjustment.md), [28-deconfounding.md](../specs/28-deconfounding.md) |
+| Phase 5E Box-Cox A3 ceiling/overlap | Wave 1 honest-eval final disfavors EB+Box-Cox as tested; mechanism-specific shape gate still pending | ceiling saturation ≤ 1%; top-5 overlap ≥ 0.40 | [phase5e-shape-revision.md](../reference/phase5e-shape-revision.md) |
 | Phase 5F regime segmentation effect | pending Wave 2+ | distinguishable optimum across regimes | [phase5f-regime-segmented-optimization.md](../reference/phase5f-regime-segmented-optimization.md) |
 | Phase 6 cloud throughput per VM | partial V2 draft | per-VM throughput gate passed; Wave 3 budget feasibility pending Wave 2 sizing | [phase6-cloud-worker-federation.md](../reference/phase6-cloud-worker-federation.md), [throughput-optimization.md](../reference/throughput-optimization.md), [17-throughput-estimator.md](../specs/17-throughput-estimator.md), [22-cloud-deployment.md](../specs/22-cloud-deployment.md) |
 | Phase 6 cloud-vs-local speedup | pending | ≥ 2× | [phase6-cloud-worker-federation.md](../reference/phase6-cloud-worker-federation.md) |

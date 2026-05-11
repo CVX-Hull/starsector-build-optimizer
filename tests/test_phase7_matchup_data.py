@@ -25,8 +25,10 @@ from starsector_optimizer.phase7_matchup_data import (
     iter_training_matchups,
     materialize_sqlite,
     recover_honest_eval_candidate_builds,
+    recover_honest_eval_output_builds,
     recover_logged_builds,
     recover_study_db_builds,
+    honest_build_id_to_key,
 )
 
 
@@ -249,6 +251,37 @@ class TestHonestEvalRecovery:
                 target=0.75,
             )
         ]
+
+    def test_recover_honest_eval_output_builds_maps_random_baseline(self, tmp_path):
+        path = tmp_path / "honest_eval.json"
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "campaign": "random-baseline",
+            "evaluated_builds": [
+                {
+                    "build": _sample_log_row()["build"],
+                    "source_campaign": "random-baseline",
+                    "source_study_idx": 0,
+                    "source_seed_idx": 0,
+                    "source_rank": 7,
+                    "source_value": None,
+                    "oracle_score": -0.25,
+                    "oracle_se": 0.01,
+                    "n_matchups_succeeded": 1620,
+                }
+            ],
+        }))
+
+        recovered = recover_honest_eval_output_builds([path])
+        mapping = honest_build_id_to_key(recovered)
+
+        assert len(recovered) == 1
+        assert recovered[0].source_kind == BuildSourceKind.HONEST_EVAL_OUTPUT_BUILD
+        assert recovered[0].campaign == "random-baseline"
+        assert recovered[0].study == "s0"
+        assert mapping == {
+            "honest__random-baseline__s0__seed0__rank7": recovered[0].build_key
+        }
 
 
 class TestSqliteMaterialization:

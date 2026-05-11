@@ -16,6 +16,7 @@ from starsector_optimizer.phase7_matchup_data import (
     iter_training_matchups,
     materialize_sqlite,
     recover_honest_eval_candidate_builds,
+    recover_honest_eval_output_builds,
     recover_logged_builds,
     recover_study_db_builds,
 )
@@ -92,6 +93,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Candidate-selection evaluation_log.jsonl path/glob for honest ledger build IDs.",
     )
     parser.add_argument(
+        "--honest-eval-json-glob",
+        action="append",
+        default=[],
+        help=(
+            "Completed data/campaigns/*/honest_eval.json path/glob. Use this "
+            "to recover evaluator-generated builds such as random-baseline."
+        ),
+    )
+    parser.add_argument(
         "--honest-hull-id",
         default=None,
         help="Hull id for honest candidate reconstruction.",
@@ -105,6 +115,7 @@ def main() -> None:
     args = build_parser().parse_args()
     log_paths = _expand_patterns(args.log_glob)
     honest_candidate_paths = _expand_patterns(args.honest_candidate_log_glob)
+    honest_eval_json_paths = _expand_patterns(args.honest_eval_json_glob)
 
     game_data = load_game_data(args.game_dir)
     manifest = GameManifest.load(args.game_dir / "manifest.json")
@@ -143,7 +154,16 @@ def main() -> None:
             )
             recovered.extend(honest_candidates)
             build_id_to_key = honest_build_id_to_key(honest_candidates)
-        honest_matchups = list(iter_honest_eval_matchups(args.honest_ledger, build_id_to_key))
+        if honest_eval_json_paths:
+            honest_outputs = recover_honest_eval_output_builds(honest_eval_json_paths)
+            recovered.extend(honest_outputs)
+            build_id_to_key.update(honest_build_id_to_key(honest_outputs))
+        honest_matchups = list(
+            iter_honest_eval_matchups(args.honest_ledger, build_id_to_key)
+        )
+        unresolved_honest_build_ids = sorted(
+            {row.build_id for row in honest_matchups if row.build_key is None}
+        )
 
     materialize_sqlite(
         args.output,
@@ -151,12 +171,19 @@ def main() -> None:
         training_matchups=training_matchups,
         honest_eval_matchups=honest_matchups,
     )
-    print(json.dumps({
-        "output": str(args.output),
-        "recovered_builds": len(recovered),
-        "training_matchups": len(training_matchups),
-        "honest_eval_matchups": len(honest_matchups),
-    }, indent=2, sort_keys=True))
+    print(json.dumps(
+        {
+            "output": str(args.output),
+            "recovered_builds": len(recovered),
+            "training_matchups": len(training_matchups),
+            "honest_eval_matchups": len(honest_matchups),
+            "unresolved_honest_build_ids": (
+                len(unresolved_honest_build_ids) if args.honest_ledger else 0
+            ),
+        },
+        indent=2,
+        sort_keys=True,
+    ))
 
 
 if __name__ == "__main__":

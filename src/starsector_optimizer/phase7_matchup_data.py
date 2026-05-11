@@ -26,6 +26,7 @@ class BuildSourceKind(StrEnum):
     EXACT_LOGGED_BUILD = "exact_logged_build"
     DB_RECONSTRUCTED_BUILD = "db_reconstructed_build"
     HONEST_EVAL_CANDIDATE_BUILD = "honest_eval_candidate_build"
+    HONEST_EVAL_OUTPUT_BUILD = "honest_eval_output_build"
     UNRESOLVED = "unresolved"
 
 
@@ -337,13 +338,54 @@ def recover_honest_eval_candidate_builds(
     return tuple(out)
 
 
+def recover_honest_eval_output_builds(paths: Sequence[Path]) -> tuple[RecoveredBuild, ...]:
+    out: list[RecoveredBuild] = []
+    for path in paths:
+        data = json.loads(path.read_text())
+        for row in data.get("evaluated_builds") or ():
+            build = _build_from_canonical(row["build"])
+            out.append(
+                RecoveredBuild(
+                    build_key=build_key(build),
+                    build=build,
+                    source_kind=BuildSourceKind.HONEST_EVAL_OUTPUT_BUILD,
+                    campaign=(
+                        str(row["source_campaign"])
+                        if row.get("source_campaign") is not None
+                        else None
+                    ),
+                    study=(
+                        f"s{int(row['source_study_idx'])}"
+                        if row.get("source_study_idx") is not None
+                        else None
+                    ),
+                    seed=(
+                        int(row["source_seed_idx"])
+                        if row.get("source_seed_idx") is not None
+                        else None
+                    ),
+                    rank=int(row["source_rank"]) if row.get("source_rank") is not None else None,
+                    trial_number=None,
+                    score=(
+                        float(row["oracle_score"])
+                        if row.get("oracle_score") is not None
+                        else None
+                    ),
+                    source_path=str(path),
+                )
+            )
+    return tuple(out)
+
+
 def honest_build_id_to_key(candidates: Sequence[RecoveredBuild]) -> dict[str, str]:
     out: dict[str, str] = {}
     for item in candidates:
         if item.rank is None or item.seed is None or item.campaign is None:
             continue
         study_idx = 0
-        if item.study:
+        if item.study and item.study.startswith("s") and item.study[1:].isdigit():
+            study_idx = int(item.study[1:])
+        elif item.study:
             study_match = re.search(r"__s(\d+)__", item.study)
             if study_match:
                 study_idx = int(study_match.group(1))
