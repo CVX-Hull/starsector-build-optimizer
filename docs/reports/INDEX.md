@@ -30,6 +30,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | draft | [Wave 1 honest-eval live preliminary](2026-05-10-wave1-honest-eval-live-preliminary.md) | Read-only in-flight snapshot of resumed honest eval. Health is clean; c0a/c0b are the only complete cells so far. |
 | 2026-05-10 | draft | [Post-hoc ranker — research and Wave 1 empirics](2026-05-10-posthoc-ranker-research.md) | Training-log candidate-selection study. `36538033d63b` is the strongest domain-vetted candidate in this draft, not the honest-eval winner. |
 | 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Pre-launch; fills in after `launch_wave2.sh` completes. |
+| 2026-05-11 | draft | [Phase 7 matchup surrogate preliminary](2026-05-11-phase7-matchup-surrogate-preliminary.md) | First generated SQLite materialization and scikit-learn grouped-split smoke baseline for the featurized matchup surrogate. |
 
 ## Historical / Pre-V2 Reports
 
