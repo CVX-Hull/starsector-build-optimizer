@@ -20,7 +20,8 @@ Run this after completing implementation tasks. Combines the after-changes check
 5. **Update the root workflow file**: Project layout if new modules added
 6. **Update spec docs**: If function signatures, parameters, or defaults changed
 7. **Update reference docs**: If decisions, phase status, or experiment findings changed
-8. **After file renames**: `grep -rn "old_filename" --include="*.md" --include="*.py"` across the entire codebase
+8. **Validate changed reports**: If any `docs/reports/*.md` file changed, verify it against `docs/CONVENTIONS.md` §"Empirical-report writing standard": Methods before Results, Results preambles, appendix file map, and the supervised-learning checklist when applicable.
+9. **After file renames**: `grep -rn "old_filename" --include="*.md" --include="*.py"` across the entire codebase
 
 ## Mechanical Checks
 

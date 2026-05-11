@@ -332,18 +332,19 @@ module contracts are owned by
 - `scripts/analysis/phase7_baseline_surrogate.py` for the first scikit-learn
   grouped-split baseline.
 
-The current baseline CLI is a sanity harness, not the end-state model. CatBoost
-remains the preferred first serious tabular baseline once the derived DB has
-been populated and the grouped split outputs are checked.
+The current baseline CLI is the comparator-gate harness, not the end-state
+model. The first grouped comparator report has been filed at
+[../reports/2026-05-11-phase7-matchup-surrogate-preliminary.md](../reports/2026-05-11-phase7-matchup-surrogate-preliminary.md).
+CatBoost remains the preferred first serious tabular baseline after that
+comparator gate.
 
 Next steps after materialization:
 
-1. Run grouped split baselines and inspect error by opponent family, build
-   family, campaign cell, and forward-time bucket.
-2. Add a dated report only after the validation script produces measurements.
-3. Promote CatBoost and sparse interaction baselines if the scikit-learn sanity
-   model shows signal and no obvious leakage.
-4. Feed validated surrogate predictions into Phase 7 as either:
+1. Inspect comparator-gate error by opponent family, build family, campaign
+   cell, and path-ordered forward bucket.
+2. Promote CatBoost and sparse interaction baselines if the scikit-learn
+   comparator model shows signal and no obvious leakage.
+3. Feed validated surrogate predictions into Phase 7 as either:
    - a prior mean for the BoTorch GP,
    - a candidate prefilter before expensive acquisition optimization,
    - or an active-learning uncertainty model for selecting which matchups to

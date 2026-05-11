@@ -7,6 +7,8 @@ import pytest
 
 from starsector_optimizer.models import Build
 from starsector_optimizer.matchup_features import (
+    EMPTY_SENTINEL,
+    FEATURE_SCHEMA_VERSION,
     build_feature_row,
     matchup_feature_row,
     opponent_feature_row,
@@ -38,6 +40,7 @@ class TestBuildFeatureRow:
         row = build_feature_row(_hammerhead_build(), hull, game_data, manifest)
 
         assert row["build_hull_id"] == "hammerhead"
+        assert row["feature_schema_version"] == FEATURE_SCHEMA_VERSION
         assert row["build_hull_size"] == hull.hull_size.value
         assert row["build_weapon_count"] == 6
         assert row["build_empty_slot_count"] == 2
@@ -48,6 +51,13 @@ class TestBuildFeatureRow:
         assert row["build_scorer_total_dps"] > 0
         assert "build_damage_kinetic_dps" in row
         assert "build_slot_small_count" in row
+        assert row["build_slot_00_slot_id"]
+        assert row["build_slot_00_slot_type"]
+        assert "build_slot_00_angle_sin" in row
+        assert "build_slot_00_arc_fraction" in row
+        assert "build_slot_00_weapon_id" in row
+        assert "build_hullmod__armoredweapons" in row
+        assert "build_small_pd_count" in row
 
     def test_unknown_weapon_is_ignored_not_crashed(self, game_data, manifest):
         hull = game_data.hulls["hammerhead"]
@@ -61,6 +71,23 @@ class TestBuildFeatureRow:
         row = build_feature_row(build, hull, game_data, manifest)
         assert row["build_weapon_count"] == 0
         assert row["build_unknown_weapon_count"] == 1
+        assert row["build_slot_00_weapon_id"] == "UNKNOWN"
+
+    def test_empty_slots_use_sentinel(self, game_data, manifest):
+        hull = game_data.hulls["hammerhead"]
+        build = Build(
+            hull_id="hammerhead",
+            weapon_assignments={slot.id: None for slot in hull.weapon_slots},
+            hullmods=frozenset(),
+            flux_vents=0,
+            flux_capacitors=0,
+        )
+
+        row = build_feature_row(build, hull, game_data, manifest)
+
+        assert EMPTY_SENTINEL in {
+            value for key, value in row.items() if key.endswith("_weapon_id")
+        }
 
 
 class TestOpponentFeatureRow:
@@ -68,6 +95,7 @@ class TestOpponentFeatureRow:
         row = opponent_feature_row("enforcer_Balanced", game_dir, game_data)
 
         assert row["opponent_variant_id"] == "enforcer_Balanced"
+        assert row["feature_schema_version"] == FEATURE_SCHEMA_VERSION
         assert row["opponent_hull_id"] == "enforcer"
         assert row["opponent_weapon_count"] > 0
         assert row["opponent_hull_size"] == game_data.hulls["enforcer"].hull_size.value
@@ -113,3 +141,4 @@ class TestMatchupFeatureRow:
         assert "interaction_speed_delta" in row
         assert row["interaction_kinetic_vs_shield"] >= 0
         assert "interaction_he_vs_armor" in row
+        assert "interaction_small_pd_vs_missile" in row

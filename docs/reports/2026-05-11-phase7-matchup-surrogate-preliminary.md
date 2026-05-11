@@ -1,6 +1,6 @@
 ---
 type: report
-status: draft
+status: shipped
 last-validated: 2026-05-11
 ---
 
@@ -8,19 +8,21 @@ last-validated: 2026-05-11
 
 ## Abstract
 
-This report is a preliminary sanity check for the Phase 7 featurized
-matchup-surrogate data layer. A generated SQLite DB materialized training-log
-matchups and the completed Wave 1 honest-eval ledger without unresolved
-honest-eval build IDs, including evaluator-generated random-baseline builds.
-A scikit-learn `RandomForestRegressor` smoke baseline ran across the available
-grouped splits. Held-out opponent transfer was much harder than the other
-smoke splits, supporting the design requirement to model opponent context
-explicitly. This is not a tuned surrogate result and not a model-performance
-claim.
+This report evaluates the first Phase 7 supervised matchup-surrogate
+comparator gate. The learning problem is row-level regression from a
+featurized `(build, opponent)` pair to the per-opponent combat target in
+Wave 1 training logs, with honest-eval rows reserved for post-fit top-k
+ranking diagnostics. The generated SQLite DB contains 21,362 training-log
+matchups and 87,480 honest-eval matchups with zero unresolved honest-eval
+build IDs. The best comparator-gate model is random forest on every grouped
+training-log split, with RMSE 0.354-0.381 on held-out build/component/seed and
+path-ordered splits and RMSE 0.622 on held-out opponents. This is a
+baseline-comparator report; it does not tune hyperparameters, claim final
+surrogate quality, or integrate the model into the optimizer.
 
 ## 1. Methods
 
-### 1.1 Data
+### 1.1 Data And Unit Of Observation
 
 Generated local SQLite DB:
 
@@ -39,7 +41,21 @@ uv run python scripts/analysis/phase7_materialize_matchups.py \
   --honest-candidate-log-glob 'data/logs/wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl' \
   --honest-eval-json-glob 'data/campaigns/*/honest_eval.json' \
   --honest-hull-id hammerhead \
-  --study-db ...15 Wave 1 Hammerhead study DB specs...
+  --study-db data/study_dbs/wave1-c0a/hammerhead__early__tpe__seed0.db:hammerhead:wave1-c0a:hammerhead__early__tpe__seed0:0 \
+  --study-db data/study_dbs/wave1-c0a/hammerhead__early__tpe__seed1.db:hammerhead:wave1-c0a:hammerhead__early__tpe__seed1:1 \
+  --study-db data/study_dbs/wave1-c0a/hammerhead__early__tpe__seed2.db:hammerhead:wave1-c0a:hammerhead__early__tpe__seed2:2 \
+  --study-db data/study_dbs/wave1-c0b/hammerhead__early__tpe__seed0.db:hammerhead:wave1-c0b:hammerhead__early__tpe__seed0:0 \
+  --study-db data/study_dbs/wave1-c0b/hammerhead__early__tpe__seed1.db:hammerhead:wave1-c0b:hammerhead__early__tpe__seed1:1 \
+  --study-db data/study_dbs/wave1-c0b/hammerhead__early__tpe__seed2.db:hammerhead:wave1-c0b:hammerhead__early__tpe__seed2:2 \
+  --study-db data/study_dbs/wave1-c1/hammerhead__early__tpe__seed0.db:hammerhead:wave1-c1:hammerhead__early__tpe__seed0:0 \
+  --study-db data/study_dbs/wave1-c1/hammerhead__early__tpe__seed1.db:hammerhead:wave1-c1:hammerhead__early__tpe__seed1:1 \
+  --study-db data/study_dbs/wave1-c1/hammerhead__early__tpe__seed2.db:hammerhead:wave1-c1:hammerhead__early__tpe__seed2:2 \
+  --study-db data/study_dbs/wave1-c2/hammerhead__early__tpe__seed0.db:hammerhead:wave1-c2:hammerhead__early__tpe__seed0:0 \
+  --study-db data/study_dbs/wave1-c2/hammerhead__early__tpe__seed1.db:hammerhead:wave1-c2:hammerhead__early__tpe__seed1:1 \
+  --study-db data/study_dbs/wave1-c2/hammerhead__early__tpe__seed2.db:hammerhead:wave1-c2:hammerhead__early__tpe__seed2:2 \
+  --study-db data/study_dbs/wave1-c3/hammerhead__early__tpe__seed0.db:hammerhead:wave1-c3:hammerhead__early__tpe__seed0:0 \
+  --study-db data/study_dbs/wave1-c3/hammerhead__early__tpe__seed1.db:hammerhead:wave1-c3:hammerhead__early__tpe__seed1:1 \
+  --study-db data/study_dbs/wave1-c3/hammerhead__early__tpe__seed2.db:hammerhead:wave1-c3:hammerhead__early__tpe__seed2:2
 ```
 
 The DB was regenerated after honest eval completed. The completed
@@ -55,7 +71,60 @@ Skipping corrupted hullmod id: 'all point-defense weapons deal %s more damage to
 That warning also appears in existing parser-driven workflows and was not
 introduced by this materialization.
 
-### 1.2 Estimator
+The supervised-learning unit is one matchup row:
+
+```text
+x_i = feature_row(build_key_i, opponent_variant_id_i)
+y_i = target_i
+```
+
+For `training_matchups`, `target_i` is the per-opponent `hp_differential`
+stored in the Wave 1 optimizer logs. This is the training-log regression
+target for all models in this report. For `honest_eval_matchups`, `target_i`
+is the per-matchup honest-eval fitness from the honest-eval ledger; those rows
+are not used for fitting and are used only for post-fit top-k recall.
+
+Rows whose `build_key` cannot be resolved to `recovered_builds` are excluded
+from model fitting and prediction. The materialized DB has zero unresolved
+honest-eval build keys.
+
+The prediction population for this report is resolved Wave 1 Hammerhead
+matchups from the generated Phase 7 DB. The report does not claim
+generalization to other hulls, future game versions, or all feasible
+Hammerhead builds outside the recovered Wave 1 and honest-eval candidate
+support.
+
+### 1.2 Feature Schema And Preprocessing
+
+Feature extraction is implemented in:
+
+```text
+src/starsector_optimizer/matchup_features.py
+```
+
+The feature schema version is `2`. A sample Hammerhead/enforcer matchup emits
+661 flat feature keys before one-hot vectorization. Exact keys are owned by
+spec 31 and the feature module; this report groups them by statistical role:
+
+| Feature family | Examples | Statistical role |
+|---|---|---|
+| Build hull identity and stats | hull ID, size, designation, OP, speed, armor, flux, shield stats | build baseline capacity |
+| Build weapon aggregates | weapon count, DPS by damage type, range mean/std/min/max, PD/missile/beam counts, flux pressure | coarse loadout composition |
+| Build per-slot geometry | sorted slot ID, slot type/size/mount, angle, arc, x/y position, normalized position | non-atomic hull layout and mount placement |
+| Build per-slot weapon attributes | weapon ID/type/size, damage type, OP, DPS, flux, range, ammo, projectile speed, turn rate, PD/beam flags | local weapon-slot assignment signal |
+| Build hullmods and OP economy | hullmod multi-hot indicators, hullmod tag counts, hullmod OP, vents/capacitors and derived flux | discrete modifiers and resource allocation |
+| Static scorer descriptors | scorer total DPS, kinetic/HE/energy DPS, effective HP, shield EHP, OP efficiency, range coherence, flux efficiency | existing hand-engineered behavior descriptors |
+| Opponent hull/variant features | opponent variant ID, hull ID, size, designation, manufacturer, hull stats | opponent context and difficulty |
+| Opponent loadout features | opponent weapon/hullmod aggregates and per-slot features | opponent combat profile |
+| Interactions | kinetic-vs-shield, HE-vs-armor, PD-vs-missile, small-slot PD-vs-missile, range deltas, flux-pressure deltas | low-order cross terms for matchup dependence |
+
+Categorical values are passed to `DictVectorizer`, which one-hot encodes them.
+Numeric values are passed through without scaling. Empty slots use the sentinel
+`EMPTY`; assigned weapon IDs missing from parsed game data use `UNKNOWN`.
+No target-derived statistics from test rows or honest-eval rows are included
+as features.
+
+### 1.3 Estimators
 
 The baseline script is:
 
@@ -63,40 +132,138 @@ The baseline script is:
 scripts/analysis/phase7_baseline_surrogate.py
 ```
 
-It fits a scikit-learn `RandomForestRegressor` over flat feature dictionaries
-with `DictVectorizer`. This is a smoke baseline. It is intended to verify that
-feature extraction, split construction, and the modeling loop run end to end.
-It is not the preferred end-state model; CatBoost and sparse interaction
-baselines remain next.
+It runs the comparator gate defined by spec 31. The script emits progress and
+ETA on stderr while writing machine-readable JSON on stdout.
 
-### 1.3 Splits And Metrics
+All estimators are fit on training rows only. For the mean and fixed-effect
+comparators, unseen groups at prediction time fall back to the train-set global
+mean. No model is selected or tuned on honest-eval targets.
+Within each split, "best" means lowest held-out training-log RMSE. That is a
+descriptive comparator ranking, not a deployment model-selection rule.
 
-The report uses the grouped splits defined by spec 31. Random row splits are
-not headline metrics. Reported metrics are mean absolute error (MAE) and root
-mean squared error (RMSE) on `target`.
+| Model | Definition | Hyperparameters in this run |
+|---|---|---|
+| `global_mean` | Predicts the training-set mean target, `ŷ = mean_train(y)`. | none |
+| `opponent_mean` | Predicts the training-set mean for `opponent_variant_id`; unseen opponents fall back to `mean_train(y)`. | fallback = train global mean |
+| `build_mean` | Predicts the training-set mean for `build_key`; unseen builds fall back to `mean_train(y)`. | fallback = train global mean |
+| `twfe_additive` | Additive build/opponent fixed-effect comparator: `ŷ = μ_train + α_build + β_opponent`, with effects computed as mean residuals around `μ_train`. Missing effects are zero, equivalent to fallback toward `μ_train`. | no iterative fitting; residual means only |
+| `ridge_hybrid` | `DictVectorizer(sparse=True)` plus scikit-learn `Ridge` regression over all feature keys. | `alpha = 10.0`; default sklearn solver |
+| `random_forest` | `DictVectorizer(sparse=True)` plus scikit-learn `RandomForestRegressor`. | `n_estimators = 80`, `min_samples_leaf = 2`, `random_state = 17`, `n_jobs = -1`; other sklearn defaults |
 
-The honest-eval exact-matchup repeat split keeps exact build/opponent groups
-in scope and is interpreted as a repeat/noise sanity check only. It is not a
-transfer metric.
+The full command used:
 
-### 1.4 Diagnostics And Thresholds
+```bash
+uv run python scripts/analysis/phase7_baseline_surrogate.py \
+  data/phase7/wave1_matchups.sqlite --split all --model all \
+  --tree-count 80 --top-k 1,3,5 \
+  > data/phase7/wave1_comparator_gate_2026-05-11.json
+```
 
-No pass/fail model-quality threshold is defined for this smoke report. The
-diagnostic threshold is operational: every grouped split must run end to end,
-materialization must produce no unresolved honest-eval build IDs, and any
-future model claim must include trivial comparators and grouped-split results.
+The full run settings embedded in the output artifact are:
+
+| Setting | Value |
+|---|---:|
+| `feature_schema_version` | 2 |
+| `seed` | 17 |
+| `holdout_fraction` | 0.2 |
+| `train_fraction` | 0.8 |
+| `tree_count` | 80 |
+| `ridge_alpha` | 10.0 |
+| `top_k_values` | 1, 3, 5 |
+| `max_rows` | null |
+
+The statistical-learning setup is summarized as:
+
+| Item | Definition |
+|---|---|
+| Unit | one resolved `(build_key, opponent_variant_id)` matchup row |
+| Target | training-log `hp_differential` for fitting; honest-eval fitness only for post-fit top-k diagnostics |
+| Prediction population | resolved Wave 1 Hammerhead matchup rows in the generated Phase 7 DB |
+| Feature schema | `FEATURE_SCHEMA_VERSION = 2`; exact keys owned by spec 31 and `matchup_features.py` |
+| Preprocessing | `DictVectorizer`; categorical one-hot encoding; numeric values unscaled |
+| Partitions | grouped held-out build/opponent/component/seed-cell and path-ordered forward split |
+| Leakage controls | no fitting on training-log test targets or honest-eval targets |
+| Hyperparameters | table above and estimator table in this section |
+| Tuning policy | no tuning; fixed comparator-gate hyperparameters |
+| RNG seed | 17 |
+| Model-selection rule | descriptive per-split lowest held-out training-log RMSE only |
+
+The generated comparator artifact is:
+
+```text
+data/phase7/wave1_comparator_gate_2026-05-11.json
+```
+
+### 1.4 Split Semantics
+
+All headline validation splits are grouped or temporal. Random row splits are
+not used as headline metrics because they would overstate generalization by
+mixing nearly identical build/opponent contexts across train and test.
+
+| Split | Train/test exclusion rule | Question answered |
+|---|---|---|
+| held-out build | `build_key` groups are disjoint. | Can the model predict unseen complete builds against known opponent contexts? |
+| held-out opponent | `opponent_variant_id` groups are disjoint. | Can the model transfer to opponents not seen during fitting? |
+| held-out component combination | Groups are sorted weapon multiset plus sorted hullmod set. | Can the model generalize across unseen loadout-component combinations rather than memorized builds? |
+| held-out seed/cell | `campaign:seed` groups are disjoint. | Does the model transfer across optimizer cell/seed panels? |
+| forward-time | Rows are sorted by source path, trial number, and opponent index; the first 80% train and last 20% test. | Does the path-ordered earlier block predict the path-ordered later block? |
+
+The split seed is 17 for grouped splits. The grouped holdout fraction is 0.2.
+The path-ordered forward split uses `train_fraction = 0.8`. It is not a
+global chronological split because the rows do not currently carry a single
+cross-campaign timestamp or global trial order.
+
+### 1.5 Metrics And Diagnostics
+
+Regression metrics are computed on the held-out training-log rows for each
+split:
+
+- MAE: `mean(abs(y_i - ŷ_i))`.
+- RMSE: `sqrt(mean((y_i - ŷ_i)^2))`.
+- Spearman `ρ`: rank correlation between held-out targets and predictions;
+  omitted when either vector is constant.
+- `n_train` and `n_test`: post-resolution row counts used by that split.
+
+Honest-eval rows are used only for post-fit top-k recall in this comparator
+gate. The top-k diagnostic fits on training-log rows, predicts every resolved
+honest-eval matchup, aggregates predicted and observed target means by
+`build_key`, and reports recall of the observed honest-eval top-k set at
+`k ∈ {1, 3, 5}`. This is a deployment-ranking sanity check, not a tuning
+criterion.
+
+The script also emits stratified diagnostics by opponent hull size,
+designation, manufacturer, score regime, and campaign cell. This preliminary
+report summarizes the main split-level results; stratified failure analysis is
+the next report step.
+
+### 1.6 Diagnostics, Thresholds, And Leakage Controls
+
+No pass/fail model-quality threshold is defined for this preliminary report.
+The diagnostic threshold is operational: every grouped split must run end to
+end, materialization must produce no unresolved honest-eval build IDs, and
+future CatBoost, sparse-interaction, or optimizer-integration claims must beat
+these comparator results under grouped validation.
+
+Leakage controls:
+
+- training-log test targets are never read during fitting;
+- honest-eval targets are never read during fitting;
+- the honest-eval exact-repeat split is excluded from this comparator gate;
+- grouped splits enforce disjointness of the declared group;
+- empirical values are reported here, not copied into reference docs as
+  timeless claims.
 
 ## 2. Materialization Results
 
 **Method (§1.1).** The materialization script wrote the generated SQLite DB.
 **Statistic (§1.1).** Row counts by table/source and unresolved build-key
 count.
-**Threshold (§1.4).** Unresolved honest-eval build keys should be zero for this
+**Threshold (§1.6).** Unresolved honest-eval build keys should be zero for this
 candidate-reconstruction pass.
 
 | Table / source | Rows |
 |---|---:|
-| `recovered_builds` | 5,103 |
+| `recovered_builds` | 5,157 |
 | `training_matchups` | 21,362 |
 | `honest_eval_matchups` | 87,480 |
 | honest-eval rows with unresolved `build_key` | 0 |
@@ -109,62 +276,93 @@ candidate-reconstruction pass.
 stage. It recovered optimizer-selected honest-eval candidates, evaluator-output
 builds, and the completed random-baseline rows without unresolved build keys.
 
-## 3. Baseline Results
+## 3. Comparator-Gate Baseline Ladder
 
-**Method (§1.2, §1.3).** The baseline script fits a flat-feature random forest
-per grouped split.
-**Statistic (§1.3).** MAE and RMSE on held-out rows.
-**Threshold (§1.4).** No pass/fail model-quality threshold is defined; this is
-a smoke baseline.
+**Method (§1.3, §1.4).** The baseline script fits train-only models per grouped
+split.
+**Statistic (§1.5).** MAE, RMSE, Spearman, and honest-eval top-k recall.
+**Threshold (§1.6).** No pass/fail model-quality threshold is defined; this is
+the comparator gate for later learned baselines.
 
-Command template:
+### 3.1 Best Model By Split
 
-```bash
-uv run python scripts/analysis/phase7_baseline_surrogate.py \
-  data/phase7/wave1_matchups.sqlite \
-  --split <split> \
-  --tree-count 80
-```
+This table identifies the lowest-RMSE comparator within each training-log
+split. In this run, random forest is the best row-level regressor on every
+split.
 
-| Split | Train rows | Test rows | MAE | RMSE |
+| Split | Best model | Train rows | Test rows | MAE | RMSE | Spearman |
+|---|---|---:|---:|---:|---:|---:|
+| held-out build | random forest | 17,075 | 4,287 | 0.2160 | 0.3542 | 0.8066 |
+| held-out component combination | random forest | 17,078 | 4,284 | 0.2168 | 0.3602 | 0.8151 |
+| held-out seed/cell | random forest | 17,158 | 4,204 | 0.2202 | 0.3597 | 0.8035 |
+| forward-time | random forest | 17,090 | 4,272 | 0.2370 | 0.3809 | 0.7898 |
+| held-out opponent | random forest | 15,065 | 6,297 | 0.5013 | 0.6222 | 0.2678 |
+
+### 3.2 Baseline Ladder Context
+
+This table shows the comparator ladder behind the best-model result. It is the
+sanity check for whether the feature model beats simple target baselines such
+as the train-set global mean and opponent-only mean.
+
+| Split | Global RMSE | Opponent-mean RMSE | Ridge-hybrid RMSE | Random-forest RMSE |
 |---|---:|---:|---:|---:|
-| held-out build | 17,075 | 4,287 | 0.2612 | 0.4034 |
-| held-out component combination | 17,078 | 4,284 | 0.2635 | 0.4072 |
-| held-out seed/cell | 17,158 | 4,204 | 0.2630 | 0.4018 |
-| forward-time | 17,090 | 4,272 | 0.2774 | 0.4228 |
-| held-out opponent | 15,065 | 6,297 | 0.7035 | 0.9180 |
-| honest-eval exact matchup repeat | 69,990 | 17,490 | 0.3133 | 0.5514 |
+| held-out build | 0.8073 | 0.4477 | 0.4258 | 0.3542 |
+| held-out component combination | 0.8019 | 0.4431 | 0.4276 | 0.3602 |
+| held-out seed/cell | 0.8046 | 0.4257 | 0.4126 | 0.3597 |
+| forward-time | 0.8150 | 0.4388 | 0.4236 | 0.3809 |
+| held-out opponent | 0.7563 | 0.7563 | 1.1280 | 0.6222 |
+
+### 3.3 Honest-Eval Top-K Diagnostic
+
+This table applies each split-trained random-forest model to honest-eval
+matchups after fitting. It is a ranking diagnostic only; honest-eval targets
+are not used during fitting.
+
+| Training split | Honest top-1 recall | Honest top-3 recall | Honest top-5 recall |
+|---|---:|---:|---:|
+| held-out build | 1.0000 | 0.3333 | 0.6000 |
+| held-out component combination | 1.0000 | 0.6667 | 0.6000 |
+| held-out seed/cell | 0.0000 | 0.3333 | 0.4000 |
+| forward-time | 1.0000 | 0.3333 | 0.4000 |
+| held-out opponent | 1.0000 | 0.3333 | 0.4000 |
+
+Honest-eval top-k recall from each training-log split-trained model is not yet
+stable: random forest reaches top-1 recall on held-out build, component,
+opponent, and forward-time training, but not seed/cell training. Honest-eval
+targets are not used for model fitting in this comparator gate.
 
 **Reading.** The split pattern is more important than the absolute numbers.
-Held-out opponent transfer is much harder than held-out build,
-component-combination, seed/cell, or forward-time transfer. That supports the
-Phase 7 design choice to model opponent context explicitly instead of treating
-builds as scalar global strengths.
+Opponent mean and TWFE-additive are already strong on build/component/seed/time
+splits because opponent identity carries much of the row-level target signal.
+Random forest improves substantially over those comparators on those splits,
+which means the enriched feature table carries build-side signal beyond
+opponent difficulty.
 
-The held-out build, component-combination, and seed/cell metrics are close to
-each other in this smoke baseline. That may mean the current flattened features
-are mostly learning build-family and campaign-level structure; it does not yet
-prove component-level counterfactual validity.
+Held-out opponent transfer remains much harder. Random forest improves over the
+global/opponent-mean comparators, but Spearman remains low and ridge-hybrid
+performs poorly. That supports the Phase 7 design choice to model opponent
+context explicitly instead of treating builds as scalar global strengths.
 
-The honest-eval repeat split is useful for calibration work but not for
-claiming generalization to new opponents or builds.
+The honest-eval matchup table remains useful for future calibration work, but
+it is excluded from comparator fitting because fitting on honest-eval targets
+would violate the leakage guardrail for top-k recall.
 
 ## 4. Synthesis And Decisions
 
-The implementation substrate is ready for a stricter Phase 7 experiment pass,
-but not for optimizer integration. The next pass must add trivial comparators
-and report grouped split results before any CatBoost, sparse interaction, or
-model-assisted-search claim is made.
+The implementation substrate passed the comparator gate well enough to justify
+the next learned-baseline pass, but not optimizer integration. The right next
+step is CatBoost and sparse-interaction baselines under the same grouped split
+and honest-eval top-k protocol. The held-out-opponent result should be treated
+as the main failure surface.
 
 ## 5. Open Questions And Next Steps
 
-- Add global-mean, opponent-mean, and rating-hybrid comparators.
-- Add CatBoost and sparse interaction baselines.
-- Report metrics by opponent family and score regime.
-- Compare surrogate top-k recall against the honest-eval ranking without
-  tuning on those same honest-eval rows.
-- Profile feature extraction and cache opponent feature rows before larger
-  experiment sweeps.
+- Add CatBoost and sparse-interaction baselines under the same protocol.
+- Add opponent-family feature diagnostics focused on the held-out-opponent
+  failure surface.
+- Improve honest-eval top-k evaluation so split-trained models are compared
+  against a single declared deployment training policy.
+- Keep progress/ETA output for all larger experiment sweeps.
 
 ## Appendix A. File Map
 
@@ -178,5 +376,17 @@ model-assisted-search claim is made.
   `src/starsector_optimizer/matchup_features.py`
 - Generated DB:
   `data/phase7/wave1_matchups.sqlite`
+- Comparator artifact:
+  `data/phase7/wave1_comparator_gate_2026-05-11.json`
+- Raw input paths:
+  `data/logs/wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl`,
+  `data/study_dbs/wave1-c*/hammerhead__early__tpe__seed*.db`,
+  `data/honest_eval/starsector-honest-eval-wave1-c0a-20260510T170431Z/results.jsonl`,
+  and `data/campaigns/*/honest_eval.json`
+- Charts directory:
+  none
+- Dependent reports:
+  [2026-05-11-wave1-honest-eval-final.md](2026-05-11-wave1-honest-eval-final.md),
+  [2026-05-11-validation-to-phase7-roadmap.md](2026-05-11-validation-to-phase7-roadmap.md)
 - Owning spec:
   [../specs/31-phase7-matchup-data.md](../specs/31-phase7-matchup-data.md)

@@ -53,6 +53,9 @@ Review the plan text for:
 ### Verification Phase
 - [ ] Does the plan end with a full test suite run?
 - [ ] Does the plan include grep-based checks for stale references?
+- [ ] If the plan produces or updates an empirical report, does it include
+      verification against `docs/CONVENTIONS.md` §"Empirical-report writing
+      standard", including the supervised-learning checklist when applicable?
 
 ## Phase 3: Engineering Principles (self-review)
 

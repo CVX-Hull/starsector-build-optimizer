@@ -21,6 +21,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | shipped | [Wave 1 honest-eval stall checkpoint](2026-05-10-wave1-honest-eval-stall-checkpoint.md) | Snapshot of interrupted eval `…20260510T170431Z`; root causes, cleanup fixes, and resume path. The run is recoverable via `--resume-from` after teardown. |
 | 2026-05-11 | shipped | [Wave 1 honest-eval final](2026-05-11-wave1-honest-eval-final.md) | Final transform-free oracle verdict. c0a wins by mean top-K, c1 has the best individual build, c2 loses to both baselines, c3 warm-start remains quarantined, and all optimizer cells beat random-feasible. |
 | 2026-05-11 | shipped | [Validation-to-Phase-7 roadmap](2026-05-11-validation-to-phase7-roadmap.md) | Consolidates final honest-eval results, corrected Wave 1 analyses, Phase 7 feature-substrate findings, and the staged roadmap from validation completion through structured optimizer work. |
+| 2026-05-11 | shipped | [Phase 7 matchup surrogate preliminary](2026-05-11-phase7-matchup-surrogate-preliminary.md) | Generated SQLite materialization plus comparator-gate grouped baselines for the featurized matchup surrogate. |
 | 2026-05-09 | shipped | [Wave 0 validation](2026-05-09-wave0-validation.md) | V2 re-validation Wave 0 preflight gate. All gates passed post-fix; multi-worker LOADOUT_MISMATCH root-caused and verified clean. |
 
 ## Draft / In-Flight Reports
@@ -32,7 +33,6 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | superseded | [Wave 1 honest-eval live preliminary](2026-05-10-wave1-honest-eval-live-preliminary.md) | Read-only in-flight snapshot of resumed honest eval after the late-result retry fix and AMI rebake. Superseded by the final 2026-05-11 honest-eval report. |
 | 2026-05-10 | draft | [Post-hoc ranker — research and Wave 1 empirics](2026-05-10-posthoc-ranker-research.md) | Training-log candidate-selection study. `36538033d63b` is the strongest domain-vetted candidate in this draft, not the honest-eval winner. |
 | 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Pre-launch; fills in after `launch_wave2.sh` completes. |
-| 2026-05-11 | draft | [Phase 7 matchup surrogate preliminary](2026-05-11-phase7-matchup-surrogate-preliminary.md) | First generated SQLite materialization and scikit-learn grouped-split smoke baseline for the featurized matchup surrogate. |
 
 ## Historical / Pre-V2 Reports
 
@@ -64,4 +64,5 @@ that should link to the eventual shipped report.
    shipped or `unvalidated` while draft.
 3. Add a row to the appropriate table above.
 4. If the report supersedes another, set `supersedes:` in the new file's frontmatter and `superseded-by:` + `status: superseded` in the older file's frontmatter.
-5. If the report fills a "Pending re-validation" row, remove that row from the table.
+5. Before marking `status: shipped`, verify the report against [docs/CONVENTIONS.md](../CONVENTIONS.md) §"Empirical-report writing standard", including the supervised-learning checklist when applicable.
+6. If the report fills a "Pending re-validation" row, remove that row from the table.

@@ -58,7 +58,8 @@ The honest-eval final outputs compute build-panel means over balanced
 `(build, opponent, replicate)` rows. Mean top-K oracle is the average over the
 9 evaluated build panels in a cell.
 
-The Phase 7 smoke baselines use `RandomForestRegressor` over flat feature rows
+The Phase 7 comparator gate uses global mean, opponent mean, build mean,
+TWFE-additive, ridge-hybrid, and random-forest baselines over flat feature rows
 from `scripts/analysis/phase7_baseline_surrogate.py`. They are diagnostic
 checks for feature-substrate coherence, not tuned model-performance claims.
 
@@ -155,11 +156,11 @@ signals therefore remain priors; honest eval remains the build-quality oracle.
 
 ## 5. Phase 7 Feature-Substrate Read
 
-**Method (§1.2).** Generated DB and smoke baselines after rematerializing the
-completed honest-eval ledger and per-cell outputs.
-**Statistic (§1.2).** Generated DB row counts and grouped-split RMSE.
-**Threshold (§1.3).** Smoke baselines are diagnostics only; optimizer
-integration waits for the promotion checklist in §6.4.
+**Method (§1.2).** Generated DB and comparator-gate baselines after
+rematerializing the completed honest-eval ledger and per-cell outputs.
+**Statistic (§1.2).** Generated DB row counts and best grouped-split RMSE.
+**Threshold (§1.3).** Comparator-gate baselines are diagnostics only;
+optimizer integration waits for the promotion checklist in §6.4.
 
 Current generated DB:
 
@@ -173,19 +174,24 @@ Current generated DB:
 | honest-eval output builds | 54 |
 | unresolved honest-eval build IDs | 0 |
 
-Additional smoke baseline spot-checks:
+Comparator-gate best RMSE by split:
 
-| Split | RMSE |
-|---|---:|
-| held-out build | 0.405 |
-| held-out seed/cell | 0.403 |
-| held-out opponent | 0.928 |
-| honest-eval exact matchup repeat | 0.551 |
+| Split | Best model | RMSE |
+|---|---|---:|
+| held-out build | random forest | 0.354 |
+| held-out component combination | random forest | 0.360 |
+| held-out seed/cell | random forest | 0.360 |
+| path-ordered forward split | random forest | 0.381 |
+| held-out opponent | random forest | 0.623 |
 
-**Reading.** The current flat feature substrate is coherent enough to run
-grouped splits, and it carries build-side signal. Held-out opponent transfer is
-much weaker, which supports the Phase 7 design requirement to model opponent
-context explicitly and to preserve opponent-conditioned small-slot decisions.
+**Reading.** The versioned feature substrate is coherent enough to run grouped
+splits, trivial/statistical comparators, and the random-forest carryover
+baseline. Opponent mean and TWFE-additive explain much of the row-level target
+signal, while random forest adds build-side signal on held-out build,
+component, seed/cell, and path-ordered forward splits. Held-out opponent
+transfer is still much weaker, which supports the Phase 7 design requirement
+to model opponent context explicitly and to preserve opponent-conditioned
+small-slot decisions.
 
 ## 6. Finalized Roadmap
 
@@ -236,10 +242,12 @@ kernel. Build the representation and validation substrate first:
    economy, opponent features, build/opponent interactions, and
    small-slot-by-opponent composition features.
 4. Run grouped baselines with held-out build, opponent, component combination,
-   seed/cell, and forward-time splits.
-5. Add trivial comparators: global mean, opponent mean, build/rating hybrid.
-6. Promote CatBoost and sparse interaction baselines after the smoke baseline
-   has a clean comparator.
+   seed/cell, and path-ordered forward splits.
+5. Add comparator-gate models: global mean, opponent mean, build mean,
+   TWFE-additive, ridge-hybrid, and random forest.
+   **Completed 2026-05-11** in the Phase 7 comparator-gate report.
+6. Promote CatBoost and sparse interaction baselines after the comparator gate
+   has run. This is now the next model step.
 7. Report top-k recall against honest-eval rankings without tuning on the
    same honest-eval rows cited as final evidence.
 
@@ -263,9 +271,9 @@ Grouped-validation promotion checklist:
 - Held-out build, opponent, component-combination, seed/cell, and forward-time
   splits are all reported.
 - Trivial comparators are included.
-- Honest-eval repeat split is labeled noise-only.
-- Top-k recall is reported against honest-eval rankings without tuning on the
-  cited honest-eval rows.
+- Honest-eval target rows are excluded from comparator fitting.
+- Top-k recall is reported against honest-eval rankings without fitting or
+  tuning on the cited honest-eval rows.
 - Failures by opponent family, score regime, and campaign cell are inspected
   before CatBoost, sparse interaction models, or optimizer integration.
 
@@ -309,10 +317,11 @@ were needed.
 
 ## 8. Next Checks
 
-- Add trivial comparators to the Phase 7 baseline report.
-- Run CatBoost and sparse interaction baselines after comparator results exist.
-- Update this report or supersede it with the final validation roadmap once
-  the first comparator-backed Phase 7 experiment completes.
+- Run CatBoost and sparse interaction baselines under the same grouped-split
+  and honest-eval top-k protocol.
+- Treat held-out-opponent transfer as the primary failure surface.
+- Define a single deployment training policy for honest-eval top-k comparison
+  before making model-selection claims.
 
 ## Appendix A. File Map
 

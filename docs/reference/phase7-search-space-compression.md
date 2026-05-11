@@ -558,7 +558,8 @@ Pass all five → ship. Fail any → revise design.
 ## 6. Implementation plan (outline — full plan to be drafted on approval)
 
 ```
-Step 0: Matchup DB + grouped feature validation gate
+Step 0: Matchup DB + grouped feature validation gate (completed through the
+        comparator-gate report; continue with learned baselines)
   - Rematerialize the Phase 7 SQLite DB from completed optimizer logs,
     study DBs, and honest-eval ledgers.
   - Preserve source authority: exact JSONL builds first, DB-reconstructed
@@ -566,9 +567,10 @@ Step 0: Matchup DB + grouped feature validation gate
     through the evaluator's extraction path.
   - Require zero unresolved honest-eval build keys for the completed ledger.
   - Run held-out build, opponent, component-combination, seed/cell, and
-    forward-time splits with global-mean, opponent-mean, and rating-hybrid
-    comparators.
-  - Label honest-eval repeat split as noise-only, not transfer.
+    path-ordered forward splits with global mean, opponent mean, build mean,
+    TWFE-additive, ridge-hybrid, and random-forest comparators.
+  - Exclude honest-eval targets from comparator fitting; use them only for
+    post-fit top-k diagnostics.
   - Inspect failures by opponent family, score regime, and campaign cell.
 
 Step 1: Attribute + slot feature extraction + hull-size normalization

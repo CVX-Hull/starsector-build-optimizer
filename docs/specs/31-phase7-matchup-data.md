@@ -70,6 +70,11 @@ class RecoveredBuild:
 
 ## Feature Rows
 
+Feature rows are versioned by the module-level integer
+`FEATURE_SCHEMA_VERSION`. Every row returned by this module includes
+`feature_schema_version`. Any script that reports model metrics must also emit
+that version and the source DB path in its JSON output.
+
 `matchup_features.py` exposes:
 
 ```python
@@ -99,6 +104,33 @@ Feature extraction uses existing parser/scorer/domain models. Unknown opponent
 variants raise `FileNotFoundError`; variants whose `hullId` is unknown in
 `GameData` raise `ValueError`; malformed direct variant files raise
 `ValueError`.
+
+Feature keys are deterministic. Slot features are emitted in sorted slot-ID
+order with a stable `build_slot_{idx:02d}_...` prefix. Slot IDs are also
+emitted as categorical values so the ordinal index is not the only identity.
+Per-slot fields include:
+
+- `slot_id`, `slot_type`, `slot_size`, `mount_type`,
+- `angle_degrees`, `angle_sin`, `angle_cos`,
+- `arc_degrees`, `arc_fraction`,
+- `x`, `y`, `x_norm`, `y_norm`, `forward_projection`,
+- `weapon_id`, `weapon_type`, `weapon_size`, `damage_type`,
+- weapon OP, sustained DPS, sustained flux, range, ammo, projectile speed,
+  turn rate, PD flag, and beam flag.
+
+Empty slots use the categorical sentinel `EMPTY`; assigned weapon IDs missing
+from `GameData.weapons` use `UNKNOWN`. Unknown weapons contribute to
+`build_unknown_weapon_count` and zero-valued numeric weapon attributes.
+
+Hullmod features are emitted from `GameData.hullmods` only. The feature row
+uses multi-hot keys `build_hullmod__{hullmod_id}` and aggregate tag/UI-tag
+counts. Unknown hullmods are counted in `build_unknown_hullmod_count` and do
+not create hardcoded rule entries.
+
+Opponent features are sourced from stock variant files and parsed `GameData`.
+They include opponent hull and variant categorical residuals. No opponent
+family registry is hardcoded in the feature extractor; any family diagnostics
+use derived hull size/designation/manufacturer labels from `GameData`.
 
 ## Log And DB Recovery
 
@@ -242,7 +274,55 @@ test.
 
 ## Baseline Evaluation
 
-The first baseline script may use scikit-learn only. It loads the derived
-SQLite DB, builds flat feature rows, and reports grouped split metrics. Random
-row splits are allowed only as debugging output and must not be the headline
-default.
+The comparator-gate baseline script uses scikit-learn only. It loads the
+derived SQLite DB, builds flat feature rows, and reports grouped split metrics.
+Random row splits are allowed only as debugging output and must not be the
+headline default.
+
+The comparator-gate model names are:
+
+```python
+global_mean
+opponent_mean
+build_mean
+twfe_additive
+ridge_hybrid
+random_forest
+```
+
+`random_forest` is retained as the carryover smoke baseline in full grid runs.
+`catboost`, sparse-interaction models, model-assisted search, and BoTorch are
+not part of the comparator gate. They require a later plan after comparator
+outputs exist.
+
+All models fit only on the split's training rows. No comparator or learned
+baseline may read test targets or honest-eval targets while fitting. For unseen
+groups at prediction time, `opponent_mean`, `build_mean`, and `twfe_additive`
+fall back to the training global mean and report fallback counts. `ridge_hybrid`
+and `random_forest` use feature rows only and must not include target-derived
+test labels.
+
+Reported metrics:
+
+- `mae`
+- `rmse`
+- `spearman_rho`
+- `n_train`
+- `n_test`
+- fallback counts when applicable
+
+The script also reports stratified diagnostics where labels are available:
+
+- opponent family using opponent hull size, designation, and manufacturer,
+- score regime using fixed target bands (`loss`, `timeout_like`, `win`),
+- campaign cell using `TrainingMatchupRow.campaign`.
+
+Honest-eval top-k recall is required for this gate. The protocol is:
+
+1. Fit the model on training-log matchups only.
+2. Predict every resolved honest-eval matchup using build/opponent features.
+3. Aggregate predicted and observed honest-eval targets by `build_key`.
+4. Report `top_k_recall` for configured `k` values against the observed
+   honest-eval build ranking.
+5. Do not tune features, model choice, or hyperparameters on the same
+   honest-eval rows cited by a report.

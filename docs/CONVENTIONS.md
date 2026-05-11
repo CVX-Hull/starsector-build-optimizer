@@ -198,11 +198,27 @@ empirical report; retrofit at next-edit if an existing report drifts.
 2. **Methods** (single section, before any Results section)
    - **Data**: unit of analysis, source paths, filters applied,
      sample size N. Define every column / field you reference later.
-   - **Estimators / models**: every metric or estimator gets a
-     one-paragraph definition with the explicit formula. Cite the
-     module path that implements it. If a metric is project-specific
-     (e.g. "imbalance index"), define it inline; if it is standard
-     (Pearson r, Spearman ρ), name it.
+   - **Estimators / models**: every metric and closed-form estimator
+     gets a one-paragraph definition with the explicit formula. Cite
+     the module path that implements it. Algorithmic estimators
+     (random forests, gradient boosting, Gaussian processes, neural
+     nets, etc.) must name the algorithm, implementation owner, input
+     representation, training objective / loss where applicable,
+     hyperparameters, defaults, and tuning policy. If a metric is
+     project-specific (e.g. "imbalance index"), define it inline; if it
+     is standard (Pearson r, Spearman ρ), name it.
+   - **Statistical-learning setup**: supervised-learning reports must
+     define the unit of observation, target variable, prediction target
+     population, feature schema or feature groups, preprocessing, data
+     partition semantics, leakage controls, hyperparameters, tuning
+     policy, random seed, and model-selection criterion. Data
+     partition semantics include train / validation / test /
+     calibration / honest-eval partitions or cross-validation folds,
+     plus the exact unit excluded across partitions. Present these as
+     explicit labeled paragraphs or a compact table so reviewers do not
+     have to infer them from prose. If a feature list is too large to
+     enumerate inline, list feature families and cite the schema owner
+     that defines exact keys.
    - **Comparison statistics**: define the test statistics used. If
      bootstrap is used, name the iteration count, RNG seed, and
      resampling unit (rows? builds? matchups?).
@@ -220,7 +236,8 @@ empirical report; retrofit at next-edit if an existing report drifts.
 5. **Open questions / next steps** — hypotheses the report cannot
    close on its own.
 6. **Appendix — file map** — explicit pointers to: producer script,
-   raw data, charts directory, dependent reports.
+   raw data, charts directory, dependent reports. Write `none` for
+   artifact classes that do not exist for the report.
 
 ### Tables
 
