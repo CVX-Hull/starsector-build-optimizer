@@ -18,7 +18,7 @@ Spec numbers are monotonically assigned and never reused. The following gaps are
 | 20 | deleted | Original `20-curtailment-monitor.md`. Stochastic curtailment was superseded by Phase 5B `WilcoxonPruner` + ASHA. Deletion landed in commit `a3f854a` (Hull-fraction combat fitness, WilcoxonPruner, and curtailment removal). |
 | 21 | deleted | Original `21-timeout-tuner.md`. Phase-3.5 timeout self-tuning went dormant once `WilcoxonPruner` started terminating runs by stat-significance instead of wall-clock; the module was deleted in commit `fd1b4fb` (Phase-7-prep relaunch). The dormancy is captured in [../reports/2026-04-19-phase6-deferred-audit.md](../reports/2026-04-19-phase6-deferred-audit.md) under H1. |
 
-When adding a new spec, take the next unused number after `30` (currently `31`). Never reuse `02`, `20`, or `21`.
+When adding a new spec, take the next unused number after `31` (currently `32`). Never reuse `02`, `20`, or `21`.
 
 ## Spec catalogue
 

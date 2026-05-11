@@ -308,22 +308,40 @@ The downloaded/extracted corpus lives under:
 _research/phase7-featurized-matchup/corpus/
 ```
 
-## Implementation Sketch
+## Implementation Substrate
 
-1. Add `src/starsector_optimizer/matchup_features.py`.
-2. Implement `build_feature_row(build, hull, game_data, manifest)`.
-3. Implement `opponent_feature_row(variant_id, game_data, manifest)`.
-4. Implement `matchup_feature_row(build, opponent_variant_id, ...)`.
-5. Add a script that materializes:
+The first implementation layer is a generated SQLite dataset rather than
+Parquet. SQLite keeps provenance, recovered builds, training-log matchups, and
+honest-eval matchups inspectable with no extra data-service dependency. The
+generated DB is local data under:
 
 ```text
-data/features/wave1_training_matchups.parquet
-data/features/honest_eval_matchups.parquet
+data/phase7/
 ```
 
-6. Train baseline CatBoost and sklearn models with grouped splits.
-7. Add a dated report only after the validation script produces measurements.
-8. Feed validated surrogate predictions into Phase 7 as either:
+The implementation exposes:
+
+- `src/starsector_optimizer/matchup_features.py` for flat player, opponent,
+  and matchup feature rows.
+- `src/starsector_optimizer/phase7_matchup_data.py` for build recovery,
+  SQLite materialization, and grouped split builders.
+- `scripts/analysis/phase7_materialize_matchups.py` for creating the derived
+  DB from JSONL logs, Optuna study DBs, and honest-eval ledgers.
+- `scripts/analysis/phase7_baseline_surrogate.py` for the first scikit-learn
+  grouped-split baseline.
+
+The current baseline CLI is a sanity harness, not the end-state model. CatBoost
+remains the preferred first serious tabular baseline once the derived DB has
+been populated and the grouped split outputs are checked.
+
+Next steps after materialization:
+
+1. Run grouped split baselines and inspect error by opponent family, build
+   family, campaign cell, and forward-time bucket.
+2. Add a dated report only after the validation script produces measurements.
+3. Promote CatBoost and sparse interaction baselines if the scikit-learn sanity
+   model shows signal and no obvious leakage.
+4. Feed validated surrogate predictions into Phase 7 as either:
    - a prior mean for the BoTorch GP,
    - a candidate prefilter before expensive acquisition optimization,
    - or an active-learning uncertainty model for selecting which matchups to

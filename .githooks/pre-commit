@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Repository validation guard. Blocks commits that modify the combat-harness
 # Java source or the Starsector game data without a corresponding manifest
-# refresh, and keeps Codex AGENTS.md entrypoints symlinked to their CLAUDE.md
-# sources.
+# refresh, keeps AGENTS.md entrypoints symlinked to their CLAUDE.md sources,
+# and ensures active plans cannot skip the explicit plan-review gate.
 #
 # Opt-in per clone: `git config core.hooksPath .githooks`.
 # Override: include `MANIFEST_REVIEWED: <reason>` on its own line in the
@@ -78,6 +78,8 @@ override_in_message() {
 }
 
 validate_agents_symlinks
+
+python scripts/validate_active_plans.py
 
 if needs_manifest_regen && ! manifest_was_regen; then
     if ! override_in_message "${1:-}"; then

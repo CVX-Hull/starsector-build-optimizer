@@ -77,7 +77,9 @@ superseded_by: null
 Allowed statuses:
 
 - `draft` — being written or reviewed.
-- `approved` — plan review passed; implementation may proceed.
+- `approved` — plan review passed, the plan's `Plan Review Gate` records
+  `Status: passed`, and the plan's `Fresh-Eye Review Gate` records
+  `Status: passed`; implementation may proceed.
 - `active` — implementation is underway.
 - `implemented` — implementation, verification, and post-implementation audit
   are complete.
@@ -100,6 +102,8 @@ Non-trivial plans include:
 - Step-by-step implementation sequence.
 - Tests and mechanical gates.
 - Review findings and dispositions.
+- Plan Review Gate.
+- Fresh-Eye Review Gate.
 - Post-implementation audit requirements.
 - Retirement checklist.
 
@@ -109,13 +113,56 @@ omitting the lifecycle fields.
 ## Review Procedure
 
 1. Create or update the plan in `active/`.
-2. Run the `plan-review` skill against the file path, not chat text.
-3. Resolve every valid finding in the plan.
-4. Set `status: approved` and `approved: YYYY-MM-DD` before implementation.
+2. Leave frontmatter `status: draft` and `approved: null` until the review has
+   actually passed. Do not mark a newly created plan approved during creation.
+3. Add a `## Plan Review Gate` section to the plan:
+
+   ```text
+   ## Plan Review Gate
+
+   - Status: not_run | passed | failed
+   - Review source: `.claude/skills/plan-review.md`
+   - Reviewed at: YYYY-MM-DD HH:MM | null
+   - Findings:
+     - ...
+   - Dispositions:
+     - ...
+   - Approval rule: frontmatter `status: approved` is invalid unless this gate is `passed`.
+   ```
+
+4. Run the `plan-review` skill against the file path, not chat text.
+5. Add a `## Fresh-Eye Review Gate` section to the plan:
+
+   ```text
+   ## Fresh-Eye Review Gate
+
+   - Status: not_run | passed
+   - Review source: sub-agents via `.claude/skills/plan-review.md`
+   - Reviewed at: YYYY-MM-DD HH:MM | null
+   - Agents:
+     - Pattern Consistency: pending | passed | findings
+     - Spec Alignment: pending | passed | findings
+     - Engineering & Design Invariants: pending | passed | findings
+   - Findings:
+     - ...
+   - Dispositions:
+     - ...
+   - Approval rule: frontmatter `status: approved` is invalid unless this gate is `passed`.
+   ```
+
+6. Launch the plan-review sub-agents when the active runtime permits sub-agent
+   use. If the runtime requires explicit current-turn authorization, stop and
+   ask for that authorization rather than approving the plan without fresh-eye
+   review.
+7. Resolve every valid finding in the plan.
+8. Set both Plan Review Gate and Fresh-Eye Review Gate to `Status: passed`.
+9. Set frontmatter `status: approved` and `approved: YYYY-MM-DD` before
+   implementation.
 
 If implementation discovers that the approved plan is materially wrong, update
-the plan and rerun plan review before continuing. Do not silently implement a
-different plan.
+the plan, reset the Plan Review Gate and Fresh-Eye Review Gate to
+`Status: not_run`, restore frontmatter `status: draft`, and rerun plan review
+before continuing. Do not silently implement a different plan.
 
 ## Implementation Procedure
 

@@ -22,6 +22,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 | 5G — Adversarial PSRO opponent curriculum | deferred | researched; revisit post-5E/5F |
 | 6 — Cloud worker federation (AWS spot fleet, Tailscale mesh, Redis reliable queue) | shipped, Tier-2 live | [phase6-cloud-worker-federation.md](docs/reference/phase6-cloud-worker-federation.md), spec `22`, [.claude/skills/cloud-worker-ops.md](.claude/skills/cloud-worker-ops.md) |
 | Phase-7-prep — Manifest-as-oracle refactor (deletes `hullmod_effects.py` + `timeout_tuner.py`) | shipped | spec `29` |
+| Phase 7 data substrate — featurized matchup recovery and baseline validation | shipped | spec `31`, [phase7-featurized-matchup-surrogate.md](docs/reference/phase7-featurized-matchup-surrogate.md) |
 | 7 — Structured search-space rep (BoTorch composed-kernel GP) | planned | [phase7-search-space-compression.md](docs/reference/phase7-search-space-compression.md) |
 | 7.5 — Infra & reproducibility | planned | [phase7.5-infrastructure-reproducibility.md](docs/reference/phase7.5-infrastructure-reproducibility.md) |
 

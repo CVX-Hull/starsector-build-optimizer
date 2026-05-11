@@ -15,6 +15,14 @@ Plan review operates on a plan file path. Plans live under
 `.claude/plans/active/` while current and are managed by the
 `plan-lifecycle` skill. Do not review chat-only prose for non-trivial work.
 
+The plan must include visible `## Plan Review Gate` and
+`## Fresh-Eye Review Gate` sections. A plan is not approved until both sections
+record `Status: passed`, the Plan Review Gate references this `plan-review`
+skill, the Fresh-Eye Review Gate records the independent sub-agent lanes, and
+frontmatter `status`/`approved` are updated afterward. If scope changes after
+approval, reset both gates to `not_run` and rerun this review before
+implementation continues.
+
 ## Phase 1: Writing Quality (self-review)
 
 Review the plan text for:
@@ -70,10 +78,12 @@ Validate against the root workflow file's design principles and invariants:
 
 ## Phase 5: Independent Sub-Agent Audits
 
-Use sub-agents when the active workflow has user authorization for
-parallel audit work. Follow the global `sub-agent-orchestration` skill shape:
-bounded task, minimal context, no leaked expected findings, and one clear
-deliverable per auditor.
+Fresh-eye sub-agent review is part of plan approval for non-trivial work.
+Follow the global `sub-agent-orchestration` skill shape: bounded task, minimal
+context, no leaked expected findings, and one clear deliverable per auditor.
+If the active runtime requires explicit current-turn authorization to launch
+sub-agents, the plan cannot be approved until that authorization is obtained
+and the sub-agents complete.
 
 Launch **3 sub-agents in parallel**. Each is an independent auditor — provide only the plan path and reference material. Do not hint at expected findings.
 
@@ -91,7 +101,11 @@ Launch **3 sub-agents in parallel**. Each is an independent auditor — provide 
 
 ## Execution
 
-1. Run Phases 1-4 yourself (checklist self-review).
-2. Launch all 3 sub-agents for Phase 5 in a **single message** (parallel execution).
-3. Review all sub-agent findings. Fix every valid finding in the plan.
-4. Only approve the plan / proceed to implementation after all findings are resolved.
+1. Confirm the target plan has `## Plan Review Gate` and
+   `## Fresh-Eye Review Gate`.
+2. Run Phases 1-4 yourself (checklist self-review).
+3. Launch all 3 sub-agents for Phase 5 in a **single message** (parallel execution).
+4. Review all sub-agent findings. Fix every valid finding in the plan.
+5. Update `## Plan Review Gate` and `## Fresh-Eye Review Gate` with status,
+   findings, agents, and dispositions.
+6. Only approve the plan / proceed to implementation after all findings are resolved.
