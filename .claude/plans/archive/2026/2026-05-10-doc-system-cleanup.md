@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: active
+status: implemented
 created: 2026-05-10
 approved: 2026-05-10
-implemented: null
+implemented: 2026-05-11
 owner: agent
 related_docs:
   - AGENTS.md
@@ -15,8 +15,8 @@ related_docs:
   - docs/reference/README.md
   - docs/reports/INDEX.md
   - docs/specs/README.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: b558786b237136a9206ec6ff62d9b767ed59b68d
+post_impl_audit: passed
 superseded_by: null
 ---
 
@@ -62,9 +62,9 @@ while making plans trackable:
 - Update documentation conventions so plans have an explicit category,
   lifecycle, and retirement procedure.
 
-This plan should remain in `active/` until those changes are committed and
-post-implementation audit is complete. It should then move to
-`.claude/plans/archive/2026/`.
+This plan was implemented in commit
+`b558786b237136a9206ec6ff62d9b767ed59b68d` and retired to
+`.claude/plans/archive/2026/` after post-implementation audit.
 
 ## Audit Waves
 
@@ -91,13 +91,13 @@ Wave 2 launches after fixes and must include:
 
 ## Retirement Checklist
 
-- [ ] Plan-lifecycle changes committed.
-- [ ] `implementation_commit` set to the commit hash.
-- [ ] Post-implementation audit complete.
-- [ ] `post_impl_audit` set to `passed` or an audit record link.
-- [ ] `status` set to `implemented`.
-- [ ] `implemented` set to the completion date.
-- [ ] File moved to `.claude/plans/archive/2026/`.
+- [x] Plan-lifecycle changes committed.
+- [x] `implementation_commit` set to the commit hash.
+- [x] Post-implementation audit complete.
+- [x] `post_impl_audit` set to `passed` or an audit record link.
+- [x] `status` set to `implemented`.
+- [x] `implemented` set to the completion date.
+- [x] File moved to `.claude/plans/archive/2026/`.
 
 ## Honest-Eval Monitor
 
