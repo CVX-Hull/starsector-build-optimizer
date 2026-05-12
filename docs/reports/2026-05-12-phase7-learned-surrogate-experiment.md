@@ -160,19 +160,31 @@ here is that the smoke gate is operational.
 
 ## Synthesis & Decisions
 
-The learned-surrogate producer passed its smoke gate once the implementation
-changes are committed or rerun provenance is acceptable as `+dirty`. The AWS
-batch wrapper has a passing dry-run and merge/control-plane unit coverage, but
-live launch remains blocked until the serving loop, budget monitor, teardown,
-status/result persistence, and final audit path are completed and audited.
-Full-run evidence is still required before this report can ship or before the
-active plan can be retired.
+The learned-surrogate producer passed its smoke gate, but publishable full-run
+evidence requires clean committed code provenance. The AWS batch wrapper now
+has live-launch lifecycle code for serving the control
+plane, requiring a full 15-worker fleet, monitoring budget with hard-cap
+teardown and soft warning thresholds, persisting status/events/results, tearing
+down on exit, running final audit, and merging only after 15 validated jobs.
+Real AWS provisioning should still wait for a clean post-change preflight so
+AMI/source provenance checks evaluate the intended commit. Full-run evidence is
+still required before this report can ship or before the active plan can be
+retired.
 
 ## Open Questions / Next Steps
 
-- Complete and audit the AWS batch serving loop, then run the full experiment
-  with all outer splits, all model families, `--hpo-trials 24`, and
-  `--top-k 1,3,5`.
+- Commit the batch implementation or explicitly treat any dirty-provenance run
+  as a non-publishable rehearsal.
+- Export `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
+  `STARSECTOR_WORKSTATION_TAILNET_IP`.
+- Run clean AWS preflight without provisioning:
+  `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`.
+- Run the live full experiment through the trap wrapper:
+  `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
+- Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
+  `ledger.jsonl`; if interrupted, run `scripts/cloud/teardown.sh
+  phase7-learned-batch-20260512` and `scripts/cloud/final_audit.sh
+  phase7-learned-batch-20260512`.
 - Recompute the artifact after commit so code provenance points to the
   committed implementation without `+dirty`.
 - The interrupted partial full-run artifact has been quarantined under

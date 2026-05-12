@@ -457,7 +457,8 @@ combat-worker Redis queue still inherit the cloud safety contract:
    `terminate_all_tagged(project_tag)` as the crash-recovery sweep.
 6. **Final audit.** The operator-facing completion path includes
    `scripts/cloud/final_audit.sh <campaign-or-batch-name>` or an equivalent
-   provider audit over all configured cloud regions.
+   provider audit over all project-supported AWS regions. The current scripts
+   audit all four US regions.
 7. **Authenticated control plane.** Any local HTTP control plane used by the
    batch requires a per-batch bearer token on every route that serves bundles,
    leases work, accepts events, accepts results, or reports status. Missing or
@@ -730,8 +731,8 @@ scripts/cloud/
 ├── probe.sh                      # Tier-1 validation: 2 spot VMs, boot-test, teardown (sub-dollar; see reports/INDEX.md)
 ├── launch_campaign.sh            # wraps `uv run python -m starsector_optimizer.campaign <yaml>`
 ├── status.sh                     # tail ledger, print per-study best-fitness + trial counts
-├── teardown.sh                   # emergency tag-based terminate (instances/SGs/volumes) — campaign-scoped (Project=starsector-<campaign>)
-├── final_audit.sh                # zero-leak verifier (instances/SGs/volumes) — campaign-scoped, exits 0 clean / 1 on any leak
+├── teardown.sh                   # emergency tag-based cleanup (instances/SGs/LTs/volumes) — campaign-scoped (Project=starsector-<campaign>)
+├── final_audit.sh                # zero-leak verifier (instances/SGs/LTs/volumes) — campaign-scoped, exits 0 clean / 1 on any leak
 ├── audit_amis.sh                 # cross-campaign AMI/snapshot inventory (Project=starsector); flags YAML-unreferenced as cleanup candidates
 ├── cleanup_amis.sh               # deregister AMIs + delete snapshots; dry-run by default, --apply to commit, --force to override YAML-reference guard
 ├── devenv-up.sh                  # rootless workstation: userspace tailscaled + redis-server + tailscale serve TCP proxies

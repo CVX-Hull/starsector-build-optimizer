@@ -53,6 +53,18 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
     LEAKED=1
   fi
 
+  if ! lts=$(aws ec2 describe-launch-templates --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+    --query 'LaunchTemplates[].LaunchTemplateName' --output text); then
+    echo "AUDIT ERROR in $region: failed to describe launch templates" >&2
+    AUDIT_FAILED=1
+    continue
+  fi
+  if [[ -n "$lts" ]]; then
+    echo "LEAK in $region: launch templates: $lts"
+    LEAKED=1
+  fi
+
   if ! volumes=$(aws ec2 describe-volumes --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
               "Name=status,Values=available" \

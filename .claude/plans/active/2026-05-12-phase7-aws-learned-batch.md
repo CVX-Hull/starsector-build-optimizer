@@ -69,6 +69,7 @@ active learned-baseline plan.
 
 - `src/starsector_optimizer/phase7_learned_batch.py`
 - `scripts/cloud/phase7_learned_batch.py`
+- `scripts/cloud/launch_phase7_learned_batch.sh`
 - `tests/test_phase7_learned_batch.py`
 - `examples/phase7-learned-batch.yaml`
 - `docs/specs/22-cloud-deployment.md`
@@ -115,13 +116,15 @@ Default launch policy:
 - `regions: [us-east-2]`.
 - `instance_types: [c7i.4xlarge, c7a.4xlarge]`.
 - `target_workers: 15`.
-- `min_workers_to_start: 8`.
+- `min_workers_to_start: 15`.
 - Per-worker logical-core plan: `hpo_jobs: 4`, `model_thread_count: 4`.
 - Target vCPU draw at full size: 240 vCPU, well below either region's 640 vCPU
   spot quota.
 - Default hard budget: `$20.00`.
 - Default max lifetime: 2 hours.
 - Ledger heartbeat: 60 seconds.
+- Partial fleet start is intentionally disabled until a later partial-batch
+  merge/resume policy exists.
 
 If `c7i/c7a.4xlarge` capacity is unavailable, do not silently fall back to
 2xlarge instances with the 16-core parallelism settings. Either lower
@@ -136,6 +139,13 @@ Completed in the current implementation pass:
 - spec 31 learned AWS batch artifact contract;
 - importable batch config, job matrix, lease state, authenticated routes,
   UserData renderer, budget-ledger helper, and merge validator;
+- live AWS launch lifecycle code for control-plane serving, full-fleet
+  provisioning, status/event/result persistence, budget monitoring with
+  one-shot warn thresholds, strict artifact validation, merge gating, layered
+  teardown, and final audit;
+- worker UserData now loops leases until the orchestrator tears down the batch,
+  posts pre-lease and per-job events, and treats duplicate result uploads as
+  idempotent;
 - thin CLI with `dry-run`, `local-smoke`, `status`, `merge`, and fail-closed
   `launch --execute`;
 - focused tests for the above;
@@ -144,12 +154,30 @@ Completed in the current implementation pass:
 
 Not complete:
 
-- live AWS launch remains hard-blocked;
-- the control-plane serving loop, budget monitor, status persistence,
-  result/log persistence under real workers, signal/`atexit` teardown, and
-  final audit path still need implementation before any AWS resource is
-  provisioned;
+- before real AWS provisioning, run a clean preflight after committing these
+  source changes so AMI/source provenance checks evaluate the intended commit;
 - no valid canonical full-run promotion exists yet.
+
+## Remaining Before Live AWS Execution
+
+1. Commit these implementation and documentation changes, or explicitly accept
+   dirty provenance for a non-publishable rehearsal.
+2. Export real launch environment:
+   `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
+   `STARSECTOR_WORKSTATION_TAILNET_IP`.
+3. Run the active-plan validator, focused batch tests, full test suite, and
+   shell syntax checks.
+4. Run launch preflight without provisioning:
+   `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`.
+5. Launch live only through the trap wrapper:
+   `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
+6. Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
+   `ledger.jsonl`.
+7. If interrupted, run
+   `scripts/cloud/teardown.sh phase7-learned-batch-20260512` and
+   `scripts/cloud/final_audit.sh phase7-learned-batch-20260512`.
+8. Ship the report only after the canonical 15-result merge exists and passes
+   post-run audit.
 
 ## Baseline Plan Interaction
 
@@ -224,11 +252,12 @@ must not overwrite the canonical full-run path.
    - disable baked `starsector-worker.service` before work;
    - download bundle from authenticated `/bundle`;
    - run `uv sync --frozen --extra surrogate`;
-   - lease exactly one job;
+   - lease jobs in a loop until the orchestrator tears down the batch;
    - run `scripts/analysis/phase7_learned_surrogate_experiment.py` with only
      the canonical job's split/model/HPO/top-k/source/comparator arguments;
-   - upload result/log/events to authenticated endpoints;
-   - exit for orchestrator teardown.
+   - upload result/events to authenticated endpoints;
+   - leave process lifetime bounded by the configured batch lifetime and
+     orchestrator teardown.
 9. Implement launch teardown:
    - use one batch-owned fleet with a unique project tag;
    - use `try/finally terminate_fleet`;
@@ -252,8 +281,9 @@ must not overwrite the canonical full-run path.
 
 - `uv run pytest tests/test_phase7_learned_batch.py -q`
 - `uv run pytest tests/test_phase7_learned_surrogate_experiment.py tests/test_phase7_learned_batch.py -q`
-- `uv run python scripts/cloud/phase7_learned_batch.py dry-run --config examples/phase7-learned-batch.yaml`
-- `uv run python scripts/cloud/phase7_learned_batch.py local-smoke --config examples/phase7-learned-batch.yaml --max-jobs 2`
+- `TAILSCALE_AUTHKEY=<authkey-or-placeholder> STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet-ip-or-placeholder> uv run python scripts/cloud/phase7_learned_batch.py dry-run --config examples/phase7-learned-batch.yaml`
+- `TAILSCALE_AUTHKEY=<authkey-or-placeholder> STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet-ip-or-placeholder> uv run python scripts/cloud/phase7_learned_batch.py local-smoke --config examples/phase7-learned-batch.yaml --max-jobs 2`
+- `bash -n scripts/cloud/launch_phase7_learned_batch.sh`
 - `uv run python scripts/validate_active_plans.py`
 - `git diff --check`
 - Full suite before final commit: `uv run pytest tests/ -v`

@@ -437,8 +437,10 @@ draft.
   `uv run python scripts/analysis/phase7_learned_surrogate_experiment.py data/phase7/wave1_matchups.sqlite --split build --model all --max-rows 200 --hpo-trials 2 --top-k 1 --progress --comparator-json data/phase7/wave1_comparator_gate_2026-05-11.json --output data/phase7/learned_surrogate_smoke_2026-05-12.json`
 - Full run:
   `uv run python scripts/analysis/phase7_learned_surrogate_experiment.py data/phase7/wave1_matchups.sqlite --split all --model all --hpo-trials 24 --hpo-jobs 4 --model-thread-count 4 --top-k 1,3,5 --progress --comparator-json data/phase7/wave1_comparator_gate_2026-05-11.json --output data/phase7/learned_surrogate_full_2026-05-12.json`
-- AWS full-run alternative:
-  `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`
+- AWS full-run preflight:
+  `AWS_PROFILE=starsector TAILSCALE_AUTHKEY=<authkey> STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet-ip> uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`
+- AWS full-run launch:
+  `AWS_PROFILE=starsector TAILSCALE_AUTHKEY=<authkey> STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet-ip> scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`
 - Focused Markdown link check over changed docs.
 - `git diff --check`
 

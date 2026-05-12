@@ -3,20 +3,26 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
 import os
 import re
 import secrets
 import shlex
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import yaml
 from flask import Flask, jsonify, request, send_file
+from werkzeug.serving import make_server
 
+
+logger = logging.getLogger(__name__)
 
 CANONICAL_SPLITS: tuple[str, ...] = (
     "build",
@@ -35,6 +41,10 @@ DEFAULT_DEPENDENCY_EXTRA = "surrogate"
 
 class BudgetExceeded(RuntimeError):
     """Raised when the configured hard budget would be exceeded."""
+
+
+class BatchLaunchFailed(RuntimeError):
+    """Raised when the live batch cannot reach a publishable completion."""
 
 
 @dataclass(frozen=True)
@@ -158,6 +168,7 @@ class BatchState:
         worker_id: str,
         attempt: int,
         now: float | None = None,
+        before_accept: Callable[[], None] | None = None,
     ) -> dict[str, str]:
         now = time.time() if now is None else now
         with self._lock:
@@ -180,6 +191,8 @@ class BatchState:
                     raise ValueError(f"result split does not match job {job_id}")
                 if result_row.get("model") != state.job.model:
                     raise ValueError(f"result model does not match job {job_id}")
+            if before_accept is not None:
+                before_accept()
             state.result = result
             state.status = "completed"
             return {"status": "accepted"}
@@ -204,6 +217,7 @@ class BatchState:
                     "attempt": state.attempt,
                     "worker_id": state.worker_id,
                     "lease_expires_at": state.lease_expires_at,
+                    "event_count": len(state.events or ()),
                 })
             return {
                 "jobs": rows,
@@ -218,6 +232,25 @@ class BatchState:
         if state is None:
             raise ValueError(f"unknown job id: {job_id}")
         return state.job
+
+
+class ControlPlaneServer:
+    """Small wrapper around Werkzeug so launch code can stop Flask cleanly."""
+
+    def __init__(self, app: Flask, *, host: str, port: int) -> None:
+        self._server = make_server(host, port, app, threaded=True)
+        self._thread = threading.Thread(
+            target=self._server.serve_forever,
+            name="phase7-learned-batch-control-plane",
+            daemon=True,
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def shutdown(self) -> None:
+        self._server.shutdown()
+        self._thread.join(timeout=5.0)
 
 
 def _expand_env(value: Any) -> Any:
@@ -288,10 +321,19 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         )
     if not (1 <= config.min_workers_to_start <= config.target_workers):
         raise ValueError("min_workers_to_start must be between 1 and target_workers")
+    if config.min_workers_to_start != config.target_workers:
+        raise ValueError(
+            "min_workers_to_start must equal target_workers until the live "
+            "worker loop has enough evidence to justify partial fleets"
+        )
     if config.budget_usd <= 0 or config.max_lifetime_hours <= 0:
         raise ValueError("budget_usd and max_lifetime_hours must be positive")
     if config.ledger_heartbeat_interval_seconds <= 0:
         raise ValueError("ledger_heartbeat_interval_seconds must be positive")
+    if not all(0.0 < value < 1.0 for value in config.ledger_warn_thresholds):
+        raise ValueError("ledger_warn_thresholds must be fractions in (0, 1)")
+    if tuple(sorted(config.ledger_warn_thresholds)) != config.ledger_warn_thresholds:
+        raise ValueError("ledger_warn_thresholds must be sorted")
     if config.dependency_extra != DEFAULT_DEPENDENCY_EXTRA:
         raise ValueError("dependency_extra must use the existing surrogate extra")
     if config.hpo_jobs <= 0 or config.model_thread_count <= 0:
@@ -414,18 +456,24 @@ def create_control_plane_app(
                 payload,
                 worker_id=worker_id,
                 attempt=attempt,
+                before_accept=(
+                    lambda: _atomic_write_json(job.output_path, payload)
+                    if config is not None else None
+                ),
             )
-            if status["status"] == "accepted":
+            if status["status"] == "accepted" and config is None:
                 _atomic_write_json(job.output_path, payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 409
-        return jsonify(status), 200 if status["status"] == "accepted" else 409
+        return jsonify(status), 200
 
     @app.post("/event/<job_id>")
     def event(job_id: str) -> tuple[Any, int]:
         payload = request.get_json(silent=True) or {}
         try:
             state.record_event(job_id, payload)
+            if config is not None:
+                _append_jsonl(config.output_dir / "events" / f"{job_id}.jsonl", payload)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 404
         return jsonify({"status": "accepted"}), 200
@@ -434,7 +482,38 @@ def create_control_plane_app(
     def status() -> Any:
         return jsonify(state.status())
 
+    @app.post("/worker-event")
+    def worker_event() -> tuple[Any, int]:
+        payload = request.get_json(silent=True) or {}
+        if config is not None:
+            _append_jsonl(config.output_dir / "events" / "worker-events.jsonl", payload)
+        return jsonify({"status": "accepted"}), 200
+
     return app
+
+
+def start_control_plane_server(
+    config: LearnedBatchConfig,
+    state: BatchState,
+    *,
+    bundle_path: Path,
+    bearer_token: str,
+    bundle_sha256: str,
+) -> ControlPlaneServer:
+    app = create_control_plane_app(
+        state,
+        bundle_path=bundle_path,
+        bearer_token=bearer_token,
+        config=config,
+        bundle_sha256=bundle_sha256,
+    )
+    server = ControlPlaneServer(
+        app,
+        host="0.0.0.0",
+        port=config.control_plane_port,
+    )
+    server.start()
+    return server
 
 
 def render_phase7_learned_batch_user_data(
@@ -456,6 +535,33 @@ def render_phase7_learned_batch_user_data(
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
+JOB_ID=""
+
+post_event() {{
+  if [[ -n "$JOB_ID" ]]; then
+    curl --silent --fail -X POST \\
+      -H "Authorization: Bearer {bearer_token}" \\
+      -H "Content-Type: application/json" \\
+      -d "{{\\"event\\":\\"$1\\",\\"instance_id\\":\\"${{INSTANCE_ID:-unknown}}\\",\\"region\\":\\"${{REGION:-unknown}}\\",\\"instance_type\\":\\"${{INSTANCE_TYPE:-unknown}}\\"}}" \\
+      {control_url}/event/"$JOB_ID" >/dev/null || true
+  fi
+}}
+post_worker_event() {{
+  curl --silent --fail -X POST \\
+    -H "Authorization: Bearer {bearer_token}" \\
+    -H "Content-Type: application/json" \\
+    -d "{{\\"event\\":\\"$1\\",\\"instance_id\\":\\"${{INSTANCE_ID:-unknown}}\\",\\"region\\":\\"${{REGION:-unknown}}\\",\\"instance_type\\":\\"${{INSTANCE_TYPE:-unknown}}\\"}}" \\
+    {control_url}/worker-event >/dev/null || true
+}}
+on_failure() {{
+  if [[ -n "$JOB_ID" ]]; then
+    post_event "worker_failed"
+  else
+    post_worker_event "worker_failed_before_lease"
+  fi
+}}
+trap on_failure ERR
+post_worker_event "bootstrap_start"
 
 TS_AUTHKEY_FILE=$(mktemp)
 cleanup_secret() {{
@@ -477,43 +583,64 @@ INSTANCE_TYPE=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" 
 mkdir -p /opt/phase7-batch
 cd /opt/phase7-batch
 curl --silent --fail -H "Authorization: Bearer {bearer_token}" -o bundle.tgz {control_url}/bundle
+post_worker_event "bundle_downloaded"
 printf '%s  bundle.tgz\\n' {json.dumps(bundle_sha256)} | sha256sum --check
 tar -xzf bundle.tgz
 uv sync --frozen --extra {dependency_extra}
+post_worker_event "uv_synced"
 
-LEASE=$(curl --silent --fail -X POST \\
-  -H "Authorization: Bearer {bearer_token}" \\
-  -H "Content-Type: application/json" \\
-  -d "{{\\"worker_id\\":\\"$INSTANCE_ID\\",\\"region\\":\\"$REGION\\",\\"instance_type\\":\\"$INSTANCE_TYPE\\"}}" \\
-  {control_url}/lease)
-JOB_ID=$(python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<< "$LEASE")
-SPLIT=$(python -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE")
-MODEL=$(python -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE")
-OUTPUT="data/phase7/aws-job-$JOB_ID.json"
+DEADLINE=$((SECONDS + {max_seconds}))
+while (( SECONDS < DEADLINE )); do
+  LEASE=$(curl --silent -w '\\n%{{http_code}}' --fail -X POST \\
+    -H "Authorization: Bearer {bearer_token}" \\
+    -H "Content-Type: application/json" \\
+    -d "{{\\"worker_id\\":\\"$INSTANCE_ID\\",\\"region\\":\\"$REGION\\",\\"instance_type\\":\\"$INSTANCE_TYPE\\"}}" \\
+    {control_url}/lease || true)
+  LEASE_CODE=$(tail -n 1 <<< "$LEASE")
+  LEASE_BODY=$(sed '$d' <<< "$LEASE")
+  if [[ "$LEASE_CODE" == "204" || -z "$LEASE_BODY" ]]; then
+    sleep 30
+    continue
+  fi
+  if [[ "$LEASE_CODE" != "200" ]]; then
+    sleep 30
+    continue
+  fi
+  JOB_ID=$(python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<< "$LEASE_BODY")
+  SPLIT=$(python -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE_BODY")
+  MODEL=$(python -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
+  ATTEMPT=$(python -c 'import json,sys; print(json.load(sys.stdin)["attempt"])' <<< "$LEASE_BODY")
+  OUTPUT="data/phase7/aws-job-$JOB_ID.json"
+  post_event "lease_acquired"
+  post_event "experiment_start"
 
-timeout {max_seconds} uv run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
-  {source_db} \\
-  --game-dir {game_dir} \\
-  --comparator-json {comparator_json} \\
-  --split "$SPLIT" \\
-  --model "$MODEL" \\
-  --holdout-fraction {config.holdout_fraction} \\
-  --train-fraction {config.train_fraction} \\
-  --split-seed {config.split_seed} \\
-  --hpo-seed {config.hpo_seed} \\
-  --hpo-trials {config.hpo_trials} \\
-  --hpo-jobs {config.hpo_jobs} \\
-  --model-thread-count {config.model_thread_count} \\
-  --top-k {top_k} \\
-  --output "$OUTPUT"
+  timeout {max_seconds} uv run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
+    {source_db} \\
+    --game-dir {game_dir} \\
+    --comparator-json {comparator_json} \\
+    --split "$SPLIT" \\
+    --model "$MODEL" \\
+    --holdout-fraction {config.holdout_fraction} \\
+    --train-fraction {config.train_fraction} \\
+    --split-seed {config.split_seed} \\
+    --hpo-seed {config.hpo_seed} \\
+    --hpo-trials {config.hpo_trials} \\
+    --hpo-jobs {config.hpo_jobs} \\
+    --model-thread-count {config.model_thread_count} \\
+    --top-k {top_k} \\
+    --output "$OUTPUT"
+  post_event "experiment_completed"
 
-curl --silent --fail -X POST \\
-  -H "Authorization: Bearer {bearer_token}" \\
-  -H "X-Worker-Id: $INSTANCE_ID" \\
-  -H "X-Lease-Attempt: $(python -c 'import json,sys; print(json.load(sys.stdin)[\"attempt\"])' <<< "$LEASE")" \\
-  -H "Content-Type: application/json" \\
-  --data-binary "@$OUTPUT" \\
-  {control_url}/result/"$JOB_ID"
+  curl --silent --fail -X POST \\
+    -H "Authorization: Bearer {bearer_token}" \\
+    -H "X-Worker-Id: $INSTANCE_ID" \\
+    -H "X-Lease-Attempt: $ATTEMPT" \\
+    -H "Content-Type: application/json" \\
+    --data-binary "@$OUTPUT" \\
+    {control_url}/result/"$JOB_ID"
+  post_event "result_uploaded"
+  JOB_ID=""
+done
 """
 
 
@@ -540,7 +667,7 @@ def record_budget_heartbeat(
         rows.append({
             "timestamp": timestamp,
             "event_type": "batch_worker_heartbeat",
-            "worker_id": inst.get("instance_id", "unknown"),
+            "worker_id": inst.get("instance_id", inst.get("id", "unknown")),
             "region": region,
             "instance_type": instance_type,
             "hours_elapsed": hours,
@@ -557,6 +684,214 @@ def record_budget_heartbeat(
             f"batch budget exceeded: cumulative_usd={total:.4f} budget_usd={config.budget_usd:.4f}"
         )
     return total
+
+
+def write_status_snapshot(
+    config: LearnedBatchConfig,
+    state: BatchState,
+    *,
+    phase: str,
+    instance_ids: Sequence[str] = (),
+    active_instances: Sequence[Mapping[str, Any]] = (),
+    cumulative_usd: float = 0.0,
+    message: str | None = None,
+    timestamp: str | None = None,
+) -> dict[str, Any]:
+    payload = {
+        "phase": phase,
+        "timestamp": timestamp or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "name": config.name,
+        "project_tag": config.project_tag,
+        "fleet_name": config.fleet_name,
+        "instance_ids": list(instance_ids),
+        "active_instances": [dict(item) for item in active_instances],
+        "budget_usd": config.budget_usd,
+        "cumulative_usd": cumulative_usd,
+        "state": state.status(),
+    }
+    if message is not None:
+        payload["message"] = message
+    _atomic_write_json(config.output_dir / "status.json", payload)
+    return payload
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def run_live_batch(
+    config: LearnedBatchConfig,
+    *,
+    provider: Any,
+    bundle_path: Path,
+    bundle_sha256: str,
+    bearer_token: str,
+    poll_interval_seconds: float | None = None,
+    server_factory: Any = start_control_plane_server,
+    sleep_fn: Any = time.sleep,
+    now_fn: Any = time.time,
+    final_audit_fn: Any | None = None,
+    on_poll: Any | None = None,
+) -> dict[str, Any]:
+    """Run the live AWS batch lifecycle and return the merged payload.
+
+    The caller owns preflight. This function owns the provision → serve →
+    monitor → merge → teardown lifecycle and is deliberately provider-shaped
+    so tests can pass a fake provider.
+    """
+    jobs = generate_jobs(config)
+    state = BatchState(jobs, lease_ttl_seconds=1800.0, max_attempts=2)
+    poll_interval = (
+        config.ledger_heartbeat_interval_seconds
+        if poll_interval_seconds is None
+        else poll_interval_seconds
+    )
+    cumulative_usd = 0.0
+    warned_budget_thresholds: set[float] = set()
+    instance_ids: list[str] = []
+    terminal_message: str | None = None
+    had_exception = False
+    server = server_factory(
+        config,
+        state,
+        bundle_path=bundle_path,
+        bearer_token=bearer_token,
+        bundle_sha256=bundle_sha256,
+    )
+    start = now_fn()
+    write_status_snapshot(config, state, phase="starting")
+    try:
+        instance_ids = provider.provision_fleet(
+            fleet_name=config.fleet_name,
+            project_tag=config.project_tag,
+            regions=config.regions,
+            ami_ids_by_region=config.ami_ids_by_region,
+            instance_types=config.instance_types,
+            ssh_key_name=config.ssh_key_name,
+            spot_allocation_strategy=config.spot_allocation_strategy,
+            target_workers=config.target_workers,
+            user_data=render_phase7_learned_batch_user_data(
+                config,
+                control_plane_url=f"http://{config.control_plane_host}:{config.control_plane_port}",
+                bearer_token=bearer_token,
+                bundle_sha256=bundle_sha256,
+            ),
+        )
+        if len(instance_ids) < config.min_workers_to_start:
+            raise BatchLaunchFailed(
+                f"only {len(instance_ids)} workers provisioned; "
+                f"minimum is {config.min_workers_to_start}"
+            )
+        while True:
+            if on_poll is not None:
+                on_poll(state)
+            status = state.status()
+            active = provider.list_active(config.project_tag)
+            spot_prices = {
+                (item.get("region", "unknown"), item.get("instance_type", "unknown")):
+                provider.get_spot_price(
+                    item.get("region", "unknown"),
+                    item.get("instance_type", "unknown"),
+                )
+                for item in active
+            }
+            cumulative_usd = record_budget_heartbeat(
+                config,
+                ledger_path=config.output_dir / "ledger.jsonl",
+                running_instances=active,
+                spot_prices=spot_prices,
+                interval_seconds=poll_interval,
+                cumulative_usd=cumulative_usd,
+                timestamp=_utc_now(),
+            )
+            budget_fraction = cumulative_usd / config.budget_usd
+            for threshold in config.ledger_warn_thresholds:
+                if budget_fraction >= threshold and threshold not in warned_budget_thresholds:
+                    warned_budget_thresholds.add(threshold)
+                    logger.warning(
+                        "batch budget threshold crossed: threshold=%.2f cumulative=%.4f budget=%.4f",
+                        threshold,
+                        cumulative_usd,
+                        config.budget_usd,
+                    )
+            write_status_snapshot(
+                config,
+                state,
+                phase="running",
+                instance_ids=instance_ids,
+                active_instances=active,
+                cumulative_usd=cumulative_usd,
+            )
+            counts = status["counts"]
+            if counts["failed"]:
+                raise BatchLaunchFailed(f"{counts['failed']} batch job(s) failed")
+            if counts["completed"] == len(jobs):
+                merged = merge_job_artifacts(config)
+                write_status_snapshot(
+                    config,
+                    state,
+                    phase="merged",
+                    instance_ids=instance_ids,
+                    active_instances=active,
+                    cumulative_usd=cumulative_usd,
+                )
+                terminal_message = "merged"
+                return merged
+            if not active and counts["completed"] < len(jobs):
+                raise BatchLaunchFailed(
+                    "no active workers remain before all jobs completed"
+                )
+            if now_fn() - start > config.max_lifetime_hours * 3600.0:
+                raise TimeoutError("batch exceeded max_lifetime_hours")
+            sleep_fn(poll_interval)
+    except Exception as exc:
+        had_exception = True
+        terminal_message = str(exc)
+        raise
+    finally:
+        teardown_errors: list[str] = []
+        write_status_snapshot(
+            config,
+            state,
+            phase="teardown",
+            instance_ids=instance_ids,
+            cumulative_usd=cumulative_usd,
+            message=terminal_message,
+        )
+        try:
+            server.shutdown()
+        except Exception as exc:
+            teardown_errors.append(f"server shutdown failed: {exc}")
+        try:
+            provider.terminate_fleet(
+                fleet_name=config.fleet_name,
+                project_tag=config.project_tag,
+            )
+        except Exception as exc:
+            teardown_errors.append(f"terminate_fleet failed: {exc}")
+        try:
+            provider.terminate_all_tagged(config.project_tag)
+        except Exception as exc:
+            teardown_errors.append(f"terminate_all_tagged failed: {exc}")
+        if final_audit_fn is not None:
+            try:
+                final_audit_fn(config)
+            except Exception as exc:
+                teardown_errors.append(f"final audit failed: {exc}")
+        final_message = terminal_message
+        if teardown_errors:
+            joined = "; ".join(teardown_errors)
+            final_message = joined if final_message is None else f"{final_message}; {joined}"
+        write_status_snapshot(
+            config,
+            state,
+            phase="teardown_complete",
+            instance_ids=instance_ids,
+            cumulative_usd=cumulative_usd,
+            message=final_message,
+        )
+        if teardown_errors and not had_exception:
+            raise BatchLaunchFailed("; ".join(teardown_errors))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -582,6 +917,10 @@ def validate_job_payload(
     bundle_sha256: str | None = None,
 ) -> dict[str, Any]:
     artifact = dict(payload)
+    if not isinstance(artifact.get("experiment_schema_version"), int):
+        raise ValueError(f"job {job.job_id} experiment schema version missing")
+    if not isinstance(artifact.get("feature_schema_version"), int):
+        raise ValueError(f"job {job.job_id} feature schema version missing")
     if artifact.get("status") not in (None, "completed"):
         raise ValueError(f"job {job.job_id} artifact is not complete")
     if artifact.get("result_count") != 1:
@@ -637,6 +976,35 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} result missing fields: {', '.join(missing)}")
     if result.get("status") != "completed":
         raise ValueError(f"job {job.job_id} result is not complete")
+    code_version = provenance.get("code_version")
+    if not isinstance(code_version, str) or code_version == "unknown" or code_version.endswith("+dirty"):
+        raise ValueError(f"job {job.job_id} code version is not clean")
+    for field in ("mae", "rmse", "spearman_rho"):
+        value = result.get(field)
+        if not isinstance(value, int | float) or not math.isfinite(float(value)):
+            raise ValueError(f"job {job.job_id} metric {field!r} is not finite")
+    for field in ("n_train", "n_inner_train", "n_inner_validation", "n_test"):
+        value = result.get(field)
+        if not isinstance(value, int) or value < 0:
+            raise ValueError(f"job {job.job_id} count {field!r} malformed")
+    if not isinstance(result.get("target_variable"), str) or not result["target_variable"]:
+        raise ValueError(f"job {job.job_id} target variable missing")
+    if not isinstance(result.get("feature_families"), dict):
+        raise ValueError(f"job {job.job_id} feature families malformed")
+    if not isinstance(result.get("hpo"), dict) or "selected_hyperparameters" not in result["hpo"]:
+        raise ValueError(f"job {job.job_id} HPO payload malformed")
+    if not isinstance(result.get("timing"), dict):
+        raise ValueError(f"job {job.job_id} timing payload malformed")
+    if not isinstance(result.get("honest_eval_top_k"), dict):
+        raise ValueError(f"job {job.job_id} honest-eval top-k payload malformed")
+    comparator_context = result.get("comparator_context")
+    if not isinstance(comparator_context, dict):
+        raise ValueError(f"job {job.job_id} comparator context malformed")
+    if (
+        comparator_context.get("diagnostic") != "ok"
+        or comparator_context.get("comparison_status") != "comparable"
+    ):
+        raise ValueError(f"job {job.job_id} comparator context is not comparable")
     if result.get("split") != job.split or result.get("model") != job.model:
         raise ValueError(f"job {job.job_id} result does not match job identity")
     if not _leakage_ok(result):
@@ -730,3 +1098,11 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
         fh.write("\n")
         tmp_name = fh.name
     Path(tmp_name).replace(path)
+
+
+def _append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(dict(payload), sort_keys=True) + "\n")
+        fh.flush()
+        os.fsync(fh.fileno())

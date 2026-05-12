@@ -435,7 +435,7 @@ class AWSProvider(CloudProvider):
             {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
         ]
         filters.append(
-            {"Name": "instance-state-name", "Values": ["pending", "running"]}
+            {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}
         )
         response = client.describe_instances(Filters=filters)
         ids: list[str] = []

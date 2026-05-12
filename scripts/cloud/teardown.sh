@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Terminate every EC2 instance + delete every security group + delete every
-# available volume tagged Project=starsector-<campaign-name> across all 4 US
+# Terminate every EC2 instance + delete every security group + launch template
+# + available volume tagged Project=starsector-<campaign-name> across all 4 US
 # regions. Idempotent — safe to run repeatedly. Mirrors what
 # `AWSProvider.terminate_all_tagged` does in-process; this script is the
 # fallback when the orchestrator can't run that path (SIGKILL, expired
 # credentials mid-run, crash).
 #
 # Order matters: instances first (releases ENIs), then SGs (which require
-# zero ENI attachments), then volumes (only Available state).
+# zero ENI attachments), then launch templates, then volumes (only Available
+# state).
 #
 # Usage:
 #   scripts/cloud/teardown.sh <campaign-name>
@@ -34,7 +35,7 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
   ids=$(aws ec2 describe-instances \
     --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
-              "Name=instance-state-name,Values=pending,running" \
+              "Name=instance-state-name,Values=pending,running,stopping,stopped" \
     --query 'Reservations[].Instances[].InstanceId' --output text 2>/dev/null || true)
   if [[ -z "$ids" ]]; then
     echo "  $region: no instances tagged $TAG"
@@ -75,7 +76,29 @@ done
 
 echo
 
-# Pass 3: delete any leaked Available volumes (in-use volumes are still
+# Pass 3: delete launch templates. They are not attached to instances after
+# launch and should be removed before final audit reports the tag as leaked.
+for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  lts=$(aws ec2 describe-launch-templates \
+    --region "$region" \
+    --filters "Name=tag:Project,Values=$TAG" \
+    --query 'LaunchTemplates[].LaunchTemplateName' --output text 2>/dev/null || true)
+  if [[ -z "$lts" ]]; then
+    echo "  $region: no launch templates tagged $TAG"
+    continue
+  fi
+  for lt in $lts; do
+    if aws ec2 delete-launch-template --region "$region" --launch-template-name "$lt" >/dev/null 2>&1; then
+      echo "  $region: deleted launch template $lt"
+    else
+      echo "  $region: WARN failed to delete launch template $lt"
+    fi
+  done
+done
+
+echo
+
+# Pass 4: delete any leaked Available volumes (in-use volumes are still
 # attached to a terminating instance and AWS will release them itself once
 # the instance is fully terminated).
 for region in us-east-1 us-east-2 us-west-1 us-west-2; do

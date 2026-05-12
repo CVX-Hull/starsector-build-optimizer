@@ -17,6 +17,10 @@ lives in:
 - `scripts/analysis/phase7_learned_surrogate_experiment.py`
 - `scripts/cloud/phase7_learned_batch.py`
 
+This spec also owns the Phase 7 learned-surrogate experiment and AWS batch
+artifact contracts. The filename remains matchup-oriented to avoid repo-wide
+link churn.
+
 This layer does not run simulations and does not replace honest evaluation. It
 recovers prior-run build/matchup evidence into auditable local tables for
 surrogate experiments.

@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import hashlib
 import json
+import secrets
+import signal
 import subprocess
 import sys
 import tarfile
@@ -23,6 +26,7 @@ from starsector_optimizer.phase7_learned_batch import (
     generate_jobs,
     load_batch_config,
     merge_job_artifacts,
+    run_live_batch,
     validate_batch_config,
 )
 
@@ -49,6 +53,7 @@ def bundle_paths(cfg) -> tuple[Path, ...]:
         Path("uv.lock"),
         cfg.source_db_path,
         cfg.comparator_json_path,
+        Path("game/starsector/data"),
         Path("game/starsector/manifest.json"),
     )
 
@@ -135,9 +140,47 @@ def launch(config_path: Path, *, execute: bool) -> int:
         print("Launch preflight passed. Re-run with --execute to provision AWS resources.")
         return 0
 
-    raise RuntimeError(
-        "live launch is blocked until the control-plane serving loop is implemented and audited"
+    bundle_path, bundle_sha256 = create_bundle(config_path, cfg.output_dir)
+    bearer_token = secrets.token_urlsafe(32)
+    cleanup_done = False
+
+    def cleanup() -> None:
+        nonlocal cleanup_done
+        if cleanup_done:
+            return
+        cleanup_done = True
+        try:
+            provider.terminate_fleet(fleet_name=cfg.fleet_name, project_tag=cfg.project_tag)
+        except Exception as exc:
+            print(f"cleanup warning: terminate_fleet failed: {exc}", file=sys.stderr)
+        try:
+            provider.terminate_all_tagged(cfg.project_tag)
+        except Exception as exc:
+            print(f"cleanup warning: terminate_all_tagged failed: {exc}", file=sys.stderr)
+
+    def handle_signal(signum, frame) -> None:
+        del frame
+        cleanup()
+        raise KeyboardInterrupt(f"received signal {signum}")
+
+    atexit.register(cleanup)
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGHUP, handle_signal)
+
+    def final_audit(config) -> None:
+        subprocess.run(["scripts/cloud/final_audit.sh", config.project_tag], check=True)
+
+    run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=bundle_path,
+        bundle_sha256=bundle_sha256,
+        bearer_token=bearer_token,
+        final_audit_fn=final_audit,
     )
+    cleanup_done = True
+    return 0
 
 
 def main() -> None:
