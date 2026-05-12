@@ -46,7 +46,7 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
             "us-east-1": "ami-11111111111111111",
         },
         instance_types=("c7i.4xlarge", "c7a.4xlarge"),
-        ssh_key_name="starsector-worker",
+        ssh_key_name="starsector-probe",
         spot_allocation_strategy="price-capacity-optimized",
         target_workers=15,
         min_workers_to_start=15,
@@ -133,7 +133,7 @@ ami_ids_by_region:
   us-east-2: ami-22222222222222222
   us-east-1: ami-11111111111111111
 instance_types: [c7i.4xlarge, c7a.4xlarge]
-ssh_key_name: starsector-worker
+ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
 target_workers: 15
 min_workers_to_start: 15
@@ -825,6 +825,7 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
         lambda provider, amis, manifest, required_regions: calls.append(("ami", tuple(required_regions))),
     )
     monkeypatch.setattr(cli, "check_amis_available", lambda provider, config: calls.append("ami-available"))
+    monkeypatch.setattr(cli, "check_key_pairs_available", lambda provider, config: calls.append("keypair"))
     monkeypatch.setattr(cli, "GameManifest", type("GM", (), {"load": staticmethod(lambda: object())}))
     monkeypatch.setattr(cli, "AWSProvider", lambda regions: FakeProvider())
     monkeypatch.setattr(cli, "create_bundle", lambda path, out: (tmp_path / "bundle.tgz", "b" * 64))
@@ -843,6 +844,7 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
     assert ("auth", cfg.tailscale_authkey_secret) in calls
     assert ("ami", cfg.regions) in calls
     assert "ami-available" in calls
+    assert "keypair" in calls
     assert "atexit" in calls
     assert ("live", "b" * 64, "token") in calls
 
@@ -861,3 +863,19 @@ def test_check_amis_available_rejects_pending_image(tmp_path):
 
     with pytest.raises(RuntimeError, match="pending"):
         cli.check_amis_available(Provider(), cfg)
+
+
+def test_check_key_pairs_available_rejects_missing_key(tmp_path):
+    cfg = make_config(tmp_path)
+    cli = load_batch_cli_module()
+
+    class Client:
+        def describe_key_pairs(self, Filters):
+            return {"KeyPairs": []}
+
+    class Provider:
+        def _client(self, region):
+            return Client()
+
+    with pytest.raises(RuntimeError, match="key pair"):
+        cli.check_key_pairs_available(Provider(), cfg)

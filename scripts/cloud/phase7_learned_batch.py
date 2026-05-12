@@ -114,6 +114,18 @@ def check_amis_available(provider, cfg) -> None:
             )
 
 
+def check_key_pairs_available(provider, cfg) -> None:
+    for region in cfg.regions:
+        client = provider._client(region)
+        response = client.describe_key_pairs(
+            Filters=[{"Name": "key-name", "Values": [cfg.ssh_key_name]}],
+        )
+        if not response.get("KeyPairs"):
+            raise RuntimeError(
+                f"EC2 key pair {cfg.ssh_key_name!r} does not exist in {region}"
+            )
+
+
 def dry_run(config_path: Path) -> int:
     cfg = load_batch_config(config_path)
     validate_batch_config(cfg)
@@ -179,6 +191,7 @@ def launch(config_path: Path, *, execute: bool) -> int:
         required_regions=cfg.regions,
     )
     check_amis_available(provider, cfg)
+    check_key_pairs_available(provider, cfg)
 
     cleanup = f"scripts/cloud/teardown.sh {cfg.name}"
     print(f"Cleanup command: {cleanup}", flush=True)
