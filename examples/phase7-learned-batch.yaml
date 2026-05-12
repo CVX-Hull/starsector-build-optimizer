@@ -2,12 +2,16 @@ name: phase7-learned-batch-20260512
 project_tag: starsector-phase7-learned-batch-20260512
 fleet_name: learned-surrogate
 regions:
-  - us-east-2
+  - us-east-1
 ami_ids_by_region:
-  us-east-2: ami-084ab970fa4ae9561
+  us-east-1: ami-073277078209f713c
 instance_types:
   - c7i.4xlarge
   - c7a.4xlarge
+  - c6i.4xlarge
+  - c6a.4xlarge
+  - m7i.4xlarge
+  - m7a.4xlarge
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
 target_workers: 15
