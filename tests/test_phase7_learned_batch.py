@@ -411,6 +411,23 @@ def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
         state.record_result(other.job_id, payload, worker_id="i-1", attempt=1, now=112.0)
 
 
+def test_requeue_missing_workers_releases_lost_leases(tmp_path):
+    cfg = make_config(tmp_path)
+    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    lost = state.lease(now=100.0, worker_id="i-lost")
+    live = state.lease(now=100.0, worker_id="i-live")
+    assert lost is not None
+    assert live is not None
+
+    requeued = state.requeue_missing_workers({"i-live"})
+
+    assert requeued == (lost.job_id,)
+    rows = {row["job_id"]: row for row in state.status()["jobs"]}
+    assert rows[lost.job_id]["status"] == "pending"
+    assert rows[lost.job_id]["attempt"] == 1
+    assert rows[live.job_id]["status"] == "leased"
+
+
 def test_result_rejects_wrong_worker_and_expired_lease(tmp_path):
     cfg = make_config(tmp_path)
     state = BatchState(generate_jobs(cfg), lease_ttl_seconds=5.0, max_attempts=2)
@@ -826,6 +843,94 @@ def test_run_live_batch_budget_exceeded_tears_down(tmp_path):
     assert provider.terminate_fleet_calls == 1
     assert provider.terminate_all_calls == 1
     assert json.loads((cfg.output_dir / "status.json").read_text())["phase"] == "teardown_complete"
+
+
+def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        target_workers=2,
+        min_workers_to_start=2,
+    )
+    server = FakeServer()
+    leases = {}
+
+    class ReplacementProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(instance_count=2)
+            self.replacement_launched = False
+
+        def provision_fleet(self, **kwargs):
+            self.provision_calls.append(kwargs)
+            if len(self.provision_calls) == 1:
+                return ["i-lost", "i-live"]
+            self.replacement_launched = True
+            return ["i-replacement"]
+
+        def list_active(self, project_tag):
+            active = [
+                {"id": "i-live", "region": "us-east-2", "instance_type": "c7i.4xlarge"},
+            ]
+            if self.replacement_launched:
+                active.append({
+                    "id": "i-replacement",
+                    "region": "us-east-2",
+                    "instance_type": "c7i.4xlarge",
+                })
+            return active
+
+    provider = ReplacementProvider()
+
+    def on_poll(state: BatchState) -> None:
+        if not leases:
+            first = state.lease(now=100.0, worker_id="i-lost")
+            second = state.lease(now=100.0, worker_id="i-live")
+            assert first is not None
+            assert second is not None
+            leases[first.job_id] = first
+            leases[second.job_id] = second
+            return
+        if provider.replacement_launched:
+            result_dir = cfg.output_dir / "results"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            rows = {row["job_id"]: row for row in state.status()["jobs"]}
+            for job_id, row in rows.items():
+                if row["status"] == "completed":
+                    continue
+                if row["status"] == "pending":
+                    lease = state.lease(now=110.0, worker_id="i-replacement")
+                    assert lease is not None
+                else:
+                    lease = leases[job_id]
+                payload = one_job_payload(cfg, lease.split, lease.model)
+                (result_dir / f"{lease.job_id}.json").write_text(
+                    json.dumps(payload),
+                    encoding="utf-8",
+                )
+                state.record_result(
+                    lease.job_id,
+                    payload,
+                    worker_id=lease.worker_id,
+                    attempt=lease.attempt,
+                    now=111.0,
+                )
+
+    merged = run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=tmp_path / "bundle.tgz",
+        bundle_sha256="b" * 64,
+        bearer_token="secret",
+        poll_interval_seconds=1.0,
+        server_factory=lambda *args, **kwargs: server,
+        sleep_fn=lambda seconds: None,
+        on_poll=on_poll,
+    )
+
+    assert merged["result_count"] == 2
+    assert [call["target_workers"] for call in provider.provision_calls] == [2, 1]
+    assert server.shutdown_called
 
 
 def test_run_live_batch_logs_budget_warn_threshold_once(tmp_path, caplog):

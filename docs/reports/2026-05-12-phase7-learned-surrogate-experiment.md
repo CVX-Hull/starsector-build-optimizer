@@ -206,10 +206,18 @@ dependency plus better worker diagnostics. The next cloud run should use
 `examples/phase7-learned-batch-smoke.yaml` with two workers. Only after the
 smoke produces validated artifacts should the full 15-worker batch resume.
 
+Update from the first rebaked smoke attempt: the missing-bundle failure is
+fixed. Both workers downloaded the bundle, ran `uv sync`, leased jobs, and
+started experiments. The CatBoost job completed and uploaded a validated
+artifact (`RMSE = 0.342093`, `Spearman rho = 0.820206`). The random-forest
+worker was service-terminated before upload while its job remained leased, so
+the batch could not retry immediately. The controller now requeues jobs whose
+leased worker disappears from the active AWS set and provisions a replacement
+worker for pending work.
+
 ## Open Questions / Next Steps
 
-- Commit the bundle/diagnostics/smoke-config changes, then rebake/update the
-  AMI if source-hash preflight requires it.
+- Commit the lost-worker replacement change, then rebake/update the AMI.
 - Export `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
   `STARSECTOR_WORKSTATION_TAILNET_IP`.
 - Run clean smoke preflight without provisioning:

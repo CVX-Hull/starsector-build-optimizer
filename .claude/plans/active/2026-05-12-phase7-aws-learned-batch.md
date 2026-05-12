@@ -170,6 +170,12 @@ Completed in the current implementation pass:
   `experiment_failed`;
 - `examples/phase7-learned-batch-smoke.yaml` defines a 2-worker build-split
   smoke matrix before another full run.
+- first 2-worker smoke on the rebaked AMI partially succeeded: CatBoost
+  completed, uploaded, and validated; the random-forest worker was
+  service-terminated while its job remained leased, then the remaining worker
+  could not retry until lease expiry;
+- live-batch control now requeues leases whose worker is no longer active and
+  provisions replacement workers for pending work.
 
 Not complete:
 
@@ -178,6 +184,8 @@ Not complete:
   requires it;
 - run and validate the 2-worker AWS smoke matrix before any 15-worker
   full-matrix relaunch;
+- re-bake after the lost-worker replacement source change and rerun the
+  2-worker smoke;
 - no valid canonical full-run promotion exists yet.
 
 ## Remaining Before Live AWS Execution

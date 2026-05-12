@@ -208,6 +208,22 @@ class BatchState:
             assert state.events is not None
             state.events.append(dict(payload))
 
+    def requeue_missing_workers(self, active_worker_ids: set[str]) -> tuple[str, ...]:
+        """Requeue leased jobs whose worker has disappeared from AWS active state."""
+        requeued: list[str] = []
+        with self._lock:
+            for state in self._states.values():
+                if state.status != "leased" or state.worker_id in active_worker_ids:
+                    continue
+                if state.attempt >= self._max_attempts:
+                    state.status = "failed"
+                else:
+                    state.status = "pending"
+                    requeued.append(state.job.job_id)
+                state.worker_id = None
+                state.lease_expires_at = None
+        return tuple(requeued)
+
     def status(self) -> dict[str, Any]:
         with self._lock:
             rows = []
@@ -803,6 +819,33 @@ def _utc_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def _provision_batch_workers(
+    config: LearnedBatchConfig,
+    *,
+    provider: Any,
+    bundle_sha256: str,
+    bearer_token: str,
+    target_workers: int,
+) -> list[str]:
+    return provider.provision_fleet(
+        fleet_name=config.fleet_name,
+        project_tag=config.project_tag,
+        regions=config.regions,
+        ami_ids_by_region=config.ami_ids_by_region,
+        instance_types=config.instance_types,
+        ssh_key_name=config.ssh_key_name,
+        spot_allocation_strategy=config.spot_allocation_strategy,
+        target_workers=target_workers,
+        user_data=render_phase7_learned_batch_user_data(
+            config,
+            control_plane_url=f"http://{config.control_plane_host}:{config.control_plane_port}",
+            bearer_token=bearer_token,
+            bundle_sha256=bundle_sha256,
+        ),
+        root_volume_size_gb=config.root_volume_size_gb,
+    )
+
+
 def run_live_batch(
     config: LearnedBatchConfig,
     *,
@@ -845,22 +888,12 @@ def run_live_batch(
     start = now_fn()
     write_status_snapshot(config, state, phase="starting")
     try:
-        instance_ids = provider.provision_fleet(
-            fleet_name=config.fleet_name,
-            project_tag=config.project_tag,
-            regions=config.regions,
-            ami_ids_by_region=config.ami_ids_by_region,
-            instance_types=config.instance_types,
-            ssh_key_name=config.ssh_key_name,
-            spot_allocation_strategy=config.spot_allocation_strategy,
+        instance_ids = _provision_batch_workers(
+            config,
+            provider=provider,
+            bundle_sha256=bundle_sha256,
+            bearer_token=bearer_token,
             target_workers=config.target_workers,
-            user_data=render_phase7_learned_batch_user_data(
-                config,
-                control_plane_url=f"http://{config.control_plane_host}:{config.control_plane_port}",
-                bearer_token=bearer_token,
-                bundle_sha256=bundle_sha256,
-            ),
-            root_volume_size_gb=config.root_volume_size_gb,
         )
         if len(instance_ids) < config.min_workers_to_start:
             raise BatchLaunchFailed(
@@ -870,8 +903,32 @@ def run_live_batch(
         while True:
             if on_poll is not None:
                 on_poll(state)
-            status = state.status()
             active = provider.list_active(config.project_tag)
+            active_worker_ids = {
+                str(item.get("instance_id") or item.get("id"))
+                for item in active
+                if item.get("instance_id") or item.get("id")
+            }
+            requeued = state.requeue_missing_workers(active_worker_ids)
+            if requeued:
+                logger.warning(
+                    "requeued jobs from missing workers: %s",
+                    ", ".join(requeued),
+                )
+            status = state.status()
+            counts = status["counts"]
+            unfinished = counts["pending"] + counts["leased"]
+            replacement_count = max(0, min(config.target_workers, unfinished) - len(active))
+            if replacement_count and counts["pending"]:
+                replacements = _provision_batch_workers(
+                    config,
+                    provider=provider,
+                    bundle_sha256=bundle_sha256,
+                    bearer_token=bearer_token,
+                    target_workers=replacement_count,
+                )
+                instance_ids.extend(replacements)
+                active = provider.list_active(config.project_tag)
             spot_prices = {
                 (item.get("region", "unknown"), item.get("instance_type", "unknown")):
                 provider.get_spot_price(
@@ -907,7 +964,6 @@ def run_live_batch(
                 active_instances=active,
                 cumulative_usd=cumulative_usd,
             )
-            counts = status["counts"]
             if counts["failed"]:
                 raise BatchLaunchFailed(f"{counts['failed']} batch job(s) failed")
             if counts["completed"] == len(jobs):
