@@ -80,6 +80,7 @@ class LearnedBatchConfig:
     holdout_fraction: float
     train_fraction: float
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
+    root_volume_size_gb: int | None = None
 
 
 @dataclass(frozen=True)
@@ -299,6 +300,11 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         holdout_fraction=float(expanded["holdout_fraction"]),
         train_fraction=float(expanded["train_fraction"]),
         dependency_extra=str(expanded.get("dependency_extra", DEFAULT_DEPENDENCY_EXTRA)),
+        root_volume_size_gb=(
+            None
+            if expanded.get("root_volume_size_gb") is None
+            else int(expanded["root_volume_size_gb"])
+        ),
     )
     validate_batch_config(cfg)
     return cfg
@@ -336,6 +342,8 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("ledger_warn_thresholds must be sorted")
     if config.dependency_extra != DEFAULT_DEPENDENCY_EXTRA:
         raise ValueError("dependency_extra must use the existing surrogate extra")
+    if config.root_volume_size_gb is not None and config.root_volume_size_gb < 8:
+        raise ValueError("root_volume_size_gb must be at least 8 when set")
     if config.hpo_jobs <= 0 or config.model_thread_count <= 0:
         raise ValueError("hpo_jobs and model_thread_count must be positive")
     if any("2xlarge" in item for item in config.instance_types):
@@ -788,6 +796,7 @@ def run_live_batch(
                 bearer_token=bearer_token,
                 bundle_sha256=bundle_sha256,
             ),
+            root_volume_size_gb=config.root_volume_size_gb,
         )
         if len(instance_ids) < config.min_workers_to_start:
             raise BatchLaunchFailed(

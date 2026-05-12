@@ -91,6 +91,7 @@ class CloudProvider(abc.ABC):
         spot_allocation_strategy: str,
         target_workers: int,
         user_data: str,
+        root_volume_size_gb: int | None = None,
     ) -> list[str]:
         """Launch a spot fleet. Return instance IDs that were launched.
 
@@ -176,6 +177,7 @@ class AWSProvider(CloudProvider):
         spot_allocation_strategy: str,
         target_workers: int,
         user_data: str,
+        root_volume_size_gb: int | None = None,
     ) -> list[str]:
         instance_ids: list[str] = []
         per_region_target = max(1, target_workers // max(1, len(regions)))
@@ -196,6 +198,7 @@ class AWSProvider(CloudProvider):
                 project_tag=project_tag, fleet_name=fleet_name,
                 ami_id=ami_id, key_name=ssh_key_name,
                 sg_id=sg_id, user_data=user_data,
+                root_volume_size_gb=root_volume_size_gb,
             )
             instance_ids.extend(self._create_fleet_in_region(
                 region=region, resource_name=resource_name,
@@ -253,9 +256,13 @@ class AWSProvider(CloudProvider):
         key_name: str,
         sg_id: str,
         user_data: str,
+        root_volume_size_gb: int | None = None,
     ) -> None:
         client = self._client(region)
         user_data_b64 = base64.b64encode(user_data.encode("utf-8")).decode("ascii")
+        ebs: dict[str, Any] = {"DeleteOnTermination": True}
+        if root_volume_size_gb is not None:
+            ebs["VolumeSize"] = root_volume_size_gb
         launch_template_data = {
             "ImageId": ami_id,
             "KeyName": key_name,
@@ -264,7 +271,7 @@ class AWSProvider(CloudProvider):
             "InstanceMarketOptions": {"MarketType": "spot"},
             "BlockDeviceMappings": [{
                 "DeviceName": "/dev/sda1",
-                "Ebs": {"DeleteOnTermination": True},
+                "Ebs": ebs,
             }],
             "TagSpecifications": [
                 {

@@ -1,5 +1,6 @@
 import json
 import importlib.util
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -691,7 +692,7 @@ def complete_all_jobs(cfg: LearnedBatchConfig, state: BatchState) -> None:
 
 
 def test_run_live_batch_merges_and_tears_down_on_completion(tmp_path):
-    cfg = make_config(tmp_path)
+    cfg = replace(make_config(tmp_path), root_volume_size_gb=128)
     provider = FakeProvider()
     server = FakeServer()
     final_audits = []
@@ -714,6 +715,7 @@ def test_run_live_batch_merges_and_tears_down_on_completion(tmp_path):
     assert server.shutdown_called
     assert provider.terminate_fleet_calls == 1
     assert provider.terminate_all_calls == 1
+    assert provider.provision_calls[0]["root_volume_size_gb"] == 128
     assert final_audits == [cfg.name]
 
 

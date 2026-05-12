@@ -3,7 +3,7 @@
 The ABC surface is keyword-only:
     provision_fleet(*, fleet_name, project_tag, regions, ami_ids_by_region,
                     instance_types, ssh_key_name, spot_allocation_strategy,
-                    target_workers, user_data) -> list[str]
+                    target_workers, user_data, root_volume_size_gb=None) -> list[str]
     terminate_fleet(*, fleet_name, project_tag) -> int            # targeted
     terminate_all_tagged(project_tag) -> int                      # sweep backstop
     list_active(project_tag) -> list[dict]
@@ -33,7 +33,7 @@ _PROVISION_KWARGS = dict(
 
 def _provision(provider, *, fleet_name, project_tag, regions=("us-east-1",),
                ami_id="ami-00000000000000000", user_data=PROBE_USER_DATA,
-               target_workers=1):
+               target_workers=1, root_volume_size_gb=None):
     return provider.provision_fleet(
         fleet_name=fleet_name,
         project_tag=project_tag,
@@ -44,6 +44,7 @@ def _provision(provider, *, fleet_name, project_tag, regions=("us-east-1",),
         spot_allocation_strategy="price-capacity-optimized",
         target_workers=target_workers,
         user_data=user_data,
+        root_volume_size_gb=root_volume_size_gb,
     )
 
 
@@ -230,6 +231,25 @@ class TestProvisionFleetUserData:
             LaunchTemplateName="starsector-ver__v",
         )["LaunchTemplateVersions"]
         assert len(versions) >= 2
+
+    @pytest.mark.usefixtures("aws_mocked")
+    def test_root_volume_size_is_embedded_when_requested(self):
+        import boto3
+        from starsector_optimizer.cloud_provider import AWSProvider
+        provider = AWSProvider(regions=("us-east-1",))
+        _provision(
+            provider,
+            fleet_name="rootvol",
+            project_tag="starsector-rootvol",
+            root_volume_size_gb=128,
+        )
+        client = boto3.client("ec2", region_name="us-east-1")
+        versions = client.describe_launch_template_versions(
+            LaunchTemplateName="starsector-rootvol__rootvol",
+        )["LaunchTemplateVersions"]
+        mapping = versions[0]["LaunchTemplateData"]["BlockDeviceMappings"][0]
+        assert mapping["Ebs"]["VolumeSize"] == 128
+        assert mapping["Ebs"]["DeleteOnTermination"] is True
 
 
 class TestProvisionFleetNoCampaignConfigDependency:
