@@ -26,6 +26,12 @@ batch: one independent job per canonical `(split, model)` pair, then validate
 and merge the 15 job artifacts into the canonical full-run JSON expected by the
 active learned-baseline plan.
 
+Current amendment after the first failed live attempt: do not relaunch the
+15-worker full matrix until a smaller AWS smoke matrix has completed with
+validated job artifacts. The smoke path uses the same worker code, bundle,
+AMI, dependency extra, provenance validation, budget ledger, and teardown
+logic, but only a configured subset of splits and model families.
+
 ## Context And Source Docs
 
 - Root workflow: `AGENTS.md`.
@@ -44,6 +50,8 @@ active learned-baseline plan.
   thin CLI wrapper.
 - Fan out the existing learned runner across 15 independent jobs:
   5 canonical splits x 3 model families.
+- Support explicit smoke/debug subsets through `splits` and `models` config
+  fields, with `target_workers = len(splits) * len(models)`.
 - Use the existing AWSProvider provisioning/teardown pattern without changing
   the combat-worker queue.
 - Use a local Tailscale-reachable authenticated HTTP control plane for bundle
@@ -151,11 +159,25 @@ Completed in the current implementation pass:
 - focused tests for the above;
 - stale interrupted canonical artifact quarantined under
   `data/phase7/interrupted/`.
+- first live AWS failure root-caused from EC2 console output:
+  `phase7_learned_surrogate_experiment.py` imports
+  `phase7_baseline_surrogate.py`, but the bundle originally omitted the helper
+  script, causing every worker to fail after `experiment_start` with
+  `FileNotFoundError`;
+- bundle manifest now includes the baseline helper script;
+- worker UserData now captures the experiment command's stdout/stderr to a
+  per-job log and posts a bounded log tail plus exit code on
+  `experiment_failed`;
+- `examples/phase7-learned-batch-smoke.yaml` defines a 2-worker build-split
+  smoke matrix before another full run.
 
 Not complete:
 
 - before real AWS provisioning, run a clean preflight after committing these
-  source changes so AMI/source provenance checks evaluate the intended commit;
+  source changes and rebaking/updating the AMI if source-hash preflight
+  requires it;
+- run and validate the 2-worker AWS smoke matrix before any 15-worker
+  full-matrix relaunch;
 - no valid canonical full-run promotion exists yet.
 
 ## Remaining Before Live AWS Execution
@@ -168,15 +190,20 @@ Not complete:
 3. Run the active-plan validator, focused batch tests, full test suite, and
    shell syntax checks.
 4. Run launch preflight without provisioning:
+   `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch-smoke.yaml`.
+5. Launch the smoke live only through the trap wrapper:
+   `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch-smoke.yaml`.
+6. Inspect smoke `status.json`, event logs, and result artifacts. Only after
+   both smoke jobs validate, run the full-run preflight:
    `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`.
-5. Launch live only through the trap wrapper:
+7. Launch the full run through the trap wrapper:
    `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
-6. Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
+8. Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
    `ledger.jsonl`.
-7. If interrupted, run
+9. If interrupted, run
    `scripts/cloud/teardown.sh phase7-learned-batch-20260512` and
    `scripts/cloud/final_audit.sh phase7-learned-batch-20260512`.
-8. Ship the report only after the canonical 15-result merge exists and passes
+10. Ship the report only after the canonical 15-result merge exists and passes
    post-run audit.
 
 ## Baseline Plan Interaction

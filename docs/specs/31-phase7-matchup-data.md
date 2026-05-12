@@ -494,7 +494,7 @@ baseline experiment. Spec 22 owns the cloud lifecycle, preflight, budget,
 teardown, UserData security, and authenticated control-plane requirements.
 This spec owns the Phase 7 job matrix and artifact semantics.
 
-The canonical batch job matrix is exactly:
+The canonical full-run batch job matrix is exactly:
 
 - splits: `build`, `opponent`, `component`, `seed-cell`, `forward-time`;
 - model families: `random_forest_tuned`, `catboost_regressor`,
@@ -506,6 +506,18 @@ split and exactly one model family, plus the configured source DB, game dir,
 comparator JSON, HPO settings, split seeds, fractions, top-k values, progress
 flag, and an explicit per-job `--output` path. The generated command must not
 include honest-eval training inputs or unsafe feature/model-selection flags.
+
+Batch configs may define explicit `splits` and `models` subsets for smoke or
+debug runs. In every config, `target_workers` must equal
+`len(splits) * len(models)`, and `min_workers_to_start` must equal
+`target_workers`. Subset batches are diagnostic only; they may not publish the
+canonical full-run artifact unless their matrix is the full canonical matrix.
+
+The batch bundle must include every runtime script imported by the worker
+command, including both `phase7_learned_surrogate_experiment.py` and its
+baseline helper `phase7_baseline_surrogate.py`. Worker failures during the
+experiment command must post a control-plane event with the command exit code
+and a bounded stdout/stderr tail before the shell exits.
 
 Per-job artifacts are normal learned-experiment JSON payloads with one
 completed result. Batch provenance may add a top-level `batch_job` object with

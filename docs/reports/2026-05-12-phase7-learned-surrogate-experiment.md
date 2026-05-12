@@ -8,14 +8,18 @@ last-validated: unvalidated
 
 ## Abstract
 
-This draft records the first smoke execution of the Phase 7 learned-surrogate
-runner. The smoke run completed all three planned model-family code paths on a
-200-row capped held-out-build slice: tuned random forest, CatBoost regressor,
-and sparse pairwise ridge. These numbers validate execution and reporting
-plumbing only; they are not model-selection evidence because the comparator
-artifact is full-data while this smoke run is row-capped. The full run is now
-planned as a bounded AWS fan-out batch using one canonical `(split, model)` job
-per worker.
+This draft records the Phase 7 learned-surrogate experiment state on
+2026-05-12. The local full run completed all 15 canonical split/model jobs
+against `data/phase7/wave1_matchups.sqlite`. CatBoost is the strongest RMSE
+model on four of five splits; tuned random forest is strongest on the
+held-out-opponent split. The held-out-opponent split remains weak in rank
+signal, which is the main modeling concern for Phase 7.
+
+The first AWS fan-out attempt did not produce model artifacts. EC2 console
+output root-caused the failure: the worker bundle omitted
+`scripts/analysis/phase7_baseline_surrogate.py`, which is imported by
+`phase7_learned_surrogate_experiment.py` at startup. The next AWS step is a
+2-worker smoke matrix, not a 15-worker relaunch.
 
 ## Methods
 
@@ -86,12 +90,20 @@ Code provenance in the artifact:
 The CLI enables progress output by default; the command omits only the
 negative flag `--no-progress`.
 
-### Full-Run Batch Plan
+### Full-Run Execution
 
-The full empirical run is authorized by
-`.claude/plans/active/2026-05-12-phase7-aws-learned-batch.md`. The batch
-matrix is 15 jobs: five canonical splits (`build`, `opponent`, `component`,
-`seed-cell`, `forward-time`) crossed with three learned model families.
+Local full-run artifact:
+`data/phase7/learned_surrogate_full_local_2026-05-12.json`.
+
+The run used the canonical 15-job matrix: five splits (`build`, `opponent`,
+`component`, `seed-cell`, `forward-time`) crossed with three learned model
+families. HPO settings were `hpo_trials = 24`, `hpo_jobs = 4`,
+`model_thread_count = 4`, `split_seed = 17`, and `hpo_seed = 23`.
+
+AWS batch execution is authorized by
+`.claude/plans/active/2026-05-12-phase7-aws-learned-batch.md`, but the full
+cloud relaunch is gated on a smaller smoke config:
+`examples/phase7-learned-batch-smoke.yaml`.
 
 AWS quota and instance policy checked on 2026-05-12:
 
@@ -101,11 +113,12 @@ AWS quota and instance policy checked on 2026-05-12:
   current provider floors worker count per region; a 15-worker batch across
   two regions would provision only 14 workers.
 - Default instance types: `c7i.4xlarge`, then `c7a.4xlarge`.
-- Target workers: 15, for 240 vCPU at full size.
+- Full target workers: 15, for 240 vCPU at full size.
+- Smoke target workers: 2, for 32 vCPU.
 - Per-worker parallelism: `hpo_jobs = 4`, `model_thread_count = 4`.
 - Hard budget: `$20.00`; max lifetime: 2 hours.
 
-The batch merge is not allowed to overwrite
+The full batch merge is not allowed to overwrite
 `data/phase7/learned_surrogate_full_2026-05-12.json` until all 15 artifacts
 validate with matching schema, provenance, source DB, comparator context,
 top-k settings, dependency extra, bundle hash, and leakage checklist. Partial
@@ -113,10 +126,11 @@ AWS outputs are batch-internal diagnostics only.
 
 ### Comparison Statistics
 
-This smoke report does not make formal comparator claims. The producer records
-metric deltas against the comparator artifact, but every row is marked
-`row_filter_mismatch` because the learned smoke run uses `max_rows = 200` and
-the comparator artifact uses the full materialized DB.
+The local full run is comparable to
+`data/phase7/wave1_comparator_gate_2026-05-11.json` because both use the full
+materialized DB. `comparator_delta` is computed as learned metric minus
+comparator metric; lower MAE/RMSE deltas are better, higher Spearman deltas
+are better.
 
 ### Diagnostics & Thresholds
 
@@ -136,6 +150,28 @@ Relevant gates:
 No pass/fail model-quality threshold is asserted in this draft.
 
 ## Results
+
+### Local Full Run
+
+**Method (§Methods).** Full uncapped learned-surrogate run over all canonical
+split/model pairs.
+
+**Statistic (§Methods).** MAE, RMSE, and Spearman rho on the outer test
+partition. Comparator deltas use learned minus matching comparator.
+
+| Split | Best RMSE model | MAE | RMSE | Spearman rho | RMSE delta vs comparator | Rho delta vs comparator |
+|---|---|---:|---:|---:|---:|---:|
+| `build` | `catboost_regressor` | 0.212694 | 0.341793 | 0.819951 | -0.012423 | +0.013344 |
+| `component` | `catboost_regressor` | 0.214998 | 0.353585 | 0.818841 | -0.006589 | +0.003702 |
+| `seed-cell` | `catboost_regressor` | 0.214573 | 0.344720 | 0.810472 | -0.014942 | +0.007021 |
+| `forward-time` | `catboost_regressor` | 0.232880 | 0.374717 | 0.798650 | -0.006224 | +0.008869 |
+| `opponent` | `random_forest_tuned` | 0.454179 | 0.583311 | 0.261427 | -0.038852 | -0.006333 |
+
+Interpretation: featureized learned models are useful for interpolation over
+build/component/time/seed-cell stresses, with CatBoost the default next
+baseline. Held-out-opponent generalization is still the weak point: RMSE
+improves under tuned random forest, but rank signal remains low and does not
+beat the comparator in Spearman rho.
 
 ### Smoke Execution
 
@@ -160,26 +196,27 @@ here is that the smoke gate is operational.
 
 ## Synthesis & Decisions
 
-The learned-surrogate producer passed its smoke gate, but publishable full-run
-evidence requires clean committed code provenance. The AWS batch wrapper now
-has live-launch lifecycle code for serving the control
-plane, requiring a full 15-worker fleet, monitoring budget with hard-cap
-teardown and soft warning thresholds, persisting status/events/results, tearing
-down on exit, running final audit, and merging only after 15 validated jobs.
-Real AWS provisioning should still wait for a clean post-change preflight so
-AMI/source provenance checks evaluate the intended commit. Full-run evidence is
-still required before this report can ship or before the active plan can be
-retired.
+The local full run is enough to guide modeling work: keep CatBoost and tuned
+random forest, treat sparse pairwise ridge as noncompetitive in its current
+form, and prioritize opponent representation/generalization before optimizer
+integration.
+
+AWS should be repaired incrementally. The immediate fix is the missing bundle
+dependency plus better worker diagnostics. The next cloud run should use
+`examples/phase7-learned-batch-smoke.yaml` with two workers. Only after the
+smoke produces validated artifacts should the full 15-worker batch resume.
 
 ## Open Questions / Next Steps
 
-- Commit the batch implementation or explicitly treat any dirty-provenance run
-  as a non-publishable rehearsal.
+- Commit the bundle/diagnostics/smoke-config changes, then rebake/update the
+  AMI if source-hash preflight requires it.
 - Export `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
   `STARSECTOR_WORKSTATION_TAILNET_IP`.
-- Run clean AWS preflight without provisioning:
-  `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`.
-- Run the live full experiment through the trap wrapper:
+- Run clean smoke preflight without provisioning:
+  `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch-smoke.yaml`.
+- Run the live smoke through the trap wrapper:
+  `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch-smoke.yaml`.
+- If the smoke passes, run the live full experiment through the trap wrapper:
   `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
 - Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
   `ledger.jsonl`; if interrupted, run `scripts/cloud/teardown.sh

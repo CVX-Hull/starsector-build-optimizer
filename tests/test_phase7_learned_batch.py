@@ -179,6 +179,24 @@ def test_generate_jobs_has_canonical_matrix(tmp_path):
     }
 
 
+def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        target_workers=2,
+        min_workers_to_start=2,
+    )
+
+    jobs = generate_jobs(cfg)
+
+    assert [job.job_id for job in jobs] == [
+        "build__random_forest_tuned",
+        "build__catboost_regressor",
+    ]
+    validate_batch_config(cfg)
+
+
 def test_build_job_command_is_single_split_single_model_and_no_unsafe_flags(tmp_path):
     cfg = make_config(tmp_path)
     job = generate_jobs(cfg)[0]
@@ -203,6 +221,7 @@ def test_bundle_paths_include_runtime_inputs(tmp_path):
 
     assert cfg.source_db_path in paths
     assert cfg.comparator_json_path in paths
+    assert Path("scripts/analysis/phase7_baseline_surrogate.py") in paths
     assert Path("game/starsector/data") in paths
     assert Path("game/starsector/manifest.json") in paths
 
@@ -225,6 +244,7 @@ def test_create_bundle_contains_runtime_inputs(tmp_path, monkeypatch):
         names = set(tar.getnames())
     assert str(cfg.source_db_path) in names
     assert str(cfg.comparator_json_path) in names
+    assert "scripts/analysis/phase7_baseline_surrogate.py" in names
     assert "game/starsector/manifest.json" in names
     assert cli.SOURCE_VERSION_ARCNAME in names
 
@@ -256,6 +276,39 @@ def test_config_validation_rejects_partial_fleet_threshold(tmp_path):
 
     with pytest.raises(ValueError, match="min_workers_to_start must equal target_workers"):
         validate_batch_config(bad)
+
+
+def test_config_validation_rejects_job_matrix_mismatch_and_unknown_values(tmp_path):
+    cfg = make_config(tmp_path)
+    bad_count = replace(
+        cfg,
+        splits=("build",),
+        models=("random_forest_tuned",),
+        target_workers=15,
+        min_workers_to_start=15,
+    )
+    with pytest.raises(ValueError, match="len\\(splits\\) \\* len\\(models\\)"):
+        validate_batch_config(bad_count)
+
+    bad_split = replace(
+        cfg,
+        splits=("not-a-split",),
+        models=("random_forest_tuned",),
+        target_workers=1,
+        min_workers_to_start=1,
+    )
+    with pytest.raises(ValueError, match="unknown split"):
+        validate_batch_config(bad_split)
+
+    bad_model = replace(
+        cfg,
+        splits=("build",),
+        models=("not-a-model",),
+        target_workers=1,
+        min_workers_to_start=1,
+    )
+    with pytest.raises(ValueError, match="unknown model"):
+        validate_batch_config(bad_model)
 
 
 def test_config_validation_rejects_unsorted_budget_warn_thresholds(tmp_path):
@@ -395,6 +448,8 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "trap on_failure ERR" in out
     assert "post_event \"lease_acquired\"" in out
     assert "post_event \"worker_failed\"" in out
+    assert "post_event_with_log \"experiment_failed\"" in out
+    assert "log_tail" in out
     assert "post_worker_event \"bootstrap_start\"" in out
     assert "/worker-event" in out
 

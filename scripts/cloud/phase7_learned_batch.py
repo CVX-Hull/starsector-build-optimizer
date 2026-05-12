@@ -53,6 +53,7 @@ def bundle_paths(cfg) -> tuple[Path, ...]:
     return (
         Path("src"),
         Path("scripts/analysis/phase7_learned_surrogate_experiment.py"),
+        Path("scripts/analysis/phase7_baseline_surrogate.py"),
         Path("pyproject.toml"),
         Path("uv.lock"),
         cfg.source_db_path,

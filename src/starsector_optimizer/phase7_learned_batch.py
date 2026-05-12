@@ -81,6 +81,8 @@ class LearnedBatchConfig:
     train_fraction: float
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
     root_volume_size_gb: int | None = None
+    splits: tuple[str, ...] = CANONICAL_SPLITS
+    models: tuple[str, ...] = CANONICAL_MODELS
 
 
 @dataclass(frozen=True)
@@ -305,6 +307,8 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
             if expanded.get("root_volume_size_gb") is None
             else int(expanded["root_volume_size_gb"])
         ),
+        splits=tuple(str(v) for v in expanded.get("splits", CANONICAL_SPLITS)),
+        models=tuple(str(v) for v in expanded.get("models", CANONICAL_MODELS)),
     )
     validate_batch_config(cfg)
     return cfg
@@ -318,8 +322,21 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
     missing_regions = [region for region in config.regions if region not in config.ami_ids_by_region]
     if missing_regions:
         raise ValueError(f"AMI IDs missing for regions: {', '.join(missing_regions)}")
-    if config.target_workers != len(CANONICAL_SPLITS) * len(CANONICAL_MODELS):
-        raise ValueError("target_workers must equal the 15-job canonical matrix")
+    if not config.splits or not config.models:
+        raise ValueError("splits and models must be non-empty")
+    unknown_splits = [split for split in config.splits if split not in CANONICAL_SPLITS]
+    if unknown_splits:
+        raise ValueError(f"unknown split(s): {', '.join(unknown_splits)}")
+    unknown_models = [model for model in config.models if model not in CANONICAL_MODELS]
+    if unknown_models:
+        raise ValueError(f"unknown model(s): {', '.join(unknown_models)}")
+    if len(set(config.splits)) != len(config.splits):
+        raise ValueError("splits must not contain duplicates")
+    if len(set(config.models)) != len(config.models):
+        raise ValueError("models must not contain duplicates")
+    job_count = len(config.splits) * len(config.models)
+    if config.target_workers != job_count:
+        raise ValueError("target_workers must equal len(splits) * len(models)")
     if config.target_workers % len(config.regions) != 0:
         raise ValueError(
             "target_workers must be divisible by region count because AWSProvider "
@@ -365,8 +382,8 @@ def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
             model=model,
             output_path=result_dir / f"{split}__{model}.json",
         )
-        for split in CANONICAL_SPLITS
-        for model in CANONICAL_MODELS
+        for split in config.splits
+        for model in config.models
     )
 
 
@@ -557,6 +574,44 @@ post_event() {{
       {control_url}/event/"$JOB_ID" >/dev/null || true
   fi
 }}
+post_event_with_log() {{
+  if [[ -n "$JOB_ID" ]]; then
+    python3 - "$1" "$2" "$3" "$JOB_ID" "${{INSTANCE_ID:-unknown}}" "${{REGION:-unknown}}" "${{INSTANCE_TYPE:-unknown}}" <<'PY'
+import json
+import sys
+import urllib.request
+from pathlib import Path
+
+event, log_path, exit_code, job_id, instance_id, region, instance_type = sys.argv[1:8]
+try:
+    log_tail = Path(log_path).read_text(encoding="utf-8", errors="replace")[-12000:]
+except OSError as exc:
+    log_tail = f"<log unavailable: {{exc}}>"
+payload = {{
+    "event": event,
+    "exit_code": int(exit_code),
+    "instance_id": instance_id,
+    "region": region,
+    "instance_type": instance_type,
+    "log_path": log_path,
+    "log_tail": log_tail,
+}}
+request = urllib.request.Request(
+    f"{json.loads(json.dumps(control_plane_url))}/event/{{job_id}}",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={{
+        "Authorization": f"Bearer {json.loads(json.dumps(bearer_token))}",
+        "Content-Type": "application/json",
+    }},
+    method="POST",
+)
+try:
+    urllib.request.urlopen(request, timeout=30).read()
+except Exception:
+    pass
+PY
+  fi
+}}
 post_worker_event() {{
   curl --silent --fail -X POST \\
     -H "Authorization: Bearer {bearer_token}" \\
@@ -631,9 +686,12 @@ while (( SECONDS < DEADLINE )); do
   MODEL=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
   ATTEMPT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["attempt"])' <<< "$LEASE_BODY")
   OUTPUT="data/phase7/aws-job-$JOB_ID.json"
+  LOG="data/phase7/aws-job-$JOB_ID.log"
+  mkdir -p data/phase7
   post_event "lease_acquired"
   post_event "experiment_start"
 
+  set +e
   timeout {max_seconds} "$UV_BIN" run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
     {source_db} \\
     --game-dir {game_dir} \\
@@ -648,7 +706,13 @@ while (( SECONDS < DEADLINE )); do
     --hpo-jobs {config.hpo_jobs} \\
     --model-thread-count {config.model_thread_count} \\
     --top-k {top_k} \\
-    --output "$OUTPUT"
+    --output "$OUTPUT" >"$LOG" 2>&1
+  RUN_CODE=$?
+  set -e
+  if [[ "$RUN_CODE" != "0" ]]; then
+    post_event_with_log "experiment_failed" "$LOG" "$RUN_CODE"
+    exit "$RUN_CODE"
+  fi
   post_event "experiment_completed"
 
   curl --silent --fail -X POST \\
