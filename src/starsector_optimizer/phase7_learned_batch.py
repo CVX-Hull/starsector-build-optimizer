@@ -626,10 +626,10 @@ while (( SECONDS < DEADLINE )); do
     sleep 30
     continue
   fi
-  JOB_ID=$(python -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<< "$LEASE_BODY")
-  SPLIT=$(python -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE_BODY")
-  MODEL=$(python -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
-  ATTEMPT=$(python -c 'import json,sys; print(json.load(sys.stdin)["attempt"])' <<< "$LEASE_BODY")
+  JOB_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<< "$LEASE_BODY")
+  SPLIT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE_BODY")
+  MODEL=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
+  ATTEMPT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["attempt"])' <<< "$LEASE_BODY")
   OUTPUT="data/phase7/aws-job-$JOB_ID.json"
   post_event "lease_acquired"
   post_event "experiment_start"

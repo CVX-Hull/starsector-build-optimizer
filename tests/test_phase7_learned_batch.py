@@ -390,6 +390,7 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "timeout 7200" in out
     assert 'UV_BIN="/home/ubuntu/.local/bin/uv"' in out
     assert '"$UV_BIN" sync --frozen --extra surrogate' in out
+    assert "JOB_ID=$(python3 -c" in out
     assert 'worker_failed_before_lease_${BOOTSTRAP_STEP}' in out
     assert "trap on_failure ERR" in out
     assert "post_event \"lease_acquired\"" in out
