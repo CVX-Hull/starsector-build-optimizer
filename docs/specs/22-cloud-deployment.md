@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-05-12
 ---
 
 # Cloud Deployment Specification
@@ -429,6 +429,45 @@ Four layers from innermost to outermost:
 4. **Shell-level `trap EXIT`** in `launch_campaign.sh` — re-runs `teardown.sh` + `final_audit.sh` unconditionally and exits non-zero if any resource leaked.
 
 `final_audit.sh` checks all 4 US regions (not just `regions:`) for any instance tagged `Project=starsector-<campaign-name>` or security groups / volumes / launch templates tagged the same.
+
+### One-shot AWS batch runners
+
+One-shot AWS batch runners that reuse `AWSProvider` but do not use the
+combat-worker Redis queue still inherit the cloud safety contract:
+
+1. **Preflight before provisioning.** Launch paths call
+   `check_aws_credentials()`, `check_authkey_syntax(authkey)`, and
+   `check_ami_tags_against_manifest(provider, ami_ids_by_region,
+   GameManifest.load(), required_regions=regions)` before
+   `provider.provision_fleet(...)`.
+2. **Unique ownership tags.** Every batch uses a unique
+   `project_tag` and one explicit `fleet_name`. Batch-owned cleanup may use
+   `terminate_all_tagged(project_tag)` because no other workload shares that
+   project tag.
+3. **Teardown command first.** The launch CLI prints the exact targeted
+   teardown command before creating any AWS resource.
+4. **Budget ledger.** The batch config contains `budget_usd`,
+   `max_lifetime_hours`, `ledger_heartbeat_interval_seconds`, and warn
+   thresholds. The orchestrator appends durable secret-free JSONL rows under
+   the batch output directory and terminates the batch-owned fleet when the
+   hard ceiling is reached.
+5. **Layered teardown.** Launch wraps orchestration in `try/finally`,
+   registers `atexit` cleanup, handles SIGINT/SIGTERM, calls
+   `terminate_fleet(fleet_name, project_tag)` on normal exit, and calls
+   `terminate_all_tagged(project_tag)` as the crash-recovery sweep.
+6. **Final audit.** The operator-facing completion path includes
+   `scripts/cloud/final_audit.sh <campaign-or-batch-name>` or an equivalent
+   provider audit over all configured cloud regions.
+7. **Authenticated control plane.** Any local HTTP control plane used by the
+   batch requires a per-batch bearer token on every route that serves bundles,
+   leases work, accepts events, accepts results, or reports status. Missing or
+   wrong tokens return 401 and do not mutate state.
+8. **UserData security.** Custom batch UserData keeps the same fail-closed
+   invariants as combat-worker UserData: `set -euo pipefail`, `umask 077`,
+   Tailscale authkey through a 0600 file followed by `shred -u`, no
+   `--ssh`, no secret logging, IMDSv2 instance ID capture, baked worker
+   service disabled before custom work, bounded lifetime, and explicit result
+   upload failure handling.
 
 ## `CloudProvider` ABC
 

@@ -33,6 +33,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | superseded | [Wave 1 honest-eval live preliminary](2026-05-10-wave1-honest-eval-live-preliminary.md) | Read-only in-flight snapshot of resumed honest eval after the late-result retry fix and AMI rebake. Superseded by the final 2026-05-11 honest-eval report. |
 | 2026-05-10 | draft | [Post-hoc ranker — research and Wave 1 empirics](2026-05-10-posthoc-ranker-research.md) | Training-log candidate-selection study. `36538033d63b` is the strongest domain-vetted candidate in this draft, not the honest-eval winner. |
 | 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Pre-launch; fills in after `launch_wave2.sh` completes. |
+| 2026-05-12 | draft | [Phase 7 learned surrogate experiment](2026-05-12-phase7-learned-surrogate-experiment.md) | Learned-surrogate runner smoke/full-run report. Current draft contains smoke execution only; no model-selection verdict until the full run completes. |
 
 ## Historical / Pre-V2 Reports
 

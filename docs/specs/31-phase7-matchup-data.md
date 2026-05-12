@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: 2026-05-11
+last-validated: 2026-05-12
 ---
 
 # Spec 31 — Phase 7 Matchup Data
@@ -11,8 +11,11 @@ lives in:
 
 - `src/starsector_optimizer/matchup_features.py`
 - `src/starsector_optimizer/phase7_matchup_data.py`
+- `src/starsector_optimizer/phase7_learned_batch.py`
 - `scripts/analysis/phase7_materialize_matchups.py`
 - `scripts/analysis/phase7_baseline_surrogate.py`
+- `scripts/analysis/phase7_learned_surrogate_experiment.py`
+- `scripts/cloud/phase7_learned_batch.py`
 
 This layer does not run simulations and does not replace honest evaluation. It
 recovers prior-run build/matchup evidence into auditable local tables for
@@ -326,3 +329,201 @@ Honest-eval top-k recall is required for this gate. The protocol is:
    honest-eval build ranking.
 5. Do not tune features, model choice, or hyperparameters on the same
    honest-eval rows cited by a report.
+
+## Learned Baseline Experiment
+
+The learned-baseline experiment is separate from the comparator gate. It may
+use stronger model families and nested hyperparameter search, but it must keep
+the comparator-gate script and model names stable.
+
+### Library Usage Policy
+
+Repository code owns the experiment contract: split construction, leakage
+rules, provenance, comparator context, JSON/report schema, and honest-eval
+diagnostic discipline. Library defaults must not replace those contracts.
+
+Use libraries by layer:
+
+- `scikit-learn` is the baseline ML framework for auditable pipelines,
+  vectorization, metrics, random forests, ridge-style models, sparse
+  interaction sketches, and simple feature-importance diagnostics.
+- CatBoost is the first primary categorical gradient-boosted tree baseline. It
+  uses native categorical handling through pandas columns and `cat_features`,
+  not manual one-hot preprocessing.
+- Optuna may be used for a later nested HPO implementation after the
+  random-search baseline establishes runtime and search-space behavior. Any
+  Optuna study must be created inside the inner validation loop and must never
+  observe outer-test or honest-eval targets.
+- LightGBM or XGBoost require a later plan and spec update. Add them only when
+  CatBoost/RF results justify another boosted-tree implementation or runtime
+  pressure requires it.
+- BoTorch/GPyTorch/Torch are reserved for structured optimizer integration and
+  calibrated allocation work, not this learned-baseline report.
+- MLflow, Weights & Biases, or similar external experiment trackers are not
+  part of this phase. Use JSON artifacts and the local report/SQLite
+  provenance path first.
+
+Parallel execution policy:
+
+- Threaded HPO is acceptable for this phase because the expensive estimators
+  are native-heavy (`scikit-learn`/OpenMP, CatBoost C++, NumPy/SciPy kernels)
+  and generally release the Python GIL during fit/predict work.
+- Avoid uncontrolled nested parallelism. Treat `hpo_jobs *
+  model_thread_count` as the intended logical-core budget and record both
+  fields in every artifact.
+- Use conservative full-run defaults on a 16-logical-core workstation:
+  `hpo_jobs = 4` and `model_thread_count = 4`.
+- If scaling is poor, unstable, or memory-bound, move trial-level parallelism
+  to a later `loky`/process-backed design with cached or memmapped feature
+  matrices rather than increasing nested threads.
+
+The learned-baseline script exposes:
+
+```python
+EXPERIMENT_SCHEMA_VERSION: int
+
+@dataclass(frozen=True)
+class LearnedExperimentConfig:
+    db_path: Path
+    game_dir: Path
+    comparator_json_path: Path | None
+    split: str
+    model: str
+    holdout_fraction: float
+    train_fraction: float
+    split_seed: int
+    hpo_seed: int
+    hpo_trials: int
+    hpo_jobs: int
+    model_thread_count: int
+    max_rows: int | None
+    top_k_values: tuple[int, ...]
+    progress: bool
+    allow_missing_optional_models: bool
+
+def build_experiment_configs(
+    config: LearnedExperimentConfig,
+) -> list[LearnedExperimentConfig]: ...
+
+def run_experiment(config: LearnedExperimentConfig) -> dict[str, object]: ...
+```
+
+All tunable thresholds, budgets, seeds, fractions, and search spaces live in
+`LearnedExperimentConfig` or module-level named constants.
+
+`hpo_jobs` controls concurrent HPO trial execution. `model_thread_count`
+controls estimator-level parallelism for libraries that expose it, including
+scikit-learn random forests and CatBoost. Reports must record both fields so
+runtime comparisons are interpretable.
+
+When `--output` is provided, the learned script writes partial checkpoint JSON
+after each completed model/split result and overwrites it with the final
+payload at completion. Checkpoints must include enough provenance to inspect an
+interrupted run.
+
+The initial learned model-family names are:
+
+```python
+random_forest_tuned
+catboost_regressor
+sparse_pairwise_ridge
+```
+
+The learned feature vectors may use game-data categorical descriptors such as
+weapon IDs, hullmod IDs, slot IDs, and opponent variant IDs. They must not
+include `build_key`, target-derived build means, target-derived opponent means,
+TWFE residuals, honest-eval labels, or any field computed from outer-test
+targets. Under held-out-build and held-out-opponent splits, unseen categories
+must be handled by the fitted encoder or model without target fallback.
+
+Each learned model/split run uses nested validation:
+
+1. Build the outer split using one of the comparator-gate split names:
+   `build`, `opponent`, `component`, `seed-cell`, or `forward-time`.
+2. Build the inner validation split from outer training rows only, using the
+   same grouping stressor as the outer split.
+3. If the outer training rows cannot support that inner split, emit an
+   `insufficient_inner_groups` result for the model/split instead of using a
+   random row split.
+4. Select hyperparameters by minimizing inner-validation RMSE. Tie breakers are
+   higher Spearman rho and then lower fit/predict runtime.
+5. Refit the selected model on the full outer training rows.
+6. Evaluate once on the outer test rows.
+
+The learned script accepts `--comparator-json`, defaulting to
+`data/phase7/wave1_comparator_gate_2026-05-11.json`. Results include the
+comparator artifact path, matching comparator context for the same split, and
+default-vs-tuned deltas when tuning is used. If no matching comparator row
+exists, the result records `comparator_missing` instead of failing.
+
+The learned script accepts `--output <path>` and writes the JSON payload there
+instead of requiring shell redirection. Parent directories are created when
+missing.
+
+CatBoost is part of the optional `surrogate` dependency set. If the caller
+selects `catboost_regressor` and CatBoost is unavailable, the script raises an
+actionable dependency error unless `--allow-missing-optional-models` is set. If
+that flag is set, the JSON output records the skipped model and reason.
+
+The learned experiment JSON output includes:
+
+- `experiment_schema_version`
+- `feature_schema_version`
+- source DB path and game directory
+- comparator JSON path
+- code/version provenance, or `unknown`
+- split seed and HPO seed
+- train/holdout fractions
+- model-family list and skipped-model list
+- per-result target, feature-family summary, split family, HPO space, HPO
+  trace summary, selected hyperparameters, metrics, comparator context,
+  honest-eval diagnostic, timing, and leakage checklist
+
+Honest-eval top-k recall remains a post-fit diagnostic only. No learned
+baseline may train, tune, choose features, choose model families, or calibrate
+on honest-eval targets.
+
+## Learned AWS Batch Artifacts
+
+The learned AWS batch runner is a distributed execution path for the learned
+baseline experiment. Spec 22 owns the cloud lifecycle, preflight, budget,
+teardown, UserData security, and authenticated control-plane requirements.
+This spec owns the Phase 7 job matrix and artifact semantics.
+
+The canonical batch job matrix is exactly:
+
+- splits: `build`, `opponent`, `component`, `seed-cell`, `forward-time`;
+- model families: `random_forest_tuned`, `catboost_regressor`,
+  `sparse_pairwise_ridge`.
+
+That produces 15 jobs. Each job runs
+`scripts/analysis/phase7_learned_surrogate_experiment.py` with exactly one
+split and exactly one model family, plus the configured source DB, game dir,
+comparator JSON, HPO settings, split seeds, fractions, top-k values, progress
+flag, and an explicit per-job `--output` path. The generated command must not
+include honest-eval training inputs or unsafe feature/model-selection flags.
+
+Per-job artifacts are normal learned-experiment JSON payloads with one
+completed result. Batch provenance may add a top-level `batch_job` object with
+`job_id`, `split`, `model`, `attempt`, `instance_id`, `region`,
+`instance_type`, `bundle_sha256`, and timestamps. A skipped optional model is
+a failed canonical job for full-run publication unless the batch config was
+explicitly created for smoke/debug output.
+
+The batch merge step must validate every per-job artifact before publishing:
+
+- all 15 canonical job IDs are present exactly once;
+- no job is failed, missing, duplicate, stale, or partial;
+- every artifact has the same `experiment_schema_version`,
+  `feature_schema_version`, source DB path, game dir, comparator JSON path,
+  split/HPO seeds, train/holdout fractions, top-k values, dependency extra,
+  source bundle SHA256, and code provenance;
+- every result has a present and passing leakage checklist;
+- every result's `split` and `model` match its job ID;
+- comparator context is present for every result.
+
+Valid merge writes a batch-internal `merged.json` and then atomically promotes
+the canonical full-run artifact to
+`data/phase7/learned_surrogate_full_2026-05-12.json`. Partial batches may
+write `.partial` or batch-internal artifacts only; they must not overwrite the
+canonical full-run path.
