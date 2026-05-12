@@ -233,16 +233,19 @@ protocol now uses renewable leases: workers renew job ownership while the
 model process is alive, and the controller requeues only after AWS worker loss
 or missed renewals beyond `lease_grace_seconds`.
 
+Update from the renewable-lease smoke: the 2-worker AWS smoke completed and
+merged both planned build-split jobs on AMI `ami-07ce0d6ab863c85c5`.
+CatBoost completed with `MAE = 0.213213`, `RMSE = 0.342093`, and
+`Spearman rho = 0.820206`; tuned RF completed with `MAE = 0.214688`,
+`RMSE = 0.348235`, and `Spearman rho = 0.814063`. Both jobs completed on
+attempt 1, RF renewed beyond the old fixed-lease failure point without being
+duplicated, and final audit reported zero tagged AWS resources. Smoke artifact
+directory:
+`data/phase7/learned_surrogate_batch_smoke_retry3_2026-05-12/`.
+
 ## Open Questions / Next Steps
 
-- Commit the renewable-lease change, then rebake/update the AMI.
-- Export `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
-  `STARSECTOR_WORKSTATION_TAILNET_IP`.
-- Run clean smoke preflight without provisioning:
-  `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch-smoke.yaml`.
-- Run the live smoke through the trap wrapper:
-  `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch-smoke.yaml`.
-- If the smoke passes, run the live full experiment through the trap wrapper:
+- Run the live full experiment through the trap wrapper:
   `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
 - Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
   `ledger.jsonl`; if interrupted, run `scripts/cloud/teardown.sh

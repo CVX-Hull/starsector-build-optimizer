@@ -189,15 +189,17 @@ Completed in the current implementation pass:
   was stopped and audited clean. The protocol now uses renewable leases, so
   job duration is bounded by model completion, batch lifetime, and budget
   guardrails rather than by a fixed lease TTL.
+- renewable-lease smoke on AMI `ami-07ce0d6ab863c85c5` completed both
+  build-split jobs on attempt 1, merged the smoke artifact, and final-audited
+  clean. RF renewed beyond the old fixed-lease failure point without duplicate
+  assignment.
 
 Not complete:
 
 - before real AWS provisioning, run a clean preflight after committing these
   source changes and rebaking/updating the AMI;
-- run and validate the 2-worker AWS smoke matrix before any 15-worker
-  full-matrix relaunch;
-- re-bake after the renewable-lease source change and rerun the 2-worker
-  smoke;
+- run a full-run preflight against the renewable-lease AMI;
+- launch the 15-worker full matrix only through the trap wrapper;
 - no valid canonical full-run promotion exists yet.
 
 ## Remaining Before Live AWS Execution
@@ -209,21 +211,16 @@ Not complete:
    `STARSECTOR_WORKSTATION_TAILNET_IP`.
 3. Run the active-plan validator, focused batch tests, full test suite, and
    shell syntax checks.
-4. Run launch preflight without provisioning:
-   `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch-smoke.yaml`.
-5. Launch the smoke live only through the trap wrapper:
-   `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch-smoke.yaml`.
-6. Inspect smoke `status.json`, event logs, and result artifacts. Only after
-   both smoke jobs validate, run the full-run preflight:
+4. Run the full-run preflight:
    `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`.
-7. Launch the full run through the trap wrapper:
+5. Launch the full run through the trap wrapper:
    `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
-8. Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
+6. Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
    `ledger.jsonl`.
-9. If interrupted, run
+7. If interrupted, run
    `scripts/cloud/teardown.sh phase7-learned-batch-20260512` and
    `scripts/cloud/final_audit.sh phase7-learned-batch-20260512`.
-10. Ship the report only after the canonical 15-result merge exists and passes
+8. Ship the report only after the canonical 15-result merge exists and passes
    post-run audit.
 
 ## Baseline Plan Interaction
