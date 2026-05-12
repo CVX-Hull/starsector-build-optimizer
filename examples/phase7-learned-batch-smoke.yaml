@@ -4,7 +4,7 @@ fleet_name: learned-surrogate-smoke
 regions:
   - us-east-1
 ami_ids_by_region:
-  us-east-1: ami-0295893f886396105
+  us-east-1: ami-094edeb24bab91fd2
 instance_types:
   - c7i.4xlarge
   - c7a.4xlarge
@@ -31,8 +31,8 @@ ledger_warn_thresholds:
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
 control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
 control_plane_port: 9132
-output_dir: data/phase7/learned_surrogate_batch_smoke_retry_2026-05-12
-canonical_output_path: data/phase7/learned_surrogate_full_smoke_retry_2026-05-12.json
+output_dir: data/phase7/learned_surrogate_batch_smoke_retry2_2026-05-12
+canonical_output_path: data/phase7/learned_surrogate_full_smoke_retry2_2026-05-12.json
 source_db_path: data/phase7/wave1_matchups.sqlite
 game_dir: game/starsector
 comparator_json_path: data/phase7/wave1_comparator_gate_2026-05-11.json
