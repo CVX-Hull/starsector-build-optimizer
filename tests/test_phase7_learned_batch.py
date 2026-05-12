@@ -218,6 +218,7 @@ def test_create_bundle_contains_runtime_inputs(tmp_path, monkeypatch):
     bundle, digest = cli.create_bundle(config_path, tmp_path)
 
     assert len(digest) == 64
+    assert bundle.is_absolute()
     import tarfile
     with tarfile.open(bundle, "r:gz") as tar:
         names = set(tar.getnames())

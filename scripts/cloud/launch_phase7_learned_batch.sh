@@ -22,6 +22,16 @@ while [[ $# -gt 0 ]]; do
 done
 
 BATCH_NAME=$(uv run python -c 'from pathlib import Path; import sys, yaml; print(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))["name"])' "$CONFIG")
+CONTROL_PLANE_PORT=$(uv run python -c 'from pathlib import Path; import sys, yaml; print(yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8"))["control_plane_port"])' "$CONFIG")
+
+TS_SOCKET="${STARSECTOR_TAILSCALE_SOCKET:-$HOME/.local/state/starsector-cloud/tailscale/tailscaled.sock}"
+if [[ -S "$TS_SOCKET" ]]; then
+  tailscale --socket="$TS_SOCKET" serve --bg \
+    --tcp="$CONTROL_PLANE_PORT" "tcp://127.0.0.1:$CONTROL_PLANE_PORT" >/dev/null
+else
+  tailscale serve --bg \
+    --tcp="$CONTROL_PLANE_PORT" "tcp://127.0.0.1:$CONTROL_PLANE_PORT" >/dev/null
+fi
 
 cleanup() {
   local status=$?

@@ -36,6 +36,7 @@ REDIS_LOG="$STATE_DIR/redis/redis.log"
 FLASK_PORT_MIN="${STARSECTOR_FLASK_PORT_MIN:-9000}"
 FLASK_PORT_MAX="${STARSECTOR_FLASK_PORT_MAX:-9099}"
 MOD_JAR_PORT="${STARSECTOR_MOD_JAR_PORT:-8081}"
+PHASE7_CONTROL_PLANE_PORT="${STARSECTOR_PHASE7_CONTROL_PLANE_PORT:-8765}"
 
 : "${TAILSCALE_AUTHKEY:?TAILSCALE_AUTHKEY must be exported before running devenv-up.sh}"
 
@@ -117,11 +118,16 @@ done
 tailscale --socket="$TS_SOCKET" serve --bg \
     --tcp="$MOD_JAR_PORT" "tcp://127.0.0.1:$MOD_JAR_PORT" >/dev/null
 
+# Phase 7 learned-batch control plane.
+tailscale --socket="$TS_SOCKET" serve --bg \
+    --tcp="$PHASE7_CONTROL_PLANE_PORT" "tcp://127.0.0.1:$PHASE7_CONTROL_PLANE_PORT" >/dev/null
+
 TS_IP="$(tailscale --socket="$TS_SOCKET" ip -4 | head -1)"
 
 msg "tailnet IP: $TS_IP"
 msg "redis exposed on $TS_IP:$REDIS_PORT via tailscale serve"
 msg "flask ports $FLASK_PORT_MIN-$FLASK_PORT_MAX exposed via tailscale serve"
 msg "mod-jar port $MOD_JAR_PORT exposed via tailscale serve (run scripts/cloud/serve_mod_jar.sh)"
+msg "phase7 control-plane port $PHASE7_CONTROL_PLANE_PORT exposed via tailscale serve"
 msg "next: scripts/cloud/launch_campaign.sh <campaign.yaml>"
 msg "tear down: scripts/cloud/devenv-down.sh"

@@ -64,8 +64,8 @@ def bundle_paths(cfg) -> tuple[Path, ...]:
 
 def create_bundle(config_path: Path, output_dir: Path) -> tuple[Path, str]:
     cfg = load_batch_config(config_path)
-    bundle_path = output_dir / "bundle.tgz"
     output_dir.mkdir(parents=True, exist_ok=True)
+    bundle_path = (output_dir / "bundle.tgz").resolve()
     source_version = current_source_version()
     with tarfile.open(bundle_path, "w:gz") as tar:
         for path in bundle_paths(cfg):
