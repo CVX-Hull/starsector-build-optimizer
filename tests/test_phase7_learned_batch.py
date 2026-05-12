@@ -212,6 +212,7 @@ def test_create_bundle_contains_runtime_inputs(tmp_path, monkeypatch):
     config_path.write_text("unused", encoding="utf-8")
     cli = load_batch_cli_module()
     monkeypatch.setattr(cli, "load_batch_config", lambda path: cfg)
+    monkeypatch.setattr(cli, "current_source_version", lambda: "abc123")
     monkeypatch.chdir(Path.cwd())
 
     bundle, digest = cli.create_bundle(config_path, tmp_path)
@@ -223,6 +224,7 @@ def test_create_bundle_contains_runtime_inputs(tmp_path, monkeypatch):
     assert str(cfg.source_db_path) in names
     assert str(cfg.comparator_json_path) in names
     assert "game/starsector/manifest.json" in names
+    assert cli.SOURCE_VERSION_ARCNAME in names
 
 
 def test_config_validation_rejects_oversubscribed_or_ambiguous_fallback(tmp_path):
@@ -822,6 +824,7 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
         "check_ami_tags_against_manifest",
         lambda provider, amis, manifest, required_regions: calls.append(("ami", tuple(required_regions))),
     )
+    monkeypatch.setattr(cli, "check_amis_available", lambda provider, config: calls.append("ami-available"))
     monkeypatch.setattr(cli, "GameManifest", type("GM", (), {"load": staticmethod(lambda: object())}))
     monkeypatch.setattr(cli, "AWSProvider", lambda regions: FakeProvider())
     monkeypatch.setattr(cli, "create_bundle", lambda path, out: (tmp_path / "bundle.tgz", "b" * 64))
@@ -839,5 +842,22 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
     assert "aws" in calls
     assert ("auth", cfg.tailscale_authkey_secret) in calls
     assert ("ami", cfg.regions) in calls
+    assert "ami-available" in calls
     assert "atexit" in calls
     assert ("live", "b" * 64, "token") in calls
+
+
+def test_check_amis_available_rejects_pending_image(tmp_path):
+    cfg = make_config(tmp_path)
+    cli = load_batch_cli_module()
+
+    class Client:
+        def describe_images(self, ImageIds):
+            return {"Images": [{"ImageId": ImageIds[0], "State": "pending"}]}
+
+    class Provider:
+        def _client(self, region):
+            return Client()
+
+    with pytest.raises(RuntimeError, match="pending"):
+        cli.check_amis_available(Provider(), cfg)

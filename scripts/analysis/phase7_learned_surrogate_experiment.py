@@ -745,6 +745,15 @@ def provenance(config: LearnedExperimentConfig) -> dict[str, object]:
 
 
 def _code_version() -> str:
+    source_version_file = Path(".phase7_source_version")
+    if source_version_file.exists():
+        try:
+            payload = json.loads(source_version_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = {}
+        version = payload.get("code_version")
+        if isinstance(version, str) and version:
+            return version
     git_dir = Path(".git")
     head = git_dir / "HEAD"
     if not head.exists():

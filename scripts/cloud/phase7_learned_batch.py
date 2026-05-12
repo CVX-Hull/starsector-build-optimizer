@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import hashlib
+import io
 import json
 import secrets
 import signal
@@ -29,6 +30,9 @@ from starsector_optimizer.phase7_learned_batch import (
     run_live_batch,
     validate_batch_config,
 )
+
+
+SOURCE_VERSION_ARCNAME = ".phase7_source_version"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -62,11 +66,52 @@ def create_bundle(config_path: Path, output_dir: Path) -> tuple[Path, str]:
     cfg = load_batch_config(config_path)
     bundle_path = output_dir / "bundle.tgz"
     output_dir.mkdir(parents=True, exist_ok=True)
+    source_version = current_source_version()
     with tarfile.open(bundle_path, "w:gz") as tar:
         for path in bundle_paths(cfg):
             tar.add(path)
+        payload = json.dumps({"code_version": source_version}, sort_keys=True).encode("utf-8")
+        info = tarfile.TarInfo(SOURCE_VERSION_ARCNAME)
+        info.size = len(payload)
+        info.mode = 0o644
+        tar.addfile(info, io.BytesIO(payload))
     digest = hashlib.sha256(bundle_path.read_bytes()).hexdigest()
     return bundle_path, digest
+
+
+def current_source_version() -> str:
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--short"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if status:
+        raise RuntimeError(
+            "refusing to create publishable Phase 7 bundle from a dirty worktree"
+        )
+    return head
+
+
+def check_amis_available(provider, cfg) -> None:
+    for region in cfg.regions:
+        ami_id = cfg.ami_ids_by_region[region]
+        client = provider._client(region)
+        response = client.describe_images(ImageIds=[ami_id])
+        images = response.get("Images", [])
+        if not images:
+            raise RuntimeError(f"AMI {ami_id} not found in {region}")
+        state = images[0].get("State")
+        if state != "available":
+            raise RuntimeError(
+                f"AMI {ami_id} in {region} is {state!r}; wait until it is 'available'"
+            )
 
 
 def dry_run(config_path: Path) -> int:
@@ -133,6 +178,7 @@ def launch(config_path: Path, *, execute: bool) -> int:
         GameManifest.load(),
         required_regions=cfg.regions,
     )
+    check_amis_available(provider, cfg)
 
     cleanup = f"scripts/cloud/teardown.sh {cfg.name}"
     print(f"Cleanup command: {cleanup}", flush=True)
