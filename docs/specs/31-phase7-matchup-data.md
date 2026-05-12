@@ -512,6 +512,9 @@ debug runs. In every config, `target_workers` must equal
 `len(splits) * len(models)`, and `min_workers_to_start` must equal
 `target_workers`. Subset batches are diagnostic only; they may not publish the
 canonical full-run artifact unless their matrix is the full canonical matrix.
+`max_job_attempts` controls the lease retry budget and must be positive. Spot
+worker loss consumes a lease attempt; configs intended for Spot execution
+therefore need a retry budget larger than one transient interruption cycle.
 
 The batch bundle must include every runtime script imported by the worker
 command, including both `phase7_learned_surrogate_experiment.py` and its

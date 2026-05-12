@@ -176,16 +176,22 @@ Completed in the current implementation pass:
   could not retry until lease expiry;
 - live-batch control now requeues leases whose worker is no longer active and
   provisions replacement workers for pending work.
+- second 2-worker smoke on the replacement-aware AMI confirmed clean teardown
+  and another validated CatBoost artifact, but both Spot instances were
+  service-terminated at the same timestamp; RF had been re-leased just before
+  the second interruption, so the hardcoded two-attempt policy marked it failed
+  without a model-level failure event;
+- retry budget is now a config field (`max_job_attempts`) and smoke/full
+  configs use six attempts so Spot worker loss does not masquerade as a
+  deterministic experiment failure.
 
 Not complete:
 
 - before real AWS provisioning, run a clean preflight after committing these
-  source changes and rebaking/updating the AMI if source-hash preflight
-  requires it;
+  source changes and rebaking/updating the AMI;
 - run and validate the 2-worker AWS smoke matrix before any 15-worker
   full-matrix relaunch;
-- re-bake after the lost-worker replacement source change and rerun the
-  2-worker smoke;
+- re-bake after the retry-budget source change and rerun the 2-worker smoke;
 - no valid canonical full-run promotion exists yet.
 
 ## Remaining Before Live AWS Execution

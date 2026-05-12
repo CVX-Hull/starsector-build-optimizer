@@ -61,6 +61,7 @@ class LearnedBatchConfig:
     min_workers_to_start: int
     budget_usd: float
     max_lifetime_hours: float
+    max_job_attempts: int
     ledger_heartbeat_interval_seconds: float
     ledger_warn_thresholds: tuple[float, ...]
     tailscale_authkey_secret: str
@@ -299,6 +300,7 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         min_workers_to_start=int(expanded["min_workers_to_start"]),
         budget_usd=float(expanded["budget_usd"]),
         max_lifetime_hours=float(expanded["max_lifetime_hours"]),
+        max_job_attempts=int(expanded.get("max_job_attempts", 4)),
         ledger_heartbeat_interval_seconds=float(expanded["ledger_heartbeat_interval_seconds"]),
         ledger_warn_thresholds=tuple(float(v) for v in expanded["ledger_warn_thresholds"]),
         tailscale_authkey_secret=str(expanded["tailscale_authkey_secret"]),
@@ -367,6 +369,8 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         )
     if config.budget_usd <= 0 or config.max_lifetime_hours <= 0:
         raise ValueError("budget_usd and max_lifetime_hours must be positive")
+    if config.max_job_attempts <= 0:
+        raise ValueError("max_job_attempts must be positive")
     if config.ledger_heartbeat_interval_seconds <= 0:
         raise ValueError("ledger_heartbeat_interval_seconds must be positive")
     if not all(0.0 < value < 1.0 for value in config.ledger_warn_thresholds):
@@ -867,7 +871,11 @@ def run_live_batch(
     so tests can pass a fake provider.
     """
     jobs = generate_jobs(config)
-    state = BatchState(jobs, lease_ttl_seconds=1800.0, max_attempts=2)
+    state = BatchState(
+        jobs,
+        lease_ttl_seconds=1800.0,
+        max_attempts=config.max_job_attempts,
+    )
     poll_interval = (
         config.ledger_heartbeat_interval_seconds
         if poll_interval_seconds is None

@@ -19,6 +19,7 @@ min_workers_to_start: 15
 root_volume_size_gb: 128
 budget_usd: 20.0
 max_lifetime_hours: 2.0
+max_job_attempts: 6
 ledger_heartbeat_interval_seconds: 60.0
 ledger_warn_thresholds:
   - 0.5

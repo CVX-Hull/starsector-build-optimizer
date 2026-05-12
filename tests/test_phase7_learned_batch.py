@@ -53,6 +53,7 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         min_workers_to_start=15,
         budget_usd=20.0,
         max_lifetime_hours=2.0,
+        max_job_attempts=4,
         ledger_heartbeat_interval_seconds=60.0,
         ledger_warn_thresholds=(0.5, 0.8, 0.95),
         tailscale_authkey_secret="tskey-auth-test",
@@ -140,6 +141,7 @@ target_workers: 15
 min_workers_to_start: 15
 budget_usd: 20.0
 max_lifetime_hours: 2.0
+max_job_attempts: 4
 ledger_heartbeat_interval_seconds: 60.0
 ledger_warn_thresholds: [0.5, 0.8, 0.95]
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
@@ -167,6 +169,7 @@ dependency_extra: surrogate
 
     assert cfg.tailscale_authkey_secret == "tskey-auth-from-env"
     assert cfg.control_plane_host == "100.64.0.9"
+    assert cfg.max_job_attempts == 4
     validate_batch_config(cfg)
 
 

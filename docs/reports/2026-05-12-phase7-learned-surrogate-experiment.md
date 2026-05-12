@@ -215,9 +215,19 @@ the batch could not retry immediately. The controller now requeues jobs whose
 leased worker disappears from the active AWS set and provisions a replacement
 worker for pending work.
 
+Update from the second smoke attempt: the CatBoost job again completed and
+uploaded a validated artifact (`RMSE = 0.342093`, `Spearman rho = 0.820206`;
+artifact `data/phase7/learned_surrogate_batch_smoke_retry_2026-05-12/results/build__catboost_regressor.json`).
+Both Spot instances were then service-terminated at
+`2026-05-12T20:20:55Z`. The RF job had been re-leased to the completed
+CatBoost worker shortly before that interruption, so the hardcoded two-attempt
+controller policy marked it failed without any model-level failure event. The
+retry budget is now explicit as `max_job_attempts`; both smoke and full configs
+use six attempts before a job is treated as failed.
+
 ## Open Questions / Next Steps
 
-- Commit the lost-worker replacement change, then rebake/update the AMI.
+- Commit the explicit retry-budget change, then rebake/update the AMI.
 - Export `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
   `STARSECTOR_WORKSTATION_TAILNET_IP`.
 - Run clean smoke preflight without provisioning:
