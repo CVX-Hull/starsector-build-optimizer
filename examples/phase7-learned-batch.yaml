@@ -4,7 +4,7 @@ fleet_name: learned-surrogate
 regions:
   - us-east-2
 ami_ids_by_region:
-  us-east-2: ami-07add6d0b2b2a75b4
+  us-east-2: ami-084ab970fa4ae9561
 instance_types:
   - c7i.4xlarge
   - c7a.4xlarge
