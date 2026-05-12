@@ -246,9 +246,13 @@ kernel. Build the representation and validation substrate first:
 5. Add comparator-gate models: global mean, opponent mean, build mean,
    TWFE-additive, ridge-hybrid, and random forest.
    **Completed 2026-05-11** in the Phase 7 comparator-gate report.
-6. Promote CatBoost and sparse interaction baselines after the comparator gate
-   has run. This is now the next model step.
-7. Report top-k recall against honest-eval rankings without tuning on the
+6. Run the learned-surrogate research gate and derive the next experiment plan:
+   candidate model families, hyperparameter search spaces, nested grouped
+   validation, leakage controls, calibration policy, and provenance. This gate
+   is now the next model-development step.
+7. Promote learned tree and sparse interaction baselines only through that
+   reviewed experiment plan, after the comparator gate has run.
+8. Report top-k recall against honest-eval rankings without tuning on the
    same honest-eval rows cited as final evidence.
 
 Materialization acceptance criteria:
@@ -275,7 +279,8 @@ Grouped-validation promotion checklist:
 - Top-k recall is reported against honest-eval rankings without fitting or
   tuning on the cited honest-eval rows.
 - Failures by opponent family, score regime, and campaign cell are inspected
-  before CatBoost, sparse interaction models, or optimizer integration.
+  before learned tree baselines, sparse interaction models, or optimizer
+  integration.
 
 ### 6.5 Phase 7 Optimizer: Residual Online Search
 

@@ -132,17 +132,27 @@ without hard-filling those slots.
 
 ## Modeling Sequence
 
+The sequence below is no longer a fixed prescription. Model-family and
+hyperparameter choices are gated by
+[phase7-learned-surrogate-research.md](phase7-learned-surrogate-research.md),
+which requires nested grouped validation, explicit HPO budgets, leakage
+controls, and honest-eval top-k as a post-fit diagnostic. Spec 31 remains the
+contract owner for the comparator gate and data provenance.
+
 ### 1. Baseline Table Model
 
-Start with `CatBoostRegressor` for continuous `combat_fitness`, plus an
-optional `CatBoostClassifier` for win/loss. CatBoost is the right first
-baseline because the data is mixed categorical/continuous, irregular, noisy,
-and medium-sized. It also handles raw categorical columns without one-hot
-explosion.
+Start with literature-justified tree-ensemble baselines for continuous
+`combat_fitness`, chosen in the next experiment plan rather than hardcoded in
+this reference. CatBoost is a strong candidate because the data is mixed
+categorical/continuous, irregular, noisy, and medium-sized, and because it
+handles categorical columns with ordered target statistics. XGBoost/LightGBM
+style baselines may also be justified if the feature representation is sparse
+one-hot or throughput becomes the dominant constraint.
 
-Use scikit-learn random forests or gradient boosting as a second sanity
-baseline. If CatBoost does not beat these, the feature table is probably wrong
-or leakage is dominating the evaluation.
+Keep the scikit-learn comparator ladder from spec 31 as the locked baseline.
+If a tuned learned model does not beat those comparators under nested grouped
+validation, the feature table, model family, or tuning protocol needs further
+diagnosis before optimizer integration.
 
 The first uncertainty baseline should be ensemble or quantile based rather than
 a full heteroscedastic GP:
@@ -335,16 +345,19 @@ module contracts are owned by
 The current baseline CLI is the comparator-gate harness, not the end-state
 model. The first grouped comparator report has been filed at
 [../reports/2026-05-11-phase7-matchup-surrogate-preliminary.md](../reports/2026-05-11-phase7-matchup-surrogate-preliminary.md).
-CatBoost remains the preferred first serious tabular baseline after that
-comparator gate.
+The literature gate for choosing the next learned baselines is
+[phase7-learned-surrogate-research.md](phase7-learned-surrogate-research.md).
 
 Next steps after materialization:
 
 1. Inspect comparator-gate error by opponent family, build family, campaign
    cell, and path-ordered forward bucket.
-2. Promote CatBoost and sparse interaction baselines if the scikit-learn
-   comparator model shows signal and no obvious leakage.
-3. Feed validated surrogate predictions into Phase 7 as either:
+2. Write an experiment plan that derives candidate models, hyperparameter
+   spaces, nested grouped validation, calibration, and artifact provenance from
+   the learned-surrogate research gate.
+3. Promote learned tree and sparse interaction baselines only if they beat the
+   scikit-learn comparator ladder under the declared protocol.
+4. Feed validated surrogate predictions into Phase 7 as either:
    - a prior mean for the BoTorch GP,
    - a candidate prefilter before expensive acquisition optimization,
    - or an active-learning uncertainty model for selecting which matchups to
@@ -365,27 +378,31 @@ local residual corrections where new simulations are most valuable.
 
 ## Evidence Base
 
-Key paper families from the 2026-05-11 research pass:
+Key paper families represented in the 2026-05-11 learned-surrogate research
+gate:
 
-- Sparse composition and matchup models: factorization machines; Dota draft
-  prediction; MOBA synergy/opposition embeddings; TrueSkill/TrueSkill2 and
-  covariate Bradley-Terry models.
-- Set and graph representations: Deep Sets, Set Transformer, entity
-  embeddings, message passing networks, relational GCNs, heterogeneous graph
-  transformers.
+- Sparse composition and matchup models: factorization machines,
+  field-aware factorization machines, contextual recommendation, matrix
+  factorization, pairwise ranking, and rating-system diagnostics.
+- Set representations: Deep Sets and Set Transformer as deferred token-model
+  candidates.
 - Practical tabular baselines: CatBoost, XGBoost, LightGBM, FT-Transformer,
-  tabular neural-network benchmark papers, TabPFN/TabICL/TabM.
-- Combinatorial BO alternatives and residual-BO tools: PRBO, COMBO, Bounce,
-  CASMOPOLITAN, HyBO, heat kernels, SAASBO, BaCO, Gryffin, CoCaBO, preferential
-  BO, and graph/set BO.
-- Offline and active-learning guardrails: contextual Bayesian optimization,
-  active-learning surveys, reusable holdouts, counterfactual risk minimization,
-  doubly robust policy evaluation, quantile/probabilistic ensembles, and
-  conformal calibration.
+  tabular neural-network benchmarks, and TabPFN.
+- Mixed-variable and residual-BO tools: EGO/BO foundations, SMAC, CoCaBO,
+  MiVaBo, category-specific BO, COMBO, TuRBO, SAASBO, additive BO, Hyperband,
+  and BOHB.
+- Offline and active-learning guardrails: grouped/nested validation, leakage,
+  reusable holdouts, selection bias, quantile forests, conformal calibration,
+  active learning, best-arm identification, knowledge gradient, and OCBA-style
+  simulation allocation.
 
 The immediate engineering conclusion is conservative: build the feature table
-and CatBoost baseline first. Use neural set/graph models only after the simple
-models establish a real signal and expose where flattened features fail.
+and grouped comparator ladder first, then add literature-derived learned tree
+and sparse-interaction baselines through a reviewed experiment plan. Use neural
+set/graph models only after lower-capacity models establish a real signal and
+expose where flattened features fail. The detailed source table and decision
+matrix live in
+[phase7-learned-surrogate-research.md](phase7-learned-surrogate-research.md).
 
 ## Current Roadmap Position
 
@@ -394,11 +411,14 @@ The staged roadmap is:
 1. Keep the completed honest-eval ledger and per-cell outputs materialized in
    the Phase 7 matchup DB with zero unresolved build keys.
 2. Validate the feature substrate with grouped splits and trivial comparators.
-3. Promote CatBoost and sparse interaction baselines only after the smoke
-   baseline has clean transfer diagnostics.
-4. Feed validated predictions into online search as a prior mean, candidate
+3. Use the learned-surrogate research gate to write the next experiment plan:
+   candidate model families, HPO spaces, nested grouped validation, leakage
+   checklist, calibration policy, and provenance schema.
+4. Promote learned baselines only after they beat the comparator ladder under
+   that protocol.
+5. Feed validated predictions into online search as a prior mean, candidate
    prefilter, or active-learning signal.
-5. Implement the custom structured BO sampler only after the cheaper
+6. Implement the custom structured BO sampler only after the cheaper
    model-assisted-search gates show value.
 
 The current roadmap checkpoint is recorded in

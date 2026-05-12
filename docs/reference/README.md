@@ -36,6 +36,7 @@ module contracts; reports own dated empirical measurements. See
 | [phase5f-regime-segmented-optimization](phase5f-regime-segmented-optimization.md) | Regime-segmented optimization rationale. |
 | [phase6-cloud-worker-federation](phase6-cloud-worker-federation.md) | AWS spot-worker federation design. |
 | [phase7-featurized-matchup-surrogate](phase7-featurized-matchup-surrogate.md) | Draft contextual matchup-surrogate plan using non-atomic hull, weapon, hullmod, and opponent features; current dated roadmap checkpoint: [validation-to-Phase-7 roadmap](../reports/2026-05-11-validation-to-phase7-roadmap.md). |
+| [phase7-learned-surrogate-research](phase7-learned-surrogate-research.md) | Literature-first gate for Phase 7 learned-surrogate model development, including grouped validation, HPO, leakage, calibration, candidate model families, and optimizer-integration constraints. |
 | [phase7-search-space-compression](phase7-search-space-compression.md) | Planned structured search-space representation. |
 | [phase7.5-infrastructure-reproducibility](phase7.5-infrastructure-reproducibility.md) | Planned reproducibility and infrastructure improvements. |
 

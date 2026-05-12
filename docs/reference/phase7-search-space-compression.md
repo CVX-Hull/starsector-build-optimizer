@@ -22,8 +22,11 @@ grouped surrogate validation must come first:
    honest-eval artifacts.
 2. Validate structured hull, weapon, hullmod, slot-geometry, opponent, and
    interaction features with grouped splits and trivial comparators.
-3. Run CatBoost and sparse interaction baselines once the smoke model has clean
-   transfer diagnostics.
+3. Use the learned-surrogate research gate
+   ([phase7-learned-surrogate-research.md](phase7-learned-surrogate-research.md))
+   to derive the next learned-baseline experiment plan, including candidate
+   model families, hyperparameter search spaces, nested grouped validation,
+   calibration, leakage controls, and provenance.
 4. Try model-assisted search first: prior mean, candidate prefiltering, or
    active-learning allocation.
 5. Implement the custom BoTorch sampler only after those cheaper gates show
@@ -214,13 +217,13 @@ The strongest consensus finding across fractalsoftworks forum threads (topics 24
 | Brawlers / heavy armor | HMG + LDAC (anti-armor follow-up) | Kinetic cracks shields; HMG finishes armor |
 | Phase flankers | Wide-arc small energies (IR Pulse, LR PD Laser) | Cover rear arc, time shields |
 
-This is **the load-bearing empirical constraint**: the optimizer must retain the ability to tweak small slots in response to opponent features. The target design encodes this as **opponent summary features as additional kernel inputs on small-slot posteriors only** (see §3.9).
+This is **the load-bearing empirical constraint**: the optimizer must retain the ability to tweak small slots in response to opponent features. The historical kernel proposal encoded this as **opponent summary features as additional kernel inputs on small-slot posteriors only** (see §3.9).
 
 Hullmod canon — items that survived 4 major patches as S-tier: ITU, Hardened Shields, Expanded Magazines, Auxiliary Thrusters, Resistant Flux Conduits, IPDAI. Stable priors for πBO's hullmod-subspace density.
 
 ### 2.9 Starsector data invariants: stable across 0.95 → 0.98
 
-Audit of `parser.py`, `models.py`, and the CSV + `.ship` JSON schemas confirms that every enum listed in §1.3 has never been expanded. Schema-stable columns used by the target design:
+Audit of `parser.py`, `models.py`, and the CSV + `.ship` JSON schemas confirms that every enum listed in §1.3 has never been expanded. Schema-stable columns used by the historical kernel proposal:
 
 - `weapon_data.csv`: `id`, `name`, `type`, `damage/second`, `damage/shot`, `OPs`, `range`, `chargeup`, `chargedown`, `burst size`, `burst delay`, `energy/shot`, `energy/second`
 - `ship_data.csv`: `id`, `name`, `designation`, `ordnance points`, `max flux`, `flux dissipation`, `hitpoints`, `armor rating`, `shield type`, `shield efficiency`
@@ -260,7 +263,7 @@ Builds that are top-tier in community meta but rely on player-only piloting (SO 
 
 **If the combat harness varies AI personality** (Cautious / Steady / Aggressive / Reckless from `PersonalityAPI`) or officer skills across trials, the varying fields enter the kernel as additional ordinal/boolean context features on the player side (same pattern as the opponent-summary features on small slots, §2.8). If the harness fixes personality to Steady and runs un-officered (the Phase 2 default), these are simulation constants and do not need to enter the kernel. The current Phase 7 ship assumes the latter — default-personality, un-officered — which matches the typical fleet deployment case (most ships in a campaign fleet have no officer). Officer-conditional or personality-conditional optimization is a Phase 7.1 extension, not part of the initial ship.
 
-**Weapon-group assignment.** Stock `.variant` files hand-tune `weaponGroups` with per-group `autofire` and `mode` (LINKED / ALTERNATING) — notably `autofire=false` on ammo-limited missiles and ALTERNATING pairings on expensive ballistics. The combat harness builds variants via `autoGenerateWeaponGroups()` (`VariantBuilder.java:48`); `BuildSpec` carries no group metadata from Python. Every optimizer-produced build therefore runs on the engine's default grouping algorithm, which may not reproduce the hand-tuned behaviour of community reference builds. Absorbed by the same §2.10 mechanism: builds whose fitness depends on specific grouping (burst-missile timing, mixed-flux ballistic swaps) will underperform their community prior and get downweighted by the self-correcting mixture. Documented as a fidelity floor; lifting it would require adding weapon-group decisions to the search space (deferred, Phase 7.1+).
+**Weapon-group assignment.** Stock `.variant` files hand-tune `weaponGroups` with per-group `autofire` and `mode` (LINKED / ALTERNATING) — notably `autofire=false` on ammo-limited missiles and ALTERNATING pairings on expensive ballistics. The combat harness builds variants via `autoGenerateWeaponGroups()` (`VariantBuilder.java:48`); `BuildSpec` carries no group metadata from Python. Every optimizer-produced build therefore runs on the engine's default grouping algorithm, which may not reproduce the hand-tuned behaviour of community reference builds. This is a fidelity limitation, not something the surrogate can make disappear. A self-correcting prior may downweight archetypes that depend on unavailable grouping control, but lifting the limitation requires adding weapon-group decisions to the search space. The roadmap report records this as an explicit deferral.
 
 **Fighter-wing assignment is out of scope.** `LAUNCH_BAY` slots are filtered out of `SearchSpace.weapon_options` (`search_space.py:157`); `BuildSpec` has no wing field; `VariantBuilder.java` never populates wings; `ManifestDumper.java` does not enumerate `FighterWingSpecAPI` or `wing_data.csv`. Carrier hulls (24 in vanilla: Astral 6 bays, Legion 4, Heron/Mora 3, Condor/Drover/Apex 2, …) are optimizable for non-bay slots only; their bays deploy empty. Per §3.8 below, the PD-carrier archetype's LAUNCH_BAY branch is currently infeasible — only the small-slot-PD branch (Hammerhead-style destroyer escorts) is realized. Mentioned here for completeness; the self-correcting mixture would collapse a carrier-only mode's weight to zero under this configuration, which is the correct behaviour given the scope.
 
@@ -293,16 +296,24 @@ k(x, x') =   k_hullmods(h, h')          # SAAS-prior Matérn on hullmod booleans
 
 Product kernel structure follows BaCO (Hellsten 2024, Eq. 3–5). Additive per-item and per-slot residuals follow the ICM template (Bonilla 2007, Álvarez 2011). Gated-sentinel handling follows BaCO §4.3. SAAS prior follows Eriksson-Jankowiak 2021.
 
-### 3.2 Implementation plan: BoTorch as Optuna sampler plugin
+### 3.2 Historical Candidate Design: BoTorch as Optuna sampler plugin
+
+This section is historical rationale for a possible future implementation, not
+an approved module contract or current plan. Any executable scope, module
+names, defaults, and tests must be reintroduced through a future active plan
+and, where appropriate, a spec.
 
 BoTorch (Balandat et al. 2020) provides `SaasFullyBayesianSingleTaskGP` out of the box and supports custom kernels via the `Kernel` base class. Optuna supports custom samplers via `BaseSampler`. Integration:
 
 - Custom BoTorch kernel implementing the §3.1 product structure.
 - Custom Optuna sampler (`BoTorchSampler` subclass) that wraps the kernel and exposes the ask-tell interface `optimizer.py` already consumes.
-- Posterior inference via NUTS / fully-Bayesian MCMC (SAASBO default). Expected overhead: 10–100× MAP-GP per acquisition, but 1–2 hours total wallclock over a 200-trial run — acceptable.
+- Posterior inference via NUTS / fully-Bayesian MCMC (SAASBO default) was the
+  historical candidate. Runtime cost must be re-estimated in a future
+  experiment plan before any implementation.
 - HyperMapper ([github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper)) is the reference implementation for BaCO's kernel choices; use it as a validation oracle, not a drop-in library (HyperMapper lacks SAAS on subspaces).
 
-Estimated integration: ~2–3 weeks of custom-kernel + sampler work; ~1 week plumbing for attribute + slot + opponent feature extraction; ~1 week for πBO acquisition layer; ~1 week for BOCA pilot phase. ~6 weeks total for a compelling Phase 7 implementation.
+Earlier schedule estimates are no longer authority. The current roadmap gates
+learned baselines and model-assisted search before custom-kernel work.
 
 ### 3.3 SAAS prior on hullmod subspace
 
@@ -484,7 +495,7 @@ Use HyperMapper as a validation oracle to verify the custom kernel's categorical
 
 **What it was.** Deterministic auto-fit heuristic (e.g., "fill smalls with cheapest PD until OP runs out") executed before the surrogate sees the build.
 
-**Why rejected.** User-explicit correction during design review: small slots must remain addressable because they are opponent-conditional (§2.8). The target design instead adds opponent summary features to small-slot posteriors (§3.9), preserving full tweakability while still letting the GP learn opponent-conditional defaults from data.
+**Why rejected.** User-explicit correction during design review: small slots must remain addressable because they are opponent-conditional (§2.8). The historical kernel proposal instead adds opponent summary features to small-slot posteriors (§3.9), preserving full tweakability while still letting a model learn opponent-conditional defaults from data.
 
 ### 4.14 REMBO / ALEBO / HeSBO random-linear subspaces — WITHIN-GROUP INTERACTIONS
 
@@ -496,7 +507,7 @@ Use HyperMapper as a validation oracle to verify the custom kernel's categorical
 
 **What it was.** Hardcode archetype-mode mixture weights per hull from community meta (e.g., "Paragon: 0.6 turret-flex, 0.3 long-range-sniper, 0.1 other"; "Onslaught: 0.5 kinetic-HE brawler, 0.3 SO brawler, 0.2 other"). Initial sketch of the πBO prior from the literature sweep.
 
-**Why rejected.** Three failures (enumerated in §2.5): (i) the 9-archetype taxonomy was induced from community analysis of ~7 meta hulls; the remaining ~40 combat hulls and all mod/patch-added hulls have sparse or absent weights; (ii) absolute-attribute mode means would mismatch across hull sizes (700-range sniper weapons don't match a capital-scale "sniper" mode defined at 1500 range); (iii) physical infeasibility — a Wolf cannot physically realize Broadside, Turret-flex, or Phase-striker modes, and assigning nonzero weight to impossible configurations wastes acquisition-function mass. The target design (§3.8) instead computes a per-hull feasibility mask from `.ship` data, initializes weights uniform over feasible modes, and uses self-correcting π (Hvarfner 2023) to online-downweight modes that disagree with per-hull evidence. Community meta contributes the *vocabulary of modes* (what characterizes a sniper vs a brawler in normalized attribute space) but not the *per-hull weights*.
+**Why rejected.** Three failures (enumerated in §2.5): (i) the 9-archetype taxonomy was induced from community analysis of ~7 meta hulls; the remaining ~40 combat hulls and all mod/patch-added hulls have sparse or absent weights; (ii) absolute-attribute mode means would mismatch across hull sizes (700-range sniper weapons don't match a capital-scale "sniper" mode defined at 1500 range); (iii) physical infeasibility — a Wolf cannot physically realize Broadside, Turret-flex, or Phase-striker modes, and assigning nonzero weight to impossible configurations wastes acquisition-function mass. The historical kernel proposal (§3.8) instead computes a per-hull feasibility mask from `.ship` data, initializes weights uniform over feasible modes, and uses self-correcting π (Hvarfner 2023) to online-downweight modes that disagree with per-hull evidence. Community meta contributes the *vocabulary of modes* (what characterizes a sniper vs a brawler in normalized attribute space) but not the *per-hull weights*.
 
 ### 4.16 Hardcoded AI-compatibility flags on archetype modes — REJECTED
 
@@ -520,30 +531,35 @@ Community-meta insight about AI pilotability is preserved as *grounding* (§2.10
 
 ---
 
-## 5. Expected impact
+## 5. Historical Expected Impact Hypotheses
 
-Projected from sweep-reported sample-efficiency numbers at our 200–2000 trial regime. Each component's gain composes multiplicatively up to diminishing-returns saturation; conservative aggregate below.
+The table below records literature-inspired hypotheses from the historical
+kernel design. It is not a project measurement and not a ship criterion. Any
+future implementation plan must replace these hypotheses with current
+experiment gates and report-owned measurements.
 
-| Component | Regime | Expected gain vs Optuna TPE | Source |
+| Component | Regime | Literature claim or design hypothesis | Source |
 |---|---|---:|---|
 | SAAS sparsity on hullmods | 30–80 hullmod dims | 2–5× at N = 200–500 | Eriksson-Jankowiak 2021 Table 2 |
 | Transformed-overlap categorical kernel | 150-level weapon IDs × 8 slots | 1.3–1.6× | Hellsten 2024 (BaCO) Table 2 |
 | Attribute-Matérn + ICM item residual | 7-dim attribute vector | 1.2–1.5× + zero-shot new-item transfer | Swersky-Snoek-Adams 2013 |
-| Slot-feature Matérn | 5-dim slot feature | 1.1–1.3× (8 slots → ~3 effective) | Cross-slot pooling, no published benchmark |
+| Slot-feature Matérn | 5-dim slot feature | Hypothesized benefit from cross-slot pooling | No published benchmark |
 | πBO archetype priors (hull-conditional) | Decay-weighted + self-correcting mixture weights | 2–5× if correct, ≤ 1.5× worst-case; hull-generalizable via feasibility mask (§3.8) | Hvarfner 2022 Fig. 3 + Hvarfner 2023 |
 | BOCA warm-start | First 30 trials | 1.1–1.3× on cold-start hulls | Chen 2021 |
-| Opponent features on smalls | 3-dim feature vec | Not benchmarked — qualitative: preserve user-required addressability | §2.8 community-meta evidence |
-| **Aggregate (conservative)** | | **≈ 2–4× sample efficiency at N = 200–500** | |
+| Opponent features on smalls | 3-dim feature vec | Qualitative hypothesis: preserve small-slot addressability | §2.8 community-meta evidence |
 
 Project-specific throughput and budget projections belong in dated reports.
 This reference only records the design expectation that improved sample
 efficiency should reduce required simulation budget if the gates below pass.
 
-Game-update transfer: new weapons with similar 7-attribute profile inherit the kernel prior on day one. Kernel lengthscales remain stale only if the update rebalances the attribute-to-fitness function itself; BaCO's follow-up transfer paper (Hellsten 2024) quantifies this: ≥ 70% parameter-space preservation → clean transfer; < 70% → partial regression. Starsector patches historically change ≤ 20% of the weapon-attribute mass; safe.
+Game-update transfer remains a design hypothesis: new weapons with similar
+attribute profiles should inherit an attribute-kernel prior. Future reports
+must validate whether that hypothesis holds for actual Starsector data.
 
-### 5.1 Ship gate
+### 5.1 Historical Candidate Validation Ideas
 
-Synthetic validation before any live run:
+The following ideas are retained as historical candidate checks. They are not
+approved pass/fail gates until a future plan or spec adopts them.
 
 1. **Rank-correlation gate**: on a held-out synthetic fitness function (Phase 5D-style 7-covariate ground truth + 200-trial eval budget), Phase 7 surrogate top-10 rank ρ vs ground truth should meet the design threshold defined by the validation plan for that experiment.
 2. **Cold-start gate**: on a new hull (not in pilot data), Phase 7 surrogate should reach the top-10 of a 2000-trial Phase-4 run within 500 Phase-6 trials.
@@ -551,92 +567,20 @@ Synthetic validation before any live run:
 4. **Addressability gate**: on a missile-heavy opponent pool, the Phase 7 surrogate's small-slot posterior mean should prefer IPDAI + Dual Flak over the opponent-pool-agnostic posterior at p < 0.05.
 5. **Hull-generalization gate**: on a non-meta hull (Gemini, Mudskipper, or any hull without published community meta), the Phase 7 surrogate should reach top-10 of a 1000-trial Phase-4 baseline within 500 Phase-6 trials — same sample-efficiency as meta hulls, verifying the feasibility-mask + uniform-initial-weights + self-correcting mechanism removes meta-hull coverage bias.
 
-Pass all five → ship. Fail any → revise design.
-
 ---
 
-## 6. Implementation plan (outline — full plan to be drafted on approval)
+## 6. Historical Implementation Outline
 
-```
-Step 0: Matchup DB + grouped feature validation gate (completed through the
-        comparator-gate report; continue with learned baselines)
-  - Rematerialize the Phase 7 SQLite DB from completed optimizer logs,
-    study DBs, and honest-eval ledgers.
-  - Preserve source authority: exact JSONL builds first, DB-reconstructed
-    builds labeled as reconstructed, honest-eval candidate builds recovered
-    through the evaluator's extraction path.
-  - Require zero unresolved honest-eval build keys for the completed ledger.
-  - Run held-out build, opponent, component-combination, seed/cell, and
-    path-ordered forward splits with global mean, opponent mean, build mean,
-    TWFE-additive, ridge-hybrid, and random-forest comparators.
-  - Exclude honest-eval targets from comparator fitting; use them only for
-    post-fit top-k diagnostics.
-  - Inspect failures by opponent family, score regime, and campaign cell.
+The executable Phase 7 sequence is now owned by the dated roadmap and future
+active plans. Historical notes from this section should be treated as design
+inputs only:
 
-Step 1: Attribute + slot feature extraction + hull-size normalization
-  - src/starsector_optimizer/models.py: extend WeaponAttributes (7 fields)
-    and add SlotFeatures (5 fields). Add normalized variants
-    (range / hull_size_max_range, op_cost / hull.op_budget) computed
-    per-hull at search-space construction.
-  - models.py: ensure HullSize enum feeds hull_size context feature
-    (already present; just expose to kernel).
-  - parser.py: populate SlotFeatures from .ship JSON during load.
-  - Preserve per-slot type, size, mount, angle, arc, and x/y position.
-  - Add opponent-conditioned small-slot composition features before accepting
-    an aggregate-only table.
-  - Ship gate: round-trip tests, all existing hulls; cross-hull-size
-    normalization sanity (range_normalized ∈ [0, 1] for every hull).
-
-Step 2: Model-assisted search gate
-  - Fit CatBoost and sparse interaction baselines after Step 0 passes.
-  - Report top-k recall against honest-eval rankings without tuning on the
-    same honest-eval rows cited as evidence.
-  - Test prior-mean, candidate-prefilter, or active-learning integration
-    before implementing the full GP sampler.
-
-Step 3: Custom BoTorch kernel
-  - src/starsector_optimizer/surrogate.py (new module):
-    * CompositeShipBuildKernel class (product kernel from §3.1)
-    * SAASHullmodKernel (half-Cauchy ARD on ~80 boolean dims)
-    * TransformedOverlapKernel (Garrido-Merchán 2020)
-    * AttributeMaternKernel (7-dim)
-    * SlotFeatureMaternKernel (5-dim)
-    * OpponentFeatureKernel (3-dim, applied to small-slot inputs only)
-    * GatedSentinelEncoder (conditional handling)
-    * ItemResidualKernel, SlotResidualKernel (ICM)
-  - Unit tests with synthetic data.
-
-Step 4: Optuna sampler wrapper
-  - src/starsector_optimizer/botorch_sampler.py: BaseSampler subclass
-    wrapping BoTorch GP + acquisition optimizer.
-  - Integration test: sampler ↔ existing optimizer.py ask-tell loop.
-
-Step 5: BOCA warm-start
-  - 30-trial Latin-hypercube + RF-importance pilot.
-  - Empirical-Bayes initialization of SAAS lengthscale priors.
-  - Integration as first phase of ask-tell loop.
-
-Step 6: πBO acquisition — hull-conditional mixture
-  - Nine-mode GMM over (normalized attribute × slot × hullmod) feature
-    space; mode definitions in hull-size-invariant units.
-  - Per-hull feasibility mask computed at hull-load from .ship JSON +
-    ship-system registry (table in §3.8). Infeasible modes → weight 0.
-  - Uniform initial weights over feasible modes (no meta-hull bias).
-  - Self-correcting mixture weight updates (Hvarfner 2023
-    arXiv:2304.00397) via marginal likelihood ratio per trial.
-  - Decay-weighted EI (Hvarfner 2022 Eq. 4); β = 5 default; CLI flag
-    to disable.
-
-Step 7: Opponent feature plumbing
-  - Compute (has_missiles_frac, has_fighters_frac, mean_armor_rating)
-    per trial in optimizer.py.
-  - Thread into small-slot kernel input only.
-
-Step 8: Validation
-  - Synthetic ship-gate harness (§5.1 gates 1-4).
-  - Hammerhead replay (2026-04-13 log) — compare top-10 composition
-    and TPE convergence trace against Phase-6 surrogate.
-```
+- custom BoTorch kernels may become relevant after learned-baseline and
+  model-assisted-search gates pass;
+- candidate module/class names from the old outline are placeholders, not
+  contracts;
+- πBO, BOCA, opponent-feature plumbing, and custom sampler work each need a
+  fresh plan, spec impact review, and post-implementation audit before coding.
 
 ---
 
