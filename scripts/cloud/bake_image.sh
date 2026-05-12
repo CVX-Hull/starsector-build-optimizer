@@ -94,6 +94,8 @@ for target in "${TARGET_REGIONS[@]}"; do
   aws ec2 create-tags --region "$target" \
     --resources "$copied_ami" \
     --tags "$src_tags_json"
+  echo "[bake_image] Waiting for $copied_ami in $target to become available..."
+  aws ec2 wait image-available --region "$target" --image-ids "$copied_ami"
 done
 
 rm -f packer.log

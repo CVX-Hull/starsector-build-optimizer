@@ -387,7 +387,9 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "starsector-worker.service" in out
     assert "latest/api/token" in out
     assert "timeout 7200" in out
-    assert "uv sync --frozen --extra surrogate" in out
+    assert 'UV_BIN="/home/ubuntu/.local/bin/uv"' in out
+    assert '"$UV_BIN" sync --frozen --extra surrogate' in out
+    assert 'worker_failed_before_lease_${BOOTSTRAP_STEP}' in out
     assert "trap on_failure ERR" in out
     assert "post_event \"lease_acquired\"" in out
     assert "post_event \"worker_failed\"" in out

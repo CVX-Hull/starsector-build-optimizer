@@ -536,6 +536,9 @@ def render_phase7_learned_batch_user_data(
 set -euo pipefail
 umask 077
 JOB_ID=""
+BOOTSTRAP_STEP="start"
+UV_BIN="/home/ubuntu/.local/bin/uv"
+export PATH="/home/ubuntu/.local/bin:$PATH"
 
 post_event() {{
   if [[ -n "$JOB_ID" ]]; then
@@ -557,38 +560,47 @@ on_failure() {{
   if [[ -n "$JOB_ID" ]]; then
     post_event "worker_failed"
   else
-    post_worker_event "worker_failed_before_lease"
+    post_worker_event "worker_failed_before_lease_${{BOOTSTRAP_STEP}}"
   fi
 }}
 trap on_failure ERR
 post_worker_event "bootstrap_start"
 
+BOOTSTRAP_STEP="tailscale_secret"
 TS_AUTHKEY_FILE=$(mktemp)
 cleanup_secret() {{
   shred -u "$TS_AUTHKEY_FILE" || rm -f "$TS_AUTHKEY_FILE"
 }}
 trap cleanup_secret EXIT
 printf '%s' {json.dumps(config.tailscale_authkey_secret)} > "$TS_AUTHKEY_FILE"
+BOOTSTRAP_STEP="tailscale_up"
 tailscale up --auth-key=file:"$TS_AUTHKEY_FILE" --advertise-tags=tag:starsector-worker --accept-dns=false
 cleanup_secret
 trap - EXIT
 
+BOOTSTRAP_STEP="disable_default_worker"
 systemctl disable --now starsector-worker.service || true
 
+BOOTSTRAP_STEP="instance_metadata"
 IMDS_TOKEN=$(curl --silent --fail -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 300" http://169.254.169.254/latest/api/token)
 INSTANCE_ID=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
 REGION=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 INSTANCE_TYPE=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-type)
 
+BOOTSTRAP_STEP="bundle_download"
 mkdir -p /opt/phase7-batch
 cd /opt/phase7-batch
 curl --silent --fail -H "Authorization: Bearer {bearer_token}" -o bundle.tgz {control_url}/bundle
 post_worker_event "bundle_downloaded"
+BOOTSTRAP_STEP="bundle_sha256"
 printf '%s  bundle.tgz\\n' {json.dumps(bundle_sha256)} | sha256sum --check
+BOOTSTRAP_STEP="bundle_extract"
 tar -xzf bundle.tgz
-uv sync --frozen --extra {dependency_extra}
+BOOTSTRAP_STEP="uv_sync"
+"$UV_BIN" sync --frozen --extra {dependency_extra}
 post_worker_event "uv_synced"
 
+BOOTSTRAP_STEP="lease_loop"
 DEADLINE=$((SECONDS + {max_seconds}))
 while (( SECONDS < DEADLINE )); do
   LEASE=$(curl --silent -w '\\n%{{http_code}}' --fail -X POST \\
@@ -614,7 +626,7 @@ while (( SECONDS < DEADLINE )); do
   post_event "lease_acquired"
   post_event "experiment_start"
 
-  timeout {max_seconds} uv run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
+  timeout {max_seconds} "$UV_BIN" run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
     {source_db} \\
     --game-dir {game_dir} \\
     --comparator-json {comparator_json} \\
