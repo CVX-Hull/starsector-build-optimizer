@@ -225,9 +225,17 @@ controller policy marked it failed without any model-level failure event. The
 retry budget is now explicit as `max_job_attempts`; both smoke and full configs
 use six attempts before a job is treated as failed.
 
+Update from the third smoke attempt: the RF job was re-leased while its
+original worker was still active, because the controller treated a fixed
+30-minute lease expiry as job abandonment. That is not a valid assumption for
+HPO/model-training jobs. The smoke was stopped and audited clean. The batch
+protocol now uses renewable leases: workers renew job ownership while the
+model process is alive, and the controller requeues only after AWS worker loss
+or missed renewals beyond `lease_grace_seconds`.
+
 ## Open Questions / Next Steps
 
-- Commit the explicit retry-budget change, then rebake/update the AMI.
+- Commit the renewable-lease change, then rebake/update the AMI.
 - Export `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
   `STARSECTOR_WORKSTATION_TAILNET_IP`.
 - Run clean smoke preflight without provisioning:

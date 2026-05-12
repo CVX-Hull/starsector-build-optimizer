@@ -23,6 +23,8 @@ root_volume_size_gb: 128
 budget_usd: 3.0
 max_lifetime_hours: 1.5
 max_job_attempts: 6
+lease_renewal_interval_seconds: 60.0
+lease_grace_seconds: 300.0
 ledger_heartbeat_interval_seconds: 60.0
 ledger_warn_thresholds:
   - 0.5

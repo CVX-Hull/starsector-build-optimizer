@@ -184,6 +184,11 @@ Completed in the current implementation pass:
 - retry budget is now a config field (`max_job_attempts`) and smoke/full
   configs use six attempts so Spot worker loss does not masquerade as a
   deterministic experiment failure.
+- third smoke revealed that a fixed lease TTL is still not principled for ML
+  jobs: RF was re-leased while the original worker was still active. The smoke
+  was stopped and audited clean. The protocol now uses renewable leases, so
+  job duration is bounded by model completion, batch lifetime, and budget
+  guardrails rather than by a fixed lease TTL.
 
 Not complete:
 
@@ -191,7 +196,8 @@ Not complete:
   source changes and rebaking/updating the AMI;
 - run and validate the 2-worker AWS smoke matrix before any 15-worker
   full-matrix relaunch;
-- re-bake after the retry-budget source change and rerun the 2-worker smoke;
+- re-bake after the renewable-lease source change and rerun the 2-worker
+  smoke;
 - no valid canonical full-run promotion exists yet.
 
 ## Remaining Before Live AWS Execution

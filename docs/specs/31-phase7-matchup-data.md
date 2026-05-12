@@ -512,9 +512,13 @@ debug runs. In every config, `target_workers` must equal
 `len(splits) * len(models)`, and `min_workers_to_start` must equal
 `target_workers`. Subset batches are diagnostic only; they may not publish the
 canonical full-run artifact unless their matrix is the full canonical matrix.
-`max_job_attempts` controls the lease retry budget and must be positive. Spot
-worker loss consumes a lease attempt; configs intended for Spot execution
-therefore need a retry budget larger than one transient interruption cycle.
+`max_job_attempts` controls the lease retry budget and must be positive. A job
+lease is not a wall-clock runtime cap: workers must renew the lease while the
+model process is still alive. The controller may requeue only when AWS no
+longer reports the worker active or the worker stops renewing for longer than
+`lease_grace_seconds`. Spot worker loss and renewal loss consume a lease
+attempt; configs intended for Spot execution therefore need a retry budget
+larger than one transient interruption cycle.
 
 The batch bundle must include every runtime script imported by the worker
 command, including both `phase7_learned_surrogate_experiment.py` and its

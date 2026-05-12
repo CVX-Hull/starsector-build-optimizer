@@ -62,6 +62,8 @@ class LearnedBatchConfig:
     budget_usd: float
     max_lifetime_hours: float
     max_job_attempts: int
+    lease_renewal_interval_seconds: float
+    lease_grace_seconds: float
     ledger_heartbeat_interval_seconds: float
     ledger_warn_thresholds: tuple[float, ...]
     tailscale_authkey_secret: str
@@ -122,14 +124,14 @@ class BatchState:
         self,
         jobs: Sequence[LearnedBatchJob],
         *,
-        lease_ttl_seconds: float,
+        lease_grace_seconds: float,
         max_attempts: int,
     ) -> None:
-        if lease_ttl_seconds <= 0:
-            raise ValueError("lease_ttl_seconds must be positive")
+        if lease_grace_seconds <= 0:
+            raise ValueError("lease_grace_seconds must be positive")
         if max_attempts <= 0:
             raise ValueError("max_attempts must be positive")
-        self._lease_ttl_seconds = lease_ttl_seconds
+        self._lease_grace_seconds = lease_grace_seconds
         self._max_attempts = max_attempts
         self._states = {job.job_id: _JobState(job=job, events=[]) for job in jobs}
         self._lock = Lock()
@@ -140,12 +142,7 @@ class BatchState:
             for state in self._states.values():
                 if state.status == "completed":
                     continue
-                expired = (
-                    state.status == "leased"
-                    and state.lease_expires_at is not None
-                    and state.lease_expires_at <= now
-                )
-                if state.status != "pending" and not expired:
+                if state.status != "pending":
                     continue
                 if state.attempt >= self._max_attempts:
                     state.status = "failed"
@@ -153,7 +150,7 @@ class BatchState:
                 state.attempt += 1
                 state.status = "leased"
                 state.worker_id = worker_id
-                state.lease_expires_at = now + self._lease_ttl_seconds
+                state.lease_expires_at = now + self._lease_grace_seconds
                 return JobLease(
                     job_id=state.job.job_id,
                     split=state.job.split,
@@ -163,6 +160,32 @@ class BatchState:
                     lease_expires_at=state.lease_expires_at,
                 )
         return None
+
+    def renew_lease(
+        self,
+        job_id: str,
+        *,
+        worker_id: str,
+        attempt: int,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        now = time.time() if now is None else now
+        with self._lock:
+            state = self._states.get(job_id)
+            if state is None:
+                raise ValueError(f"unknown job id: {job_id}")
+            if state.status == "completed":
+                return {"status": "completed"}
+            if state.status != "leased":
+                raise ValueError(f"job {job_id} is not leased")
+            if state.worker_id != worker_id:
+                raise ValueError(f"job {job_id} is leased to a different worker")
+            if state.attempt != attempt:
+                raise ValueError(f"job {job_id} lease attempt mismatch")
+            if state.lease_expires_at is not None and now > state.lease_expires_at:
+                raise ValueError(f"job {job_id} lease expired")
+            state.lease_expires_at = now + self._lease_grace_seconds
+            return {"status": "renewed", "lease_expires_at": state.lease_expires_at}
 
     def record_result(
         self,
@@ -215,6 +238,27 @@ class BatchState:
         with self._lock:
             for state in self._states.values():
                 if state.status != "leased" or state.worker_id in active_worker_ids:
+                    continue
+                if state.attempt >= self._max_attempts:
+                    state.status = "failed"
+                else:
+                    state.status = "pending"
+                    requeued.append(state.job.job_id)
+                state.worker_id = None
+                state.lease_expires_at = None
+        return tuple(requeued)
+
+    def requeue_unrenewed_leases(self, *, now: float | None = None) -> tuple[str, ...]:
+        """Requeue leased jobs whose worker stopped renewing its ownership."""
+        now = time.time() if now is None else now
+        requeued: list[str] = []
+        with self._lock:
+            for state in self._states.values():
+                if (
+                    state.status != "leased"
+                    or state.lease_expires_at is None
+                    or state.lease_expires_at > now
+                ):
                     continue
                 if state.attempt >= self._max_attempts:
                     state.status = "failed"
@@ -301,6 +345,10 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         budget_usd=float(expanded["budget_usd"]),
         max_lifetime_hours=float(expanded["max_lifetime_hours"]),
         max_job_attempts=int(expanded.get("max_job_attempts", 4)),
+        lease_renewal_interval_seconds=float(
+            expanded.get("lease_renewal_interval_seconds", 60.0)
+        ),
+        lease_grace_seconds=float(expanded.get("lease_grace_seconds", 300.0)),
         ledger_heartbeat_interval_seconds=float(expanded["ledger_heartbeat_interval_seconds"]),
         ledger_warn_thresholds=tuple(float(v) for v in expanded["ledger_warn_thresholds"]),
         tailscale_authkey_secret=str(expanded["tailscale_authkey_secret"]),
@@ -371,6 +419,10 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("budget_usd and max_lifetime_hours must be positive")
     if config.max_job_attempts <= 0:
         raise ValueError("max_job_attempts must be positive")
+    if config.lease_renewal_interval_seconds <= 0 or config.lease_grace_seconds <= 0:
+        raise ValueError("lease renewal interval and grace must be positive")
+    if config.lease_renewal_interval_seconds >= config.lease_grace_seconds:
+        raise ValueError("lease renewal interval must be shorter than lease grace")
     if config.ledger_heartbeat_interval_seconds <= 0:
         raise ValueError("ledger_heartbeat_interval_seconds must be positive")
     if not all(0.0 < value < 1.0 for value in config.ledger_warn_thresholds):
@@ -477,6 +529,24 @@ def create_control_plane_app(
             return jsonify({"status": "empty"}), 204
         return jsonify(leased.__dict__), 200
 
+    @app.post("/lease/<job_id>/renew")
+    def renew_lease(job_id: str) -> tuple[Any, int]:
+        payload = request.get_json(silent=True) or {}
+        worker_id = str(payload.get("worker_id") or request.headers.get("X-Worker-Id") or "")
+        try:
+            attempt = int(payload.get("attempt") or request.headers.get("X-Lease-Attempt", "0"))
+        except ValueError:
+            return jsonify({"error": "invalid lease attempt"}), 400
+        try:
+            status = state.renew_lease(
+                job_id,
+                worker_id=worker_id,
+                attempt=attempt,
+            )
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 409
+        return jsonify(status), 200
+
     @app.post("/result/<job_id>")
     def result(job_id: str) -> tuple[Any, int]:
         payload = request.get_json(silent=True)
@@ -577,6 +647,7 @@ def render_phase7_learned_batch_user_data(
     comparator_json = shlex.quote(str(config.comparator_json_path))
     dependency_extra = shlex.quote(config.dependency_extra)
     control_url = shlex.quote(control_plane_url)
+    renewal_interval = int(config.lease_renewal_interval_seconds)
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
@@ -638,6 +709,21 @@ post_worker_event() {{
     -H "Content-Type: application/json" \\
     -d "{{\\"event\\":\\"$1\\",\\"instance_id\\":\\"${{INSTANCE_ID:-unknown}}\\",\\"region\\":\\"${{REGION:-unknown}}\\",\\"instance_type\\":\\"${{INSTANCE_TYPE:-unknown}}\\"}}" \\
     {control_url}/worker-event >/dev/null || true
+}}
+renew_lease_loop() {{
+  while true; do
+    sleep {renewal_interval}
+    if [[ -z "$JOB_ID" ]]; then
+      continue
+    fi
+    curl --silent --fail -X POST \\
+      -H "Authorization: Bearer {bearer_token}" \\
+      -H "X-Worker-Id: $INSTANCE_ID" \\
+      -H "X-Lease-Attempt: $ATTEMPT" \\
+      -H "Content-Type: application/json" \\
+      -d "{{\\"worker_id\\":\\"$INSTANCE_ID\\",\\"attempt\\":$ATTEMPT}}" \\
+      {control_url}/lease/"$JOB_ID"/renew >/dev/null || true
+  done
 }}
 on_failure() {{
   if [[ -n "$JOB_ID" ]]; then
@@ -710,6 +796,8 @@ while (( SECONDS < DEADLINE )); do
   mkdir -p data/phase7
   post_event "lease_acquired"
   post_event "experiment_start"
+  renew_lease_loop &
+  RENEW_PID=$!
 
   set +e
   timeout {max_seconds} "$UV_BIN" run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
@@ -728,6 +816,8 @@ while (( SECONDS < DEADLINE )); do
     --top-k {top_k} \\
     --output "$OUTPUT" >"$LOG" 2>&1
   RUN_CODE=$?
+  kill "$RENEW_PID" >/dev/null 2>&1 || true
+  wait "$RENEW_PID" >/dev/null 2>&1 || true
   set -e
   if [[ "$RUN_CODE" != "0" ]]; then
     post_event_with_log "experiment_failed" "$LOG" "$RUN_CODE"
@@ -873,7 +963,7 @@ def run_live_batch(
     jobs = generate_jobs(config)
     state = BatchState(
         jobs,
-        lease_ttl_seconds=1800.0,
+        lease_grace_seconds=config.lease_grace_seconds,
         max_attempts=config.max_job_attempts,
     )
     poll_interval = (
@@ -922,6 +1012,12 @@ def run_live_batch(
                 logger.warning(
                     "requeued jobs from missing workers: %s",
                     ", ".join(requeued),
+                )
+            unrenewed = state.requeue_unrenewed_leases(now=now_fn())
+            if unrenewed:
+                logger.warning(
+                    "requeued jobs from stale lease renewals: %s",
+                    ", ".join(unrenewed),
                 )
             status = state.status()
             counts = status["counts"]

@@ -54,6 +54,8 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         budget_usd=20.0,
         max_lifetime_hours=2.0,
         max_job_attempts=4,
+        lease_renewal_interval_seconds=60.0,
+        lease_grace_seconds=300.0,
         ledger_heartbeat_interval_seconds=60.0,
         ledger_warn_thresholds=(0.5, 0.8, 0.95),
         tailscale_authkey_secret="tskey-auth-test",
@@ -142,6 +144,8 @@ min_workers_to_start: 15
 budget_usd: 20.0
 max_lifetime_hours: 2.0
 max_job_attempts: 4
+lease_renewal_interval_seconds: 60.0
+lease_grace_seconds: 300.0
 ledger_heartbeat_interval_seconds: 60.0
 ledger_warn_thresholds: [0.5, 0.8, 0.95]
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
@@ -170,6 +174,8 @@ dependency_extra: surrogate
     assert cfg.tailscale_authkey_secret == "tskey-auth-from-env"
     assert cfg.control_plane_host == "100.64.0.9"
     assert cfg.max_job_attempts == 4
+    assert cfg.lease_renewal_interval_seconds == 60.0
+    assert cfg.lease_grace_seconds == 300.0
     validate_batch_config(cfg)
 
 
@@ -326,7 +332,7 @@ def test_control_plane_requires_bearer_token_for_all_routes(tmp_path):
     cfg = make_config(tmp_path)
     bundle = tmp_path / "bundle.tgz"
     bundle.write_bytes(b"bundle")
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     app = create_control_plane_app(state, bundle_path=bundle, bearer_token="secret")
     client = app.test_client()
 
@@ -339,6 +345,15 @@ def test_control_plane_requires_bearer_token_for_all_routes(tmp_path):
     )
     assert leased.status_code == 200
     lease_payload = leased.get_json()
+    assert client.post(
+        f"/lease/{lease_payload['job_id']}/renew",
+        headers={
+            "Authorization": "Bearer secret",
+            "X-Worker-Id": "i-1",
+            "X-Lease-Attempt": str(lease_payload["attempt"]),
+        },
+        json={"worker_id": "i-1", "attempt": lease_payload["attempt"]},
+    ).status_code == 200
     assert client.post(
         f"/result/{lease_payload['job_id']}",
         headers={
@@ -357,7 +372,7 @@ def test_control_plane_persists_events_and_status_counts_events(tmp_path):
     cfg = make_config(tmp_path)
     bundle = tmp_path / "bundle.tgz"
     bundle.write_bytes(b"bundle")
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     app = create_control_plane_app(
         state,
         bundle_path=bundle,
@@ -389,7 +404,7 @@ def test_control_plane_persists_events_and_status_counts_events(tmp_path):
 
 def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
     cfg = make_config(tmp_path)
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     lease = state.lease(now=100.0, worker_id="i-1")
     assert lease is not None
     payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
@@ -416,7 +431,7 @@ def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
 
 def test_requeue_missing_workers_releases_lost_leases(tmp_path):
     cfg = make_config(tmp_path)
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     lost = state.lease(now=100.0, worker_id="i-lost")
     live = state.lease(now=100.0, worker_id="i-live")
     assert lost is not None
@@ -431,9 +446,52 @@ def test_requeue_missing_workers_releases_lost_leases(tmp_path):
     assert rows[live.job_id]["status"] == "leased"
 
 
-def test_result_rejects_wrong_worker_and_expired_lease(tmp_path):
+def test_lease_renewal_extends_long_running_job_ownership(tmp_path):
     cfg = make_config(tmp_path)
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=5.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
+    lease = state.lease(now=100.0, worker_id="i-1")
+    assert lease is not None
+
+    renewed = state.renew_lease(
+        lease.job_id,
+        worker_id="i-1",
+        attempt=lease.attempt,
+        now=150.0,
+    )
+
+    assert renewed["status"] == "renewed"
+    rows = {row["job_id"]: row for row in state.status()["jobs"]}
+    assert rows[lease.job_id]["lease_expires_at"] == 210.0
+    payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
+    assert state.record_result(
+        lease.job_id,
+        payload,
+        worker_id="i-1",
+        attempt=lease.attempt,
+        now=205.0,
+    )["status"] == "accepted"
+
+
+def test_lease_does_not_steal_unrenewed_job_without_controller_requeue(tmp_path):
+    cfg = make_config(tmp_path)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=5.0, max_attempts=2)
+    first = state.lease(now=100.0, worker_id="i-1")
+    second = state.lease(now=106.0, worker_id="i-2")
+    assert first is not None
+    assert second is not None
+    assert second.job_id != first.job_id
+
+    requeued = state.requeue_unrenewed_leases(now=106.0)
+    assert requeued == (first.job_id,)
+    retry = state.lease(now=107.0, worker_id="i-2")
+    assert retry is not None
+    assert retry.job_id == first.job_id
+    assert retry.attempt == 2
+
+
+def test_result_rejects_wrong_worker_and_expired_unrenewed_lease(tmp_path):
+    cfg = make_config(tmp_path)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=5.0, max_attempts=2)
     lease = state.lease(now=100.0, worker_id="i-1")
     assert lease is not None
     payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
@@ -469,6 +527,8 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "post_event \"lease_acquired\"" in out
     assert "post_event \"worker_failed\"" in out
     assert "post_event_with_log \"experiment_failed\"" in out
+    assert "renew_lease_loop &" in out
+    assert "/lease/\"$JOB_ID\"/renew" in out
     assert "log_tail" in out
     assert "post_worker_event \"bootstrap_start\"" in out
     assert "/worker-event" in out
@@ -507,7 +567,7 @@ def test_budget_heartbeat_writes_ledger_and_raises_at_cap(tmp_path):
 
 def test_write_status_snapshot_contains_counts_and_budget(tmp_path):
     cfg = make_config(tmp_path)
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
 
     payload = write_status_snapshot(
         cfg,
@@ -624,7 +684,7 @@ def test_control_plane_persists_accepted_result_for_merge(tmp_path):
     cfg = make_config(tmp_path)
     bundle = tmp_path / "bundle.tgz"
     bundle.write_bytes(b"bundle")
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     app = create_control_plane_app(
         state,
         bundle_path=bundle,
@@ -659,7 +719,7 @@ def test_control_plane_does_not_persist_rejected_or_duplicate_result(tmp_path):
     cfg = make_config(tmp_path)
     bundle = tmp_path / "bundle.tgz"
     bundle.write_bytes(b"bundle")
-    state = BatchState(generate_jobs(cfg), lease_ttl_seconds=60.0, max_attempts=2)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     app = create_control_plane_app(
         state,
         bundle_path=bundle,
