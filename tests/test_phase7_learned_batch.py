@@ -56,6 +56,7 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         max_job_attempts=4,
         lease_renewal_interval_seconds=60.0,
         lease_grace_seconds=300.0,
+        pending_instance_grace_seconds=300.0,
         ledger_heartbeat_interval_seconds=60.0,
         ledger_warn_thresholds=(0.5, 0.8, 0.95),
         tailscale_authkey_secret="tskey-auth-test",
@@ -63,6 +64,8 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         control_plane_port=9131,
         output_dir=tmp_path / "batch",
         canonical_output_path=tmp_path / "full.json",
+        publish_canonical=True,
+        execution_enabled=True,
         source_db_path=Path("data/phase7/wave1_matchups.sqlite"),
         game_dir=Path("game/starsector"),
         comparator_json_path=Path("data/phase7/wave1_comparator_gate_2026-05-11.json"),
@@ -123,6 +126,17 @@ class FakeProvider:
         return 0
 
 
+class FakeClock:
+    def __init__(self, start: float = 100.0) -> None:
+        self.now = start
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
 def test_load_batch_config_expands_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("TAILSCALE_AUTHKEY", "tskey-auth-from-env")
     monkeypatch.setenv("STARSECTOR_WORKSTATION_TAILNET_IP", "100.64.0.9")
@@ -146,6 +160,7 @@ max_lifetime_hours: 2.0
 max_job_attempts: 4
 lease_renewal_interval_seconds: 60.0
 lease_grace_seconds: 300.0
+pending_instance_grace_seconds: 300.0
 ledger_heartbeat_interval_seconds: 60.0
 ledger_warn_thresholds: [0.5, 0.8, 0.95]
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
@@ -153,6 +168,8 @@ control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
 control_plane_port: 9131
 output_dir: batch
 canonical_output_path: full.json
+publish_canonical: true
+execution_enabled: true
 source_db_path: data/phase7/wave1_matchups.sqlite
 game_dir: game/starsector
 comparator_json_path: data/phase7/wave1_comparator_gate_2026-05-11.json
@@ -176,6 +193,7 @@ dependency_extra: surrogate
     assert cfg.max_job_attempts == 4
     assert cfg.lease_renewal_interval_seconds == 60.0
     assert cfg.lease_grace_seconds == 300.0
+    assert cfg.pending_instance_grace_seconds == 300.0
     validate_batch_config(cfg)
 
 
@@ -195,6 +213,7 @@ def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
         models=("random_forest_tuned", "catboost_regressor"),
         target_workers=2,
         min_workers_to_start=2,
+        publish_canonical=False,
     )
 
     jobs = generate_jobs(cfg)
@@ -275,7 +294,7 @@ def test_config_validation_rejects_region_count_that_loses_workers(tmp_path):
         }
     )
 
-    with pytest.raises(ValueError, match="divisible"):
+    with pytest.raises(ValueError, match="exactly one region"):
         validate_batch_config(bad)
 
 
@@ -429,7 +448,7 @@ def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
         state.record_result(other.job_id, payload, worker_id="i-1", attempt=1, now=112.0)
 
 
-def test_requeue_missing_workers_releases_lost_leases(tmp_path):
+def test_requeue_missing_workers_waits_for_lease_grace(tmp_path):
     cfg = make_config(tmp_path)
     state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     lost = state.lease(now=100.0, worker_id="i-lost")
@@ -437,12 +456,16 @@ def test_requeue_missing_workers_releases_lost_leases(tmp_path):
     assert lost is not None
     assert live is not None
 
-    requeued = state.requeue_missing_workers({"i-live"})
+    early = state.requeue_missing_workers({"i-live"}, now=120.0)
+    assert early == ()
+
+    requeued = state.requeue_missing_workers({"i-live"}, now=161.0)
 
     assert requeued == (lost.job_id,)
     rows = {row["job_id"]: row for row in state.status()["jobs"]}
     assert rows[lost.job_id]["status"] == "pending"
     assert rows[lost.job_id]["attempt"] == 1
+    assert rows[lost.job_id]["last_requeue_reason"] == "missing_worker_lease_expired"
     assert rows[live.job_id]["status"] == "leased"
 
 
@@ -518,7 +541,7 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "--ssh" not in out
     assert "starsector-worker.service" in out
     assert "latest/api/token" in out
-    assert "timeout 7200" in out
+    assert 'timeout "$JOB_TIMEOUT"' in out
     assert 'UV_BIN="/home/ubuntu/.local/bin/uv"' in out
     assert '"$UV_BIN" sync --frozen --extra surrogate' in out
     assert "JOB_ID=$(python3 -c" in out
@@ -527,8 +550,10 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "post_event \"lease_acquired\"" in out
     assert "post_event \"worker_failed\"" in out
     assert "post_event_with_log \"experiment_failed\"" in out
-    assert "renew_lease_loop &" in out
+    assert "lease_renewal_lost" in out
+    assert "RUN_PID=$!" in out
     assert "/lease/\"$JOB_ID\"/renew" in out
+    assert "shutdown -h +" in out
     assert "log_tail" in out
     assert "post_worker_event \"bootstrap_start\"" in out
     assert "/worker-event" in out
@@ -628,6 +653,8 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
                 "leakage_checklist": {
                     "outer_test_targets_excluded_from_fit": True,
                     "honest_eval_targets_excluded_from_fit": True,
+                    "feature_selection_inside_inner_fold": True,
+                    "build_key_excluded_from_feature_vectors": True,
                 },
                 "comparator_context": {"diagnostic": "ok", "comparison_status": "comparable"},
             }
@@ -657,6 +684,16 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
     payload = one_job_payload(cfg, job.split, job.model)
     payload["results"][0]["comparator_context"] = "bad"
     with pytest.raises(ValueError, match="comparator context"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["provenance"]["bundle_sha256"] = "c" * 64
+    with pytest.raises(ValueError, match="bundle_sha256 mismatch"):
+        validate_job_payload(cfg, job, payload, bundle_sha256="b" * 64)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["leakage_checklist"] = {}
+    with pytest.raises(ValueError, match="leakage checklist"):
         validate_job_payload(cfg, job, payload)
 
     payload = one_job_payload(cfg, job.split, job.model)
@@ -809,6 +846,54 @@ def test_merge_refuses_partial_batch_without_canonical_overwrite(tmp_path):
     assert not cfg.canonical_output_path.exists()
 
 
+def test_subset_merge_stays_batch_internal_and_reports_subset_models(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+        lease_grace_seconds=5.0,
+    )
+    result_dir = cfg.output_dir / "results"
+    result_dir.mkdir(parents=True)
+    for job in generate_jobs(cfg):
+        (result_dir / f"{job.job_id}.json").write_text(
+            json.dumps(one_job_payload(cfg, job.split, job.model)),
+            encoding="utf-8",
+        )
+
+    merged = merge_job_artifacts(cfg)
+
+    assert merged["result_count"] == 2
+    assert merged["model_families"] == ["random_forest_tuned", "catboost_regressor"]
+    assert (cfg.output_dir / "merged.json").exists()
+    assert not cfg.canonical_output_path.exists()
+
+
+def test_merge_rechecks_canonical_publication_guard(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=True,
+    )
+    result_dir = cfg.output_dir / "results"
+    result_dir.mkdir(parents=True)
+    for job in generate_jobs(cfg):
+        (result_dir / f"{job.job_id}.json").write_text(
+            json.dumps(one_job_payload(cfg, job.split, job.model)),
+            encoding="utf-8",
+        )
+
+    with pytest.raises(ValueError, match="canonical publication"):
+        merge_job_artifacts(cfg)
+    assert not cfg.canonical_output_path.exists()
+
+
 def complete_all_jobs(cfg: LearnedBatchConfig, state: BatchState) -> None:
     result_dir = cfg.output_dir / "results"
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -908,6 +993,96 @@ def test_run_live_batch_budget_exceeded_tears_down(tmp_path):
     assert json.loads((cfg.output_dir / "status.json").read_text())["phase"] == "teardown_complete"
 
 
+def test_run_live_batch_preserves_primary_failure_when_teardown_also_fails(tmp_path):
+    cfg = make_config(tmp_path)
+    provider = FakeProvider(
+        active=[{"id": "i-1", "region": "us-east-2", "instance_type": "c7i.4xlarge"}],
+        price=100.0,
+    )
+    provider.terminate_fleet = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("fleet boom"))
+    server = FakeServer()
+
+    with pytest.raises(BudgetExceeded):
+        run_live_batch(
+            replace(cfg, budget_usd=0.001),
+            provider=provider,
+            bundle_path=tmp_path / "bundle.tgz",
+            bundle_sha256="b" * 64,
+            bearer_token="secret",
+            poll_interval_seconds=60.0,
+            server_factory=lambda *args, **kwargs: server,
+            sleep_fn=lambda seconds: None,
+        )
+
+    status = json.loads((cfg.output_dir / "status.json").read_text())
+    assert "fleet boom" in status["message"]
+
+
+def test_run_live_batch_treats_initial_instances_as_pending_until_visible(tmp_path):
+    cfg = replace(make_config(tmp_path), pending_instance_grace_seconds=10.0)
+    server = FakeServer()
+    clock = FakeClock(start=100.0)
+
+    class LaggingProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(instance_count=15)
+            self.list_calls = 0
+
+        def list_active(self, project_tag):
+            self.list_calls += 1
+            if self.list_calls == 1:
+                return []
+            return super().list_active(project_tag)
+
+    provider = LaggingProvider()
+
+    merged = run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=tmp_path / "bundle.tgz",
+        bundle_sha256="b" * 64,
+        bearer_token="secret",
+        poll_interval_seconds=1.0,
+        server_factory=lambda *args, **kwargs: server,
+        sleep_fn=clock.sleep,
+        now_fn=clock.time,
+        on_poll=lambda state: (
+            complete_all_jobs(cfg, state) if provider.list_calls else None
+        ),
+    )
+
+    assert merged["result_count"] == 15
+    assert [call["target_workers"] for call in provider.provision_calls] == [15]
+
+
+def test_run_live_batch_fails_when_pending_instances_never_become_active(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        pending_instance_grace_seconds=2.0,
+        max_lifetime_hours=1.0,
+    )
+    server = FakeServer()
+    clock = FakeClock(start=100.0)
+    provider = FakeProvider(instance_count=15, active=[])
+
+    with pytest.raises(BatchLaunchFailed, match="pending workers"):
+        run_live_batch(
+            cfg,
+            provider=provider,
+            bundle_path=tmp_path / "bundle.tgz",
+            bundle_sha256="b" * 64,
+            bearer_token="secret",
+            poll_interval_seconds=1.0,
+            server_factory=lambda *args, **kwargs: server,
+            sleep_fn=clock.sleep,
+            now_fn=clock.time,
+        )
+
+    assert [call["target_workers"] for call in provider.provision_calls] == [15]
+    assert provider.terminate_fleet_calls == 1
+    assert provider.terminate_all_calls == 1
+
+
 def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
     cfg = replace(
         make_config(tmp_path),
@@ -915,9 +1090,12 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
         models=("random_forest_tuned", "catboost_regressor"),
         target_workers=2,
         min_workers_to_start=2,
+        publish_canonical=False,
+        lease_grace_seconds=5.0,
     )
     server = FakeServer()
     leases = {}
+    clock = FakeClock(start=100.0)
 
     class ReplacementProvider(FakeProvider):
         def __init__(self) -> None:
@@ -954,6 +1132,15 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
             leases[first.job_id] = first
             leases[second.job_id] = second
             return
+        live = next((lease for lease in leases.values() if lease.worker_id == "i-live"), None)
+        rows = {row["job_id"]: row for row in state.status()["jobs"]}
+        if live is not None and rows[live.job_id]["status"] == "leased":
+            state.renew_lease(
+                live.job_id,
+                worker_id="i-live",
+                attempt=live.attempt,
+                now=clock.time(),
+            )
         if provider.replacement_launched:
             result_dir = cfg.output_dir / "results"
             result_dir.mkdir(parents=True, exist_ok=True)
@@ -976,7 +1163,7 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
                     payload,
                     worker_id=lease.worker_id,
                     attempt=lease.attempt,
-                    now=111.0,
+                    now=clock.time(),
                 )
 
     merged = run_live_batch(
@@ -987,7 +1174,8 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
         bearer_token="secret",
         poll_interval_seconds=1.0,
         server_factory=lambda *args, **kwargs: server,
-        sleep_fn=lambda seconds: None,
+        sleep_fn=clock.sleep,
+        now_fn=clock.time,
         on_poll=on_poll,
     )
 
@@ -1076,6 +1264,21 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
     assert "keypair" in calls
     assert "atexit" in calls
     assert ("live", "b" * 64, "token") in calls
+
+
+def test_cli_launch_execute_disabled_refuses_before_aws_provider(tmp_path, monkeypatch):
+    cfg = replace(make_config(tmp_path), execution_enabled=False)
+    cli = load_batch_cli_module()
+
+    monkeypatch.setattr(cli, "load_batch_config", lambda path: cfg)
+    monkeypatch.setattr(
+        cli,
+        "AWSProvider",
+        lambda regions: (_ for _ in ()).throw(AssertionError("AWSProvider touched")),
+    )
+
+    with pytest.raises(RuntimeError, match="execution_enabled is false"):
+        cli.launch(tmp_path / "config.yaml", execute=True)
 
 
 def test_check_amis_available_rejects_pending_image(tmp_path):

@@ -35,9 +35,13 @@ fi
 
 cleanup() {
   local status=$?
-  scripts/cloud/teardown.sh "$BATCH_NAME" || true
-  scripts/cloud/final_audit.sh "$BATCH_NAME" || true
-  return "$status"
+  local cleanup_status=0
+  scripts/cloud/teardown.sh "$BATCH_NAME" || cleanup_status=$?
+  scripts/cloud/final_audit.sh "$BATCH_NAME" || cleanup_status=$?
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
+  return "$cleanup_status"
 }
 trap cleanup EXIT
 

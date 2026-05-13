@@ -486,6 +486,7 @@ class CloudProvider(abc.ABC):
         spot_allocation_strategy: str,         # "price-capacity-optimized"
         target_workers: int,
         user_data: str,                        # cloud-init script (caller-rendered)
+        root_volume_size_gb: int | None = None,
     ) -> list[str]: ...
         # returns instance IDs
 

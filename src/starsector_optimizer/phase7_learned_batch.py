@@ -64,6 +64,7 @@ class LearnedBatchConfig:
     max_job_attempts: int
     lease_renewal_interval_seconds: float
     lease_grace_seconds: float
+    pending_instance_grace_seconds: float
     ledger_heartbeat_interval_seconds: float
     ledger_warn_thresholds: tuple[float, ...]
     tailscale_authkey_secret: str
@@ -71,6 +72,8 @@ class LearnedBatchConfig:
     control_plane_port: int
     output_dir: Path
     canonical_output_path: Path
+    publish_canonical: bool
+    execution_enabled: bool
     source_db_path: Path
     game_dir: Path
     comparator_json_path: Path
@@ -113,6 +116,8 @@ class _JobState:
     attempt: int = 0
     worker_id: str | None = None
     lease_expires_at: float | None = None
+    last_requeue_reason: str | None = None
+    last_requeued_at: float | None = None
     result: dict[str, Any] | None = None
     events: list[dict[str, Any]] | None = None
 
@@ -151,6 +156,7 @@ class BatchState:
                 state.status = "leased"
                 state.worker_id = worker_id
                 state.lease_expires_at = now + self._lease_grace_seconds
+                state.last_requeue_reason = None
                 return JobLease(
                     job_id=state.job.job_id,
                     split=state.job.split,
@@ -232,18 +238,29 @@ class BatchState:
             assert state.events is not None
             state.events.append(dict(payload))
 
-    def requeue_missing_workers(self, active_worker_ids: set[str]) -> tuple[str, ...]:
-        """Requeue leased jobs whose worker has disappeared from AWS active state."""
+    def requeue_missing_workers(
+        self,
+        active_worker_ids: set[str],
+        *,
+        now: float | None = None,
+    ) -> tuple[str, ...]:
+        """Requeue missing-worker leases only after their renewal grace expires."""
+        now = time.time() if now is None else now
         requeued: list[str] = []
         with self._lock:
             for state in self._states.values():
                 if state.status != "leased" or state.worker_id in active_worker_ids:
                     continue
+                if state.lease_expires_at is None or state.lease_expires_at > now:
+                    continue
                 if state.attempt >= self._max_attempts:
                     state.status = "failed"
+                    state.last_requeue_reason = "missing_worker_attempts_exhausted"
                 else:
                     state.status = "pending"
+                    state.last_requeue_reason = "missing_worker_lease_expired"
                     requeued.append(state.job.job_id)
+                state.last_requeued_at = now
                 state.worker_id = None
                 state.lease_expires_at = None
         return tuple(requeued)
@@ -262,9 +279,12 @@ class BatchState:
                     continue
                 if state.attempt >= self._max_attempts:
                     state.status = "failed"
+                    state.last_requeue_reason = "lease_renewal_attempts_exhausted"
                 else:
                     state.status = "pending"
+                    state.last_requeue_reason = "lease_renewal_expired"
                     requeued.append(state.job.job_id)
+                state.last_requeued_at = now
                 state.worker_id = None
                 state.lease_expires_at = None
         return tuple(requeued)
@@ -281,6 +301,8 @@ class BatchState:
                     "attempt": state.attempt,
                     "worker_id": state.worker_id,
                     "lease_expires_at": state.lease_expires_at,
+                    "last_requeue_reason": state.last_requeue_reason,
+                    "last_requeued_at": state.last_requeued_at,
                     "event_count": len(state.events or ()),
                 })
             return {
@@ -349,6 +371,9 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
             expanded.get("lease_renewal_interval_seconds", 60.0)
         ),
         lease_grace_seconds=float(expanded.get("lease_grace_seconds", 300.0)),
+        pending_instance_grace_seconds=float(
+            expanded.get("pending_instance_grace_seconds", 300.0)
+        ),
         ledger_heartbeat_interval_seconds=float(expanded["ledger_heartbeat_interval_seconds"]),
         ledger_warn_thresholds=tuple(float(v) for v in expanded["ledger_warn_thresholds"]),
         tailscale_authkey_secret=str(expanded["tailscale_authkey_secret"]),
@@ -356,6 +381,8 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         control_plane_port=int(expanded["control_plane_port"]),
         output_dir=Path(expanded["output_dir"]),
         canonical_output_path=Path(expanded["canonical_output_path"]),
+        publish_canonical=bool(expanded.get("publish_canonical", False)),
+        execution_enabled=bool(expanded.get("execution_enabled", True)),
         source_db_path=Path(expanded["source_db_path"]),
         game_dir=Path(expanded["game_dir"]),
         comparator_json_path=Path(expanded["comparator_json_path"]),
@@ -385,6 +412,11 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("name and project_tag are required")
     if not config.regions:
         raise ValueError("at least one region is required")
+    if len(config.regions) != 1:
+        raise ValueError(
+            "Phase 7 learned batch currently supports exactly one region; "
+            "replacement provisioning needs per-region allocation before multi-region use"
+        )
     missing_regions = [region for region in config.regions if region not in config.ami_ids_by_region]
     if missing_regions:
         raise ValueError(f"AMI IDs missing for regions: {', '.join(missing_regions)}")
@@ -421,8 +453,14 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("max_job_attempts must be positive")
     if config.lease_renewal_interval_seconds <= 0 or config.lease_grace_seconds <= 0:
         raise ValueError("lease renewal interval and grace must be positive")
+    if config.lease_renewal_interval_seconds < 1.0:
+        raise ValueError("lease renewal interval must be at least one second")
+    if not float(config.lease_renewal_interval_seconds).is_integer():
+        raise ValueError("lease renewal interval must be an integer number of seconds")
     if config.lease_renewal_interval_seconds >= config.lease_grace_seconds:
         raise ValueError("lease renewal interval must be shorter than lease grace")
+    if config.pending_instance_grace_seconds <= 0:
+        raise ValueError("pending_instance_grace_seconds must be positive")
     if config.ledger_heartbeat_interval_seconds <= 0:
         raise ValueError("ledger_heartbeat_interval_seconds must be positive")
     if not all(0.0 < value < 1.0 for value in config.ledger_warn_thresholds):
@@ -443,6 +481,11 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("fractions must be in (0, 1)")
     if tuple(sorted(config.top_k_values)) != config.top_k_values:
         raise ValueError("top_k values must be sorted")
+    canonical_matrix = (
+        config.splits == CANONICAL_SPLITS and config.models == CANONICAL_MODELS
+    )
+    if config.publish_canonical and not canonical_matrix:
+        raise ValueError("publish_canonical is allowed only for the full canonical matrix")
 
 
 def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
@@ -641,17 +684,22 @@ def render_phase7_learned_batch_user_data(
     if len(bundle_sha256) != 64:
         raise ValueError("bundle_sha256 must be a SHA-256 hex digest")
     max_seconds = int(config.max_lifetime_hours * 3600)
+    renewal_interval = int(config.lease_renewal_interval_seconds)
+    max_missed_renewals = max(
+        1,
+        int(config.lease_grace_seconds // config.lease_renewal_interval_seconds),
+    )
     top_k = shlex.quote(",".join(str(value) for value in config.top_k_values))
     source_db = shlex.quote(str(config.source_db_path))
     game_dir = shlex.quote(str(config.game_dir))
     comparator_json = shlex.quote(str(config.comparator_json_path))
     dependency_extra = shlex.quote(config.dependency_extra)
     control_url = shlex.quote(control_plane_url)
-    renewal_interval = int(config.lease_renewal_interval_seconds)
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
 JOB_ID=""
+RUN_PID=""
 BOOTSTRAP_STEP="start"
 UV_BIN="/home/ubuntu/.local/bin/uv"
 export PATH="/home/ubuntu/.local/bin:$PATH"
@@ -711,18 +759,31 @@ post_worker_event() {{
     {control_url}/worker-event >/dev/null || true
 }}
 renew_lease_loop() {{
+  local renewal_failures=0
   while true; do
     sleep {renewal_interval}
     if [[ -z "$JOB_ID" ]]; then
       continue
     fi
-    curl --silent --fail -X POST \\
+    if curl --silent --fail -X POST \\
       -H "Authorization: Bearer {bearer_token}" \\
       -H "X-Worker-Id: $INSTANCE_ID" \\
       -H "X-Lease-Attempt: $ATTEMPT" \\
       -H "Content-Type: application/json" \\
       -d "{{\\"worker_id\\":\\"$INSTANCE_ID\\",\\"attempt\\":$ATTEMPT}}" \\
-      {control_url}/lease/"$JOB_ID"/renew >/dev/null || true
+      {control_url}/lease/"$JOB_ID"/renew >/dev/null; then
+      renewal_failures=0
+    else
+      renewal_failures=$((renewal_failures + 1))
+      post_event "lease_renewal_failed"
+      if (( renewal_failures >= {max_missed_renewals} )); then
+        post_event "lease_renewal_lost"
+        if [[ -n "$RUN_PID" ]]; then
+          kill -TERM "$RUN_PID" >/dev/null 2>&1 || true
+        fi
+        exit 70
+      fi
+    fi
   done
 }}
 on_failure() {{
@@ -731,6 +792,7 @@ on_failure() {{
   else
     post_worker_event "worker_failed_before_lease_${{BOOTSTRAP_STEP}}"
   fi
+  shutdown -h now >/dev/null 2>&1 || true
 }}
 trap on_failure ERR
 post_worker_event "bootstrap_start"
@@ -755,6 +817,7 @@ IMDS_TOKEN=$(curl --silent --fail -X PUT -H "X-aws-ec2-metadata-token-ttl-second
 INSTANCE_ID=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
 REGION=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 INSTANCE_TYPE=$(curl --silent --fail -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/instance-type)
+shutdown -h +$((({max_seconds} + 299) / 60)) >/dev/null 2>&1 || true
 
 BOOTSTRAP_STEP="bundle_download"
 mkdir -p /opt/phase7-batch
@@ -794,13 +857,19 @@ while (( SECONDS < DEADLINE )); do
   OUTPUT="data/phase7/aws-job-$JOB_ID.json"
   LOG="data/phase7/aws-job-$JOB_ID.log"
   mkdir -p data/phase7
+  REMAINING=$((DEADLINE - SECONDS - {renewal_interval}))
+  if (( REMAINING < {renewal_interval} )); then
+    post_worker_event "worker_deadline_too_close_for_new_job"
+    break
+  fi
+  JOB_TIMEOUT=$REMAINING
   post_event "lease_acquired"
   post_event "experiment_start"
   renew_lease_loop &
   RENEW_PID=$!
 
   set +e
-  timeout {max_seconds} "$UV_BIN" run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
+  timeout "$JOB_TIMEOUT" "$UV_BIN" run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
     {source_db} \\
     --game-dir {game_dir} \\
     --comparator-json {comparator_json} \\
@@ -814,13 +883,23 @@ while (( SECONDS < DEADLINE )); do
     --hpo-jobs {config.hpo_jobs} \\
     --model-thread-count {config.model_thread_count} \\
     --top-k {top_k} \\
-    --output "$OUTPUT" >"$LOG" 2>&1
+    --output "$OUTPUT" >"$LOG" 2>&1 &
+  RUN_PID=$!
+  wait "$RUN_PID"
   RUN_CODE=$?
   kill "$RENEW_PID" >/dev/null 2>&1 || true
-  wait "$RENEW_PID" >/dev/null 2>&1 || true
+  wait "$RENEW_PID" >/dev/null 2>&1
+  RENEW_CODE=$?
+  RUN_PID=""
   set -e
+  if [[ "$RENEW_CODE" == "70" ]]; then
+    post_event_with_log "experiment_failed_lost_lease" "$LOG" "$RENEW_CODE"
+    shutdown -h now >/dev/null 2>&1 || true
+    exit "$RENEW_CODE"
+  fi
   if [[ "$RUN_CODE" != "0" ]]; then
     post_event_with_log "experiment_failed" "$LOG" "$RUN_CODE"
+    shutdown -h now >/dev/null 2>&1 || true
     exit "$RUN_CODE"
   fi
   post_event "experiment_completed"
@@ -951,6 +1030,7 @@ def run_live_batch(
     server_factory: Any = start_control_plane_server,
     sleep_fn: Any = time.sleep,
     now_fn: Any = time.time,
+    timestamp_fn: Any = _utc_now,
     final_audit_fn: Any | None = None,
     on_poll: Any | None = None,
 ) -> dict[str, Any]:
@@ -974,18 +1054,21 @@ def run_live_batch(
     cumulative_usd = 0.0
     warned_budget_thresholds: set[float] = set()
     instance_ids: list[str] = []
+    pending_instance_ids: dict[str, float] = {}
     terminal_message: str | None = None
-    had_exception = False
-    server = server_factory(
-        config,
-        state,
-        bundle_path=bundle_path,
-        bearer_token=bearer_token,
-        bundle_sha256=bundle_sha256,
-    )
+    primary_exception: BaseException | None = None
+    server = None
     start = now_fn()
-    write_status_snapshot(config, state, phase="starting")
+    last_budget_heartbeat_at = start - poll_interval
     try:
+        server = server_factory(
+            config,
+            state,
+            bundle_path=bundle_path,
+            bearer_token=bearer_token,
+            bundle_sha256=bundle_sha256,
+        )
+        write_status_snapshot(config, state, phase="starting", timestamp=timestamp_fn())
         instance_ids = _provision_batch_workers(
             config,
             provider=provider,
@@ -998,7 +1081,16 @@ def run_live_batch(
                 f"only {len(instance_ids)} workers provisioned; "
                 f"minimum is {config.min_workers_to_start}"
             )
+        pending_instance_ids.update({instance_id: start for instance_id in instance_ids})
         while True:
+            now = now_fn()
+            if now - start > config.max_lifetime_hours * 3600.0:
+                raise TimeoutError("batch exceeded max_lifetime_hours")
+            if cumulative_usd >= config.budget_usd:
+                raise BudgetExceeded(
+                    f"batch budget exceeded before replacement provisioning: "
+                    f"cumulative_usd={cumulative_usd:.4f} budget_usd={config.budget_usd:.4f}"
+                )
             if on_poll is not None:
                 on_poll(state)
             active = provider.list_active(config.project_tag)
@@ -1007,32 +1099,46 @@ def run_live_batch(
                 for item in active
                 if item.get("instance_id") or item.get("id")
             }
-            requeued = state.requeue_missing_workers(active_worker_ids)
+            for worker_id in active_worker_ids:
+                pending_instance_ids.pop(worker_id, None)
+            pre_requeue_status = state.status()
+            missing_leased_worker_ids = {
+                str(row["worker_id"])
+                for row in pre_requeue_status["jobs"]
+                if (
+                    row["status"] == "leased"
+                    and row["worker_id"] is not None
+                    and row["worker_id"] not in active_worker_ids
+                )
+            }
+            requeued = state.requeue_missing_workers(active_worker_ids, now=now)
             if requeued:
                 logger.warning(
                     "requeued jobs from missing workers: %s",
                     ", ".join(requeued),
                 )
-            unrenewed = state.requeue_unrenewed_leases(now=now_fn())
+                for worker_id in missing_leased_worker_ids:
+                    pending_instance_ids.pop(worker_id, None)
+            unrenewed = state.requeue_unrenewed_leases(now=now)
             if unrenewed:
                 logger.warning(
                     "requeued jobs from stale lease renewals: %s",
                     ", ".join(unrenewed),
                 )
+                for worker_id in missing_leased_worker_ids:
+                    pending_instance_ids.pop(worker_id, None)
+            expired_pending = [
+                worker_id
+                for worker_id, launched_at in pending_instance_ids.items()
+                if now - launched_at > config.pending_instance_grace_seconds
+            ]
+            if expired_pending:
+                raise BatchLaunchFailed(
+                    "pending workers did not become active before grace: "
+                    + ", ".join(sorted(expired_pending)[:5])
+                )
             status = state.status()
             counts = status["counts"]
-            unfinished = counts["pending"] + counts["leased"]
-            replacement_count = max(0, min(config.target_workers, unfinished) - len(active))
-            if replacement_count and counts["pending"]:
-                replacements = _provision_batch_workers(
-                    config,
-                    provider=provider,
-                    bundle_sha256=bundle_sha256,
-                    bearer_token=bearer_token,
-                    target_workers=replacement_count,
-                )
-                instance_ids.extend(replacements)
-                active = provider.list_active(config.project_tag)
             spot_prices = {
                 (item.get("region", "unknown"), item.get("instance_type", "unknown")):
                 provider.get_spot_price(
@@ -1041,14 +1147,16 @@ def run_live_batch(
                 )
                 for item in active
             }
+            budget_interval = max(0.0, now - last_budget_heartbeat_at)
+            last_budget_heartbeat_at = now
             cumulative_usd = record_budget_heartbeat(
                 config,
                 ledger_path=config.output_dir / "ledger.jsonl",
                 running_instances=active,
                 spot_prices=spot_prices,
-                interval_seconds=poll_interval,
+                interval_seconds=budget_interval,
                 cumulative_usd=cumulative_usd,
-                timestamp=_utc_now(),
+                timestamp=timestamp_fn(),
             )
             budget_fraction = cumulative_usd / config.budget_usd
             for threshold in config.ledger_warn_thresholds:
@@ -1060,6 +1168,32 @@ def run_live_batch(
                         cumulative_usd,
                         config.budget_usd,
                     )
+            unfinished = counts["pending"] + counts["leased"]
+            effective_active_count = len(active) + len(pending_instance_ids)
+            replacement_count = max(
+                0,
+                min(config.target_workers, unfinished) - effective_active_count,
+            )
+            if replacement_count and counts["pending"]:
+                replacements = _provision_batch_workers(
+                    config,
+                    provider=provider,
+                    bundle_sha256=bundle_sha256,
+                    bearer_token=bearer_token,
+                    target_workers=replacement_count,
+                )
+                instance_ids.extend(replacements)
+                pending_instance_ids.update(
+                    {instance_id: now for instance_id in replacements}
+                )
+                active = provider.list_active(config.project_tag)
+                active_worker_ids = {
+                    str(item.get("instance_id") or item.get("id"))
+                    for item in active
+                    if item.get("instance_id") or item.get("id")
+                }
+                for worker_id in active_worker_ids:
+                    pending_instance_ids.pop(worker_id, None)
             write_status_snapshot(
                 config,
                 state,
@@ -1067,6 +1201,7 @@ def run_live_batch(
                 instance_ids=instance_ids,
                 active_instances=active,
                 cumulative_usd=cumulative_usd,
+                timestamp=timestamp_fn(),
             )
             if counts["failed"]:
                 raise BatchLaunchFailed(f"{counts['failed']} batch job(s) failed")
@@ -1079,18 +1214,17 @@ def run_live_batch(
                     instance_ids=instance_ids,
                     active_instances=active,
                     cumulative_usd=cumulative_usd,
+                    timestamp=timestamp_fn(),
                 )
                 terminal_message = "merged"
                 return merged
-            if not active and counts["completed"] < len(jobs):
+            if not active and not pending_instance_ids and counts["completed"] < len(jobs):
                 raise BatchLaunchFailed(
                     "no active workers remain before all jobs completed"
                 )
-            if now_fn() - start > config.max_lifetime_hours * 3600.0:
-                raise TimeoutError("batch exceeded max_lifetime_hours")
             sleep_fn(poll_interval)
-    except Exception as exc:
-        had_exception = True
+    except BaseException as exc:
+        primary_exception = exc
         terminal_message = str(exc)
         raise
     finally:
@@ -1102,11 +1236,13 @@ def run_live_batch(
             instance_ids=instance_ids,
             cumulative_usd=cumulative_usd,
             message=terminal_message,
+            timestamp=timestamp_fn(),
         )
-        try:
-            server.shutdown()
-        except Exception as exc:
-            teardown_errors.append(f"server shutdown failed: {exc}")
+        if server is not None:
+            try:
+                server.shutdown()
+            except Exception as exc:
+                teardown_errors.append(f"server shutdown failed: {exc}")
         try:
             provider.terminate_fleet(
                 fleet_name=config.fleet_name,
@@ -1134,9 +1270,12 @@ def run_live_batch(
             instance_ids=instance_ids,
             cumulative_usd=cumulative_usd,
             message=final_message,
+            timestamp=timestamp_fn(),
         )
-        if teardown_errors and not had_exception:
-            raise BatchLaunchFailed("; ".join(teardown_errors))
+        if teardown_errors and primary_exception is None:
+            raise BatchLaunchFailed("; ".join(teardown_errors)) from primary_exception
+        if teardown_errors:
+            logger.error("batch teardown completed with errors: %s", "; ".join(teardown_errors))
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1144,8 +1283,18 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def _leakage_ok(result: Mapping[str, Any]) -> bool:
+    required = {
+        "outer_test_targets_excluded_from_fit",
+        "honest_eval_targets_excluded_from_fit",
+        "feature_selection_inside_inner_fold",
+        "build_key_excluded_from_feature_vectors",
+    }
     checklist = result.get("leakage_checklist")
-    return isinstance(checklist, dict) and all(bool(value) for value in checklist.values())
+    return (
+        isinstance(checklist, dict)
+        and required.issubset(checklist.keys())
+        and all(bool(checklist[key]) for key in required)
+    )
 
 
 def _require_64_hex(value: Any, *, field: str) -> str:
@@ -1198,7 +1347,11 @@ def validate_job_payload(
     if provenance["dependency_extra"] != config.dependency_extra:
         raise ValueError(f"job {job.job_id} dependency extra mismatch")
     if bundle_sha256 is not None:
-        provenance["bundle_sha256"] = bundle_sha256
+        recorded_bundle = provenance.get("bundle_sha256")
+        if recorded_bundle is None:
+            provenance["bundle_sha256"] = bundle_sha256
+        elif recorded_bundle != bundle_sha256:
+            raise ValueError(f"job {job.job_id} bundle_sha256 mismatch")
     _require_64_hex(provenance.get("bundle_sha256"), field="bundle_sha256")
     result_rows = artifact.get("results")
     if not isinstance(result_rows, list) or len(result_rows) != 1:
@@ -1317,7 +1470,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         "experiment_schema_version": first["experiment_schema_version"],
         "feature_schema_version": first["feature_schema_version"],
         "db_path": first["db_path"],
-        "model_families": list(CANONICAL_MODELS),
+        "model_families": list(config.models),
         "provenance": provenance,
         "result_count": len(results),
         "skipped_models": [],
@@ -1327,7 +1480,15 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     merged_path = config.output_dir / "merged.json"
     _atomic_write_json(merged_path, merged)
-    _atomic_write_json(config.canonical_output_path, merged)
+    if config.publish_canonical:
+        canonical_matrix = (
+            config.splits == CANONICAL_SPLITS and config.models == CANONICAL_MODELS
+        )
+        if not canonical_matrix or len(jobs) != len(CANONICAL_SPLITS) * len(CANONICAL_MODELS):
+            raise ValueError(
+                "canonical publication requires the full canonical split/model matrix"
+            )
+        _atomic_write_json(config.canonical_output_path, merged)
     return merged
 
 

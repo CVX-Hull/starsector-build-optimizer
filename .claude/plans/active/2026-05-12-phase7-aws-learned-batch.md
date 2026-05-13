@@ -112,19 +112,22 @@ Checked on 2026-05-12 with `AWS_PROFILE=starsector`.
 - Spot availability check found `c7i.4xlarge`, `c7a.4xlarge`,
   `c7i.2xlarge`, and `c7a.2xlarge` offered in both target regions.
 - Spot price sample favored `us-east-2`, especially `c7i.4xlarge`
-  at roughly `$0.20/hour`.
+  at roughly `$0.20/hour`; later smoke/full configs used `us-east-1` because
+  the available renewable-lease AMI was in that region.
 - Cloud-run lesson: `AWSProvider.provision_fleet` currently floors
   `target_workers // len(regions)`, so a 15-worker batch across two regions
   would request only 14 workers. The default full-run config therefore uses
   one region. Multi-region fallback requires either provider remainder
   distribution or a target worker count divisible by the region count.
 
-Default launch policy:
+Final checked-in config policy:
 
-- `regions: [us-east-2]`.
-- `instance_types: [c7i.4xlarge, c7a.4xlarge]`.
+- `regions: [us-east-1]`.
+- `instance_types: [c7i.4xlarge, c7a.4xlarge, c6i.4xlarge, c6a.4xlarge,
+  m7i.4xlarge, m7a.4xlarge]`.
 - `target_workers: 15`.
 - `min_workers_to_start: 15`.
+- `execution_enabled: false`.
 - Per-worker logical-core plan: `hpo_jobs: 4`, `model_thread_count: 4`.
 - Target vCPU draw at full size: 240 vCPU, well below either region's 640 vCPU
   spot quota.
@@ -194,46 +197,38 @@ Completed in the current implementation pass:
   clean. RF renewed beyond the old fixed-lease failure point without duplicate
   assignment.
 
-Not complete:
+Closeout decision after the local full run:
 
-- before real AWS provisioning, run a clean preflight after committing these
-  source changes and rebaking/updating the AMI;
-- run a full-run preflight against the renewable-lease AMI;
-- launch the 15-worker full matrix only through the trap wrapper;
-- no valid canonical full-run promotion exists yet.
+- do not spend a 15-worker AWS run to duplicate
+  `data/phase7/learned_surrogate_full_local_2026-05-12.json`;
+- the AWS path is now infrastructure validation only, not the evidence source
+  for the Phase 7 modeling decision;
+- checked-in AWS configs are disabled with `execution_enabled: false`;
+- no AWS artifact may publish a canonical full-run path unless
+  `publish_canonical: true` and the full 15-job canonical matrix validates.
 
-## Remaining Before Live AWS Execution
+## Closed AWS Execution Path
 
-1. Commit these implementation and documentation changes, or explicitly accept
-   dirty provenance for a non-publishable rehearsal.
-2. Export real launch environment:
-   `AWS_PROFILE`, `TAILSCALE_AUTHKEY`, and
-   `STARSECTOR_WORKSTATION_TAILNET_IP`.
-3. Run the active-plan validator, focused batch tests, full test suite, and
-   shell syntax checks.
-4. Run the full-run preflight:
-   `uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`.
-5. Launch the full run through the trap wrapper:
-   `scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`.
-6. Monitor `data/phase7/learned_surrogate_batch_2026-05-12/status.json` and
-   `ledger.jsonl`.
-7. If interrupted, run
-   `scripts/cloud/teardown.sh phase7-learned-batch-20260512` and
-   `scripts/cloud/final_audit.sh phase7-learned-batch-20260512`.
-8. Ship the report only after the canonical 15-result merge exists and passes
-   post-run audit.
+Future AWS execution requires a new explicit reproducibility or infrastructure
+validation goal. The operator must re-enable `execution_enabled`, run preflight,
+and re-confirm budget/cleanup approvals before provisioning resources. The
+previous "launch full matrix next" step is superseded by the completed local
+full run and the renewable-lease smoke.
 
 ## Baseline Plan Interaction
 
 The existing learned-baseline plan still owns the learned runner, smoke report,
-and canonical report text. This AWS plan may satisfy that plan's full-run
-artifact requirement only when all of the following are true:
+and canonical report text. This AWS plan no longer satisfies that plan's
+full-run artifact requirement; the local full artifact is the evidence source
+for this report. Future AWS artifacts may be promoted only when all of the
+following are true:
 
 - all 15 canonical jobs complete successfully;
 - every per-job artifact validates against the same source DB, comparator JSON,
   feature schema version, split contract, top-k set, seed/fraction settings,
   dependency set, source bundle SHA256, and leakage checklist;
 - merge writes a batch-internal `merged.json`;
+- `publish_canonical: true` is explicitly set;
 - merge atomically promotes the canonical artifact to
   `data/phase7/learned_surrogate_full_2026-05-12.json`.
 

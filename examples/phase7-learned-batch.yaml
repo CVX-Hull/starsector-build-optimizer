@@ -22,6 +22,7 @@ max_lifetime_hours: 2.0
 max_job_attempts: 6
 lease_renewal_interval_seconds: 60.0
 lease_grace_seconds: 300.0
+pending_instance_grace_seconds: 300.0
 ledger_heartbeat_interval_seconds: 60.0
 ledger_warn_thresholds:
   - 0.5
@@ -32,6 +33,8 @@ control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
 control_plane_port: 9131
 output_dir: data/phase7/learned_surrogate_batch_2026-05-12
 canonical_output_path: data/phase7/learned_surrogate_full_2026-05-12.json
+publish_canonical: false
+execution_enabled: false
 source_db_path: data/phase7/wave1_matchups.sqlite
 game_dir: game/starsector
 comparator_json_path: data/phase7/wave1_comparator_gate_2026-05-11.json

@@ -161,10 +161,13 @@ def local_smoke(config_path: Path, max_jobs: int) -> int:
 def merge(config_path: Path) -> int:
     cfg = load_batch_config(config_path)
     payload = merge_job_artifacts(cfg)
+    canonical_output_path = (
+        str(cfg.canonical_output_path) if cfg.publish_canonical else None
+    )
     print(json.dumps({
         "status": "merged",
         "result_count": payload["result_count"],
-        "canonical_output_path": str(cfg.canonical_output_path),
+        "canonical_output_path": canonical_output_path,
         "batch_output_path": str(cfg.output_dir / "merged.json"),
     }, indent=2, sort_keys=True))
     return 0
@@ -182,6 +185,10 @@ def status(config_path: Path) -> int:
 
 def launch(config_path: Path, *, execute: bool) -> int:
     cfg = load_batch_config(config_path)
+    if execute and not cfg.execution_enabled:
+        raise RuntimeError(
+            f"execution_enabled is false for {config_path}; refusing to provision AWS resources"
+        )
     provider = AWSProvider(cfg.regions)
     check_aws_credentials()
     check_authkey_syntax(cfg.tailscale_authkey_secret)
@@ -220,7 +227,6 @@ def launch(config_path: Path, *, execute: bool) -> int:
 
     def handle_signal(signum, frame) -> None:
         del frame
-        cleanup()
         raise KeyboardInterrupt(f"received signal {signum}")
 
     atexit.register(cleanup)
@@ -231,15 +237,17 @@ def launch(config_path: Path, *, execute: bool) -> int:
     def final_audit(config) -> None:
         subprocess.run(["scripts/cloud/final_audit.sh", config.project_tag], check=True)
 
-    run_live_batch(
-        cfg,
-        provider=provider,
-        bundle_path=bundle_path,
-        bundle_sha256=bundle_sha256,
-        bearer_token=bearer_token,
-        final_audit_fn=final_audit,
-    )
-    cleanup_done = True
+    try:
+        run_live_batch(
+            cfg,
+            provider=provider,
+            bundle_path=bundle_path,
+            bundle_sha256=bundle_sha256,
+            bearer_token=bearer_token,
+            final_audit_fn=final_audit,
+        )
+    finally:
+        cleanup_done = True
     return 0
 
 

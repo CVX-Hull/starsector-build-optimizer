@@ -510,15 +510,24 @@ include honest-eval training inputs or unsafe feature/model-selection flags.
 Batch configs may define explicit `splits` and `models` subsets for smoke or
 debug runs. In every config, `target_workers` must equal
 `len(splits) * len(models)`, and `min_workers_to_start` must equal
-`target_workers`. Subset batches are diagnostic only; they may not publish the
-canonical full-run artifact unless their matrix is the full canonical matrix.
+`target_workers`. Subset batches are diagnostic only. `publish_canonical` must
+be false for any subset matrix, and the implementation must reject configs
+that combine `publish_canonical: true` with anything other than the full
+canonical matrix.
 `max_job_attempts` controls the lease retry budget and must be positive. A job
 lease is not a wall-clock runtime cap: workers must renew the lease while the
-model process is still alive. The controller may requeue only when AWS no
-longer reports the worker active or the worker stops renewing for longer than
-`lease_grace_seconds`. Spot worker loss and renewal loss consume a lease
-attempt; configs intended for Spot execution therefore need a retry budget
-larger than one transient interruption cycle.
+model process is still alive. A single stale AWS active-instance snapshot is
+not sufficient to steal a lease. The controller may requeue only after the
+lease has exceeded `lease_grace_seconds` without renewal; missing-worker
+classification is diagnostic status, not an immediate ownership transfer. Spot
+worker loss and renewal loss consume a lease attempt; configs intended for
+Spot execution therefore need a retry budget larger than one transient
+interruption cycle.
+
+Provisioned instance IDs are counted as pending only for
+`pending_instance_grace_seconds`. They must become visible in the provider's
+active-instance listing before that grace expires; otherwise the batch fails
+rather than suppressing recovery indefinitely behind never-active instance IDs.
 
 The batch bundle must include every runtime script imported by the worker
 command, including both `phase7_learned_surrogate_experiment.py` and its
@@ -545,8 +554,9 @@ The batch merge step must validate every per-job artifact before publishing:
 - every result's `split` and `model` match its job ID;
 - comparator context is present for every result.
 
-Valid merge writes a batch-internal `merged.json` and then atomically promotes
-the canonical full-run artifact to
-`data/phase7/learned_surrogate_full_2026-05-12.json`. Partial batches may
-write `.partial` or batch-internal artifacts only; they must not overwrite the
-canonical full-run path.
+Valid merge always writes a batch-internal `merged.json`. It atomically
+promotes the canonical full-run artifact to
+`data/phase7/learned_surrogate_full_2026-05-12.json` only when
+`publish_canonical: true` and the validated matrix is the full canonical
+matrix. Partial batches may write batch-internal artifacts only; they must not
+overwrite the canonical full-run path.

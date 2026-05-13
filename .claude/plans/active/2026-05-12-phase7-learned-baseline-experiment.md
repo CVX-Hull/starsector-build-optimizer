@@ -366,18 +366,16 @@ report:
 The report must show learned results beside comparator-gate results; prose
 comparison alone is not enough.
 
-## Execution Amendment: AWS Batch Path
+## Execution Amendment: Local Full Artifact
 
-The initial local full run was interrupted before completion. The separate
-active AWS batch plan may satisfy this plan's full-run requirement by producing
-the same canonical artifact path:
-`data/phase7/learned_surrogate_full_2026-05-12.json`.
+The initial local full run was restarted and completed successfully as
+`data/phase7/learned_surrogate_full_local_2026-05-12.json`. That local full
+artifact satisfies this plan's full-run requirement for the current evidence
+pass.
 
-That promotion is valid only if the AWS batch merge validates all 15 canonical
-`(split, model)` jobs, refuses partial/duplicate/inconsistent job artifacts,
-writes a batch-internal `merged.json`, and atomically promotes the canonical
-artifact. Until that happens, this plan remains active and the report remains
-draft.
+The AWS batch path is no longer required for this plan. It remains available
+only as future infrastructure validation, and checked-in AWS configs are
+disabled for execution.
 
 ## Implementation Sequence
 
@@ -404,11 +402,9 @@ draft.
    families, `--hpo-trials 24`, `--hpo-jobs 4`,
    `--model-thread-count 4`, `--top-k 1,3,5`, progress enabled, and JSON
    output via `--output
-   data/phase7/learned_surrogate_full_2026-05-12.json`. This can happen as a
-   single local run or through the approved AWS batch plan's validated atomic
-   merge. Keep the plan active until the canonical full artifact exists or the
-   user explicitly approves splitting full empirical execution into a follow-up
-   plan.
+   data/phase7/learned_surrogate_full_local_2026-05-12.json`. This local full
+   run is complete and is the evidence source for this report. The AWS batch
+   path is now infrastructure validation only.
 6. Create or update the learned-surrogate experiment report with method
    context before result interpretation:
    - target variable;
@@ -435,23 +431,24 @@ draft.
 - `uv run python scripts/validate_active_plans.py`
 - Smoke run:
   `uv run python scripts/analysis/phase7_learned_surrogate_experiment.py data/phase7/wave1_matchups.sqlite --split build --model all --max-rows 200 --hpo-trials 2 --top-k 1 --progress --comparator-json data/phase7/wave1_comparator_gate_2026-05-11.json --output data/phase7/learned_surrogate_smoke_2026-05-12.json`
-- Full run:
-  `uv run python scripts/analysis/phase7_learned_surrogate_experiment.py data/phase7/wave1_matchups.sqlite --split all --model all --hpo-trials 24 --hpo-jobs 4 --model-thread-count 4 --top-k 1,3,5 --progress --comparator-json data/phase7/wave1_comparator_gate_2026-05-11.json --output data/phase7/learned_surrogate_full_2026-05-12.json`
-- AWS full-run preflight:
-  `AWS_PROFILE=starsector TAILSCALE_AUTHKEY=<authkey> STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet-ip> uv run python scripts/cloud/phase7_learned_batch.py launch --config examples/phase7-learned-batch.yaml`
-- AWS full-run launch:
-  `AWS_PROFILE=starsector TAILSCALE_AUTHKEY=<authkey> STARSECTOR_WORKSTATION_TAILNET_IP=<tailnet-ip> scripts/cloud/launch_phase7_learned_batch.sh --config examples/phase7-learned-batch.yaml`
+- Full run artifact:
+  `data/phase7/learned_surrogate_full_local_2026-05-12.json`
+- AWS full-run execution:
+  disabled for this plan. `examples/phase7-learned-batch.yaml` has
+  `execution_enabled: false` and must not be launched without a new explicit
+  reproducibility or infrastructure-validation goal.
 - Focused Markdown link check over changed docs.
 - `git diff --check`
 
 The smoke artifact is required before committing the runner. A schema-valid
 full artifact is required before marking this plan implemented and before
-marking the report `shipped`; mere path existence is not enough. The stale
+marking the report `shipped`; mere path existence is not enough. The local
+full artifact satisfies the empirical execution gate for this plan. The stale
 interrupted file previously at
 `data/phase7/learned_surrogate_full_2026-05-12.json` was quarantined under
 `data/phase7/interrupted/` because it had `status = running` and only partial
-results. A validated AWS batch merge is an accepted way to produce the
-canonical artifact.
+results. A validated AWS batch merge is a future infrastructure-validation
+option only, not required for this plan closeout.
 
 ## Deferred Items
 
