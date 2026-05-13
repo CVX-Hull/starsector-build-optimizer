@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-05-11
+last-validated: 2026-05-12
 ---
 
 # Reports — Index
@@ -20,7 +20,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | shipped | [Wave 1 optimization-trajectory analysis](2026-05-10-wave1-optimization-trajectory.md) | Training-log trajectory diagnostics. Warm-start is not justified as a default from this report alone; honest eval remains the oracle for cross-cell build quality. |
 | 2026-05-10 | shipped | [Wave 1 honest-eval stall checkpoint](2026-05-10-wave1-honest-eval-stall-checkpoint.md) | Snapshot of interrupted eval `…20260510T170431Z`; root causes, cleanup fixes, and resume path. The run is recoverable via `--resume-from` after teardown. |
 | 2026-05-11 | shipped | [Wave 1 honest-eval final](2026-05-11-wave1-honest-eval-final.md) | Final transform-free oracle verdict. c0a wins by mean top-K, c1 has the best individual build, c2 loses to both baselines, c3 warm-start remains quarantined, and all optimizer cells beat random-feasible. |
-| 2026-05-11 | shipped | [Validation-to-Phase-7 roadmap](2026-05-11-validation-to-phase7-roadmap.md) | Consolidates final honest-eval results, corrected Wave 1 analyses, Phase 7 feature-substrate findings, and the staged roadmap from validation completion through structured optimizer work. |
+| 2026-05-11 | shipped | [Validation-to-Phase-7 roadmap](2026-05-11-validation-to-phase7-roadmap.md) | Consolidates final honest-eval results, corrected Wave 1 analyses, Phase 7 feature-substrate findings, and the staged roadmap; 2026-05-12 text revision tightens learned-surrogate gates without changing 2026-05-11 evidence. |
 | 2026-05-11 | shipped | [Phase 7 matchup surrogate preliminary](2026-05-11-phase7-matchup-surrogate-preliminary.md) | Generated SQLite materialization plus comparator-gate grouped baselines for the featurized matchup surrogate. |
 | 2026-05-09 | shipped | [Wave 0 validation](2026-05-09-wave0-validation.md) | V2 re-validation Wave 0 preflight gate. All gates passed post-fix; multi-worker LOADOUT_MISMATCH root-caused and verified clean. |
 

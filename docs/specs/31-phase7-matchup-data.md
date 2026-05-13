@@ -186,6 +186,29 @@ Feature profiles are deterministic ablation subsets:
 
 Unknown feature profiles raise `ValueError`.
 
+Future feature-selection experiments must not treat the materialized feature
+columns as an anonymous flat mask. Any learned-selection artifact that claims
+feature-selection evidence must include a feature-family registry for the
+feature schema/profile used in that run. For every generated feature column,
+the registry records:
+
+- `family`: semantic subsystem such as hull, mobility, flux, defense, weapon
+  pressure, slot geometry, hullmod, opponent aggregate, sparse component,
+  explicit interaction, or provenance/context;
+- `template`: generator pattern such as raw descriptor, aggregate, normalized
+  ratio, categorical residual, sparse indicator, interaction, binned value, or
+  learned/derived embedding;
+- `parents`: empty for main-effect features and the parent feature families
+  for interaction features;
+- `leakage_risk`: `low`, `medium`, or `high`, with sparse IDs, rare component
+  fingerprints, and target-derived aggregates classified conservatively.
+
+Feature selection, family screening, clustering, dimensionality reduction,
+encoding, scaling, target transforms, calibration, and HPO are all fitted
+operations. They must be fit inside the training portion of the relevant
+outer split. No fitted preprocessing or feature-selection decision may use
+outer-test or honest-eval targets.
+
 ## Log And DB Recovery
 
 `phase7_matchup_data.py` exposes:
@@ -326,6 +349,39 @@ def forward_time_split(rows, train_fraction: float) -> SplitIds: ...
 `ValueError`. The group named by each split must not appear in both train and
 test.
 
+The supported split levels and their claim boundaries are:
+
+| Split level | Group key | Supported claim |
+|---|---|---|
+| `replicate` | exact `(build_key, opponent_variant_id)` with held-out replicate indices | Simulator-noise estimation only; not transfer evidence. |
+| `build` | `build_key` | Transfer to unseen repaired player builds drawn from the same broader build distribution. |
+| `opponent` | `opponent_variant_id` | Transfer to unseen exact opponent variants/builds. |
+| `opponent_hull` | opponent `hull_id` derived from the stock variant | Transfer to unseen opponent hulls. Requires a future split-builder implementation before reportable use. |
+| `opponent_family` | declared or derived opponent family/archetype key | Transfer to unseen opponent families/archetypes. Requires a future outcome-free or train-fold-fitted family builder before reportable use. |
+| `component` | component-combination key defined below | Transfer away from selected component combinations, not from all components globally. |
+| `seed-cell` | `(campaign, seed)` or campaign-cell key when seed is absent | Transfer across campaign cells/proposal contexts. |
+| `forward-time` | source order key, normally `(source_path, trial_number, opponent_index)` | Forward deployment over later optimizer proposals. |
+
+Each result must record `split_level`, the exact group-key function or field
+set, the supported claim, and overlap counts for stricter hierarchy levels
+when available. Random-row splits may be implemented only as smoke/debug
+diagnostics and must set `claim_supported` to `debug_only`.
+
+The component split key is the canonical full component fingerprint by
+default: sorted weapon IDs including slot IDs, sorted hullmods, hull ID, and
+flux allocation. Future k-combination stress tests may use weapon multisets,
+hullmod sets, or weapon-hullmod pairs/triples, but the artifact must name the
+component key definition. Reports that use component holdout must include
+train/test overlap diagnostics for exact full fingerprints and component
+combinations at `k = 1`, `k = 2`, and `k = 3` where computable.
+
+Inner validation must use a split compatible with the outer claim. For grouped
+splits, the inner training rows must contain enough unique groups for the
+declared inner fold count; otherwise emit `insufficient_inner_groups` instead
+of falling back to row-random validation. For `forward-time`, the inner split
+must declare the ordering key and use blocked or rolling-origin semantics
+within the outer-training prefix.
+
 ## Baseline Evaluation
 
 The comparator-gate baseline script uses scikit-learn only. It loads the
@@ -452,6 +508,9 @@ class LearnedExperimentConfig:
     progress: bool
     allow_missing_optional_models: bool
     feature_profile: str = "all"
+    batch_job_id: str | None = None
+    batch_name: str | None = None
+    batch_fleet_name: str | None = None
 
 def build_experiment_configs(
     config: LearnedExperimentConfig,
@@ -485,8 +544,13 @@ The learned feature vectors may use game-data categorical descriptors such as
 weapon IDs, hullmod IDs, slot IDs, and opponent variant IDs. They must not
 include `build_key`, target-derived build means, target-derived opponent means,
 TWFE residuals, honest-eval labels, or any field computed from outer-test
-targets. Under held-out-build and held-out-opponent splits, unseen categories
-must be handled by the fitted encoder or model without target fallback.
+targets. Source path, trial number, row kind, source kind, rank, campaign,
+seed, and batch/job identifiers are diagnostic provenance by default, not model
+features. A later plan may allow campaign/seed context for a split-specific
+question only if the plan names the supported claim and forbids incompatible
+claims such as forward-time or seed-cell transfer. Under held-out-build and
+held-out-opponent splits, unseen categories must be handled by the fitted
+encoder or model without target fallback.
 
 Each learned model/split run uses nested validation:
 
@@ -501,6 +565,43 @@ Each learned model/split run uses nested validation:
    higher Spearman rho and then lower fit/predict runtime.
 5. Refit the selected model on the full outer training rows.
 6. Evaluate once on the outer test rows.
+
+The canonical 15-job matrix reports fixed model families across fixed splits;
+it is a comparison matrix, not an automatically nested model-family selector.
+Any claim that names a single "best" learned model must either predeclare the
+model family and primary endpoint before the run, or implement model-family
+choice inside the inner validation procedure and evaluate that full selection
+procedure on the outer fold. Reports must declare the primary split, primary
+metric, primary top-k value when applicable, model-promotion rule, and whether
+each table is exploratory or confirmatory.
+
+Feature selection is part of that nested validation procedure. If a learned
+run enables feature selection, the JSON artifact must record the selector
+family, selected feature families, selected feature count, selected-family
+stability when repeated resampling is used, heredity policy for interactions,
+and every selector hyperparameter. Bayesian optimization, TPE, SMBO, random
+search, successive halving, embedded regularization, and filter/wrapper
+selectors are all allowed only inside the inner validation loop. Flat
+per-column masks over the full feature table are diagnostic only unless the
+run justifies the mask size, grouping, and leakage controls in the artifact.
+If multi-fidelity screening or successive halving is used as a promotion gate,
+the artifact must include the cheap-fidelity definition, full-fidelity
+definition, promotion rule, and a rank-preservation diagnostic or mark the run
+as exploratory-only.
+
+Hierarchy-aware split metadata is required for feature-selection claims. Each
+result must record the split unit, claim supported by that split, forbidden
+cross-split keys, and overlap counts for exact opponent, hull ID, component
+combination, campaign cell, and exact matchup group where those labels are
+available. Random-row splits may be emitted as smoke/debug diagnostics, but
+they are not evidence for held-out-opponent transfer.
+
+Canonical learned runs must include named leakage diagnostics, or an explicit
+`not_applicable` reason for each unavailable diagnostic: forbidden-key overlap,
+adversarial-validation AUC by hierarchy level, rare-combination overlap,
+nearest-neighbor overlap, and sparse-ID ablation delta. Diagnostics may fail
+open only for exploratory artifacts; confirmatory artifacts must define pass,
+warning, or fail semantics before the run.
 
 The learned script accepts `--comparator-json`, defaulting to
 `data/phase7/wave1_comparator_gate_2026-05-11.json`. Results include the
@@ -531,10 +632,19 @@ The learned experiment JSON output includes:
 - per-result target, feature-family summary, split family, HPO space, HPO
   trace summary, selected hyperparameters, metrics, comparator context,
   honest-eval diagnostic, timing, feature profile, and leakage checklist
+- feature-family registry digest, feature-selection protocol, selected-family
+  summary, hierarchy scorecard, and model-specific regularization settings
+  when those are applicable to the run
+- `honest_eval_usage` with one of `diagnostic_only`, `exploratory_selection`,
+  or `final_claim`, plus the honest-eval ledger identifier and run-lineage
+  pointer when honest-eval diagnostics are emitted
 
 Honest-eval top-k recall remains a post-fit diagnostic only. No learned
 baseline may train, tune, choose features, choose model families, or calibrate
-on honest-eval targets.
+on honest-eval targets. If an experiment plan changes model families, feature
+families, promotion thresholds, or optimizer-integration decisions after
+inspecting an honest-eval diagnostic, subsequent claims on the same ledger are
+exploratory unless a fresh honest-eval ledger is used for the final claim.
 
 ## Learned AWS Batch Artifacts
 

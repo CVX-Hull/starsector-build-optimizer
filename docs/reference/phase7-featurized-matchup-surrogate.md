@@ -1,7 +1,7 @@
 ---
 type: reference
 status: draft
-last-validated: 2026-05-11
+last-validated: 2026-05-12
 ---
 
 # Phase 7 — Featurized Matchup Surrogate
@@ -146,6 +146,14 @@ feature profiles (`all`, `aggregate`, `geometry`, `opponent-parity`,
 `sparse-component`, and `sparse-cross`) so ablations can test representation
 families without changing the underlying row materialization.
 
+Future feature-selection experiments should treat these profiles as the first
+level of a hierarchy, not as the whole selection space. Each materialized
+feature should also be assignable to a family, template, parent set, and
+leakage-risk class so reports can distinguish "this combat subsystem is
+stable" from "this exact sparse fingerprint happened to win one split." The
+learned-surrogate research gate owns the full selection protocol:
+[phase7-learned-surrogate-research.md](phase7-learned-surrogate-research.md#3-feature-selection-is-part-of-the-estimator).
+
 ## Modeling Sequence
 
 The sequence below is no longer a fixed prescription. Model-family and
@@ -177,10 +185,13 @@ a full heteroscedastic GP:
 - NGBoost-style probabilistic boosting if distributional outputs are useful.
 - Grouped split-conformal calibration over the chosen point/quantile model.
 
-Repeated matchups should produce both raw repeat rows and an aggregate table:
+Repeated matchups should support both raw repeat rows and derived aggregate
+analysis views:
 `mean_fitness`, `n_repeats`, and `sample_variance` by exact
-`(build, opponent)` group. Raw rows are useful for variance modeling; aggregate
-rows are cleaner for ranking and calibration.
+`(build, opponent)` group. Spec 31 currently owns the raw SQLite tables; any
+persistent aggregate table or materialized view requires a spec update before
+implementation. Raw rows are useful for variance modeling; aggregate views are
+cleaner for ranking and calibration.
 
 ### 2. Sparse Interaction Model
 
@@ -188,6 +199,17 @@ Fit a factorization-machine-style model over sparse component indicators:
 hull, slot weapon IDs, hullmods, opponent ID/type, and binned numeric
 features. This is the most direct model family for sparse composition with
 pairwise synergy and counter effects.
+
+Regularization is load-bearing for this model family. The experiment plan must
+declare interaction rank, field definitions, L2 penalties, feature-family
+dropout or subsampling where available, and heredity rules for explicit
+interaction features. For vanilla factorization-machine models, heredity is a
+diagnostic lens rather than a native constraint; it becomes a hard rule only
+for explicit counter features or hierarchical sparse interaction variants. A
+hand-authored matchup interaction should normally be retained only when its
+parent families are stable under grouped validation, such as keeping
+`kinetic_pressure x opponent_shield_profile` only if weapon-pressure and
+opponent-defense families both survive family-level selection.
 
 The key value is not just prediction. Learned component interactions can
 answer questions such as:
@@ -233,6 +255,20 @@ A heterogeneous graph model is a later extension if token models plateau:
 nodes for hull, slots, weapon instances, hullmods, opponent, and typed edges
 for `has_slot`, `equipped_with`, `has_hullmod`, and `faces_opponent`.
 
+The first neural representation should remain small and regularized:
+manifest-derived side features plus capped entity embeddings, weight decay,
+dropout, early stopping on grouped inner validation, and simple sum/mean
+pooling before attention. Set Transformer, cross-attention between own and
+opponent component tokens, and graph message passing are later ablations
+because they add enough capacity to memorize rare opponent/loadout
+fingerprints unless hierarchy-aware diagnostics stay clean.
+
+If a graph model is later justified, relation types should be predeclared from
+game structure, such as `mounted_in`, `same_arc`, `range_compatible`,
+`flux_competes_with`, `counters_defense`, and `enabled_by_hullmod`. Arbitrary
+learned dense edges are not first-line evidence because they are harder to
+audit for leakage.
+
 ## Validation Protocol
 
 Random row splits are invalid for this project because replicates, near-duplicate
@@ -241,7 +277,8 @@ builds, and repeated opponents leak across train/test.
 Use at least these splits:
 
 - **Held-out replicate**: checks noise modeling only. This is the easiest split
-  and should not be reported as transfer.
+  and should not be reported as transfer. This split is the only exception to
+  the rule that all repeats of an exact matchup stay in the same fold.
 - **Held-out opponent**: train on some opponents, test on unseen opponents.
 - **Held-out build**: all rows for selected builds are test-only.
 - **Held-out component combination**: test on builds containing weapon/hullmod
@@ -250,6 +287,18 @@ Use at least these splits:
 - **Forward-time split**: train on earlier optimizer proposals, test on later
   proposals to mimic online deployment.
 
+For hold-out-opponent claims, report a hierarchy ladder instead of one averaged
+score:
+
+- **Random row split**: smoke/debug only; not transfer evidence.
+- **Exact-opponent holdout**: minimum anti-memorization gate.
+- **Hull holdout**: all variants/loadouts for selected hulls are test-only.
+- **Hull-family or archetype-cluster holdout**: harder transfer across related
+  opponent families; any learned clusters must be fit inside the training fold
+  or computed from outcome-free manifest/loadout descriptors.
+- **Campaign/regime holdout**: only for claims that cross campaign cells,
+  curricula, or proposal policies.
+
 Metrics:
 
 - RMSE/MAE on `combat_fitness`.
@@ -257,6 +306,8 @@ Metrics:
 - Calibration of predictive intervals.
 - Top-k recall against honest-eval oracle rankings.
 - Counterfactual stability under opponent-group holdout.
+- Feature-family stability and selected-family frequency.
+- Rare-combination overlap and nearest-neighbor leakage diagnostics.
 
 The honest-eval ledger should be the final judge for top-k ranking, not the
 training target used to tune feature choices.

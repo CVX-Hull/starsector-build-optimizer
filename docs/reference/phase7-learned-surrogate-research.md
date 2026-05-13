@@ -1,7 +1,7 @@
 ---
 type: reference
 status: shipped
-last-validated: 2026-05-11
+last-validated: 2026-05-12
 ---
 
 # Phase 7 — Learned Surrogate Research Gate
@@ -28,6 +28,10 @@ integration work?
   selection, and calibration be separated from final evaluation?
 - Which model families are justified as candidates by the literature and our
   data shape, without assuming a winner in advance?
+- How should feature selection be represented so held-out-opponent validation
+  tests transferable combat structure instead of memorized opponent identity?
+- Which hierarchy and regularization schemes apply to feature families,
+  interactions, and more complex compositional models?
 - When is model-assisted search or Bayesian optimization justified?
 
 **Inclusion criteria.** Primary papers, surveys, or implementation papers that
@@ -43,14 +47,13 @@ not implementation authority.
 **Corpus relation.** The existing `_research/phase7-featurized-matchup/`
 corpus contains extracted papers for Phase 7 search-space and surrogate
 design. This note reuses that corpus where relevant and adds the 2026-05-11
-sub-agent research lanes for validation/HPO, model families, and
-optimization/allocation. Sources not full-text-read are marked `skimmed` or
-`metadata-only`.
+research lanes for validation/HPO, model families, and optimization/allocation.
+Sources not full-text-read are marked `skimmed` or `metadata-only`.
 
 | Corpus bucket | Sources |
 |---|---|
 | Reused from local extracted corpus | Gorishniy 2021, Eriksson & Jankowiak 2021, Hvarfner/πBO-family sources already cited by Phase 7 search-space design, Ru 2020, Oh 2019, and related BO/representation papers present under `_research/phase7-featurized-matchup/corpus/`. |
-| Newly added by 2026-05-11 research agents | Roberts 2017; Varma & Simon 2006; Cawley & Talbot 2010; Krstajic 2014; Vabalas 2019; Bischl 2023; Probst 2019; Kaufman 2012; Kapoor & Narayanan 2023; Dwork 2015; Gneiting 2007; Kuleshov 2018; Lei 2018; Romano 2019; Grinsztajn 2022; Borisov 2024; Prokhorenkova 2018; Rendle 2010; Schnabel 2016; Li 2018; Falkner 2018; Daxberger 2020; Kaufmann et al. 2016; Frazier et al. 2009. |
+| Newly added by 2026-05-11 research lanes | Roberts 2017; Varma & Simon 2006; Cawley & Talbot 2010; Krstajic 2014; Vabalas 2019; Bischl 2023; Probst 2019; Kaufman 2012; Kapoor & Narayanan 2023; Dwork 2015; Gneiting 2007; Kuleshov 2018; Lei 2018; Romano 2019; Grinsztajn 2022; Borisov 2024; Prokhorenkova 2018; Rendle 2010; Schnabel 2016; Li 2018; Falkner 2018; Daxberger 2020; Kaufmann et al. 2016; Frazier et al. 2009. |
 | Local full-text/extracted access verified | Sources listed in `_research/phase7-featurized-matchup/corpus/reading_index.md`; those entries have Markdown/text extraction paths. |
 | Web/metadata access in this pass | DOI, arXiv, publisher, JMLR, PMLR, NeurIPS, Microsoft Research, and ACM/IEEE landing pages listed in the source table below. |
 
@@ -63,9 +66,9 @@ Local extracted sources used directly in this note:
 | Ru et al. 2020 | `_research/phase7-featurized-matchup/corpus/markdown/arxiv-1906.08878.md` |
 | Oh et al. 2019 | `_research/phase7-featurized-matchup/corpus/markdown/arxiv-1902.00448.md` |
 | BaCO / Hellsten et al. | `_research/phase7-featurized-matchup/corpus/markdown/arxiv-2212.11142.md` |
-| πBO / Hvarfner et al. | `_research/phase7-featurized-matchup/corpus/markdown/arxiv-2204.11051.md` and `_research/phase7-featurized-matchup/corpus/markdown/arxiv-2304.00397.md` |
+| πBO / Hvarfner et al. | `_research/phase7-featurized-matchup/corpus/markdown/arxiv-2204.11051.md`; adaptive-prior BO citations require a refreshed corpus entry for arXiv 2304.11005 before use as design authority. |
 
-**Sub-agent execution record.** Three research agents were launched on
+**Research execution record.** Three independent research lanes were run on
 2026-05-11 before synthesis:
 
 - validation/HPO/calibration/leakage lane;
@@ -84,7 +87,7 @@ not a verbatim paste of any single lane.
   [spec 31](../specs/31-phase7-matchup-data.md).
 - The comparator-gate measurements are owned by
   [2026-05-11-phase7-matchup-surrogate-preliminary.md](../reports/2026-05-11-phase7-matchup-surrogate-preliminary.md).
-- The current dated roadmap and promotion checklist are owned by
+- The current dated roadmap summary is
   [2026-05-11-validation-to-phase7-roadmap.md](../reports/2026-05-11-validation-to-phase7-roadmap.md).
 - This reference can refine literature-derived rationale, but it does not
   silently supersede those contracts or report-owned empirical decisions.
@@ -119,7 +122,12 @@ available in this pass.
 | HPO best practices | [Bischl et al. 2023](https://doi.org/10.1002/widm.1484) | read | HPO requires explicit spaces, budgets, evaluation protocol, parallelism, and reproducibility. | Every HPO run needs recorded search space, budget, objective, split builder, seeds, pruning policy, and refit rule. |
 | Random HPO | [Bergstra & Bengio 2012](https://jmlr.org/papers/v13/bergstra12a.html) | read | Random search is a strong baseline when only some hyperparameters matter. | Start HPO with random/quasi-random search; avoid naive grids. |
 | TPE HPO | [Bergstra et al. 2011](https://papers.nips.cc/paper/4443-algorithms-for-hyper-parameter-optimization) | skimmed | TPE helps conditional spaces but is not a validation guarantee. | TPE is allowed only inside nested grouped validation. |
+| Conditional SMBO | [Hutter et al. 2011](https://doi.org/10.1007/978-3-642-25566-3_40), [Thornton et al. 2013](https://doi.org/10.1145/2487575.2487629), [Feurer et al. 2015](https://papers.nips.cc/paper/5872-efficient-and-robust-automated-machine-learning) | skimmed | Sequential model-based configuration and AutoML systems natively search conditional choices such as model family, preprocessing, and hyperparameters. | Feature-family enablement, selector choice, model family, and HPO should be one nested grouped selection procedure, not separate manual passes. |
+| Tree-structured BO | [Jenatton et al. 2017](https://proceedings.mlr.press/v70/jenatton17a.html) | skimmed | Bayesian optimization can handle tree-structured dependencies. | Coarse-to-fine feature selection is preferable to a flat binary mask over all columns. |
+| Multi-fidelity HPO | [Li et al. 2018](https://www.jmlr.org/papers/v18/16-558.html), [Falkner et al. 2018](https://proceedings.mlr.press/v80/falkner18a.html), [Klein et al. 2017](https://proceedings.mlr.press/v54/klein17a.html) | read / skimmed | Resource-aware HPO can promote candidates from cheap to expensive evaluations when fidelities correlate. | Screen feature families cheaply only after measuring whether cheap grouped scores rank candidates similarly to full grouped scores. |
 | Tunability | [Probst et al. 2019](https://jmlr.org/papers/v20/18-444.html) | read | Hyperparameters vary greatly in practical importance; defaults and spaces matter. | Keep search spaces small, justified, and model-family-specific. |
+| Grouped feature selection | [Yuan & Lin 2006](https://doi.org/10.1111/j.1467-9868.2005.00532.x), [Simon et al. 2013](https://doi.org/10.1080/10618600.2012.681250), [Jenatton et al. 2011](https://www.jmlr.org/papers/v12/jenatton11b.html) | skimmed | Group, sparse-group, and structured sparsity select coherent feature groups and within-group columns. | Select by feature family/template first; individual columns are secondary evidence. |
+| Stability and interaction heredity | [Meinshausen & Buhlmann 2010](https://doi.org/10.1111/j.1467-9868.2010.00740.x), [Bien et al. 2013](https://pubmed.ncbi.nlm.nih.gov/26257447/) | skimmed | Stable selection across resamples and heredity constraints reduce fragile interaction discovery. | Explicit interaction features need stable parent families; selected-family frequency is a required diagnostic. |
 | Leakage | [Kaufman et al. 2012](https://doi.org/10.1145/2382577.2382579) | skimmed | Leakage is illegitimate target information at prediction time. | No target-derived statistics from outer test or honest eval; every join needs provenance. |
 | ML science leakage | [Kapoor & Narayanan 2023](https://doi.org/10.1016/j.patter.2023.100804) | skimmed | Leakage is common in ML science; explicit model information sheets help auditing. | Add a Phase 7 leakage/model card to experiment artifacts. |
 | Reusable holdout | [Dwork et al. 2015](https://doi.org/10.1126/science.aaa9375) | skimmed | Adaptive repeated holdout use can overfit the holdout. | If honest-eval targets guide design changes, later final claims need fresh honest eval or exploratory labeling. |
@@ -193,7 +201,163 @@ Random or quasi-random search is the first HPO baseline. TPE or other
 sequential HPO is allowed only inside the inner grouped validation loop. A
 manual one-off tuning pass is not acceptable evidence for promotion.
 
-### 3. Candidate Families Are Literature-Derived, Not Preselected
+### 3. Feature Selection Is Part Of The Estimator
+
+Feature selection has the same leakage risk as hyperparameter tuning. A
+feature set chosen after looking at outer-test opponents is part of the fitted
+estimator and must be charged to the same nested grouped validation procedure.
+The correct claim-bearing unit is therefore:
+
+```text
+feature generator
+  + feature-family selector
+  + preprocessing
+  + model family
+  + hyperparameter search
+  + calibration rule
+```
+
+Bayesian optimization and other SMBO methods can select features, but the
+search space should be hierarchical and conditional rather than a flat binary
+mask over every materialized column. A practical hierarchy is:
+
+```text
+feature family enabled?
+  -> subgroup/profile enabled?
+     -> selector type?
+        -> selector hyperparameters?
+           -> individual top-k/threshold/mask only for small promoted pools
+```
+
+This matches the feature structure better than per-column masks. Candidate
+families include hull/platform stats, mobility, flux economy, armor/shield
+defense, weapon pressure by damage/range/arc, slot geometry, hullmod
+descriptors, wing pressure for stock opponents, explicit matchup counters,
+sparse component IDs, and regime/archetype descriptors.
+
+The default selection protocol is:
+
+1. Define a feature-family registry before the run. Every generated column
+   gets `family`, `template`, `parents`, and `leakage_risk` metadata.
+2. Run coarse family/profile screening inside each outer-training fold only.
+3. Use grouped inner validation to choose selector type, model family, and
+   hyperparameters jointly.
+4. Promote only finalists to full-budget tuning.
+5. Refit the selected full pipeline on the outer-training fold and score the
+   untouched outer-test fold once.
+
+Multi-objective selection is allowed when the objectives are declared before
+the run. Useful objectives are grouped loss, ranking quality, calibration,
+feature count, family count, train time, inference time, selected-family
+stability, and robustness across opponent hierarchy levels. Any sparsity or
+compute penalty is a modeling choice and must be reported as such.
+
+Multi-fidelity screening is allowed only as a compute-saving device. Before it
+becomes a gate, the experiment should estimate whether cheap fidelities such
+as fewer rows, fewer groups, fewer folds, or fewer trees preserve the ranking
+of candidate feature/model configurations under the full grouped protocol.
+Cheap-fidelity pruning must never inspect outer-test or honest-eval targets.
+
+### 4. Hierarchy Defines The Generalization Claim
+
+There are three separate hierarchies and they should not be collapsed:
+
+- **Opponent hierarchy**: faction or doctrine, hull class, hull ID,
+  variant/loadout archetype, exact opponent build, combat replicate.
+- **Player-build hierarchy**: role or doctrine, hull, slot geometry, weapon
+  family, mounted weapon, hullmod set, exact repaired build.
+- **Feature hierarchy**: combat subsystem, feature family, generator template,
+  individual column.
+
+The split boundary defines the supported claim. Random-row splits are smoke
+tests only. The Phase 7 scorecard should report a ladder:
+
+- replicate holdout for simulator noise only;
+- exact-opponent holdout for opponent-ID memorization;
+- hull holdout for hull-specific transfer;
+- hull-family or archetype-cluster holdout for harder opponent transfer;
+- campaign/regime or forward-time holdout when deployment claims cross those
+  boundaries.
+
+Hierarchy reduces leakage only when every preprocessing, clustering, feature
+selection, HPO, calibration, and target transform is nested inside the same
+hierarchical boundary. An archetype cluster learned from all rows before
+splitting can leak just as badly as a target-derived aggregate. If archetypes
+are used as validation groups or model features, they must be computed from
+manifest/loadout descriptors without outcome labels, or fit inside the
+training fold when learned.
+
+Required hierarchy diagnostics for future Phase 7 reports:
+
+- split unit and claim supported by that split;
+- forbidden cross-split keys for the chosen hierarchy level;
+- train/test overlap counts for opponent ID, hull ID, family/archetype, and
+  exact matchup groups;
+- adversarial-validation AUC for distinguishing train from test at each
+  hierarchy level;
+- rare feature-combination overlap and nearest-neighbor summaries;
+- ablation without sparse categorical/fingerprint features.
+
+### 5. Regularization By Model Family
+
+Regularization should match the model's capacity and the leakage surface. The
+shared rule is that all regularization strengths and early-stopping decisions
+are selected inside grouped inner validation.
+
+**Linear and generalized linear models.** Use ridge as a dense baseline,
+elastic net for sparse individual columns, group lasso for whole feature
+families, and sparse group lasso when a family is useful but only some columns
+within it are stable. Report both selected-feature frequency and
+selected-family frequency. Family-level stability can justify keeping a
+descriptor group even when individual correlated columns swap across folds.
+
+**Explicit interaction models.** Factorization machines, field-aware
+factorization machines, and hand-authored counter interactions need capacity
+limits: interaction rank, field grouping, L2 penalties on latent factors,
+dropout or feature subsampling where available, and heredity constraints.
+Explicit interaction families should be retained only when their parent
+main-effect families are also stable under grouped resampling, unless a
+pre-registered domain rule justifies the exception. For vanilla FM/FFM models,
+heredity is a diagnostic and reporting lens rather than a native constraint
+unless the implementation uses a hierarchical sparse interaction variant.
+
+**Tree ensembles and boosted trees.** Use depth, minimum leaf size,
+subsampling, column subsampling, learning rate, number of trees/rounds,
+categorical-smoothing controls, monotone or interaction constraints only when
+the domain rule is justified, and early stopping on inner grouped validation.
+Tree feature importances are diagnostics, not selection proof; use grouped
+permutation or block-permutation importance by feature family.
+
+**Gaussian-process and kernel models.** Use shrinkage priors or additive
+structure for high-dimensional feature blocks, separate kernels by feature
+family only when the decomposition is declared before tuning, and constrain
+kernel choices through nested validation. Sparse-axis-aligned priors and
+multiple-kernel weights are regularizers; they should not be interpreted as
+feature truth without stability diagnostics.
+
+**Neural tabular, set, and token models.** Defer these until lower-capacity
+baselines plateau, but define their regularization requirements now:
+embedding-dimension caps, weight decay, dropout, early stopping, token/set
+pooling constraints, small MLP heads, categorical embedding sharing by entity
+type, and manifest-derived numeric side features so rare components are not
+pure IDs. The first neural representation should be hierarchical Deep Sets
+over weapon and hullmod tokens with slot-aware pooling; Set Transformer,
+cross-attention, and graph networks require stronger evidence because they can
+memorize sparse component combinations.
+
+**Graph and relational models.** If graph models are later justified, regularize
+by limiting relation types, message-passing depth, hidden width, edge dropout,
+node/edge feature dropout, weight decay, and pooling hierarchy. Prefer typed
+relations that correspond to known game structure (`mounted_in`, `same_arc`,
+`range_compatible`, `counters_defense`) over arbitrary learned dense edges.
+
+**Calibration and uncertainty models.** Calibration layers, conformal scores,
+quantile heads, and uncertainty ensembles need their own inner calibration
+folds. Coverage should be reported by hierarchy level and score regime; a
+globally calibrated interval under row-random splits is not evidence for
+held-out-opponent allocation.
+
+### 6. Candidate Families Are Literature-Derived, Not Preselected
 
 The literature supports a staged candidate set, but not a predeclared winner.
 
@@ -226,7 +390,7 @@ The literature supports a staged candidate set, but not a predeclared winner.
   as final surrogates. They remain diagnostics because they cannot explain
   transferable component counterfactuals.
 
-### 4. Calibration And Uncertainty Are Second-Stage
+### 7. Calibration And Uncertainty Are Second-Stage
 
 Point prediction and ranking must pass grouped validation first. Then
 uncertainty can be added with an inner calibration split and proper scoring or
@@ -234,7 +398,7 @@ coverage diagnostics. Marginal conformal coverage under exchangeability does
 not imply reliable top-k selection under held-out opponents or campaign shift,
 so coverage must be stratified by split, opponent group, and score regime.
 
-### 5. Optimizer Integration Waits
+### 8. Optimizer Integration Waits
 
 The optimization literature supports surrogate-assisted expensive black-box
 search only when the surrogate improves sample efficiency and its uncertainty
@@ -244,6 +408,9 @@ are:
 
 - offline grouped validation beats the comparator ladder;
 - honest-eval top-k diagnostic improves without tuning on honest-eval targets;
+- any model/feature/promotion decision influenced by prior honest-eval
+  diagnostics is labeled exploratory unless confirmed on a fresh honest-eval
+  ledger;
 - uncertainty or ranking confidence is calibrated enough for allocation;
 - an online or replay-style allocation ablation beats current TPE/random/SMBO
   style baselines on simulation budget or wall-clock efficiency.
@@ -254,7 +421,12 @@ are:
 |---|---|---|---:|---|
 | Random row splits are invalid headline evidence for Phase 7. | Roberts 2017; Krstajic 2014; spec 31 | Grouped splits answer different questions and cannot be averaged naively. | High | Keep grouped outer splits and matching inner splits. |
 | HPO must be nested inside outer evaluation. | Varma & Simon 2006; Cawley & Talbot 2010; Bischl 2023 | Full nested repeated CV can be expensive. | High | Use budgeted inner grouped HPO and record the budget. |
+| Feature selection must be nested inside outer evaluation. | Varma & Simon 2006; Krstajic 2014; Cawley & Talbot 2010; group-selection literature | Full nested selection can be expensive; multi-fidelity gates require validation. | High | Treat feature generator, selector, model choice, and HPO as one fitted pipeline. |
+| Hierarchical feature-family selection is preferable to flat masks. | TPE/SMBO; tree-structured BO; group/sparse-group lasso | Bad groups can hide useful features or preserve leakage. | Medium-high | Maintain a feature-family registry and report family-level stability. |
+| Interaction features require heredity and stability checks. | Bien 2013; structured sparsity literature | Some true interactions may appear before weak main effects under finite data. | Medium | Keep explicit interactions only when parent families are stable or a domain rule pre-registers the exception. |
+| Holdout hierarchy defines the empirical claim. | Roberts 2017; Kapoor & Narayanan 2023; grouped validation literature | Harder hierarchy levels may have high variance with few groups. | High | Publish a split ladder instead of one averaged transfer score. |
 | Honest-eval targets must remain post-fit diagnostics. | Dwork 2015; leakage literature; spec 31 | Adaptive use may be acceptable only if labeled exploratory or followed by fresh honest eval. | High | Do not tune features, model choice, hyperparameters, or calibration on honest-eval targets. |
+| Model-family winners require a predeclared or nested selection rule. | Cawley & Talbot 2010; Varma & Simon 2006 | Reporting a full model matrix is still useful as exploratory evidence. | High | State primary endpoint/split/k and whether model-family choice is fixed, nested, or exploratory. |
 | Tree ensembles are mandatory learned baselines. | Grinsztajn 2022; Borisov 2024; CatBoost/XGBoost/LightGBM papers | They may not capture all sparse component synergies. | High | Include serious tree baselines before neural models. |
 | Sparse interaction models fit the build representation. | Rendle 2010; FFM/DeepFM literature | Pairwise or field interactions can underfit high-order effects. | Medium-high | Add FM-style models before deep interaction networks. |
 | Calibration is required before allocation claims. | Gneiting 2007; Kuleshov 2018; conformal literature; BO literature | Exchangeability failures under held-out opponent can break marginal guarantees. | High | Report coverage/proper scores by grouped split before active allocation. |
@@ -266,7 +438,10 @@ are:
 | Decision | Status | Rationale | Gate Before Implementation |
 |---|---|---|---|
 | Require nested grouped validation for learned baselines | implement now | Strong validation literature and spec 31 leakage constraints align. | Next experiment plan must define outer and inner grouping units. |
+| Add feature-family registry and hierarchy metadata | implement now | Feature selection, block importance, leakage checks, and hierarchical diagnostics need stable family/template/parent labels. | Extend feature-schema/report artifacts before large feature-selection runs. |
+| Use hierarchical feature selection rather than flat per-column masks | implement now | Conditional SMBO and grouped sparsity align with the feature structure and reduce search dimensionality. | Define families, leakage-risk labels, promotion rules, and multi-objective penalties in the next plan. |
 | Use random/quasi-random HPO as first tuning baseline | implement now | Random HPO is strong, simple, and auditable; sequential HPO can overfit if not nested. | Declare search space, budget, seeds, objective, and refit rule. |
+| Allow TPE/SMBO for feature selection | needs experiment | Literature supports conditional spaces, but it can optimize leakage if the objective is wrong. | Use only inside nested grouped validation with hierarchy diagnostics. |
 | Add serious tree-ensemble learned baselines | implement now | Tabular literature supports tree ensembles as first-line for mixed tabular data. | Choose exact package/representation in next plan; compare default vs tuned. |
 | Add sparse interaction baseline | implement now | Factorization-machine-style models match sparse slot/weapon/hullmod/opponent interactions. | Define fields, interaction order/rank, regularization, and grouped HPO. |
 | Add ranking objective | needs experiment | Regression metrics may not align with top-k selection, but ranking queries must be defined carefully. | First inspect regression-vs-top-k disagreement under frozen protocol. |
@@ -283,7 +458,19 @@ hyperparameter spaces from this research, but it must at minimum include:
 
 - a model card / leakage checklist for every run;
 - outer grouped split definitions and inner grouped validation definitions;
+- a hierarchy scorecard defining the split ladder and supported claim for each
+  split;
+- a primary endpoint, primary split, primary top-k value, model-promotion rule,
+  and exploratory-vs-confirmatory boundary;
+- a feature-family registry with `family`, `template`, `parents`, and
+  `leakage_risk` metadata for every generated feature;
+- a declared feature-selection protocol, including whether selection is
+  filter, wrapper, embedded, SMBO/TPE, grouped regularization, or a staged
+  combination;
 - a declared HPO search space, search algorithm, budget, seeds, and objective;
+- regularization spaces for every model family, including interaction rank,
+  tree depth/subsampling, embedding dimensions, dropout/weight decay, early
+  stopping, and calibration-fold policy where applicable;
 - default-vs-tuned comparisons where tuning is used;
 - provenance fields: source DB path, feature schema version, code version,
   split seed, HPO seed, model family, chosen hyperparameters, and runtime;

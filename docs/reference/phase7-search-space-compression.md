@@ -1,12 +1,12 @@
 ---
 type: reference
 status: draft
-last-validated: 2026-05-11
+last-validated: 2026-05-12
 ---
 
 # Phase 7 — Structured Search-Space Representation
 
-> **Status**: PLANNED. Research complete (2026-04-17). Targets the combinatorial-explosion vs expensive-evaluation bottleneck by replacing the Optuna TPE surrogate (CatCMAwM removed 2026-04-19; see spec 24) with a custom BoTorch-based Gaussian Process whose kernel composes sparse-axis-aligned priors on hullmod booleans, transformed-overlap categoricals and attribute-Matérn on weapons, Matérn on slot coordinates, opponent-context features on small-slot posteriors, gated-sentinel for conditional slots, and ICM-style per-item and per-slot residuals. Warmed by a BOCA-style 30-trial random-forest importance pilot and biased (but not locked) by πBO decay-weighted priors over nine community-stable role archetypes. No shipped code yet.
+> **Status**: PLANNED. Research complete (2026-04-17). Targets the combinatorial-explosion vs expensive-evaluation bottleneck by replacing the Optuna TPE surrogate (CatCMAwM removed 2026-04-19; see spec 24) with a custom BoTorch-based Gaussian Process whose candidate design composes sparse-axis-aligned priors on hullmod booleans, transformed-overlap categoricals and attribute-Matérn on weapons, Matérn on slot coordinates, opponent-context features on small-slot posteriors, explicit conditional-slot handling, and item/slot residuals. Warm-starting and πBO-style archetype priors remain hypotheses for future optimizer experiments. No shipped code yet.
 
 Design and research log for how the optimizer **represents and searches** the ship-build space. Phase 5 improves the *scoring* of builds (signal quality); Phase 7 improves the *surrogate model* that decides which builds to test next, by injecting stable structural priors (slot geometry, weapon attributes, archetype density, hullmod sparsity) that survive game updates.
 
@@ -26,16 +26,25 @@ grouped surrogate validation must come first:
    ([phase7-learned-surrogate-research.md](phase7-learned-surrogate-research.md))
    to derive the next learned-baseline experiment plan, including candidate
    model families, hyperparameter search spaces, nested grouped validation,
-   calibration, leakage controls, and provenance.
+   calibration, feature-family selection, hierarchy-aware leakage controls,
+   model-specific regularization, and provenance.
 4. Try model-assisted search first: prior mean, candidate prefiltering, or
    active-learning allocation.
 5. Implement the custom BoTorch sampler only after those cheaper gates show
    value.
 
+The same hierarchy applies to optimizer-facing features. Before replacing the
+sampler, the project should learn which feature families and interaction
+templates generalize under held-out opponents, hulls, and archetypes. A custom
+kernel over all available features is not automatically principled; kernel
+blocks, priors, and acquisition features should be restricted or regularized
+according to the nested grouped feature-selection evidence.
+
 The current dated roadmap checkpoint is
 [../reports/2026-05-11-validation-to-phase7-roadmap.md](../reports/2026-05-11-validation-to-phase7-roadmap.md).
 
-This design is the synthesis of a 10-agent, 2026-04-17 literature sweep plus a follow-up compiler-autotuning deep-dive:
+This design is the synthesis of a multi-lane 2026-04-17 literature sweep plus
+a follow-up compiler-autotuning deep-dive:
 
 1. Hierarchical / tree-structured BO (Jenatton, Ma-Blaschko)
 2. Mixed-categorical BO with attribute kernels (CoCaBO, SAASBO, HEBO, ICM)
@@ -48,7 +57,9 @@ This design is the synthesis of a 10-agent, 2026-04-17 literature sweep plus a f
 9. Starsector data invariants (stable enum + CSV columns across 0.95→0.98)
 10. Exploratory adjacent-field scan (compiler autotuning, protein engineering / MLDE, materials discovery, QD)
 
-Plus the compiler-autotuning deep-dive that surfaced the transformed-overlap kernel and gated-sentinel conditional handling as production-grade primitives.
+Plus the compiler-autotuning deep-dive that surfaced transformed-overlap
+kernels and explicit conditional-parameter handling as candidate primitives to
+validate, not as shipped implementation.
 
 ---
 
@@ -60,8 +71,14 @@ A per-hull build is a tuple of `(hullmod subset ⊆ H, weapon-per-slot ∈ W × 
 
 The search problem is small-budget-expensive-combinatorial: typical BO regime. But two factors make the vanilla approach insufficient:
 
-- **Effective dimensionality is ~30–50, not 150^8.** Most weapons at most slots are equivalent on the coarse axes (damage type, range, flux-efficiency). One-hot encoding over weapon IDs wastes information by treating equivalent items as independent.
-- **Most hullmods are irrelevant per build.** The community meta identifies ~5–10 load-bearing hullmods per archetype; the remaining 70–75 add near-zero variance to fitness. Dense BO over a 70-dim boolean space is sample-inefficient.
+- **Effective dimensionality is far below the raw combinatorial count.** Most
+  weapons at most slots are equivalent on coarse axes such as damage type,
+  range, and flux efficiency. One-hot encoding over weapon IDs wastes
+  information by treating equivalent items as independent.
+- **Hullmod effects are expected to be sparse.** Community-meta analysis
+  suggests a small subset of hullmods is usually load-bearing for a given
+  archetype. This is a design hypothesis for sparse priors, not an internal
+  empirical variance claim.
 
 ### 1.2 Current Optuna TPE pathologies
 
@@ -89,29 +106,44 @@ The user's explicit correction during design review: rule-based small-slot fills
 
 Garrido-Merchán & Hernández-Lobato 2020 ("Dealing with Categorical and Integer-valued Variables in Bayesian Optimization with Gaussian Processes," *Neurocomputing*) introduce the transformed overlap kernel: for categorical `x_c ∈ {1..K}`, embed as a learnable K-dim real vector and apply a standard Matérn. The GP learns per-category lengthscales, so "kinetic small HVD" and "kinetic medium HVD" can be close on one axis but distant on another, without the Hamming brittleness of raw one-hot.
 
-Hellsten et al. 2024 "BaCO: A Fast and Portable Bayesian Compiler Optimization Framework" (ASPLOS, [arXiv:2212.11142](https://arxiv.org/abs/2212.11142), Eq. 3–5) compose this as a **product kernel** over real / ordinal / categorical / permutation / conditional parameter groups. It is the production state-of-the-art for exactly our problem shape: discrete + conditional + mixed-type + expensive-eval + budget-limited + must-transfer-across-versions. Reported 1.36×–1.56× speedup vs prior SOTA on TACO / RISE-ELEVATE / HPVM2FPGA compiler benchmarks.
+Hellsten et al. 2024 "BaCO: A Fast and Portable Bayesian Compiler Optimization Framework" (ASPLOS, [arXiv:2212.11142](https://arxiv.org/abs/2212.11142)) uses a weighted Matérn kernel over per-parameter distance measures for mixed compiler-optimization spaces, with Hamming-style distances for categorical parameters and explicit constraint handling. Its value here is evidence that carefully structured mixed-space BO can be practical in expensive discrete systems, not that BaCO itself supplies our transformed-overlap or sentinel design.
 
-Conditional parameters in BaCO are handled by **gated-sentinel imputation** (§4.3 of the paper): inactive parameters take a special "NA" category; the categorical kernel learns NA↔NA similarity as a free hyperparameter, so the GP learns *how much* inactivity matters per parameter rather than forcing a zero-gradient. This is materially lighter than Jenatton 2017 / Ma-Blaschko 2020 tree-structured GPs and empirically matches or beats them when the conditional structure is simple.
+Inactive conditional slots in a future custom kernel should be modeled
+explicitly, for example with sentinel categories or a tree/conditional kernel,
+but the exact mechanism is a project design choice that must be validated
+against alternatives. Do not cite BaCO as direct support for a learned
+NA-similarity kernel.
 
 ### 2.2 Sparse axis-aligned subspaces (SAASBO)
 
 Eriksson & Jankowiak 2021 "High-Dimensional Bayesian Optimization with Sparse Axis-Aligned Subspaces" (UAI, [arXiv:2103.00349](https://arxiv.org/abs/2103.00349)) place a half-Cauchy prior on inverse lengthscales: `τ ~ HC(0.1)`, inducing soft sparsity. Most dimensions get lengthscale → ∞ (effectively inactive), a few get learned small lengthscales (active). Crucially **dimensions remain addressable** — a dim that seemed irrelevant can activate as data accumulates. Validated to D=388 with 100–500 trials. BoTorch ships `SaasFullyBayesianSingleTaskGP`. Reported 2–5× vs vanilla GP-BO at D=60–388 in the 100–500-trial regime — *exactly our setting*.
 
-This subsumes the older Add-GP-UCB (Kandasamy 2015, [arXiv:1503.01673](https://arxiv.org/abs/1503.01673)) and Gardner 2017 (learned additive decomposition) for our purposes. Rolland et al. 2018 ([arXiv:1802.07028](https://arxiv.org/abs/1802.07028)) and Ziomek & Ammar 2023 ([arXiv:2301.12844](https://arxiv.org/abs/2301.12844)) show that *random* additive decompositions often match *learned* ones at fixed budget — arguing against the complexity of Ma-Blaschko tree kernels when SAAS sparsity is available.
+SAASBO, additive BO, and tree-structured BO encode different assumptions. SAAS
+targets sparse axis-aligned relevance; additive BO targets decomposable
+low-dimensional structure; tree kernels target conditional structure. The
+Phase 7 design should treat SAAS as a strong candidate for high-dimensional
+hullmod-style blocks, not as a proof that additive or conditional kernels are
+unnecessary.
 
-SAAS fits our hullmod-boolean subspace exactly. The community meta identifies ~5–10 load-bearing hullmods per archetype; the half-Cauchy prior encodes "most dimensions should shrink to irrelevance" as a structural prior, not as a heuristic pre-filter.
+SAAS fits the expected sparse hullmod-boolean subspace. The half-Cauchy prior
+encodes "most dimensions should shrink toward irrelevance" as a structural
+prior while keeping every dimension addressable.
 
 ### 2.3 Attribute kernels + per-item ICM residuals
 
-Swersky, Snoek & Adams 2013 "Multi-task Bayesian Optimization" (NeurIPS, [arXiv:1309.6835](https://arxiv.org/abs/1309.6835)) and the broader Intrinsic Coregionalization Model (ICM) literature (Bonilla et al. 2007, Álvarez & Lawrence 2011 [arXiv:1106.6251](https://arxiv.org/abs/1106.6251)) provide the principled template for combining **attribute priors** with **item-specific residuals**:
+Swersky, Snoek & Adams 2013 "Multi-task Bayesian Optimization" (NeurIPS, [arXiv:1309.6835](https://arxiv.org/abs/1309.6835)) and the broader Intrinsic Coregionalization Model (ICM) literature (Bonilla et al. 2007, Álvarez & Lawrence 2011 [arXiv:1106.6251](https://arxiv.org/abs/1106.6251)) support information sharing across related tasks. The following **attribute prior plus item residual** form is a project design hypothesis inspired by that literature, not a direct claim from Swersky et al.:
 
 `f(w) = m(φ(w)) + g(w)`
 
-where `m` is a GP/linear model over the attribute vector `φ(w)` (transfers across items: a new weapon with similar stats inherits the prior mean for free), and `g(w)` is a per-item GP with shrinkage prior (captures quirks — e.g., Antimatter Blaster's specific synergy with short-range brawl — that the attribute vector does not encode).
+where `m` is a GP/linear model over the attribute vector `φ(w)` and `g(w)` is a
+per-item residual with shrinkage prior. A new weapon with similar stats should
+inherit the attribute-side prior in this design, but future reports must
+validate whether this zero-observation transfer works in actual game data.
 
 This is structurally identical to the Phase 5D Empirical-Bayes fusion paradigm: `α̂_TWFE` and the 7-covariate heuristic prior are combined as noisy measurements of the same latent `α`. Re-using the fusion paradigm at the surrogate level keeps the architecture coherent across phases.
 
-The attribute vector for weapons is the **7-dim tuple** sized by the Phase 5D sweep + variance audit:
+The initial attribute vector for weapons is the following tuple, chosen from
+schema-stable weapon descriptors and prior Phase 5 feature work:
 
 | Attribute | Source | Stability |
 |---|---|---|
@@ -145,9 +177,10 @@ Invariance: `.ship` JSON fields are stable schema across all Starsector versions
 
 ### 2.5 πBO decay-weighted priors + hull-conditional archetype activation
 
-Hvarfner et al. 2022 "πBO: Prior-guided Bayesian Optimization" (ICLR, [arXiv:2204.11051](https://arxiv.org/abs/2204.11051)) multiplies the acquisition function by a user-supplied prior density `π(x)` with a **decay schedule** `π(x)^(β/t)` — prior weight shrinks with trial count. No-regret preserved under mild conditions; the decay lets the data override the prior as evidence accumulates. Reported 6×–12× speedup when the prior is accurate and ~1.5× worst-case overhead when the prior is adversarial. Souza et al. 2021 BOPrO ([arXiv:2006.14608](https://arxiv.org/abs/2006.14608)) gives the same mechanism in pseudo-posterior form with explicit misleading-prior recovery results.
+Hvarfner et al. 2022 "πBO: Prior-guided Bayesian Optimization" (ICLR, [arXiv:2204.11051](https://arxiv.org/abs/2204.11051)) multiplies the acquisition function by a user-supplied prior density `π(x)` with a decay schedule, so prior influence weakens with trial count. The paper reports large benchmark-specific speedups when priors are useful and studies misleading-prior behavior, but it does not provide a universal constant-factor wrong-prior guarantee. Souza et al. 2021 BOPrO ([arXiv:2006.14608](https://arxiv.org/abs/2006.14608)) is related prior-guided BO evidence.
 
-The community-meta agent (sweep round 2, 2026-04-17) extracted **nine role archetypes** stable across 0.95 → 0.96 → 0.97 → 0.98 (four major patches):
+The community-meta research lane extracted **nine role archetypes** that appear
+stable across recent vanilla releases:
 
 | Archetype | Characteristic large-mount weapons | Defining trait |
 |---|---|---|
@@ -161,7 +194,11 @@ The community-meta agent (sweep round 2, 2026-04-17) extracted **nine role arche
 | **Flanker / glass cannon** | Plasma Cannon + Heavy Blaster | Aurora-style Plasma Burn hit-and-run |
 | **Phase striker** | Reaper + AM Blaster | Inverse flux rule (caps > vents) |
 
-Each archetype is a point in **normalized** attribute × slot-feature × hullmod-subset space (not a specific weapon list — weapons change between patches; attribute profiles do not; normalized range + normalized OP cost transfer across hull sizes per §2.3). πBO encodes the modes as a mixture density `π(x) = Σ_k w_k · N(x ; μ_k, Σ_k)`. Small `β` (≤ 10) bounds worst-case regret to ≤ 1.5× vanilla BO when all modes are wrong.
+Each archetype can be represented as a region in **normalized** attribute ×
+slot-feature × hullmod-subset space rather than as a fixed weapon list.
+Encoding those regions as a πBO-style mixture density is a design hypothesis;
+the decay schedule should be tuned and reported as part of the optimizer
+experiment, not treated as a fixed guarantee.
 
 **Three failures a naïve hull-agnostic weighting would hit.** The 9-archetype vocabulary above was induced from community analysis that concentrates on ~7 meta hulls (Onslaught, Paragon, Conquest, Aurora, Hammerhead, Eagle, Odyssey). Applied uniformly to any hull it fails on:
 
@@ -175,17 +212,29 @@ a. **Hull-feasibility mask.** For each (hull, archetype) pair, pre-compute physi
 
 b. **Attribute normalization + `hull_size` context.** Resolved at §2.3. Archetype modes defined in the normalized space work across all hull sizes without per-hull rescaling; `hull_size` as a categorical context feature lets the kernel still express hull-size-specific effects where data demands.
 
-c. **Uniform initial mixture weights over feasible modes + online self-correction.** Instead of hardcoding meta-derived weights, start uniform across the modes left feasible by (a) for the given hull. Hvarfner 2023 "Self-Correcting Bayesian Optimization through Bayesian Active Learning" ([arXiv:2304.00397](https://arxiv.org/abs/2304.00397)) gives the mechanism: online estimate prior credibility via a marginal likelihood ratio; when the data-observed posterior disagrees with a prior mode, downweight that mode's mixture weight. Covers both the "community missed this hull" case and the "this hull's actual best archetype is unusual" case.
+c. **Uniform initial mixture weights over feasible modes.** Instead of hardcoding
+meta-derived weights, start uniform across the modes left feasible by (a) for
+the given hull. Online reweighting of mode credibility is a possible future
+extension, but it is project design work and must not be attributed to SCoreBO.
+Hvarfner et al. 2023 "Self-Correcting Bayesian Optimization through Bayesian
+Active Learning" ([arXiv:2304.11005](https://arxiv.org/abs/2304.11005)) is
+relevant to active GP hyperparameter learning, not a ready-made archetype-mode
+reweighting rule.
 
 The community meta's role is therefore to supply the **vocabulary of modes** (what "sniper" vs "brawler" means in normalized attribute space), not the **per-hull weights** (which the optimizer learns from data). This preserves the community insight while removing the meta-hull bias.
 
-A fourth failure — related but distinct — is that community meta builds are often designed for **player piloting** (SO brawler, phase striker, burst-missile) and the AI mispilots them in simulation. §2.10 covers this as a separate grounding point. The self-correcting mixture mechanism above handles it by the same route: AI-hostile modes produce weaker-than-predicted fitness and get online-downweighted; no hardcoded AI-compatibility flag is needed.
+A fourth failure — related but distinct — is that community meta builds are often designed for **player piloting** (SO brawler, phase striker, burst-missile) and the AI mispilots them in simulation. §2.10 covers this as a separate grounding point. Any future archetype prior should treat AI-pilotability as an empirical diagnostic and should not rely on an unvalidated adaptive-weighting rule to remove AI-hostile modes.
 
 ### 2.6 BOCA importance pilot as SAAS warm-start
 
 Chen et al. 2021 "BOCA" (ICSE) runs a 30-trial random-forest-importance pilot before the main BO, partitioning compiler flags into impactful vs unimpactful and then running BO over only the impactful set. In isolation BOCA commits hard to the pilot's verdict — a miscalled flag gets randomized forever, no recovery.
 
-At our scale SAAS subsumes the principled form of this: its half-Cauchy prior encodes the same "most dims don't matter" belief and learns online which dims activate, with full reversibility. BOCA's role shrinks to **warm-starting SAAS**: run 30 trials of Latin-hypercube-seeded evaluations, compute random-forest importance, use the importance ordering to set the initial prior scale on each lengthscale (empirical-Bayes initialization). This gives SAASBO a head start on the cold-start problem without the commit-forever risk of vanilla BOCA. Cheap insurance for the new-hull case; drops out once SAAS has seen ~100 trials of evidence.
+SAAS provides a reversible sparse prior that addresses the same broad
+"most dimensions may not matter" intuition without permanently removing
+dimensions. BOCA-style random-forest importance is therefore best treated as a
+possible warm-start diagnostic for SAAS priors, not as a hard dimensionality
+reduction step. Trial counts and prior initializations must be chosen in a
+future experiment plan.
 
 ### 2.7 Naval architecture: Evans spiral and platform/mission split
 
@@ -259,19 +308,34 @@ Community meta is not uniformly compatible with this premise. A well-documented 
 
 Builds that are top-tier in community meta but rely on player-only piloting (SO brawler with skill-5 Helmsmanship, phase striker with perfectly-timed cloaks, burst-missile with manually-ordered volleys) may score poorly in AI-vs-AI sim. Conversely, builds the community dismisses as "too AI-friendly" may genuinely dominate the sim because the simulator's evaluation context matches those builds' design assumption.
 
-**Implication for Phase 7.** The uniform-initial-weights + self-correcting π design from §2.5 already addresses this: community meta contributes the vocabulary of modes, not the weights, and the per-hull self-correcting mechanism online-downweights modes that underperform under the actual simulation context. An SO-brawler mode that the AI mispilots will empirically produce worse fitness than the community-meta prior predicts, and the Hvarfner 2023 marginal-likelihood-ratio update will reduce its mixture weight on the next acquisition. No hardcoding of AI-hostility flags is needed; the data does the work.
+**Implication for Phase 7.** Community meta should contribute the vocabulary of
+modes, not fixed per-hull weights. Uniform feasible-mode priors avoid
+hardcoding AI-pilotability assumptions, but they do not by themselves solve
+AI-hostile archetypes. Any future online mode-reweighting rule must be
+implemented and validated as project design work before it can be used as a
+claim-bearing mechanism.
 
 **If the combat harness varies AI personality** (Cautious / Steady / Aggressive / Reckless from `PersonalityAPI`) or officer skills across trials, the varying fields enter the kernel as additional ordinal/boolean context features on the player side (same pattern as the opponent-summary features on small slots, §2.8). If the harness fixes personality to Steady and runs un-officered (the Phase 2 default), these are simulation constants and do not need to enter the kernel. The current Phase 7 ship assumes the latter — default-personality, un-officered — which matches the typical fleet deployment case (most ships in a campaign fleet have no officer). Officer-conditional or personality-conditional optimization is a Phase 7.1 extension, not part of the initial ship.
 
-**Weapon-group assignment.** Stock `.variant` files hand-tune `weaponGroups` with per-group `autofire` and `mode` (LINKED / ALTERNATING) — notably `autofire=false` on ammo-limited missiles and ALTERNATING pairings on expensive ballistics. The combat harness builds variants via `autoGenerateWeaponGroups()` (`VariantBuilder.java:48`); `BuildSpec` carries no group metadata from Python. Every optimizer-produced build therefore runs on the engine's default grouping algorithm, which may not reproduce the hand-tuned behaviour of community reference builds. This is a fidelity limitation, not something the surrogate can make disappear. A self-correcting prior may downweight archetypes that depend on unavailable grouping control, but lifting the limitation requires adding weapon-group decisions to the search space. The roadmap report records this as an explicit deferral.
+**Weapon-group assignment.** Stock `.variant` files hand-tune `weaponGroups` with per-group `autofire` and `mode` (LINKED / ALTERNATING) — notably `autofire=false` on ammo-limited missiles and ALTERNATING pairings on expensive ballistics. The combat harness builds variants via `autoGenerateWeaponGroups()` (`VariantBuilder.java:48`); `BuildSpec` carries no group metadata from Python. Every optimizer-produced build therefore runs on the engine's default grouping algorithm, which may not reproduce the hand-tuned behaviour of community reference builds. This is a fidelity limitation, not something the surrogate can make disappear. A future prior or residual model may learn that grouping-sensitive archetypes underperform, but lifting the limitation requires adding weapon-group decisions to the search space. The roadmap report records this as an explicit deferral.
 
-**Fighter-wing assignment is out of scope.** `LAUNCH_BAY` slots are filtered out of `SearchSpace.weapon_options` (`search_space.py:157`); `BuildSpec` has no wing field; `VariantBuilder.java` never populates wings; `ManifestDumper.java` does not enumerate `FighterWingSpecAPI` or `wing_data.csv`. Carrier hulls (24 in vanilla: Astral 6 bays, Legion 4, Heron/Mora 3, Condor/Drover/Apex 2, …) are optimizable for non-bay slots only; their bays deploy empty. Per §3.8 below, the PD-carrier archetype's LAUNCH_BAY branch is currently infeasible — only the small-slot-PD branch (Hammerhead-style destroyer escorts) is realized. Mentioned here for completeness; the self-correcting mixture would collapse a carrier-only mode's weight to zero under this configuration, which is the correct behaviour given the scope.
+**Fighter-wing assignment is out of scope.** `LAUNCH_BAY` slots are filtered out of `SearchSpace.weapon_options` (`search_space.py:157`); `BuildSpec` has no wing field; `VariantBuilder.java` never populates wings; `ManifestDumper.java` does not enumerate `FighterWingSpecAPI` or `wing_data.csv`. Carrier hulls (24 in vanilla: Astral 6 bays, Legion 4, Heron/Mora 3, Condor/Drover/Apex 2, …) are optimizable for non-bay slots only; their bays deploy empty. Per §3.8 below, the PD-carrier archetype's LAUNCH_BAY branch is currently infeasible — only the small-slot-PD branch (Hammerhead-style destroyer escorts) is realized. Mentioned here for completeness; feasible-mode masking should exclude carrier-only modes under the current search-space scope.
 
 ### 2.11 What the sweep ruled OUT
 
-The 10-agent sweep and compiler-autotuning deep-dive disqualified several directions that sounded plausible a priori. See §4 for the full rejected-alternative chain. Short version: NAS weight-sharing doesn't transfer to non-neural settings; REMBO/ALEBO linear-random-subspaces fail on within-group interactions; BOCS requires binary-only indicators (our categoricals break it); GFlowNets need training-signal volumes we don't have; Hearthstone MESB behavior-descriptor search needs a phenotype→genotype map we cannot build cheaply; conjoint-analysis ACBC is a human-respondent paradigm, not a black-box-sim paradigm; Definitive Screening Designs are "explicitly undesirable for high-cardinality categoricals" (Jones-Nachtsheim 2011); full RL / Q-DeckRec / MuZero require 10⁵+ evaluations.
+The research sweep and compiler-autotuning deep-dive disqualified several
+directions that sounded plausible a priori. See §4 for the full
+rejected-alternative chain. Short version: NAS weight-sharing does not transfer
+to non-neural settings; REMBO/ALEBO linear-random-subspaces fail on within-group
+interactions; BOCS requires binary-only indicators; GFlowNets need training
+signal volumes we do not have; Hearthstone MESB behavior-descriptor search
+needs a phenotype-to-genotype map we cannot build cheaply; conjoint-analysis
+ACBC is a human-respondent paradigm, not a black-box-sim paradigm; full RL /
+Q-DeckRec / MuZero require much larger evaluation volumes.
 
-Two ideas survived as *considered-and-rejected* rather than *considered-and-subsumed*: Ma-Blaschko additive tree kernel (subsumed by gated-sentinel + SAAS), and HyperMapper/BaCO off-the-shelf (missing SAAS on the hullmod subspace). See §4.
+Two ideas survived as alternatives to compare rather than as fully rejected
+primitives: tree/conditional kernels, and HyperMapper/BaCO-style off-the-shelf
+mixed-space BO. See §4.
 
 ---
 
@@ -289,12 +353,16 @@ k(x, x') =   k_hullmods(h, h')          # SAAS-prior Matérn on hullmod booleans
            · k_slot(s, s')               # 5-dim slot-feature Matérn
            · k_opp_small(o, o')          # opponent features, small slots only
            · k_op(op, op')               # OP allocation Matérn (3-dim)
-           · 1_{conditional}(x, x')      # gated-sentinel for inactive slots
+           · 1_{conditional}(x, x')      # explicit conditional-slot handling
          + k_item_residual(w)            # ICM per-weapon residual (shrinks to 0)
          + k_slot_residual(s)            # ICM per-slot residual (shrinks to 0)
 ```
 
-Product kernel structure follows BaCO (Hellsten 2024, Eq. 3–5). Additive per-item and per-slot residuals follow the ICM template (Bonilla 2007, Álvarez 2011). Gated-sentinel handling follows BaCO §4.3. SAAS prior follows Eriksson-Jankowiak 2021.
+Product-kernel structure is inspired by mixed-space BO systems such as BaCO.
+Additive per-item and per-slot residuals are project design hypotheses inspired
+by ICM/multi-task GP literature. Conditional-slot handling remains an explicit
+design choice to compare against tree/conditional kernels. SAAS prior follows
+Eriksson-Jankowiak 2021.
 
 ### 3.2 Historical Candidate Design: BoTorch as Optuna sampler plugin
 
@@ -310,14 +378,14 @@ BoTorch (Balandat et al. 2020) provides `SaasFullyBayesianSingleTaskGP` out of t
 - Posterior inference via NUTS / fully-Bayesian MCMC (SAASBO default) was the
   historical candidate. Runtime cost must be re-estimated in a future
   experiment plan before any implementation.
-- HyperMapper ([github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper)) is the reference implementation for BaCO's kernel choices; use it as a validation oracle, not a drop-in library (HyperMapper lacks SAAS on subspaces).
+- HyperMapper ([github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper)) and BaCO-style implementations are useful references for mixed-space BO behavior; use them as comparison baselines or validation aids, not as proof that the custom kernel is correct.
 
 Earlier schedule estimates are no longer authority. The current roadmap gates
 learned baselines and model-assisted search before custom-kernel work.
 
 ### 3.3 SAAS prior on hullmod subspace
 
-`k_hullmods` is a Matérn-5/2 with per-dimension inverse lengthscales `τ_d ~ HalfCauchy(0.1)` (Eriksson-Jankowiak 2021 default). The soft-sparsity prior encodes the empirical observation (community meta + variance audit) that ~5–10 hullmods per build are load-bearing and the remaining 70+ add near-zero fitness variance. All dimensions remain addressable; none are hard-zeroed.
+`k_hullmods` is a Matérn-5/2 with per-dimension inverse lengthscales `τ_d ~ HalfCauchy(0.1)` (Eriksson-Jankowiak 2021 default). The soft-sparsity prior encodes the design belief that only a subset of hullmods is load-bearing for a given build. All dimensions remain addressable; none are hard-zeroed.
 
 ### 3.4 Transformed-overlap + attribute-Matérn product on weapons
 
@@ -334,9 +402,12 @@ A new weapon added in a future patch inherits the full attribute-kernel prior on
 
 Bonus: for a future multi-hull surrogate, the slot-feature vector is hull-agnostic — a forward hardpoint on a Hammerhead looks similar in feature space to a forward hardpoint on an Onslaught. Built-in multi-hull transfer at zero marginal cost.
 
-### 3.6 Gated-sentinel for conditional slots
+### 3.6 Conditional-slot handling
 
-Inactive slots (e.g., hull `X` has only 7 weapon slots, so slot 8 is inactive) get a special "NA" category in both the weapon-ID transformed-overlap and the attribute Matérn. BaCO §4.3 approach: the kernel learns a free NA↔NA similarity hyperparameter, so it decides empirically how much inactivity matters per slot — neither a hard zero nor a pure sentinel. Lighter than Jenatton / Ma-Blaschko tree-structured GPs.
+Inactive slots (e.g., hull `X` has only 7 weapon slots, so slot 8 is inactive)
+must be represented explicitly. Candidate designs include sentinel categories,
+masked kernels, or a tree/conditional kernel. A learned sentinel-similarity
+kernel is a project proposal to validate; it should not be attributed to BaCO.
 
 ### 3.7 Per-item and per-slot ICM residuals
 
@@ -349,7 +420,12 @@ Both shrink toward zero in the empirical-Bayes sense — the data must supply po
 
 ### 3.8 πBO archetype priors — hull-conditional mixture
 
-The acquisition function `α(x)` is multiplied by a Gaussian-mixture prior density `π(x)` over modes defined in the **normalized** attribute × slot × hullmod space (§2.3 normalization), with decay schedule `π(x)^(β/t)`. The nine modes are the community-meta archetypes (§2.5). `β = 5` chosen from the Hvarfner 2022 Fig. 3 tuning curves — 2–3× speedup when priors are correct, ≤ 1.3× overhead when wrong.
+The acquisition function `α(x)` may be multiplied by a Gaussian-mixture prior
+density `π(x)` over modes defined in the **normalized** attribute × slot ×
+hullmod space (§2.3 normalization), with a decay schedule following πBO-style
+prior weakening. The nine modes are the community-meta archetypes (§2.5).
+The decay parameter is a tunable design choice and must be selected under the
+same optimizer-evaluation protocol as other acquisition settings.
 
 **Per-hull activation (§2.5).** At hull-load time, compute the feasibility mask `{mode_k : hull can physically realize mode_k}` from `.ship` JSON + ship-system data. Concretely:
 
@@ -369,7 +445,11 @@ Infeasible modes get zero mixture weight, so the prior density collapses onto on
 
 **Initial weights uniform over feasible modes** (not community-derived) to avoid the meta-hull coverage bias. Mode *definitions* come from community meta; mode *weights* are learned from data.
 
-**Self-correcting π — shipped, not optional.** Hvarfner 2023 ([arXiv:2304.00397](https://arxiv.org/abs/2304.00397)): after each trial, update each feasible mode's weight by the marginal-likelihood ratio `p(y_observed | prior mode_k active) / p(y_observed | flat prior)`. Modes that consistently disagree with data get downweighted; modes that match get amplified. This covers both "community missed this hull" (Gemini, Mudskipper, mod hulls) and "this hull's actual best archetype is unusual" (e.g., a Vanguard running non-SO). Combined with the β/t decay, the prior becomes information only until the data provides it more cheaply.
+**Optional future mode reweighting.** Online reweighting of feasible archetype
+modes is a possible extension after static feasible-mode priors are validated.
+It is not shipped and is not a direct result of SCoreBO. Any implementation
+must define the update rule, compare it against fixed uniform feasible-mode
+weights, and report whether it improves optimizer efficiency.
 
 **Mode definition invariance.** Because modes are points in normalized attribute + slot-feature + hullmod space — never in weapon-ID space — patches that rename or rebalance individual weapons do not invalidate the mode definitions. A mode "long-range sniper" is `(range_normalized > 0.7, flux_per_damage_normalized < 0.4, forward_projection > 0.8)`; the next patch's new weapons that satisfy this triple automatically match the mode.
 
@@ -421,13 +501,22 @@ Initial ship is single-hull per study. Multi-hull surrogate (one GP across all h
 
 **What it was.** Leave the Optuna TPE sampler untouched; add attribute-vector-based warm-start seeding (30–60 Latin-hypercube seeds) and optional archetype-ranked seed ordering.
 
-**Why rejected.** TPE's per-dimension independent KDE structure cannot exploit kernel structure (transformed-overlap categoricals, slot-feature similarity, SAAS sparsity). Warm-start helps the first ~30 trials but provides no ongoing benefit. Community meta → surrogate correlation would be lost after the initial seeds. ~1.3× sample efficiency gain vs ~3× for the full composite kernel — not worth freezing the design at the worst option.
+**Why rejected.** TPE's per-dimension independent KDE structure cannot exploit
+kernel structure such as transformed-overlap categoricals, slot-feature
+similarity, or sparse lengthscale priors. Warm-start helps only the initial
+proposal set and provides no ongoing structural sharing. The expected
+efficiency advantage of richer kernels remains a design hypothesis that future
+reports must measure.
 
-### 4.2 Ma-Blaschko additive tree kernel — SUBSUMED
+### 4.2 Ma-Blaschko additive tree kernel — DEFERRED COMPARATOR
 
 **What it was.** Ma & Blaschko 2020 "Additive Tree-Structured Conditional Parameter Spaces" (TPAMI [arXiv:2010.03171](https://arxiv.org/abs/2010.03171)) — additive tree kernel where overlapping subtrees share priors via ancestors. Explicit hierarchical structure: `role → large-slot → medium → small`.
 
-**Why rejected.** Gated-sentinel imputation (§2.1, §3.6) + SAAS sparsity (§2.2, §3.3) achieves the same information-pooling without a tree-kernel commitment. Ziomek & Ammar 2023 ([arXiv:2301.12844](https://arxiv.org/abs/2301.12844)) showed random decompositions often match learned ones at our budget, further eroding the case for the tree-kernel complexity. The hierarchy is still encoded — via πBO archetype priors as a *soft* bias rather than a *hard* tree.
+**Why deferred.** Tree kernels address conditional structure directly, while
+SAAS addresses sparse axis-aligned relevance. They are not substitutes. The
+first implementation should prefer simpler conditional-slot handling plus
+SAAS-style sparsity, then compare tree/conditional kernels if residual errors
+show that conditional structure is the bottleneck.
 
 ### 4.3 NAS weight-sharing (DARTS / ENAS / OFA / BigNAS) — DOES NOT TRANSFER
 
@@ -437,11 +526,13 @@ Initial ship is single-hull per study. Multi-hull surrogate (one GP across all h
 
 ### 4.4 HyperMapper / BaCO off-the-shelf — MISSING SAAS SUBSPACE
 
-**What it was.** Wrap HyperMapper ([github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper)) as an Optuna sampler (~1–2 weeks) for its BaCO-style product kernel + gated-sentinel.
+**What it was.** Wrap HyperMapper ([github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper)) or a BaCO-style mixed-space optimizer as an Optuna sampler.
 
 **Why rejected.** HyperMapper does not implement SAAS sparsity on subspaces. For our hullmod-boolean subspace (~30–80 dims, ~5–10 active) this is the load-bearing advantage; losing it gives up a majority of the sample-efficiency gain. The 1–2 week shortcut turns into a worse kernel; the 2–3 week custom BoTorch build captures everything.
 
-Use HyperMapper as a validation oracle to verify the custom kernel's categorical handling matches the BaCO reference implementation, not as a drop-in.
+Use HyperMapper/BaCO-style implementations as comparison baselines for
+mixed-space behavior, not as evidence for transformed-overlap or learned
+sentinel claims that BaCO does not implement.
 
 ### 4.5 Pure SAASBO (no mixed-space kernel) — BAD CATEGORICAL HANDLING
 
@@ -507,13 +598,28 @@ Use HyperMapper as a validation oracle to verify the custom kernel's categorical
 
 **What it was.** Hardcode archetype-mode mixture weights per hull from community meta (e.g., "Paragon: 0.6 turret-flex, 0.3 long-range-sniper, 0.1 other"; "Onslaught: 0.5 kinetic-HE brawler, 0.3 SO brawler, 0.2 other"). Initial sketch of the πBO prior from the literature sweep.
 
-**Why rejected.** Three failures (enumerated in §2.5): (i) the 9-archetype taxonomy was induced from community analysis of ~7 meta hulls; the remaining ~40 combat hulls and all mod/patch-added hulls have sparse or absent weights; (ii) absolute-attribute mode means would mismatch across hull sizes (700-range sniper weapons don't match a capital-scale "sniper" mode defined at 1500 range); (iii) physical infeasibility — a Wolf cannot physically realize Broadside, Turret-flex, or Phase-striker modes, and assigning nonzero weight to impossible configurations wastes acquisition-function mass. The historical kernel proposal (§3.8) instead computes a per-hull feasibility mask from `.ship` data, initializes weights uniform over feasible modes, and uses self-correcting π (Hvarfner 2023) to online-downweight modes that disagree with per-hull evidence. Community meta contributes the *vocabulary of modes* (what characterizes a sniper vs a brawler in normalized attribute space) but not the *per-hull weights*.
+**Why rejected.** Three failures (enumerated in §2.5): (i) the archetype
+taxonomy was induced from community analysis of a limited set of meta hulls;
+many combat hulls and all mod/patch-added hulls have sparse or absent weights;
+(ii) absolute-attribute mode means would mismatch across hull sizes; (iii)
+physical infeasibility — a Wolf cannot physically realize Broadside,
+Turret-flex, or Phase-striker modes, and assigning nonzero weight to impossible
+configurations wastes acquisition-function mass. The current design hypothesis
+(§3.8) instead computes a per-hull feasibility mask from `.ship` data and
+initializes weights uniform over feasible modes. Community meta contributes the
+*vocabulary of modes* but not the *per-hull weights*.
 
 ### 4.16 Hardcoded AI-compatibility flags on archetype modes — REJECTED
 
 **What it was.** Manually annotate each of the nine archetype modes with an AI-pilotability flag (low / medium / high, per §2.10 table) and multiply the πBO prior weight by a hardcoded pilotability factor at hull-load time. Example: SO-brawler weight halved because "community consensus says the AI mispilots it."
 
-**Why rejected.** Three failures. (i) AI behavior changes across game patches — Alex periodically revises the combat AI's target selection, flux management, and ship-system usage; hardcoded compatibility flags rot. (ii) AI-compatibility interacts with hull: the AI may mispilot Gryphon's burst-missile pattern but handle burst-missile on Hammerhead fine because the Hammerhead's smaller missile count is within the AI's short-horizon planning. A global per-mode flag cannot encode this. (iii) The self-correcting mixture mechanism from §3.8 + §2.10 already handles AI-hostility via empirical evidence — an AI-hostile mode produces worse-than-predicted fitness and its mixture weight is reduced on the next Hvarfner 2023 update. Hardcoding the flag would both duplicate and prejudice the mechanism that is already running.
+**Why rejected.** Three failures. (i) AI behavior changes across game patches;
+hardcoded compatibility flags rot. (ii) AI-compatibility interacts with hull:
+the AI may mispilot Gryphon's burst-missile pattern but handle burst-missile on
+Hammerhead differently because the Hammerhead's smaller missile count is within
+the AI's short-horizon planning. A global per-mode flag cannot encode this.
+(iii) Hardcoded flags would prejudice a future empirical reweighting or
+residual-learning mechanism before that mechanism is validated.
 
 Community-meta insight about AI pilotability is preserved as *grounding* (§2.10 documents the known-hostile modes so the user can interpret why SO-brawler weights collapse fast on AI-vs-AI runs) but never enters the prior weights directly.
 
@@ -527,7 +633,11 @@ Community-meta insight about AI pilotability is preserved as *grounding* (§2.10
 
 **What it was.** Run 30 random-forest-importance trials, hard-partition flags into impactful / unimpactful, then BO over only impactful.
 
-**Why rejected in standalone form.** If the pilot miscalls an important hullmod, it is randomized forever. At 30 pilot trials there is real risk of this. SAAS subsumes the principled form of the same idea with full reversibility — a wrongly-estimated hullmod can activate as more data accumulates. BOCA retained only as a SAAS *warm-start* (§3.10), not as a standalone dim-reduction mechanism.
+**Why rejected in standalone form.** If the pilot miscalls an important
+hullmod, it is randomized forever. Sparse priors keep recovery possible because
+a wrongly-estimated hullmod can activate as more data accumulates. BOCA is
+retained only as a possible warm-start diagnostic, not as a standalone
+dimension-reduction mechanism.
 
 ---
 
@@ -540,12 +650,12 @@ experiment gates and report-owned measurements.
 
 | Component | Regime | Literature claim or design hypothesis | Source |
 |---|---|---:|---|
-| SAAS sparsity on hullmods | 30–80 hullmod dims | 2–5× at N = 200–500 | Eriksson-Jankowiak 2021 Table 2 |
-| Transformed-overlap categorical kernel | 150-level weapon IDs × 8 slots | 1.3–1.6× | Hellsten 2024 (BaCO) Table 2 |
-| Attribute-Matérn + ICM item residual | 7-dim attribute vector | 1.2–1.5× + zero-shot new-item transfer | Swersky-Snoek-Adams 2013 |
+| SAAS sparsity on hullmods | high-dimensional hullmod block | Literature supports sparse-axis-aligned BO under matching assumptions | Eriksson-Jankowiak 2021 |
+| Transformed-overlap categorical kernel | high-cardinality weapon IDs | Literature supports categorical kernels; BaCO supports mixed-space BO with different categorical handling | Garrido-Merchán 2020; Hellsten 2024 |
+| Attribute-Matérn + item residual | schema-stable weapon attributes | Design hypothesis inspired by attribute transfer and multi-task GP literature | Swersky-Snoek-Adams 2013; ICM literature |
 | Slot-feature Matérn | 5-dim slot feature | Hypothesized benefit from cross-slot pooling | No published benchmark |
-| πBO archetype priors (hull-conditional) | Decay-weighted + self-correcting mixture weights | 2–5× if correct, ≤ 1.5× worst-case; hull-generalizable via feasibility mask (§3.8) | Hvarfner 2022 Fig. 3 + Hvarfner 2023 |
-| BOCA warm-start | First 30 trials | 1.1–1.3× on cold-start hulls | Chen 2021 |
+| πBO archetype priors (hull-conditional) | Decay-weighted feasible-mode prior | Literature supports prior-guided BO; project must validate feasible archetype modes and any reweighting | Hvarfner 2022; BOPrO |
+| BOCA warm-start | initial exploration | Possible warm-start diagnostic, not hard dimensionality reduction | Chen 2021 |
 | Opponent features on smalls | 3-dim feature vec | Qualitative hypothesis: preserve small-slot addressability | §2.8 community-meta evidence |
 
 Project-specific throughput and budget projections belong in dated reports.
@@ -565,7 +675,7 @@ approved pass/fail gates until a future plan or spec adopts them.
 2. **Cold-start gate**: on a new hull (not in pilot data), Phase 7 surrogate should reach the top-10 of a 2000-trial Phase-4 run within 500 Phase-6 trials.
 3. **Game-update gate**: on simulated addition of 5 new weapons with attribute profiles interpolated from existing weapons, posterior mean at the new-weapon points should be within 0.2 σ of the attribute-interpolation ground truth with zero observations.
 4. **Addressability gate**: on a missile-heavy opponent pool, the Phase 7 surrogate's small-slot posterior mean should prefer IPDAI + Dual Flak over the opponent-pool-agnostic posterior at p < 0.05.
-5. **Hull-generalization gate**: on a non-meta hull (Gemini, Mudskipper, or any hull without published community meta), the Phase 7 surrogate should reach top-10 of a 1000-trial Phase-4 baseline within 500 Phase-6 trials — same sample-efficiency as meta hulls, verifying the feasibility-mask + uniform-initial-weights + self-correcting mechanism removes meta-hull coverage bias.
+5. **Hull-generalization gate**: on a non-meta hull, the Phase 7 surrogate should demonstrate comparable sample-efficiency to meta hulls under a report-owned benchmark, verifying whether the feasibility mask and uniform feasible-mode prior reduce meta-hull coverage bias.
 
 ---
 
@@ -613,7 +723,7 @@ inputs only:
 ### Informed priors
 - Hvarfner et al. 2022 "πBO: Augmenting Acquisition Functions with User Beliefs," ICLR, [arXiv:2204.11051](https://arxiv.org/abs/2204.11051).
 - Souza et al. 2021 "Bayesian Optimization with a Prior for the Optimum" (BOPrO), UAI, [arXiv:2006.14608](https://arxiv.org/abs/2006.14608).
-- Hvarfner et al. 2023 "Self-Correcting Bayesian Optimization through Bayesian Active Learning," [arXiv:2304.00397](https://arxiv.org/abs/2304.00397).
+- Hvarfner et al. 2023 "Self-Correcting Bayesian Optimization through Bayesian Active Learning," [arXiv:2304.11005](https://arxiv.org/abs/2304.11005).
 - Mallik et al. 2023 "PriorBand: Practical Hyperparameter Optimization in the Age of Deep Learning," [arXiv:2306.12370](https://arxiv.org/abs/2306.12370).
 
 ### Multi-task / attribute priors (ICM)
@@ -655,7 +765,7 @@ inputs only:
 ### Software
 - BoTorch — [botorch.org](https://botorch.org/) — `SaasFullyBayesianSingleTaskGP`, `Kernel`, `BaseAcquisitionFunction`.
 - HyperMapper — [github.com/luinardi/hypermapper](https://github.com/luinardi/hypermapper) — reference implementation for BaCO kernels.
-- BaCO — [github.com/baco-authors/baco](https://github.com/baco-authors/baco) — validation oracle.
+- BaCO — [github.com/baco-authors/baco](https://github.com/baco-authors/baco) — mixed-space BO comparison reference.
 - Optuna — [github.com/optuna/optuna](https://github.com/optuna/optuna) — `BaseSampler` plugin API.
 
 ### See also

@@ -16,6 +16,14 @@ production default. It supports c0a as the best mean top-K cell, c1 as the
 best high-ceiling candidate-generation branch, and Phase 7 feature-substrate
 work as the next cost-effective direction.
 
+**Roadmap revision note (2026-05-12).** The empirical tables below are still
+the 2026-05-11 validation evidence. The Phase 7 execution roadmap was tightened
+after the learned-surrogate research and documentation audits: feature
+selection, model-family selection, hierarchy splits, honest-eval reuse,
+multi-fidelity screening, and optimizer integration now have explicit
+claim-boundary gates before any new promotion claim. Spec 31 owns the durable
+artifact contracts; this report records dated decisions and sequencing.
+
 ## 1. Methods
 
 ### 1.1 Data
@@ -38,6 +46,7 @@ Primary local artifacts:
   [2026-05-11-phase7-matchup-surrogate-preliminary.md](2026-05-11-phase7-matchup-surrogate-preliminary.md)
 - Phase 7 reference designs:
   [phase7-featurized-matchup-surrogate.md](../reference/phase7-featurized-matchup-surrogate.md),
+  [phase7-learned-surrogate-research.md](../reference/phase7-learned-surrogate-research.md),
   [phase7-search-space-compression.md](../reference/phase7-search-space-compression.md)
 
 The final honest-eval report was generated with:
@@ -78,6 +87,14 @@ This roadmap applies these decision rules:
   random-feasible baseline.
 - Phase 7 optimizer work must be gated by feature-substrate validation before
   custom BoTorch kernel implementation.
+- Learned-surrogate promotion requires a predeclared primary split, metric,
+  top-k value if applicable, final refit/deployment policy, candidate universe,
+  model-promotion rule, and exploratory-vs-confirmatory label.
+- The completed 2026-05-11 honest-eval ledger remains final evidence for the
+  Wave 1 cell comparison in this report. For future learned-surrogate feature,
+  model, or promotion decisions, reuse of this same ledger is
+  `exploratory_selection`; final learned-surrogate claims require a fresh
+  ledger or an explicit exploratory label.
 - References remain design owners; empirical magnitudes remain in reports.
 
 ## 2. Final Validation State
@@ -160,7 +177,7 @@ signals therefore remain priors; honest eval remains the build-quality oracle.
 rematerializing the completed honest-eval ledger and per-cell outputs.
 **Statistic (§1.2).** Generated DB row counts and best grouped-split RMSE.
 **Threshold (§1.3).** Comparator-gate baselines are diagnostics only;
-optimizer integration waits for the promotion checklist in §6.4.
+optimizer integration waits for the spec-owned gates summarized in §6.4.
 
 Current generated DB:
 
@@ -179,7 +196,7 @@ Comparator-gate best RMSE by split:
 | Split | Best model | RMSE |
 |---|---|---:|
 | held-out build | random forest | 0.354 |
-| held-out component combination | random forest | 0.360 |
+| legacy held-out component combination | random forest | 0.360 |
 | held-out seed/cell | random forest | 0.360 |
 | path-ordered forward split | random forest | 0.381 |
 | held-out opponent | random forest | 0.623 |
@@ -188,7 +205,12 @@ Comparator-gate best RMSE by split:
 splits, trivial/statistical comparators, and the random-forest carryover
 baseline. Opponent mean and TWFE-additive explain much of the row-level target
 signal, while random forest adds build-side signal on held-out build,
-component, seed/cell, and path-ordered forward splits. Held-out opponent
+legacy component, seed/cell, and path-ordered forward splits. The component
+split in the 2026-05-11 comparator report used the then-current weaker
+weapon-multiset plus hullmod key. Spec 31 now defines a stricter default
+component fingerprint including slot IDs, hull ID, and flux allocation plus
+k-combination overlap diagnostics; component-transfer evidence must be rerun
+under that current contract before it supports a new claim. Held-out opponent
 transfer is still much weaker, which supports the Phase 7 design requirement
 to model opponent context explicitly and to preserve opponent-conditioned
 small-slot decisions.
@@ -198,15 +220,17 @@ small-slot decisions.
 ### 6.1 Immediate: Close Out Validation Artifacts
 
 The honest-eval run is complete and the stale Phase 7 DB has been regenerated.
-The remaining closeout work is to keep reports aligned with the final summary
-and commit the code path that resolves random-baseline output builds.
+The remaining closeout work is to keep reports aligned with the final summary.
 
 ### 6.2 Default Read: Do Not Promote c2
 
 Do not promote c2 as a production default from Wave 1. The completed evidence
-argues against EB+Box-Cox as tested. All optimizer cells beat the random
-baseline by mean top-K oracle, so the optimizer is extracting signal, but c2 is
-not the winning configuration.
+argues against EB+Box-Cox as tested. All optimizer cells beat the evaluated
+9-build random-feasible panel by mean top-K oracle, so this run supports the
+directional read that optimizer cells are extracting signal. It is not a full
+random-feasible population claim; promotion-grade random-baseline comparisons
+should use repeated random panels or a predeclared uncertainty procedure. c2
+is not the winning configuration.
 
 Use c1 as the primary next investigation branch because it generated the best
 completed panel. The next c1 work should test repeatability, not assume
@@ -228,10 +252,11 @@ focused ablation:
 - equal logged-combat-budget comparisons,
 - direct honest-eval oracle comparison.
 
-### 6.4 Phase 7: Feature Table Before Better Optimizer
+### 6.4 Phase 7: Feature Table And Selection Protocol Before Better Optimizer
 
 The next implementation wave should not jump directly to the custom BoTorch
-kernel. Build the representation and validation substrate first:
+kernel. Build the representation, leakage, selection, and validation substrate
+first:
 
 1. Keep the Phase 7 SQLite dataset reproducibly materialized from complete
    Wave 1 and honest-eval artifacts.
@@ -246,16 +271,48 @@ kernel. Build the representation and validation substrate first:
 5. Add comparator-gate models: global mean, opponent mean, build mean,
    TWFE-additive, ridge-hybrid, and random forest.
    **Completed 2026-05-11** in the Phase 7 comparator-gate report.
+   The component-combination split in that completed report is legacy evidence
+   under the older key and must be corrected and rerun before current-spec
+   component-transfer claims.
 6. Run the learned-surrogate research gate and derive the next experiment plan:
    candidate model families, hyperparameter search spaces, nested grouped
-   validation, leakage controls, calibration policy, and provenance. This gate
-   is now the next model-development step.
-7. Promote learned tree and sparse interaction baselines only through that
-   reviewed experiment plan, after the comparator gate has run.
-8. Report top-k recall against honest-eval rankings without tuning on the
-   same honest-eval rows cited as final evidence.
+   validation, leakage controls, calibration policy, and provenance.
+   **Completed as design rationale on 2026-05-12**; spec 31 now owns the
+   artifact contract.
+7. Before new learned experiments, create an active implementation plan and
+   update spec 31 with implementable artifact contracts for the feature-family
+   registry, hierarchy scorecard, leakage diagnostics, `honest_eval_usage`,
+   promotion declarations, config/CLI fields, JSON schema, and batch
+   propagation. The plan must pass the repository plan-review and fresh-review
+   gates before code changes.
+8. Add a feature-family registry for every generated feature: family,
+   generator template, parent families for interactions, and leakage-risk
+   class. Feature selection is part of the estimator and must be nested inside
+   the outer split.
+9. Add hierarchy-aware split metadata and diagnostics. The roadmap ladder is:
+   random-row smoke only, exact-opponent holdout, opponent-hull holdout,
+   opponent-family/archetype holdout, seed/cell or campaign-regime holdout,
+   and forward-time holdout. Only implemented split builders can support
+   reportable claims.
+10. Predeclare the primary endpoint before any learned-surrogate promotion:
+   primary split, primary metric, primary top-k value if top-k is used,
+   model-family policy (fixed or selected inside inner validation), feature-
+   selection policy, final refit/deployment policy, candidate universe, and
+   model-promotion threshold.
+11. Promote learned tree and sparse interaction baselines only through that
+    reviewed experiment plan, after the comparator gate has run. The canonical
+    spec-31 model/split matrix is a fixed comparison matrix; it is exploratory
+    for single-winner claims unless it uses a predeclared fixed winner policy
+    or is replaced by a fully nested model-family selector.
+12. Report top-k recall against honest-eval rankings without training, tuning,
+    feature selection, model-family selection, or calibration on the cited
+    honest-eval rows. If prior honest-eval diagnostics affected the model or
+    promotion rule, the result is exploratory unless a fresh honest-eval ledger
+    confirms it.
 
-Materialization acceptance criteria:
+Spec 31 owns the durable materialization and learned-artifact contracts. The
+next implementation plan should satisfy the current spec and close these
+roadmap-level prerequisites:
 
 - JSONL optimizer logs remain authoritative for exact logged rows.
 - DB-reconstructed builds are labeled as reconstructed and not treated as exact
@@ -266,18 +323,38 @@ Materialization acceptance criteria:
   materialization.
 - The rematerialized DB reports full ledger coverage for the completed run and
   zero unresolved honest-eval build keys.
-- Row-kind breakdown is reported, and cache-hit or invalid-spec rows are not
-  silently mixed into matchup refits.
+- Row-kind breakdown remains inspectable; any additional skipped-row/cache-hit/
+  invalid-spec reporting must be defined in spec 31 before it becomes a
+  required artifact field.
 - Feature/provenance schema versioning is sufficient to regenerate rows later.
+- Feature-family registry coverage is complete for the schema/profile used by
+  any selection run.
+- Provenance/context fields such as source path, trial number, row kind,
+  source kind, rank, campaign, seed, and batch/job IDs are diagnostic-only by
+  default unless a reviewed plan explicitly scopes a split-specific claim that
+  allows them.
 
-Grouped-validation promotion checklist:
+Grouped-validation gate summary:
 
 - Held-out build, opponent, component-combination, seed/cell, and forward-time
   splits are all reported.
+- Any stronger split claim, such as opponent-hull or opponent-family transfer,
+  has an implemented group-key function and records the exact supported claim.
 - Trivial comparators are included.
 - Honest-eval target rows are excluded from comparator fitting.
 - Top-k recall is reported against honest-eval rankings without fitting or
   tuning on the cited honest-eval rows.
+- `honest_eval_usage` is recorded as `diagnostic_only`,
+  `exploratory_selection`, or `final_claim`; adaptive reuse of a ledger is
+  labeled exploratory unless confirmed on a fresh ledger.
+- Canonical learned runs emit forbidden-key overlap, adversarial-validation
+  AUC by hierarchy level, rare-combination overlap, nearest-neighbor overlap,
+  and sparse-ID ablation diagnostics, or explicit `not_applicable` reasons.
+- Multi-fidelity screening or successive halving is exploratory until the run
+  records a cheap-vs-full fidelity rank-preservation diagnostic.
+- Active-learning repeat allocation, uncertainty-based candidate selection,
+  or optimizer-allocation claims require grouped calibration/proper-score
+  diagnostics by split, opponent group, and score regime.
 - Failures by opponent family, score regime, and campaign cell are inspected
   before learned tree baselines, sparse interaction models, or optimizer
   integration.
@@ -293,9 +370,14 @@ observed fitness
   + online_BO_residual(build, opponent)
 ```
 
-The first integration should be model-assisted search: candidate prefiltering,
-prior mean, or active-learning repeat allocation. The full custom BoTorch
-sampler should follow only after those cheaper gates show value.
+The first integration should be model-assisted search: candidate prefiltering
+or prior mean can come before calibrated uncertainty. Active-learning repeat
+allocation requires calibrated uncertainty or ranking-confidence evidence
+under grouped diagnostics. The full custom BoTorch sampler should follow only
+after cheaper gates show value under the same claim-boundary rules.
+Optimizer-facing kernels, archetype priors, and feature blocks should be
+restricted or regularized according to nested grouped feature-selection
+evidence, not by historical design preference alone.
 
 ### 6.6 Explicit Deferrals
 
@@ -317,16 +399,43 @@ Their shared findings are incorporated above:
 - Slot geometry and opponent-conditioned small-slot behavior are not optional.
 - Fighter bays and weapon grouping are explicit deferrals.
 
-The fresh-eye findings required documentation changes only; no code changes
-were needed.
+A second documentation/literature audit wave on 2026-05-12 tightened the
+Phase 7 learned-surrogate roadmap:
+
+- feature selection, model-family choice, preprocessing, HPO, and calibration
+  are one estimator for validation purposes;
+- model-family winners require a predeclared fixed policy or nested selection;
+- repeated use of the same honest-eval ledger is exploratory unless confirmed
+  on a fresh ledger;
+- hierarchy ladders need concrete group-key functions before reportable use;
+- multi-fidelity screening needs cheap-vs-full rank-preservation evidence;
+- older custom-kernel references were downgraded from asserted mechanisms to
+  design hypotheses where the cited literature did not directly support them.
+
+The 2026-05-12 documentation/literature audit findings required documentation
+changes only; no code changes were made in that audit pass.
 
 ## 8. Next Checks
 
-- Run CatBoost and sparse interaction baselines under the same grouped-split
-  and honest-eval top-k protocol.
-- Treat held-out-opponent transfer as the primary failure surface.
-- Define a single deployment training policy for honest-eval top-k comparison
-  before making model-selection claims.
+- Create an active implementation plan for the spec-31 artifact-contract
+  upgrade, including plan-review and independent review gates before code.
+- Define concrete JSON/config/CLI contracts for feature-family registry,
+  hierarchy scorecard, `honest_eval_usage`, leakage diagnostics, promotion
+  declaration, and batch propagation.
+- Correct the component-combination split to the current spec or explicitly
+  relabel old comparator evidence as legacy until rerun.
+- Run the existing spec-31 fixed model-family comparison matrix only after the
+  artifact-contract upgrade, or write a separate plan for a fully nested
+  model-family selector; do not mix those claims.
+- Predeclare the primary endpoint, primary split, primary top-k value, final
+  refit/deployment policy, candidate universe, and promotion rule before
+  running CatBoost, sparse interaction, or feature-selection experiments.
+- Treat held-out-opponent transfer as the primary failure surface, then add
+  opponent-hull and opponent-family/archetype stress tests only after their
+  group-key builders exist.
+- Treat the current honest-eval ledger as `exploratory_selection` for future
+  learned-surrogate model development; reserve final learned-surrogate claims
+  for a fresh ledger or label them exploratory.
 
 ## Appendix A. File Map
 
@@ -348,4 +457,5 @@ were needed.
   [../specs/31-phase7-matchup-data.md](../specs/31-phase7-matchup-data.md)
 - Phase 7 reference docs:
   [../reference/phase7-featurized-matchup-surrogate.md](../reference/phase7-featurized-matchup-surrogate.md),
+  [../reference/phase7-learned-surrogate-research.md](../reference/phase7-learned-surrogate-research.md),
   [../reference/phase7-search-space-compression.md](../reference/phase7-search-space-compression.md)
