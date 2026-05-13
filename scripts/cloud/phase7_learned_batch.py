@@ -139,6 +139,7 @@ def dry_run(config_path: Path) -> int:
         "target_workers": cfg.target_workers,
         "target_vcpu": cfg.target_workers * 16,
         "budget_usd": cfg.budget_usd,
+        "feature_profile": cfg.feature_profile,
         "job_count": len(jobs),
         "jobs": [job.__dict__ | {"output_path": str(job.output_path)} for job in jobs],
         "teardown_command": f"scripts/cloud/teardown.sh {cfg.name}",

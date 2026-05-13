@@ -49,4 +49,5 @@ split_seed: 17
 hpo_seed: 23
 holdout_fraction: 0.2
 train_fraction: 0.8
+feature_profile: all
 dependency_extra: surrogate

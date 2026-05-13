@@ -24,7 +24,11 @@ from sklearn.kernel_approximation import PolynomialCountSketch
 from sklearn.linear_model import Ridge
 from sklearn.pipeline import FeatureUnion, Pipeline
 
-from starsector_optimizer.matchup_features import FEATURE_SCHEMA_VERSION
+from starsector_optimizer.matchup_features import (
+    DEFAULT_FEATURE_PROFILE,
+    FEATURE_PROFILES,
+    FEATURE_SCHEMA_VERSION,
+)
 from starsector_optimizer.phase7_matchup_data import (
     SplitIds,
     TrainingMatchupRow,
@@ -134,6 +138,10 @@ class LearnedExperimentConfig:
     top_k_values: tuple[int, ...]
     progress: bool
     allow_missing_optional_models: bool
+    feature_profile: str = DEFAULT_FEATURE_PROFILE
+    batch_job_id: str | None = None
+    batch_name: str | None = None
+    batch_fleet_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -271,6 +279,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--model-thread-count", type=int, default=ALL_AVAILABLE_CORES)
     parser.add_argument("--top-k", default=",".join(str(item) for item in baseline.DEFAULT_TOP_K_VALUES))
     parser.add_argument("--max-rows", type=int, default=None)
+    parser.add_argument("--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE)
+    parser.add_argument("--batch-job-id", default=None)
+    parser.add_argument("--batch-name", default=None)
+    parser.add_argument("--batch-fleet-name", default=None)
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--no-progress", action="store_true")
     parser.add_argument("--allow-missing-optional-models", action="store_true")
@@ -302,6 +314,10 @@ def build_experiment_configs(config: LearnedExperimentConfig) -> list[LearnedExp
             top_k_values=config.top_k_values,
             progress=config.progress,
             allow_missing_optional_models=config.allow_missing_optional_models,
+            feature_profile=config.feature_profile,
+            batch_job_id=config.batch_job_id,
+            batch_name=config.batch_name,
+            batch_fleet_name=config.batch_fleet_name,
         )
         for split in splits
         for model in models
@@ -322,6 +338,7 @@ def _baseline_config(config: LearnedExperimentConfig) -> baseline.BaselineConfig
         max_rows=config.max_rows,
         top_k_values=config.top_k_values,
         progress=config.progress,
+        feature_profile=config.feature_profile,
     )
 
 
@@ -542,6 +559,8 @@ def load_comparator_context(
     model: str,
     *,
     max_rows: int | None = None,
+    feature_profile: str = DEFAULT_FEATURE_PROFILE,
+    feature_schema_version: int = FEATURE_SCHEMA_VERSION,
 ) -> dict[str, object]:
     if path is None or not path.exists():
         return {
@@ -549,6 +568,7 @@ def load_comparator_context(
             "diagnostic": "comparator_missing",
         }
     data = json.loads(path.read_text())
+    artifact_feature_schema = data.get("feature_schema_version") if isinstance(data, dict) else None
     rows = data.get("results", [data]) if isinstance(data, dict) else []
     split_rows = [
         row for row in rows
@@ -559,17 +579,27 @@ def load_comparator_context(
     if model == "sparse_pairwise_ridge":
         matching = next((row for row in split_rows if row.get("model") == "ridge_hybrid"), random_forest)
     comparator_max_rows = _comparator_max_rows(matching)
+    comparator_feature_profile = _comparator_feature_profile(matching)
+    comparator_feature_schema = _comparator_feature_schema(matching, artifact_feature_schema)
     comparison_status = "comparable"
     if matching is None:
         comparison_status = "missing"
+    elif comparator_feature_schema is not None and comparator_feature_schema != feature_schema_version:
+        comparison_status = "feature_schema_mismatch"
     elif comparator_max_rows != max_rows:
         comparison_status = "row_filter_mismatch"
+    elif comparator_feature_profile is not None and comparator_feature_profile != feature_profile:
+        comparison_status = "feature_profile_mismatch"
     return {
         "artifact_path": str(path),
         "diagnostic": "ok" if matching is not None else "comparator_missing",
         "comparison_status": comparison_status,
         "current_max_rows": max_rows,
         "comparator_max_rows": comparator_max_rows,
+        "current_feature_schema_version": feature_schema_version,
+        "comparator_feature_schema_version": comparator_feature_schema,
+        "current_feature_profile": feature_profile,
+        "comparator_feature_profile": comparator_feature_profile,
         "matching_result": matching,
         "random_forest_result": random_forest,
     }
@@ -583,6 +613,30 @@ def _comparator_max_rows(row: Mapping[str, object] | None) -> int | None:
         return None
     value = provenance.get("max_rows")
     return int(value) if value is not None else None
+
+
+def _comparator_feature_profile(row: Mapping[str, object] | None) -> str | None:
+    if row is None:
+        return None
+    provenance = row.get("provenance")
+    if isinstance(provenance, dict) and isinstance(provenance.get("feature_profile"), str):
+        return str(provenance["feature_profile"])
+    value = row.get("feature_profile")
+    return str(value) if isinstance(value, str) else None
+
+
+def _comparator_feature_schema(
+    row: Mapping[str, object] | None,
+    artifact_feature_schema: object,
+) -> int | None:
+    if row is None:
+        return None
+    value = row.get("feature_schema_version")
+    if isinstance(value, int):
+        return value
+    if isinstance(artifact_feature_schema, int):
+        return artifact_feature_schema
+    return None
 
 
 def _metric_delta(metrics: Mapping[str, object], comparator: Mapping[str, object] | None) -> dict[str, float] | None:
@@ -599,6 +653,9 @@ def missing_optional_model_result(config: LearnedExperimentConfig) -> dict[str, 
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "db_path": str(config.db_path),
+        "feature_profile": config.feature_profile,
+        "batch_job": batch_job_context(config),
         "split": config.split,
         "model": config.model,
         "status": "skipped",
@@ -648,18 +705,22 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
         config.split,
         config.model,
         max_rows=config.max_rows,
+        feature_profile=config.feature_profile,
+        feature_schema_version=FEATURE_SCHEMA_VERSION,
     )
     matching = comparator.get("matching_result") if isinstance(comparator.get("matching_result"), dict) else None
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
+        "feature_profile": config.feature_profile,
+        "batch_job": batch_job_context(config),
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,
         "status": "completed",
         "target_variable": TARGET_VARIABLE,
-        "feature_families": feature_families(outer_train.records),
+        "feature_families": feature_families(outer_train.records, config.feature_profile),
         "n_train": len(outer_train.rows),
         "n_inner_train": len(inner_train.rows),
         "n_inner_validation": len(inner_validation.rows),
@@ -692,6 +753,8 @@ def _insufficient_result(config: LearnedExperimentConfig, reason: str) -> dict[s
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
+        "feature_profile": config.feature_profile,
+        "batch_job": batch_job_context(config),
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,
@@ -701,9 +764,13 @@ def _insufficient_result(config: LearnedExperimentConfig, reason: str) -> dict[s
     }
 
 
-def feature_families(records: Sequence[Mapping[str, FeatureValue]]) -> dict[str, object]:
+def feature_families(
+    records: Sequence[Mapping[str, FeatureValue]],
+    feature_profile: str = DEFAULT_FEATURE_PROFILE,
+) -> dict[str, object]:
     keys = sorted({key for record in records for key in record})
     return {
+        "feature_profile": feature_profile,
         "column_count": len(keys),
         "prefixes": sorted({key.split("_", 2)[0] for key in keys}),
         "columns": keys,
@@ -740,7 +807,23 @@ def provenance(config: LearnedExperimentConfig) -> dict[str, object]:
         "train_fraction": config.train_fraction,
         "top_k_values": list(config.top_k_values),
         "max_rows": config.max_rows,
+        "feature_profile": config.feature_profile,
+        "batch_job_id": config.batch_job_id,
+        "batch_name": config.batch_name,
+        "batch_fleet_name": config.batch_fleet_name,
         "code_version": _code_version(),
+    }
+
+
+def batch_job_context(config: LearnedExperimentConfig) -> dict[str, object] | None:
+    if config.batch_job_id is None:
+        return None
+    return {
+        "job_id": config.batch_job_id,
+        "batch_name": config.batch_name,
+        "fleet_name": config.batch_fleet_name,
+        "split": config.split,
+        "model": config.model,
     }
 
 
@@ -789,6 +872,8 @@ def _experiment_payload(
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_profile": config.feature_profile,
+        "batch_job": batch_job_context(config),
         "db_path": str(config.db_path),
         "status": status,
         "elapsed_seconds": time.monotonic() - started,
@@ -875,6 +960,10 @@ def main() -> None:
         top_k_values=parse_top_k_values(args.top_k),
         progress=not args.no_progress,
         allow_missing_optional_models=args.allow_missing_optional_models,
+        feature_profile=args.feature_profile,
+        batch_job_id=args.batch_job_id,
+        batch_name=args.batch_name,
+        batch_fleet_name=args.batch_fleet_name,
     )
     result = run_experiment(config, checkpoint_path=args.output)
     payload = json.dumps(result, indent=2, sort_keys=True)

@@ -11,8 +11,10 @@ import pandas as pd
 
 from .models import (
     DamageType,
+    EngineSlot,
     GameData,
     HullMod,
+    HullGeometry,
     HullSize,
     ShieldType,
     ShipHull,
@@ -22,6 +24,7 @@ from .models import (
     Weapon,
     WeaponSlot,
     WeaponType,
+    Wing,
 )
 
 logger = logging.getLogger(__name__)
@@ -72,6 +75,12 @@ def _parse_tags(val) -> list[str]:
     if pd.isna(val) or not isinstance(val, str) or val.strip() == "":
         return []
     return [t.strip().strip('"') for t in val.split(",") if t.strip()]
+
+
+def _tuple_float_pair(raw, *, default: tuple[float, float] = (0.0, 0.0)) -> tuple[float, float]:
+    if not isinstance(raw, list | tuple) or len(raw) < 2:
+        return default
+    return (_safe_float(raw[0]), _safe_float(raw[1]))
 
 
 def parse_ship_csv(csv_path: Path) -> list[ShipHull]:
@@ -130,10 +139,57 @@ def parse_ship_file(path: Path) -> dict:
     return {
         "hullId": data.get("hullId", ""),
         "hullSize": data.get("hullSize", ""),
+        "bounds": data.get("bounds", []),
+        "center": data.get("center", [0, 0]),
+        "collisionRadius": data.get("collisionRadius", 0),
+        "width": data.get("width", 0),
+        "height": data.get("height", 0),
+        "shieldCenter": data.get("shieldCenter", [0, 0]),
+        "shieldRadius": data.get("shieldRadius", 0),
+        "style": data.get("style", ""),
+        "spriteName": data.get("spriteName", ""),
+        "engineSlots": data.get("engineSlots", []),
         "weaponSlots": data.get("weaponSlots", []),
         "builtInMods": data.get("builtInMods", []),
         "builtInWeapons": data.get("builtInWeapons", {}),
     }
+
+
+def parse_engine_slots(raw_slots) -> tuple[EngineSlot, ...]:
+    """Parse static engine slot geometry from a .ship file."""
+    if not isinstance(raw_slots, list):
+        return ()
+    slots: list[EngineSlot] = []
+    for raw in raw_slots:
+        if not isinstance(raw, dict):
+            logger.debug("Skipping malformed engine slot: %r", raw)
+            continue
+        slots.append(EngineSlot(
+            angle=_safe_float(raw.get("angle")),
+            location=_tuple_float_pair(raw.get("location")),
+            length=_safe_float(raw.get("length")),
+            width=_safe_float(raw.get("width")),
+            style=str(raw.get("style", "") or ""),
+        ))
+    return tuple(slots)
+
+
+def parse_hull_geometry(ship_data: dict) -> HullGeometry:
+    """Parse static hull geometry from a .ship file."""
+    raw_bounds = ship_data.get("bounds", ())
+    bounds = tuple(_safe_float(item) for item in raw_bounds) if isinstance(raw_bounds, list) else ()
+    return HullGeometry(
+        bounds=bounds,
+        center=_tuple_float_pair(ship_data.get("center")),
+        collision_radius=_safe_float(ship_data.get("collisionRadius")),
+        width=_safe_float(ship_data.get("width")),
+        height=_safe_float(ship_data.get("height")),
+        shield_center=_tuple_float_pair(ship_data.get("shieldCenter")),
+        shield_radius=_safe_float(ship_data.get("shieldRadius")),
+        style=str(ship_data.get("style", "") or ""),
+        sprite_name=str(ship_data.get("spriteName", "") or ""),
+        engine_slots=parse_engine_slots(ship_data.get("engineSlots", [])),
+    )
 
 
 def merge_ship_hull_data(hulls: list[ShipHull], ship_dir: Path) -> list[ShipHull]:
@@ -144,7 +200,7 @@ def merge_ship_hull_data(hulls: list[ShipHull], ship_dir: Path) -> list[ShipHull
             continue
         try:
             ship_data = parse_ship_file(ship_path)
-        except (json.JSONDecodeError, Exception) as e:
+        except (json.JSONDecodeError, OSError, TypeError, ValueError) as e:
             logger.warning("Failed to parse %s: %s", ship_path, e)
             continue
 
@@ -156,6 +212,9 @@ def merge_ship_hull_data(hulls: list[ShipHull], ship_dir: Path) -> list[ShipHull
         # Parse weapon slots
         slots = []
         for ws in ship_data.get("weaponSlots", []):
+            if not isinstance(ws, dict):
+                logger.debug("Skipping malformed weapon slot in %s: %r", hull.id, ws)
+                continue
             st = SlotType.from_str(ws.get("type", ""))
             ss = SlotSize.from_str(ws.get("size", ""))
             mt = MountType.from_str(ws.get("mount", ""))
@@ -169,16 +228,43 @@ def merge_ship_hull_data(hulls: list[ShipHull], ship_dir: Path) -> list[ShipHull
                 slot_type=st,
                 slot_size=ss,
                 mount_type=mt,
-                angle=float(ws.get("angle", 0)),
-                arc=float(ws.get("arc", 0)),
-                position=(float(loc[0]) if len(loc) > 0 else 0.0,
-                          float(loc[1]) if len(loc) > 1 else 0.0),
+                angle=_safe_float(ws.get("angle")),
+                arc=_safe_float(ws.get("arc")),
+                position=_tuple_float_pair(loc),
             ))
         hull.weapon_slots = slots
         hull.built_in_mods = ship_data.get("builtInMods", [])
         hull.built_in_weapons = ship_data.get("builtInWeapons", {})
+        hull.geometry = parse_hull_geometry(ship_data)
 
     return hulls
+
+
+def parse_wing_csv(csv_path: Path) -> list[Wing]:
+    """Parse fighter wing metadata from wing_data.csv."""
+    df = pd.read_csv(csv_path, comment="#", dtype=str, keep_default_na=False)
+    wings = []
+    for _, row in df.iterrows():
+        wid = row.get("id", "").strip()
+        if not wid:
+            continue
+        wings.append(Wing(
+            id=wid,
+            variant=row.get("variant", "").strip(),
+            tags=tuple(_parse_tags(row.get("tags"))),
+            tier=_safe_int(row.get("tier")),
+            fleet_points=_safe_int(row.get("fleet pts")),
+            op_cost=_safe_int(row.get("op cost")),
+            formation=row.get("formation", "").strip(),
+            range=_safe_float(row.get("range")),
+            attack_run_range=_safe_float(row.get("attackRunRange")),
+            attack_position_offset=_safe_float(row.get("attackPositionOffset")),
+            num=_safe_int(row.get("num")),
+            role=row.get("role", "").strip(),
+            role_desc=row.get("role desc", "").strip(),
+            refit=_safe_float(row.get("refit")),
+        ))
+    return wings
 
 
 _DAMAGE_TYPE_TO_WEAPON_TYPE: dict[str, WeaponType] = {
@@ -306,12 +392,14 @@ def load_game_data(
 
     # Parse hullmods
     hullmods = parse_hullmod_csv(data_dir / "hullmods" / "hull_mods.csv")
+    wings = parse_wing_csv(data_dir / "hulls" / "wing_data.csv")
 
     # Build GameData
     game_data = GameData(
         hulls={h.id: h for h in hulls if h.id},
         weapons={w.id: w for w in weapons if w.id},
         hullmods={m.id: m for m in hullmods if m.id},
+        wings={w.id: w for w in wings if w.id},
     )
 
     # Validation summary
@@ -319,10 +407,11 @@ def load_game_data(
     hidden_mods = sum(1 for m in game_data.hullmods.values() if m.is_hidden)
     logger.info(
         "Loaded game data: %d hulls (%d with weapon slots), "
-        "%d weapons, %d hullmods (%d hidden)",
+        "%d weapons, %d hullmods (%d hidden), %d wings",
         len(game_data.hulls), hulls_with_slots,
         len(game_data.weapons),
         len(game_data.hullmods), hidden_mods,
+        len(game_data.wings),
     )
 
     # hullmod registry validation lived here pre-Phase-7-prep; now the

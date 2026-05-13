@@ -21,6 +21,11 @@ import yaml
 from flask import Flask, jsonify, request, send_file
 from werkzeug.serving import make_server
 
+from starsector_optimizer.matchup_features import (
+    DEFAULT_FEATURE_PROFILE,
+    FEATURE_PROFILES,
+    FEATURE_SCHEMA_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,7 @@ class LearnedBatchConfig:
     hpo_seed: int
     holdout_fraction: float
     train_fraction: float
+    feature_profile: str = DEFAULT_FEATURE_PROFILE
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
     root_volume_size_gb: int | None = None
     splits: tuple[str, ...] = CANONICAL_SPLITS
@@ -394,6 +400,7 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         hpo_seed=int(expanded["hpo_seed"]),
         holdout_fraction=float(expanded["holdout_fraction"]),
         train_fraction=float(expanded["train_fraction"]),
+        feature_profile=str(expanded.get("feature_profile", DEFAULT_FEATURE_PROFILE)),
         dependency_extra=str(expanded.get("dependency_extra", DEFAULT_DEPENDENCY_EXTRA)),
         root_volume_size_gb=(
             None
@@ -428,6 +435,8 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
     unknown_models = [model for model in config.models if model not in CANONICAL_MODELS]
     if unknown_models:
         raise ValueError(f"unknown model(s): {', '.join(unknown_models)}")
+    if config.feature_profile not in FEATURE_PROFILES:
+        raise ValueError(f"unknown feature_profile: {config.feature_profile}")
     if len(set(config.splits)) != len(config.splits):
         raise ValueError("splits must not contain duplicates")
     if len(set(config.models)) != len(config.models):
@@ -533,6 +542,14 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         str(config.model_thread_count),
         "--top-k",
         ",".join(str(value) for value in config.top_k_values),
+        "--feature-profile",
+        config.feature_profile,
+        "--batch-job-id",
+        job.job_id,
+        "--batch-name",
+        config.name,
+        "--batch-fleet-name",
+        config.fleet_name,
         "--output",
         str(job.output_path),
     ]
@@ -883,6 +900,10 @@ while (( SECONDS < DEADLINE )); do
     --hpo-jobs {config.hpo_jobs} \\
     --model-thread-count {config.model_thread_count} \\
     --top-k {top_k} \\
+    --feature-profile {shlex.quote(config.feature_profile)} \\
+    --batch-job-id "$JOB_ID" \\
+    --batch-name {shlex.quote(config.name)} \\
+    --batch-fleet-name {shlex.quote(config.fleet_name)} \\
     --output "$OUTPUT" >"$LOG" 2>&1 &
   RUN_PID=$!
   wait "$RUN_PID"
@@ -1315,6 +1336,21 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} experiment schema version missing")
     if not isinstance(artifact.get("feature_schema_version"), int):
         raise ValueError(f"job {job.job_id} feature schema version missing")
+    if artifact["feature_schema_version"] != FEATURE_SCHEMA_VERSION:
+        raise ValueError(f"job {job.job_id} feature schema version mismatch")
+    batch_job = artifact.get("batch_job")
+    if not isinstance(batch_job, dict):
+        raise ValueError(f"job {job.job_id} batch job identity missing")
+    expected_batch_job = {
+        "job_id": job.job_id,
+        "batch_name": config.name,
+        "fleet_name": config.fleet_name,
+        "split": job.split,
+        "model": job.model,
+    }
+    for key, expected in expected_batch_job.items():
+        if batch_job.get(key) != expected:
+            raise ValueError(f"job {job.job_id} batch job field {key!r} mismatch")
     if artifact.get("status") not in (None, "completed"):
         raise ValueError(f"job {job.job_id} artifact is not complete")
     if artifact.get("result_count") != 1:
@@ -1325,6 +1361,8 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} model_families mismatch")
     if artifact.get("db_path") != str(config.source_db_path):
         raise ValueError(f"job {job.job_id} source DB mismatch")
+    if artifact.get("feature_profile") != config.feature_profile:
+        raise ValueError(f"job {job.job_id} feature profile mismatch")
     provenance = artifact.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError(f"job {job.job_id} provenance missing")
@@ -1339,6 +1377,10 @@ def validate_job_payload(
         "holdout_fraction": config.holdout_fraction,
         "train_fraction": config.train_fraction,
         "top_k_values": list(config.top_k_values),
+        "feature_profile": config.feature_profile,
+        "batch_job_id": job.job_id,
+        "batch_name": config.name,
+        "batch_fleet_name": config.fleet_name,
     }
     for key, expected in expected_provenance.items():
         if provenance.get(key) != expected:
@@ -1389,6 +1431,8 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} target variable missing")
     if not isinstance(result.get("feature_families"), dict):
         raise ValueError(f"job {job.job_id} feature families malformed")
+    if result["feature_families"].get("feature_profile") != config.feature_profile:
+        raise ValueError(f"job {job.job_id} feature family profile mismatch")
     if not isinstance(result.get("hpo"), dict) or "selected_hyperparameters" not in result["hpo"]:
         raise ValueError(f"job {job.job_id} HPO payload malformed")
     if not isinstance(result.get("timing"), dict):
@@ -1429,6 +1473,7 @@ def _common_key(payload: Mapping[str, Any], config: LearnedBatchConfig) -> tuple
         provenance.get("holdout_fraction"),
         provenance.get("train_fraction"),
         tuple(provenance.get("top_k_values", ())),
+        provenance.get("feature_profile"),
         provenance.get("code_version"),
         provenance.get("dependency_extra", config.dependency_extra),
         provenance.get("bundle_sha256"),
@@ -1469,6 +1514,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     merged = {
         "experiment_schema_version": first["experiment_schema_version"],
         "feature_schema_version": first["feature_schema_version"],
+        "feature_profile": first["feature_profile"],
         "db_path": first["db_path"],
         "model_families": list(config.models),
         "provenance": provenance,

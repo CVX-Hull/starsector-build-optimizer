@@ -79,9 +79,17 @@ Use three layers of features, ordered from low-risk to high-capacity.
 - Multi-hot hullmods.
 - Weapon ID per stable slot.
 - Empty-slot sentinels.
-- Slot-local attributes: slot type, slot size, mount, angle, arc, position.
+- Slot-local attributes: slot type, slot size, mount, angle, arc, position,
+  normalized position, forward projection, lateral/longitudinal offset, and
+  tactical arc bucket.
 - Weapon-local attributes: type, size, damage type, OP, sustained DPS,
   sustained flux, range, ammo, projectile speed, turn rate, tags/hints.
+- Static hull geometry from `.ship`: bounds, width, height, center, collision
+  radius, shield center/radius, engine-slot summaries, hull style, and sprite
+  name as metadata. These are structured file fields, not sprite-pixel,
+  video, or audio features.
+- Arc-pressure summaries: front/aft/port/starboard slot counts, arc-weighted
+  weapon pressure, PD coverage, and broadside/frontal/aft pressure totals.
 
 **Structured token features**:
 
@@ -103,6 +111,9 @@ For a single opponent variant:
 - Opponent hull stats and hull size.
 - Opponent weapon totals by damage type, range, missile/PD/fighter pressure.
 - Opponent armor/shield/flux profile.
+- Opponent variant vents/capacitors, hullmod OP, hull system, phase stats,
+  static geometry, arc-pressure summaries, and stock-variant fighter-wing
+  pressure from `wing_data.csv`.
 - Opponent role summaries derived from manifest/scorer features.
 
 For a pool or curriculum stage:
@@ -129,6 +140,11 @@ Use cheap, interpretable interactions before deep models:
 These features preserve the Phase 7 requirement that small slots remain
 addressable. They let the model learn opponent-conditional small-slot value
 without hard-filling those slots.
+
+Feature schema v3 implements these as flat tabular features plus deterministic
+feature profiles (`all`, `aggregate`, `geometry`, `opponent-parity`,
+`sparse-component`, and `sparse-cross`) so ablations can test representation
+families without changing the underlying row materialization.
 
 ## Modeling Sequence
 

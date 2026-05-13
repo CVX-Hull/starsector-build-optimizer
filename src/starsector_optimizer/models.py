@@ -115,6 +115,29 @@ class WeaponSlot:
     position: tuple[float, float]
 
 
+@dataclass(frozen=True)
+class EngineSlot:
+    angle: float
+    location: tuple[float, float]
+    length: float
+    width: float
+    style: str
+
+
+@dataclass(frozen=True)
+class HullGeometry:
+    bounds: tuple[float, ...] = ()
+    center: tuple[float, float] = (0.0, 0.0)
+    collision_radius: float = 0.0
+    width: float = 0.0
+    height: float = 0.0
+    shield_center: tuple[float, float] = (0.0, 0.0)
+    shield_radius: float = 0.0
+    style: str = ""
+    sprite_name: str = ""
+    engine_slots: tuple[EngineSlot, ...] = ()
+
+
 @dataclass
 class ShipHull:
     id: str
@@ -142,6 +165,7 @@ class ShipHull:
     weapon_slots: list[WeaponSlot] = field(default_factory=list)
     built_in_mods: list[str] = field(default_factory=list)
     built_in_weapons: dict[str, str] = field(default_factory=dict)
+    geometry: HullGeometry = field(default_factory=HullGeometry)
     hints: list[str] = field(default_factory=list)
     tags: list[str] = field(default_factory=list)
     # Engine vent/capacitor caps. Populated at construction from
@@ -250,6 +274,24 @@ class HullMod:
 
 
 @dataclass(frozen=True)
+class Wing:
+    id: str
+    variant: str
+    tags: tuple[str, ...]
+    tier: int
+    fleet_points: int
+    op_cost: int
+    formation: str
+    range: float
+    attack_run_range: float
+    attack_position_offset: float
+    num: int
+    role: str
+    role_desc: str
+    refit: float
+
+
+@dataclass(frozen=True)
 class Build:
     hull_id: str
     weapon_assignments: dict[str, str | None]
@@ -293,6 +335,7 @@ class GameData:
     hulls: dict[str, ShipHull]
     weapons: dict[str, Weapon]
     hullmods: dict[str, HullMod]
+    wings: dict[str, Wing] = field(default_factory=dict)
 
 
 # --- Phase 2: Combat protocol dataclasses ---

@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: approved
+status: implemented
 created: 2026-05-12
 approved: 2026-05-12
-implemented: null
+implemented: 2026-05-12
 owner: agent
 related_docs:
   - AGENTS.md
@@ -12,8 +12,8 @@ related_docs:
   - docs/specs/31-phase7-matchup-data.md
   - docs/reports/2026-05-12-phase7-learned-surrogate-experiment.md
   - .claude/plans/active/2026-05-12-phase7-learned-baseline-experiment.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: 55a77e96f7840adcfcbe6980fb26328953476c80
+post_impl_audit: passed
 superseded_by: null
 ---
 

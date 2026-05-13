@@ -80,7 +80,9 @@ class RecoveredBuild:
 Feature rows are versioned by the module-level integer
 `FEATURE_SCHEMA_VERSION`. Every row returned by this module includes
 `feature_schema_version`. Any script that reports model metrics must also emit
-that version and the source DB path in its JSON output.
+that version, the selected `feature_profile`, and the source DB path in its
+JSON output. Feature schema v3 is the structured static-game-data feature
+surface. Historical v2 artifacts remain valid only as v2 evidence.
 
 `matchup_features.py` exposes:
 
@@ -105,6 +107,11 @@ def matchup_feature_row(
     game_data: GameData,
     manifest: GameManifest,
 ) -> dict[str, float | int | str]: ...
+
+def filter_feature_profile(
+    row: Mapping[str, float | int | str],
+    feature_profile: str = "all",
+) -> dict[str, float | int | str]: ...
 ```
 
 Feature extraction uses existing parser/scorer/domain models. Unknown opponent
@@ -119,8 +126,9 @@ Per-slot fields include:
 
 - `slot_id`, `slot_type`, `slot_size`, `mount_type`,
 - `angle_degrees`, `angle_sin`, `angle_cos`,
-- `arc_degrees`, `arc_fraction`,
+- `arc_degrees`, `arc_fraction`, `arc_bucket`,
 - `x`, `y`, `x_norm`, `y_norm`, `forward_projection`,
+  `lateral_offset`, `longitudinal_offset`,
 - `weapon_id`, `weapon_type`, `weapon_size`, `damage_type`,
 - weapon OP, sustained DPS, sustained flux, range, ammo, projectile speed,
   turn rate, PD flag, and beam flag.
@@ -128,6 +136,27 @@ Per-slot fields include:
 Empty slots use the categorical sentinel `EMPTY`; assigned weapon IDs missing
 from `GameData.weapons` use `UNKNOWN`. Unknown weapons contribute to
 `build_unknown_weapon_count` and zero-valued numeric weapon attributes.
+Built-in weapons are resolved consistently for per-slot, small-slot, and
+aggregate weapon features.
+
+Schema v3 adds static geometry features parsed from `.ship` files:
+`geometry_width`, `geometry_height`, `geometry_collision_radius`,
+`geometry_center_*`, `geometry_shield_center_*`, `geometry_shield_radius`,
+`geometry_style`, and engine-slot count/width/length summaries. These fields
+are static structured game data; sprite pixels, video, and audio are not part
+of this feature schema. Tactical arc summaries use module-level named
+constants for front/aft/port/starboard bucket thresholds and emit
+`arc_{bucket}_slot_count`, `arc_{bucket}_weapon_dps`,
+`arc_{bucket}_weapon_range_weighted_dps`, `arc_{bucket}_pd_count`,
+`arc_broadside_weapon_dps`, `arc_frontal_weapon_dps`, and
+`arc_aft_weapon_dps`.
+
+Player/build feature rows do not model fighter wings under v3 because the
+current optimizer and combat-harness build contracts do not support non-empty
+player wings. Opponent rows may emit descriptive stock-variant wing pressure
+from `hulls/wing_data.csv` and variant `wings` lists, including wing count,
+OP, fleet points, total wingcraft count, mean range, mean attack-run range,
+mean refit time, role counts, tag counts, and unknown-wing count.
 
 Hullmod features are emitted from `GameData.hullmods` only. The feature row
 uses multi-hot keys `build_hullmod__{hullmod_id}` and aggregate tag/UI-tag
@@ -138,6 +167,24 @@ Opponent features are sourced from stock variant files and parsed `GameData`.
 They include opponent hull and variant categorical residuals. No opponent
 family registry is hardcoded in the feature extractor; any family diagnostics
 use derived hull size/designation/manufacturer labels from `GameData`.
+Opponent rows also emit variant vents/capacitors, hullmod OP, built-in overlap,
+unknown weapon count, scorer-like summaries, hull system ID, phase stats, and
+the same static geometry/arc summaries as build rows.
+
+Feature profiles are deterministic ablation subsets:
+
+- `all` — every feature in the current schema.
+- `aggregate` — aggregate/scorer/context features without per-slot sparse
+  component columns or interaction columns.
+- `geometry` — aggregate features plus geometry, slot placement, and arc
+  pressure fields.
+- `opponent-parity` — build/opponent aggregate context without sparse ID
+  residuals or explicit interaction fields.
+- `sparse-component` — aggregate features plus hull/slot/weapon/hullmod/
+  opponent categorical components.
+- `sparse-cross` — sparse-component features plus explicit interaction fields.
+
+Unknown feature profiles raise `ValueError`.
 
 ## Log And DB Recovery
 
@@ -404,6 +451,7 @@ class LearnedExperimentConfig:
     top_k_values: tuple[int, ...]
     progress: bool
     allow_missing_optional_models: bool
+    feature_profile: str = "all"
 
 def build_experiment_configs(
     config: LearnedExperimentConfig,
@@ -412,7 +460,7 @@ def build_experiment_configs(
 def run_experiment(config: LearnedExperimentConfig) -> dict[str, object]: ...
 ```
 
-All tunable thresholds, budgets, seeds, fractions, and search spaces live in
+All tunable thresholds, budgets, seeds, fractions, feature-profile names, and search spaces live in
 `LearnedExperimentConfig` or module-level named constants.
 
 `hpo_jobs` controls concurrent HPO trial execution. `model_thread_count`
@@ -473,6 +521,7 @@ The learned experiment JSON output includes:
 
 - `experiment_schema_version`
 - `feature_schema_version`
+- `feature_profile`
 - source DB path and game directory
 - comparator JSON path
 - code/version provenance, or `unknown`
@@ -481,7 +530,7 @@ The learned experiment JSON output includes:
 - model-family list and skipped-model list
 - per-result target, feature-family summary, split family, HPO space, HPO
   trace summary, selected hyperparameters, metrics, comparator context,
-  honest-eval diagnostic, timing, and leakage checklist
+  honest-eval diagnostic, timing, feature profile, and leakage checklist
 
 Honest-eval top-k recall remains a post-fit diagnostic only. No learned
 baseline may train, tune, choose features, choose model families, or calibrate
@@ -504,8 +553,9 @@ That produces 15 jobs. Each job runs
 `scripts/analysis/phase7_learned_surrogate_experiment.py` with exactly one
 split and exactly one model family, plus the configured source DB, game dir,
 comparator JSON, HPO settings, split seeds, fractions, top-k values, progress
-flag, and an explicit per-job `--output` path. The generated command must not
-include honest-eval training inputs or unsafe feature/model-selection flags.
+flag, `--feature-profile`, and an explicit per-job `--output` path. The
+generated command must not include honest-eval training inputs or unsafe
+feature/model-selection flags.
 
 Batch configs may define explicit `splits` and `models` subsets for smoke or
 debug runs. In every config, `target_workers` must equal
@@ -536,20 +586,23 @@ experiment command must post a control-plane event with the command exit code
 and a bounded stdout/stderr tail before the shell exits.
 
 Per-job artifacts are normal learned-experiment JSON payloads with one
-completed result. Batch provenance may add a top-level `batch_job` object with
-`job_id`, `split`, `model`, `attempt`, `instance_id`, `region`,
-`instance_type`, `bundle_sha256`, and timestamps. A skipped optional model is
-a failed canonical job for full-run publication unless the batch config was
-explicitly created for smoke/debug output.
+completed result. Each per-job artifact must include a top-level `batch_job`
+object with `job_id`, `batch_name`, `fleet_name`, `split`, and `model`, and
+matching `batch_job_id`, `batch_name`, and `batch_fleet_name` in provenance.
+Worker telemetry may additionally record attempt, instance ID, region,
+instance type, bundle SHA256, and timestamps in event logs. A skipped optional
+model is a failed canonical job for full-run publication unless the batch
+config was explicitly created for smoke/debug output.
 
 The batch merge step must validate every per-job artifact before publishing:
 
-- all 15 canonical job IDs are present exactly once;
+- all 15 canonical job IDs are present exactly once and every artifact's
+  stamped `batch_job.job_id` matches the expected file/job identity;
 - no job is failed, missing, duplicate, stale, or partial;
 - every artifact has the same `experiment_schema_version`,
-  `feature_schema_version`, source DB path, game dir, comparator JSON path,
-  split/HPO seeds, train/holdout fractions, top-k values, dependency extra,
-  source bundle SHA256, and code provenance;
+  `feature_schema_version`, `feature_profile`, source DB path, game dir,
+  comparator JSON path, split/HPO seeds, train/holdout fractions, top-k values,
+  dependency extra, source bundle SHA256, and code provenance;
 - every result has a present and passing leakage checklist;
 - every result's `split` and `model` match its job ID;
 - comparator context is present for every result.

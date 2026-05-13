@@ -84,6 +84,7 @@ def test_build_parser_help_constructs():
     parser = baseline.build_parser()
     text = parser.format_help()
     assert "--model" in text
+    assert "--feature-profile" in text
     assert "global_mean" in text
     assert "replicate" not in text
 
@@ -131,3 +132,4 @@ def test_provenance_shape():
 
     assert provenance["tree_count"] == 80
     assert provenance["top_k_values"] == [1, 3]
+    assert provenance["feature_profile"] == "all"

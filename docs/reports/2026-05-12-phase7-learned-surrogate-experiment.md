@@ -253,6 +253,11 @@ reported in the Results section above.
   publication gate; do not spend AWS budget solely to duplicate this artifact.
 - Keep AWS learned-batch configs disabled until a future infra-validation goal
   explicitly re-enables `execution_enabled`.
+- The next code-level wave is feature schema v3: static `.ship` geometry,
+  slot-arc pressure, built-in weapon aggregate parity, opponent parity
+  features, and deterministic feature profiles for ablation. This is a
+  substrate change only; it does not revise the v2 results in this report
+  until a new local v3 experiment is run.
 - The interrupted partial full-run artifact has been quarantined under
   `data/phase7/interrupted/` and must not be cited as full-run evidence.
 - Run post-implementation audit with fresh-eye sub-agents before shipping.

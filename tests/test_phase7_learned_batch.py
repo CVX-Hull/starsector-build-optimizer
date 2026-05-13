@@ -237,6 +237,8 @@ def test_build_job_command_is_single_split_single_model_and_no_unsafe_flags(tmp_
     assert "--model" in command
     assert command[command.index("--model") + 1] == job.model
     assert "--output" in command
+    assert "--feature-profile" in command
+    assert command[command.index("--feature-profile") + 1] == cfg.feature_profile
     assert "--allow-missing-optional-models" not in command
     assert "honest" not in " ".join(command).lower()
 
@@ -612,7 +614,15 @@ def test_write_status_snapshot_contains_counts_and_budget(tmp_path):
 def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
     return {
         "experiment_schema_version": 1,
-        "feature_schema_version": 2,
+        "feature_schema_version": 3,
+        "feature_profile": cfg.feature_profile,
+        "batch_job": {
+            "job_id": f"{split}__{model}",
+            "batch_name": cfg.name,
+            "fleet_name": cfg.fleet_name,
+            "split": split,
+            "model": model,
+        },
         "db_path": str(cfg.source_db_path),
         "model_families": [model],
         "provenance": {
@@ -626,6 +636,10 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
             "holdout_fraction": cfg.holdout_fraction,
             "train_fraction": cfg.train_fraction,
             "top_k_values": list(cfg.top_k_values),
+            "feature_profile": cfg.feature_profile,
+            "batch_job_id": f"{split}__{model}",
+            "batch_name": cfg.name,
+            "batch_fleet_name": cfg.fleet_name,
             "max_rows": None,
             "code_version": "abc123",
             "dependency_extra": cfg.dependency_extra,
@@ -639,7 +653,12 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
                 "split": split,
                 "model": model,
                 "target_variable": "honest_eval_fitness",
-                "feature_families": {"column_count": 2, "prefixes": ["a"], "columns": ["a_x", "a_y"]},
+                "feature_families": {
+                    "feature_profile": cfg.feature_profile,
+                    "column_count": 2,
+                    "prefixes": ["a"],
+                    "columns": ["a_x", "a_y"],
+                },
                 "n_train": 100,
                 "n_inner_train": 80,
                 "n_inner_validation": 20,
@@ -687,6 +706,16 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
         validate_job_payload(cfg, job, payload)
 
     payload = one_job_payload(cfg, job.split, job.model)
+    payload["feature_schema_version"] = 2
+    with pytest.raises(ValueError, match="feature schema version mismatch"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["batch_job"]["job_id"] = "stale__artifact"
+    with pytest.raises(ValueError, match="batch job field 'job_id'"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
     payload["provenance"]["bundle_sha256"] = "c" * 64
     with pytest.raises(ValueError, match="bundle_sha256 mismatch"):
         validate_job_payload(cfg, job, payload, bundle_sha256="b" * 64)
@@ -714,6 +743,16 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
     payload = one_job_payload(cfg, job.split, job.model)
     payload["results"][0].pop("target_variable")
     with pytest.raises(ValueError, match="target variable"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["feature_profile"] = "geometry"
+    with pytest.raises(ValueError, match="feature profile"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["feature_families"]["feature_profile"] = "geometry"
+    with pytest.raises(ValueError, match="feature family profile"):
         validate_job_payload(cfg, job, payload)
 
 

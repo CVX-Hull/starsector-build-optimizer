@@ -20,6 +20,7 @@ from starsector_optimizer.parser import (
     parse_ship_csv,
     parse_ship_file,
     parse_weapon_csv,
+    parse_wing_csv,
     merge_ship_hull_data,
 )
 
@@ -96,6 +97,15 @@ class TestParseShipFile:
         assert "size" in slot
         assert "mount" in slot
 
+    def test_ship_file_exposes_static_geometry(self, game_dir):
+        data = parse_ship_file(game_dir / "data" / "hulls" / "hammerhead.ship")
+        assert data["width"] > 0
+        assert data["height"] > 0
+        assert data["collisionRadius"] > 0
+        assert len(data["bounds"]) > 0
+        assert len(data["engineSlots"]) > 0
+        assert len(data["shieldCenter"]) == 2
+
 
 class TestMergeShipHullData:
     def test_eagle_gets_weapon_slots(self, game_dir):
@@ -119,6 +129,47 @@ class TestMergeShipHullData:
         afflictor = next((h for h in hulls if h.id == "afflictor"), None)
         if afflictor:
             assert "phasefield" in afflictor.built_in_mods
+
+    def test_hammerhead_gets_static_geometry(self, game_dir):
+        hulls = parse_ship_csv(game_dir / "data" / "hulls" / "ship_data.csv")
+        hulls = merge_ship_hull_data(hulls, game_dir / "data" / "hulls")
+        hammerhead = next(h for h in hulls if h.id == "hammerhead")
+        assert hammerhead.geometry.width > 0
+        assert hammerhead.geometry.height > 0
+        assert hammerhead.geometry.collision_radius > 0
+        assert hammerhead.geometry.shield_radius > 0
+        assert len(hammerhead.geometry.engine_slots) > 0
+
+    def test_malformed_weapon_slot_numeric_fields_default(self, tmp_path, game_dir):
+        hulls = parse_ship_csv(game_dir / "data" / "hulls" / "ship_data.csv")
+        ship_dir = tmp_path / "hulls"
+        ship_dir.mkdir()
+        (ship_dir / "hammerhead.ship").write_text("""
+        {
+          "hullId": "hammerhead",
+          "hullSize": "DESTROYER",
+          "weaponSlots": [
+            {
+              "id": "bad_numeric",
+              "type": "BALLISTIC",
+              "size": "SMALL",
+              "mount": "TURRET",
+              "angle": "not-a-number",
+              "arc": "also-bad",
+              "locations": "not-a-list"
+            },
+            "not-a-slot"
+          ]
+        }
+        """)
+
+        merged = merge_ship_hull_data(hulls, ship_dir)
+        hammerhead = next(h for h in merged if h.id == "hammerhead")
+
+        assert len(hammerhead.weapon_slots) == 1
+        assert hammerhead.weapon_slots[0].angle == 0.0
+        assert hammerhead.weapon_slots[0].arc == 0.0
+        assert hammerhead.weapon_slots[0].position == (0.0, 0.0)
 
 
 # --- Weapon parsing tests ---
@@ -182,6 +233,17 @@ class TestParseWeaponCsv:
         assert len(pd_weapons) > 5
 
 
+class TestParseWingCsv:
+    def test_broadsword_wing_parses(self, game_dir):
+        wings = parse_wing_csv(game_dir / "data" / "hulls" / "wing_data.csv")
+        broadsword = next(w for w in wings if w.id == "broadsword_wing")
+        assert broadsword.variant == "broadsword_Fighter"
+        assert broadsword.role == "FIGHTER"
+        assert broadsword.op_cost > 0
+        assert broadsword.num > 0
+        assert "fighter" in broadsword.tags
+
+
 # --- Hullmod parsing tests ---
 
 
@@ -236,6 +298,10 @@ class TestLoadGameData:
 
     def test_has_hullmods(self, game_data):
         assert len(game_data.hullmods) > 100
+
+    def test_has_wings(self, game_data):
+        assert len(game_data.wings) > 10
+        assert "broadsword_wing" in game_data.wings
 
     def test_eagle_in_hulls(self, game_data):
         assert "eagle" in game_data.hulls

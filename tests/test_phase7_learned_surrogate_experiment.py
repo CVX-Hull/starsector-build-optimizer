@@ -37,6 +37,7 @@ def _config(**overrides):
         "top_k_values": (1, 3),
         "progress": False,
         "allow_missing_optional_models": False,
+        "feature_profile": "all",
     }
     values.update(overrides)
     return learned.LearnedExperimentConfig(**values)
@@ -60,6 +61,7 @@ def test_parser_exposes_learned_model_and_comparator_options():
     assert "--hpo-trials" in text
     assert "--hpo-jobs" in text
     assert "--model-thread-count" in text
+    assert "--feature-profile" in text
     assert "--output" in text
 
 
@@ -131,12 +133,14 @@ def test_config_provenance_includes_ml_context():
     assert provenance["hpo_seed"] == 23
     assert provenance["hpo_jobs"] == 1
     assert provenance["model_thread_count"] == 1
+    assert provenance["feature_profile"] == "all"
     assert provenance["comparator_json_path"].endswith("wave1_comparator_gate_2026-05-11.json")
 
 
 def test_load_comparator_context_finds_matching_split(tmp_path):
     artifact = tmp_path / "comparator.json"
     artifact.write_text(json.dumps({
+        "feature_schema_version": learned.FEATURE_SCHEMA_VERSION,
         "results": [
             {"split": "build", "model": "random_forest", "rmse": 2.0},
             {"split": "opponent", "model": "random_forest", "rmse": 3.0},
@@ -149,6 +153,23 @@ def test_load_comparator_context_finds_matching_split(tmp_path):
     assert context["matching_result"]["split"] == "build"
     assert context["random_forest_result"]["rmse"] == 2.0
     assert context["comparison_status"] == "comparable"
+    assert context["current_feature_schema_version"] == learned.FEATURE_SCHEMA_VERSION
+    assert context["comparator_feature_schema_version"] == learned.FEATURE_SCHEMA_VERSION
+
+
+def test_load_comparator_context_marks_schema_mismatch(tmp_path):
+    artifact = tmp_path / "comparator.json"
+    artifact.write_text(json.dumps({
+        "feature_schema_version": 2,
+        "results": [
+            {"split": "build", "model": "random_forest", "rmse": 2.0},
+        ],
+    }))
+
+    context = learned.load_comparator_context(artifact, "build", "random_forest_tuned", max_rows=None)
+
+    assert context["comparison_status"] == "feature_schema_mismatch"
+    assert context["comparator_feature_schema_version"] == 2
 
 
 def test_missing_comparator_context_is_diagnostic(tmp_path):

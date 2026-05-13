@@ -23,7 +23,13 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.pipeline import Pipeline
 
 from starsector_optimizer.game_manifest import GameManifest
-from starsector_optimizer.matchup_features import FEATURE_SCHEMA_VERSION, matchup_feature_row
+from starsector_optimizer.matchup_features import (
+    DEFAULT_FEATURE_PROFILE,
+    FEATURE_PROFILES,
+    FEATURE_SCHEMA_VERSION,
+    filter_feature_profile,
+    matchup_feature_row,
+)
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.phase7_matchup_data import (
     HonestEvalMatchupRow,
@@ -62,7 +68,7 @@ MODEL_CHOICES = (
 
 Row = TrainingMatchupRow | HonestEvalMatchupRow
 FeatureValue = float | int | str
-_FEATURE_CACHE: dict[tuple[str, str, str], dict[str, FeatureValue]] = {}
+_FEATURE_CACHE: dict[tuple[str, str, str, str], dict[str, FeatureValue]] = {}
 
 
 @lru_cache(maxsize=4)
@@ -84,6 +90,7 @@ class BaselineConfig:
     max_rows: int | None
     top_k_values: tuple[int, ...]
     progress: bool
+    feature_profile: str = DEFAULT_FEATURE_PROFILE
 
 
 @dataclass(frozen=True)
@@ -231,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ridge-alpha", type=float, default=DEFAULT_RIDGE_ALPHA)
     parser.add_argument("--top-k", default=",".join(str(item) for item in DEFAULT_TOP_K_VALUES))
     parser.add_argument("--max-rows", type=int, default=None)
+    parser.add_argument("--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE)
     parser.add_argument("--no-progress", action="store_true")
     return parser
 
@@ -277,14 +285,17 @@ def _feature_bundle(rows: Sequence[Row], build_lookup, config: BaselineConfig) -
     for row in rows:
         if row.build_key is None:
             continue
-        cache_key = (str(config.game_dir), row.build_key, row.opponent_variant_id)
+        cache_key = (str(config.game_dir), row.build_key, row.opponent_variant_id, config.feature_profile)
         if cache_key not in _FEATURE_CACHE:
-            _FEATURE_CACHE[cache_key] = matchup_feature_row(
-                build_lookup[row.build_key],
-                row.opponent_variant_id,
-                config.game_dir,
-                game_data,
-                manifest,
+            _FEATURE_CACHE[cache_key] = filter_feature_profile(
+                matchup_feature_row(
+                    build_lookup[row.build_key],
+                    row.opponent_variant_id,
+                    config.game_dir,
+                    game_data,
+                    manifest,
+                ),
+                config.feature_profile,
             )
         records.append(_FEATURE_CACHE[cache_key])
     targets = np.asarray([row.target for row in rows if row.build_key is not None], dtype=float)
@@ -444,6 +455,7 @@ def run_one(config: BaselineConfig) -> dict[str, object]:
     return {
         "db_path": str(config.db_path),
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_profile": config.feature_profile,
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,
@@ -466,6 +478,7 @@ def provenance(config: BaselineConfig) -> dict[str, object]:
         "ridge_alpha": config.ridge_alpha,
         "top_k_values": list(config.top_k_values),
         "max_rows": config.max_rows,
+        "feature_profile": config.feature_profile,
     }
 
 
@@ -487,6 +500,7 @@ def _configs_to_run(config: BaselineConfig) -> Iterable[BaselineConfig]:
                 max_rows=config.max_rows,
                 top_k_values=config.top_k_values,
                 progress=config.progress,
+                feature_profile=config.feature_profile,
             )
 
 
@@ -521,6 +535,7 @@ def main() -> None:
         max_rows=args.max_rows,
         top_k_values=parse_top_k_values(args.top_k),
         progress=not args.no_progress,
+        feature_profile=args.feature_profile,
     )
     configs = list(_configs_to_run(config))
     results = []
@@ -552,6 +567,7 @@ def main() -> None:
     payload: object = results[0] if len(results) == 1 else {
         "db_path": str(config.db_path),
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
+        "feature_profile": config.feature_profile,
         "provenance": provenance(config),
         "result_count": len(results),
         "results": results,
