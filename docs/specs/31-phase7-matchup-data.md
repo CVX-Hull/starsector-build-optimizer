@@ -508,6 +508,15 @@ class LearnedExperimentConfig:
     progress: bool
     allow_missing_optional_models: bool
     feature_profile: str = "all"
+    honest_eval_usage: str = "diagnostic_only"
+    fresh_honest_eval_ledger_id: str | None = None
+    primary_top_k: int = 1
+    promotion_metric: str = "honest_eval_top_k_recall"
+    promotion_threshold: float = 0.0
+    claim_label: str = "exploratory"
+    final_refit_policy: str = "refit_selected_model_on_all_training_rows_after_selection"
+    candidate_universe: str = "source_db_builds"
+    deployment_artifact: str = "none"
     batch_job_id: str | None = None
     batch_name: str | None = None
     batch_fleet_name: str | None = None
@@ -516,7 +525,11 @@ def build_experiment_configs(
     config: LearnedExperimentConfig,
 ) -> list[LearnedExperimentConfig]: ...
 
-def run_experiment(config: LearnedExperimentConfig) -> dict[str, object]: ...
+def run_experiment(
+    config: LearnedExperimentConfig,
+    *,
+    checkpoint_path: Path | None = None,
+) -> dict[str, object]: ...
 ```
 
 All tunable thresholds, budgets, seeds, fractions, feature-profile names, and search spaces live in
@@ -639,6 +652,40 @@ The learned experiment JSON output includes:
   or `final_claim`, plus the honest-eval ledger identifier and run-lineage
   pointer when honest-eval diagnostics are emitted
 
+The artifact contract uses these stable JSON object names at both the top level
+and per-result where the object is result-specific:
+
+- `claim_boundary`: `target_variable`, `honest_eval_diagnostic_target`,
+  `primary_split`, `primary_top_k`, `promotion_metric`,
+  `promotion_threshold`, `higher_is_better`, `claim_label`,
+  `honest_eval_usage`, and `fresh_honest_eval_ledger_id`.
+- `model_family_policy`: `policy_type`, `candidate_model_families`,
+  `selected_model_family`, and `selection_scope`.
+- `feature_selection_protocol`: `policy_type`, `feature_profile`,
+  `feature_family_registry`, `feature_family_registry_sha256`,
+  `selected_feature_families`, `selected_feature_count`, `selector_family`,
+  `selector_hyperparameters`, `stability`, `heredity_policy`, and
+  `selection_scope`. For the fixed-matrix baseline with no feature selector,
+  `policy_type` is `fixed_profile_no_selector`.
+- `feature_family_registry`: per-generated-feature entries with `family`,
+  `template`, `parents`, and `leakage_risk`. The SHA-256 digest is computed over
+  canonical sorted JSON and does not replace the registry itself.
+- `hierarchy_scorecard`: `split_level`, `group_key_function`,
+  `group_key_fields`, `claim_supported`, `forbidden_cross_split_keys`,
+  `overlap_counts`, `component_key_definition`, and
+  `component_overlap_diagnostics`.
+- `leakage_diagnostics`: named entries for forbidden-key overlap,
+  adversarial-validation AUC, rare-combination overlap,
+  nearest-neighbor overlap, and sparse-ID ablation delta. Unavailable
+  diagnostics are represented as `not_applicable` objects with reasons.
+- `deployment_policy`: `final_refit_policy`, `candidate_universe`, and
+  `deployment_artifact`.
+
+The standalone learned script defaults `honest_eval_usage` to
+`diagnostic_only`. Current-ledger batch configs that informed roadmap decisions
+must stamp `exploratory_selection`. `final_claim` requires an explicit fresh
+honest-eval ledger identifier and must be rejected without one.
+
 Honest-eval top-k recall remains a post-fit diagnostic only. No learned
 baseline may train, tune, choose features, choose model families, or calibrate
 on honest-eval targets. If an experiment plan changes model families, feature
@@ -663,7 +710,8 @@ That produces 15 jobs. Each job runs
 `scripts/analysis/phase7_learned_surrogate_experiment.py` with exactly one
 split and exactly one model family, plus the configured source DB, game dir,
 comparator JSON, HPO settings, split seeds, fractions, top-k values, progress
-flag, `--feature-profile`, and an explicit per-job `--output` path. The
+flag, `--feature-profile`, claim-boundary options, and an explicit per-job
+`--output` path. The
 generated command must not include honest-eval training inputs or unsafe
 feature/model-selection flags.
 

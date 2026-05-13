@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import logging
 import math
 import os
@@ -90,6 +91,15 @@ class LearnedBatchConfig:
     hpo_seed: int
     holdout_fraction: float
     train_fraction: float
+    honest_eval_usage: str = "diagnostic_only"
+    fresh_honest_eval_ledger_id: str | None = None
+    primary_top_k: int = 1
+    promotion_metric: str = "honest_eval_top_k_recall"
+    promotion_threshold: float = 0.0
+    claim_label: str = "exploratory"
+    final_refit_policy: str = "refit_selected_model_on_all_training_rows_after_selection"
+    candidate_universe: str = "source_db_builds"
+    deployment_artifact: str = "none"
     feature_profile: str = DEFAULT_FEATURE_PROFILE
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
     root_volume_size_gb: int | None = None
@@ -400,6 +410,17 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         hpo_seed=int(expanded["hpo_seed"]),
         holdout_fraction=float(expanded["holdout_fraction"]),
         train_fraction=float(expanded["train_fraction"]),
+        honest_eval_usage=str(expanded.get("honest_eval_usage", "diagnostic_only")),
+        fresh_honest_eval_ledger_id=expanded.get("fresh_honest_eval_ledger_id"),
+        primary_top_k=int(expanded.get("primary_top_k", 1)),
+        promotion_metric=str(expanded.get("promotion_metric", "honest_eval_top_k_recall")),
+        promotion_threshold=float(expanded.get("promotion_threshold", 0.0)),
+        claim_label=str(expanded.get("claim_label", "exploratory")),
+        final_refit_policy=str(
+            expanded.get("final_refit_policy", "refit_selected_model_on_all_training_rows_after_selection")
+        ),
+        candidate_universe=str(expanded.get("candidate_universe", "source_db_builds")),
+        deployment_artifact=str(expanded.get("deployment_artifact", "none")),
         feature_profile=str(expanded.get("feature_profile", DEFAULT_FEATURE_PROFILE)),
         dependency_extra=str(expanded.get("dependency_extra", DEFAULT_DEPENDENCY_EXTRA)),
         root_volume_size_gb=(
@@ -456,6 +477,12 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
             "min_workers_to_start must equal target_workers until the live "
             "worker loop has enough evidence to justify partial fleets"
         )
+    if config.honest_eval_usage not in ("diagnostic_only", "exploratory_selection", "final_claim"):
+        raise ValueError("honest_eval_usage must be diagnostic_only, exploratory_selection, or final_claim")
+    if config.honest_eval_usage == "final_claim" and not config.fresh_honest_eval_ledger_id:
+        raise ValueError("honest_eval_usage=final_claim requires fresh_honest_eval_ledger_id")
+    if config.primary_top_k <= 0:
+        raise ValueError("primary_top_k must be positive")
     if config.budget_usd <= 0 or config.max_lifetime_hours <= 0:
         raise ValueError("budget_usd and max_lifetime_hours must be positive")
     if config.max_job_attempts <= 0:
@@ -512,7 +539,7 @@ def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
 
 
 def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[str]:
-    return [
+    command = [
         "uv",
         "run",
         "python",
@@ -544,6 +571,22 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         ",".join(str(value) for value in config.top_k_values),
         "--feature-profile",
         config.feature_profile,
+        "--honest-eval-usage",
+        config.honest_eval_usage,
+        "--primary-top-k",
+        str(config.primary_top_k),
+        "--promotion-metric",
+        config.promotion_metric,
+        "--promotion-threshold",
+        str(config.promotion_threshold),
+        "--claim-label",
+        config.claim_label,
+        "--final-refit-policy",
+        config.final_refit_policy,
+        "--candidate-universe",
+        config.candidate_universe,
+        "--deployment-artifact",
+        config.deployment_artifact,
         "--batch-job-id",
         job.job_id,
         "--batch-name",
@@ -553,6 +596,9 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         "--output",
         str(job.output_path),
     ]
+    if config.fresh_honest_eval_ledger_id is not None:
+        command.extend(["--fresh-honest-eval-ledger-id", config.fresh_honest_eval_ledger_id])
+    return command
 
 
 def _authorized(expected: str) -> bool:
@@ -712,6 +758,11 @@ def render_phase7_learned_batch_user_data(
     comparator_json = shlex.quote(str(config.comparator_json_path))
     dependency_extra = shlex.quote(config.dependency_extra)
     control_url = shlex.quote(control_plane_url)
+    fresh_ledger_flag = (
+        ""
+        if config.fresh_honest_eval_ledger_id is None
+        else f"    --fresh-honest-eval-ledger-id {shlex.quote(config.fresh_honest_eval_ledger_id)} \\\n"
+    )
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
@@ -901,6 +952,15 @@ while (( SECONDS < DEADLINE )); do
     --model-thread-count {config.model_thread_count} \\
     --top-k {top_k} \\
     --feature-profile {shlex.quote(config.feature_profile)} \\
+    --honest-eval-usage {shlex.quote(config.honest_eval_usage)} \\
+    --primary-top-k {config.primary_top_k} \\
+    --promotion-metric {shlex.quote(config.promotion_metric)} \\
+    --promotion-threshold {config.promotion_threshold} \\
+    --claim-label {shlex.quote(config.claim_label)} \\
+    --final-refit-policy {shlex.quote(config.final_refit_policy)} \\
+    --candidate-universe {shlex.quote(config.candidate_universe)} \\
+    --deployment-artifact {shlex.quote(config.deployment_artifact)} \\
+{fresh_ledger_flag}\
     --batch-job-id "$JOB_ID" \\
     --batch-name {shlex.quote(config.name)} \\
     --batch-fleet-name {shlex.quote(config.fleet_name)} \\
@@ -1318,6 +1378,47 @@ def _leakage_ok(result: Mapping[str, Any]) -> bool:
     )
 
 
+def _contract_ok(result: Mapping[str, Any]) -> bool:
+    claim = result.get("claim_boundary")
+    model_policy = result.get("model_family_policy")
+    feature_protocol = result.get("feature_selection_protocol")
+    deployment = result.get("deployment_policy")
+    hierarchy = result.get("hierarchy_scorecard")
+    leakage = result.get("leakage_diagnostics")
+    registry = feature_protocol.get("feature_family_registry") if isinstance(feature_protocol, dict) else None
+    registry_digest = feature_protocol.get("feature_family_registry_sha256") if isinstance(feature_protocol, dict) else None
+    return (
+        isinstance(claim, dict)
+        and claim.get("target_variable") == "training_matchups.target"
+        and claim.get("honest_eval_usage") in ("diagnostic_only", "exploratory_selection", "final_claim")
+        and isinstance(model_policy, dict)
+        and model_policy.get("policy_type") == "fixed_matrix"
+        and isinstance(feature_protocol, dict)
+        and feature_protocol.get("policy_type") == "fixed_profile_no_selector"
+        and isinstance(registry, dict)
+        and isinstance(registry_digest, str)
+        and re.fullmatch(r"[0-9a-fA-F]{64}", registry_digest) is not None
+        and isinstance(hierarchy, dict)
+        and isinstance(hierarchy.get("split_level"), str)
+        and isinstance(hierarchy.get("group_key_fields"), list)
+        and isinstance(hierarchy.get("forbidden_cross_split_keys"), list)
+        and isinstance(hierarchy.get("overlap_counts"), dict)
+        and isinstance(hierarchy.get("component_overlap_diagnostics"), dict)
+        and isinstance(deployment, dict)
+        and isinstance(leakage, dict)
+        and all(
+            isinstance(leakage.get(key), dict) and "status" in leakage[key]
+            for key in (
+                "forbidden_key_overlap",
+                "adversarial_validation_auc",
+                "rare_combination_overlap",
+                "nearest_neighbor_overlap",
+                "sparse_id_ablation_delta",
+            )
+        )
+    )
+
+
 def _require_64_hex(value: Any, *, field: str) -> str:
     if not isinstance(value, str) or re.fullmatch(r"[0-9a-fA-F]{64}", value) is None:
         raise ValueError(f"{field} must be a 64-character SHA-256 hex digest")
@@ -1378,6 +1479,15 @@ def validate_job_payload(
         "train_fraction": config.train_fraction,
         "top_k_values": list(config.top_k_values),
         "feature_profile": config.feature_profile,
+        "honest_eval_usage": config.honest_eval_usage,
+        "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
+        "primary_top_k": config.primary_top_k,
+        "promotion_metric": config.promotion_metric,
+        "promotion_threshold": config.promotion_threshold,
+        "claim_label": config.claim_label,
+        "final_refit_policy": config.final_refit_policy,
+        "candidate_universe": config.candidate_universe,
+        "deployment_artifact": config.deployment_artifact,
         "batch_job_id": job.job_id,
         "batch_name": config.name,
         "batch_fleet_name": config.fleet_name,
@@ -1385,7 +1495,8 @@ def validate_job_payload(
     for key, expected in expected_provenance.items():
         if provenance.get(key) != expected:
             raise ValueError(f"job {job.job_id} provenance field {key!r} mismatch")
-    provenance.setdefault("dependency_extra", config.dependency_extra)
+    if "dependency_extra" not in provenance:
+        raise ValueError(f"job {job.job_id} dependency extra missing")
     if provenance["dependency_extra"] != config.dependency_extra:
         raise ValueError(f"job {job.job_id} dependency extra mismatch")
     if bundle_sha256 is not None:
@@ -1410,6 +1521,12 @@ def validate_job_payload(
         "timing",
         "comparator_context",
         "leakage_checklist",
+        "claim_boundary",
+        "model_family_policy",
+        "feature_selection_protocol",
+        "deployment_policy",
+        "hierarchy_scorecard",
+        "leakage_diagnostics",
     )
     missing = [field for field in required_result_fields if field not in result]
     if missing:
@@ -1427,8 +1544,8 @@ def validate_job_payload(
         value = result.get(field)
         if not isinstance(value, int) or value < 0:
             raise ValueError(f"job {job.job_id} count {field!r} malformed")
-    if not isinstance(result.get("target_variable"), str) or not result["target_variable"]:
-        raise ValueError(f"job {job.job_id} target variable missing")
+    if result.get("target_variable") != "training_matchups.target":
+        raise ValueError(f"job {job.job_id} target variable mismatch")
     if not isinstance(result.get("feature_families"), dict):
         raise ValueError(f"job {job.job_id} feature families malformed")
     if result["feature_families"].get("feature_profile") != config.feature_profile:
@@ -1451,6 +1568,47 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} result does not match job identity")
     if not _leakage_ok(result):
         raise ValueError(f"job {job.job_id} leakage checklist failed or missing")
+    if not _contract_ok(result):
+        raise ValueError(f"job {job.job_id} artifact contract fields failed or missing")
+    claim = result["claim_boundary"]
+    if claim.get("primary_split") != job.split:
+        raise ValueError(f"job {job.job_id} claim boundary split mismatch")
+    expected_claim = {
+        "target_variable": "training_matchups.target",
+        "honest_eval_diagnostic_target": "honest_eval_top_k",
+        "primary_top_k": config.primary_top_k,
+        "promotion_metric": config.promotion_metric,
+        "promotion_threshold": config.promotion_threshold,
+        "claim_label": config.claim_label,
+        "honest_eval_usage": config.honest_eval_usage,
+        "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
+    }
+    for key, expected in expected_claim.items():
+        if claim.get(key) != expected:
+            raise ValueError(f"job {job.job_id} claim boundary field {key!r} mismatch")
+    policy = result["model_family_policy"]
+    if policy.get("selected_model_family") != job.model:
+        raise ValueError(f"job {job.job_id} model family policy mismatch")
+    feature_protocol = result["feature_selection_protocol"]
+    if feature_protocol.get("feature_profile") != config.feature_profile:
+        raise ValueError(f"job {job.job_id} feature selection profile mismatch")
+    registry = feature_protocol.get("feature_family_registry")
+    expected_digest = hashlib.sha256(
+        json.dumps(registry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if feature_protocol.get("feature_family_registry_sha256") != expected_digest:
+        raise ValueError(f"job {job.job_id} feature family registry digest mismatch")
+    deployment = result["deployment_policy"]
+    expected_deployment = {
+        "final_refit_policy": config.final_refit_policy,
+        "candidate_universe": config.candidate_universe,
+        "deployment_artifact": config.deployment_artifact,
+    }
+    for key, expected in expected_deployment.items():
+        if deployment.get(key) != expected:
+            raise ValueError(f"job {job.job_id} deployment policy field {key!r} mismatch")
+    if claim.get("honest_eval_usage") == "final_claim" and not claim.get("fresh_honest_eval_ledger_id"):
+        raise ValueError(f"job {job.job_id} final claim missing fresh honest-eval ledger")
     artifact["provenance"] = provenance
     return artifact
 
@@ -1474,6 +1632,15 @@ def _common_key(payload: Mapping[str, Any], config: LearnedBatchConfig) -> tuple
         provenance.get("train_fraction"),
         tuple(provenance.get("top_k_values", ())),
         provenance.get("feature_profile"),
+        provenance.get("honest_eval_usage"),
+        provenance.get("fresh_honest_eval_ledger_id"),
+        provenance.get("primary_top_k"),
+        provenance.get("promotion_metric"),
+        provenance.get("promotion_threshold"),
+        provenance.get("claim_label"),
+        provenance.get("final_refit_policy"),
+        provenance.get("candidate_universe"),
+        provenance.get("deployment_artifact"),
         provenance.get("code_version"),
         provenance.get("dependency_extra", config.dependency_extra),
         provenance.get("bundle_sha256"),
@@ -1503,6 +1670,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         results.append(dict(result))
 
     first = payloads[0]
+    first_result = first["results"][0]
     provenance = dict(first["provenance"])
     provenance["batch"] = {
         "name": config.name,
@@ -1517,6 +1685,12 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         "feature_profile": first["feature_profile"],
         "db_path": first["db_path"],
         "model_families": list(config.models),
+        "claim_boundary": first.get("claim_boundary") or first_result.get("claim_boundary"),
+        "model_family_policy": first.get("model_family_policy") or first_result.get("model_family_policy"),
+        "feature_selection_protocol": first.get("feature_selection_protocol") or first_result.get("feature_selection_protocol"),
+        "deployment_policy": first.get("deployment_policy") or first_result.get("deployment_policy"),
+        "hierarchy_scorecard": first.get("hierarchy_scorecard") or first_result.get("hierarchy_scorecard"),
+        "leakage_diagnostics": first.get("leakage_diagnostics") or first_result.get("leakage_diagnostics"),
         "provenance": provenance,
         "result_count": len(results),
         "skipped_models": [],

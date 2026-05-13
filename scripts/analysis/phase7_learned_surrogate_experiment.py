@@ -12,6 +12,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from typing import Mapping, Protocol, Sequence
 
@@ -32,6 +33,7 @@ from starsector_optimizer.matchup_features import (
 from starsector_optimizer.phase7_matchup_data import (
     SplitIds,
     TrainingMatchupRow,
+    component_fingerprint_json,
     forward_time_split,
     held_out_build_split,
     held_out_component_combination_split,
@@ -60,11 +62,23 @@ DEFAULT_TRAIN_FRACTION = baseline.DEFAULT_TRAIN_FRACTION
 DEFAULT_SPLIT_SEED = baseline.DEFAULT_RANDOM_SEED
 DEFAULT_HPO_SEED = 23
 DEFAULT_HPO_TRIALS = 24
+DEFAULT_HPO_JOBS = 4
+DEFAULT_MODEL_THREAD_COUNT = 4
 DEFAULT_COMPARATOR_JSON = Path("data/phase7/wave1_comparator_gate_2026-05-11.json")
 SPLIT_CHOICES = baseline.SPLIT_CHOICES
 MODEL_CHOICES = ("random_forest_tuned", "catboost_regressor", "sparse_pairwise_ridge")
 TARGET_VARIABLE = "training_matchups.target"
+HONEST_EVAL_DIAGNOSTIC_TARGET = "honest_eval_top_k"
 ALL_AVAILABLE_CORES = -1
+HONEST_EVAL_USAGE_CHOICES = ("diagnostic_only", "exploratory_selection", "final_claim")
+DEFAULT_HONEST_EVAL_USAGE = "diagnostic_only"
+DEFAULT_PRIMARY_TOP_K = 1
+DEFAULT_PROMOTION_METRIC = "honest_eval_top_k_recall"
+DEFAULT_PROMOTION_THRESHOLD = 0.0
+DEFAULT_CLAIM_LABEL = "exploratory"
+DEFAULT_FINAL_REFIT_POLICY = "refit_selected_model_on_all_training_rows_after_selection"
+DEFAULT_CANDIDATE_UNIVERSE = "source_db_builds"
+DEFAULT_DEPLOYMENT_ARTIFACT = "none"
 
 HPO_SPACES: dict[str, dict[str, object]] = {
     "random_forest_tuned": {
@@ -139,6 +153,15 @@ class LearnedExperimentConfig:
     progress: bool
     allow_missing_optional_models: bool
     feature_profile: str = DEFAULT_FEATURE_PROFILE
+    honest_eval_usage: str = DEFAULT_HONEST_EVAL_USAGE
+    fresh_honest_eval_ledger_id: str | None = None
+    primary_top_k: int = DEFAULT_PRIMARY_TOP_K
+    promotion_metric: str = DEFAULT_PROMOTION_METRIC
+    promotion_threshold: float = DEFAULT_PROMOTION_THRESHOLD
+    claim_label: str = DEFAULT_CLAIM_LABEL
+    final_refit_policy: str = DEFAULT_FINAL_REFIT_POLICY
+    candidate_universe: str = DEFAULT_CANDIDATE_UNIVERSE
+    deployment_artifact: str = DEFAULT_DEPLOYMENT_ARTIFACT
     batch_job_id: str | None = None
     batch_name: str | None = None
     batch_fleet_name: str | None = None
@@ -275,11 +298,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split-seed", type=int, default=DEFAULT_SPLIT_SEED)
     parser.add_argument("--hpo-seed", type=int, default=DEFAULT_HPO_SEED)
     parser.add_argument("--hpo-trials", type=int, default=DEFAULT_HPO_TRIALS)
-    parser.add_argument("--hpo-jobs", type=int, default=1)
-    parser.add_argument("--model-thread-count", type=int, default=ALL_AVAILABLE_CORES)
+    parser.add_argument("--hpo-jobs", type=int, default=DEFAULT_HPO_JOBS)
+    parser.add_argument("--model-thread-count", type=int, default=DEFAULT_MODEL_THREAD_COUNT)
     parser.add_argument("--top-k", default=",".join(str(item) for item in baseline.DEFAULT_TOP_K_VALUES))
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE)
+    parser.add_argument("--honest-eval-usage", choices=HONEST_EVAL_USAGE_CHOICES, default=DEFAULT_HONEST_EVAL_USAGE)
+    parser.add_argument("--fresh-honest-eval-ledger-id", default=None)
+    parser.add_argument("--primary-top-k", type=int, default=DEFAULT_PRIMARY_TOP_K)
+    parser.add_argument("--promotion-metric", default=DEFAULT_PROMOTION_METRIC)
+    parser.add_argument("--promotion-threshold", type=float, default=DEFAULT_PROMOTION_THRESHOLD)
+    parser.add_argument("--claim-label", default=DEFAULT_CLAIM_LABEL)
+    parser.add_argument("--final-refit-policy", default=DEFAULT_FINAL_REFIT_POLICY)
+    parser.add_argument("--candidate-universe", default=DEFAULT_CANDIDATE_UNIVERSE)
+    parser.add_argument("--deployment-artifact", default=DEFAULT_DEPLOYMENT_ARTIFACT)
     parser.add_argument("--batch-job-id", default=None)
     parser.add_argument("--batch-name", default=None)
     parser.add_argument("--batch-fleet-name", default=None)
@@ -315,6 +347,15 @@ def build_experiment_configs(config: LearnedExperimentConfig) -> list[LearnedExp
             progress=config.progress,
             allow_missing_optional_models=config.allow_missing_optional_models,
             feature_profile=config.feature_profile,
+            honest_eval_usage=config.honest_eval_usage,
+            fresh_honest_eval_ledger_id=config.fresh_honest_eval_ledger_id,
+            primary_top_k=config.primary_top_k,
+            promotion_metric=config.promotion_metric,
+            promotion_threshold=config.promotion_threshold,
+            claim_label=config.claim_label,
+            final_refit_policy=config.final_refit_policy,
+            candidate_universe=config.candidate_universe,
+            deployment_artifact=config.deployment_artifact,
             batch_job_id=config.batch_job_id,
             batch_name=config.batch_name,
             batch_fleet_name=config.batch_fleet_name,
@@ -649,13 +690,222 @@ def _metric_delta(metrics: Mapping[str, object], comparator: Mapping[str, object
     return out
 
 
+def _validate_claim_config(config: LearnedExperimentConfig) -> None:
+    if config.honest_eval_usage == "final_claim" and not config.fresh_honest_eval_ledger_id:
+        raise ValueError("honest_eval_usage=final_claim requires --fresh-honest-eval-ledger-id")
+    if config.primary_top_k <= 0:
+        raise ValueError("primary_top_k must be positive")
+
+
+def claim_boundary(config: LearnedExperimentConfig) -> dict[str, object]:
+    _validate_claim_config(config)
+    return {
+        "target_variable": TARGET_VARIABLE,
+        "honest_eval_diagnostic_target": HONEST_EVAL_DIAGNOSTIC_TARGET,
+        "primary_split": config.split,
+        "primary_top_k": config.primary_top_k,
+        "promotion_metric": config.promotion_metric,
+        "promotion_threshold": config.promotion_threshold,
+        "higher_is_better": True,
+        "claim_label": config.claim_label,
+        "honest_eval_usage": config.honest_eval_usage,
+        "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
+    }
+
+
+def model_family_policy(config: LearnedExperimentConfig) -> dict[str, object]:
+    return {
+        "policy_type": "fixed_matrix",
+        "candidate_model_families": list(MODEL_CHOICES),
+        "selected_model_family": config.model,
+        "selection_scope": "predeclared_fixed_matrix",
+    }
+
+
+def _feature_family_for_key(key: str) -> str:
+    return key.split("_", 1)[0]
+
+
+def feature_family_registry(records: Sequence[Mapping[str, FeatureValue]]) -> dict[str, dict[str, object]]:
+    keys = sorted({key for record in records for key in record})
+    excluded = set(feature_families((), DEFAULT_FEATURE_PROFILE)["excluded"])
+    return {
+        key: {
+            "family": _feature_family_for_key(key),
+            "template": key,
+            "parents": [],
+            "leakage_risk": "high" if key in excluded else "low",
+        }
+        for key in keys
+    }
+
+
+def _registry_digest(registry: Mapping[str, object]) -> str:
+    raw = json.dumps(registry, sort_keys=True, separators=(",", ":"))
+    return sha256(raw.encode("utf-8")).hexdigest()
+
+
+def feature_selection_protocol(
+    records: Sequence[Mapping[str, FeatureValue]],
+    feature_profile: str,
+) -> dict[str, object]:
+    registry = feature_family_registry(records)
+    selected = sorted({item["family"] for item in registry.values() if isinstance(item.get("family"), str)})
+    return {
+        "policy_type": "fixed_profile_no_selector",
+        "feature_profile": feature_profile,
+        "feature_family_registry": registry,
+        "feature_family_registry_sha256": _registry_digest(registry),
+        "selected_feature_families": selected,
+        "selected_feature_count": len(registry),
+        "selector_family": "none",
+        "selector_hyperparameters": {},
+        "stability": "not_applicable",
+        "heredity_policy": "not_applicable",
+        "selection_scope": "no_feature_selection",
+    }
+
+
+def deployment_policy(config: LearnedExperimentConfig) -> dict[str, object]:
+    return {
+        "final_refit_policy": config.final_refit_policy,
+        "candidate_universe": config.candidate_universe,
+        "deployment_artifact": config.deployment_artifact,
+    }
+
+
+def _overlap_count(train_values: set[str], test_values: set[str]) -> int:
+    return len(train_values & test_values)
+
+
+def hierarchy_scorecard(
+    config: LearnedExperimentConfig,
+    split: SplitIds | None,
+    build_lookup: Mapping[str, object],
+) -> dict[str, object]:
+    if split is None:
+        return {
+            "split_level": config.split,
+            "status": "not_applicable",
+            "reason": "split_unavailable",
+            "group_key_function": "not_applicable",
+            "group_key_fields": [],
+            "claim_supported": "not_applicable",
+            "forbidden_cross_split_keys": [],
+            "overlap_counts": {},
+            "component_key_definition": "not_applicable",
+            "component_overlap_diagnostics": {
+                "k1": {"status": "not_applicable", "reason": "split_unavailable"},
+                "k2": {"status": "not_applicable", "reason": "split_unavailable"},
+                "k3": {"status": "not_applicable", "reason": "split_unavailable"},
+            },
+        }
+    train = tuple(row for row in split.train if isinstance(row, TrainingMatchupRow))
+    test = tuple(row for row in split.test if isinstance(row, TrainingMatchupRow))
+    train_components = {
+        component_fingerprint_json(build_lookup[row.build_key])
+        for row in train
+        if row.build_key in build_lookup
+    }
+    test_components = {
+        component_fingerprint_json(build_lookup[row.build_key])
+        for row in test
+        if row.build_key in build_lookup
+    }
+    return {
+        "split_level": config.split,
+        "group_key_function": {
+            "build": "held_out_build_split",
+            "opponent": "held_out_opponent_split",
+            "component": "held_out_component_combination_split",
+            "seed-cell": "held_out_seed_cell_split",
+            "forward-time": "forward_time_split",
+        }.get(config.split, "unknown"),
+        "group_key_fields": {
+            "build": ["build_key"],
+            "opponent": ["opponent_variant_id"],
+            "component": ["hull_id", "weapon_assignments", "hullmods", "flux_vents", "flux_capacitors"],
+            "seed-cell": ["campaign", "seed"],
+            "forward-time": ["source_order"],
+        }.get(config.split, []),
+        "claim_supported": {
+            "build": "held_out_build_transfer",
+            "opponent": "held_out_opponent_transfer",
+            "component": "held_out_component_combination_transfer",
+            "seed-cell": "held_out_campaign_seed_cell_transfer",
+            "forward-time": "forward_time_transfer",
+        }.get(config.split, "diagnostic"),
+        "forbidden_cross_split_keys": {
+            "build": ["build_key"],
+            "opponent": ["opponent_variant_id"],
+            "component": ["component_fingerprint"],
+            "seed-cell": ["campaign", "seed"],
+            "forward-time": ["future_rows"],
+        }.get(config.split, []),
+        "overlap_counts": {
+            "exact_opponent": _overlap_count(
+                {row.opponent_variant_id for row in train},
+                {row.opponent_variant_id for row in test},
+            ),
+            "hull_id": _overlap_count(
+                {getattr(build_lookup[row.build_key], "hull_id", "") for row in train if row.build_key in build_lookup},
+                {getattr(build_lookup[row.build_key], "hull_id", "") for row in test if row.build_key in build_lookup},
+            ),
+            "component_combination": _overlap_count(train_components, test_components),
+            "campaign_cell": _overlap_count(
+                {f"{row.campaign}:{row.seed}" for row in train},
+                {f"{row.campaign}:{row.seed}" for row in test},
+            ),
+            "exact_matchup_group": _overlap_count(
+                {f"{row.build_key}:{row.opponent_variant_id}" for row in train},
+                {f"{row.build_key}:{row.opponent_variant_id}" for row in test},
+            ),
+        },
+        "component_key_definition": "canonical_full_component_fingerprint" if config.split == "component" else "not_applicable",
+        "component_overlap_diagnostics": {
+            "k1": (
+                _overlap_count(train_components, test_components)
+                if config.split == "component"
+                else {"status": "not_applicable", "reason": "not_component_split"}
+            ),
+            "k2": {"status": "not_applicable", "reason": "combination_overlap_k2_not_implemented"},
+            "k3": {"status": "not_applicable", "reason": "combination_overlap_k3_not_implemented"},
+        },
+    }
+
+
+def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[str, object]:
+    overlaps = hierarchy.get("overlap_counts") if isinstance(hierarchy, Mapping) else None
+    forbidden_overlap = max(
+        (int(value) for value in overlaps.values() if isinstance(value, int)),
+        default=0,
+    ) if isinstance(overlaps, Mapping) else 0
+    return {
+        "forbidden_key_overlap": {
+            "status": "pass" if forbidden_overlap == 0 else "fail",
+            "value": forbidden_overlap,
+        },
+        "adversarial_validation_auc": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
+        "rare_combination_overlap": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
+        "nearest_neighbor_overlap": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
+        "sparse_id_ablation_delta": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
+    }
+
+
 def missing_optional_model_result(config: LearnedExperimentConfig) -> dict[str, object]:
+    _validate_claim_config(config)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
+        "claim_boundary": claim_boundary(config),
+        "model_family_policy": model_family_policy(config),
+        "feature_selection_protocol": feature_selection_protocol((), config.feature_profile),
+        "deployment_policy": deployment_policy(config),
+        "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
+        "leakage_diagnostics": leakage_diagnostics(),
         "split": config.split,
         "model": config.model,
         "status": "skipped",
@@ -666,6 +916,7 @@ def missing_optional_model_result(config: LearnedExperimentConfig) -> dict[str, 
 
 
 def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
+    _validate_claim_config(config)
     if config.model == "catboost_regressor" and CatBoostRegressor is None:
         if config.allow_missing_optional_models:
             return missing_optional_model_result(config)
@@ -709,18 +960,38 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
         feature_schema_version=FEATURE_SCHEMA_VERSION,
     )
     matching = comparator.get("matching_result") if isinstance(comparator.get("matching_result"), dict) else None
+    feature_protocol = feature_selection_protocol(outer_train.records, config.feature_profile)
+    hierarchy = hierarchy_scorecard(config, split, build_lookup)
+    claim = claim_boundary(config)
+    family_policy = model_family_policy(config)
+    deploy_policy = deployment_policy(config)
+    leakage = leakage_diagnostics(hierarchy)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
+        "claim_boundary": claim,
+        "model_family_policy": family_policy,
+        "feature_selection_protocol": feature_protocol,
+        "deployment_policy": deploy_policy,
+        "hierarchy_scorecard": hierarchy,
+        "leakage_diagnostics": leakage,
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,
         "status": "completed",
         "target_variable": TARGET_VARIABLE,
         "feature_families": feature_families(outer_train.records, config.feature_profile),
+        "feature_family_registry": feature_protocol["feature_family_registry"],
+        "feature_family_registry_sha256": feature_protocol["feature_family_registry_sha256"],
+        "claim_boundary": claim,
+        "model_family_policy": family_policy,
+        "feature_selection_protocol": feature_protocol,
+        "deployment_policy": deploy_policy,
+        "hierarchy_scorecard": hierarchy,
+        "leakage_diagnostics": leakage,
         "n_train": len(outer_train.rows),
         "n_inner_train": len(inner_train.rows),
         "n_inner_validation": len(inner_validation.rows),
@@ -749,17 +1020,27 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
 
 
 def _insufficient_result(config: LearnedExperimentConfig, reason: str) -> dict[str, object]:
+    _validate_claim_config(config)
+    feature_protocol = feature_selection_protocol((), config.feature_profile)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
+        "claim_boundary": claim_boundary(config),
+        "model_family_policy": model_family_policy(config),
+        "feature_selection_protocol": feature_protocol,
+        "deployment_policy": deployment_policy(config),
+        "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
+        "leakage_diagnostics": leakage_diagnostics(),
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,
         "status": reason,
         "target_variable": TARGET_VARIABLE,
+        "feature_family_registry": feature_protocol["feature_family_registry"],
+        "feature_family_registry_sha256": feature_protocol["feature_family_registry_sha256"],
         "leakage_checklist": leakage_checklist(),
     }
 
@@ -808,6 +1089,15 @@ def provenance(config: LearnedExperimentConfig) -> dict[str, object]:
         "top_k_values": list(config.top_k_values),
         "max_rows": config.max_rows,
         "feature_profile": config.feature_profile,
+        "honest_eval_usage": config.honest_eval_usage,
+        "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
+        "primary_top_k": config.primary_top_k,
+        "promotion_metric": config.promotion_metric,
+        "promotion_threshold": config.promotion_threshold,
+        "claim_label": config.claim_label,
+        "final_refit_policy": config.final_refit_policy,
+        "candidate_universe": config.candidate_universe,
+        "deployment_artifact": config.deployment_artifact,
         "batch_job_id": config.batch_job_id,
         "batch_name": config.batch_name,
         "batch_fleet_name": config.batch_fleet_name,
@@ -869,11 +1159,19 @@ def _experiment_payload(
     status: str,
     started: float,
 ) -> dict[str, object]:
+    _validate_claim_config(config)
+    feature_protocol = feature_selection_protocol((), config.feature_profile)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
+        "claim_boundary": claim_boundary(config),
+        "model_family_policy": model_family_policy(config),
+        "feature_selection_protocol": feature_protocol,
+        "deployment_policy": deployment_policy(config),
+        "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
+        "leakage_diagnostics": leakage_diagnostics(),
         "db_path": str(config.db_path),
         "status": status,
         "elapsed_seconds": time.monotonic() - started,
@@ -961,6 +1259,15 @@ def main() -> None:
         progress=not args.no_progress,
         allow_missing_optional_models=args.allow_missing_optional_models,
         feature_profile=args.feature_profile,
+        honest_eval_usage=args.honest_eval_usage,
+        fresh_honest_eval_ledger_id=args.fresh_honest_eval_ledger_id,
+        primary_top_k=args.primary_top_k,
+        promotion_metric=args.promotion_metric,
+        promotion_threshold=args.promotion_threshold,
+        claim_label=args.claim_label,
+        final_refit_policy=args.final_refit_policy,
+        candidate_universe=args.candidate_universe,
+        deployment_artifact=args.deployment_artifact,
         batch_job_id=args.batch_job_id,
         batch_name=args.batch_name,
         batch_fleet_name=args.batch_fleet_name,

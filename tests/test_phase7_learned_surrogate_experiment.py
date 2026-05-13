@@ -62,6 +62,9 @@ def test_parser_exposes_learned_model_and_comparator_options():
     assert "--hpo-jobs" in text
     assert "--model-thread-count" in text
     assert "--feature-profile" in text
+    assert "--honest-eval-usage" in text
+    assert "--fresh-honest-eval-ledger-id" in text
+    assert "--primary-top-k" in text
     assert "--output" in text
 
 
@@ -134,7 +137,50 @@ def test_config_provenance_includes_ml_context():
     assert provenance["hpo_jobs"] == 1
     assert provenance["model_thread_count"] == 1
     assert provenance["feature_profile"] == "all"
+    assert provenance["honest_eval_usage"] == "diagnostic_only"
+    assert provenance["primary_top_k"] == 1
     assert provenance["comparator_json_path"].endswith("wave1_comparator_gate_2026-05-11.json")
+
+
+def test_final_claim_requires_fresh_honest_eval_ledger():
+    with pytest.raises(ValueError, match="fresh"):
+        learned.claim_boundary(_config(honest_eval_usage="final_claim"))
+
+
+def test_artifact_contract_helpers_emit_registry_and_policies():
+    cfg = _config(split="component", model="random_forest_tuned", honest_eval_usage="exploratory_selection")
+    records = [{"weapon_range": 700.0, "slot_arc": 90.0}]
+    protocol = learned.feature_selection_protocol(records, "all")
+    claim = learned.claim_boundary(cfg)
+
+    assert claim["target_variable"] == "training_matchups.target"
+    assert claim["honest_eval_diagnostic_target"] == "honest_eval_top_k"
+    assert claim["honest_eval_usage"] == "exploratory_selection"
+    assert protocol["policy_type"] == "fixed_profile_no_selector"
+    assert protocol["selected_feature_count"] == 2
+    assert len(protocol["feature_family_registry_sha256"]) == 64
+    assert protocol["feature_family_registry"]["weapon_range"]["family"] == "weapon"
+    assert protocol["feature_family_registry"]["weapon_range"]["parents"] == []
+    assert protocol["feature_family_registry"]["weapon_range"]["leakage_risk"] == "low"
+    assert learned.model_family_policy(cfg)["policy_type"] == "fixed_matrix"
+    assert learned.deployment_policy(cfg)["candidate_universe"] == "source_db_builds"
+    leakage = learned.leakage_diagnostics()
+    assert set(leakage) == {
+        "forbidden_key_overlap",
+        "adversarial_validation_auc",
+        "rare_combination_overlap",
+        "nearest_neighbor_overlap",
+        "sparse_id_ablation_delta",
+    }
+    assert leakage["forbidden_key_overlap"]["status"] == "pass"
+
+
+def test_leakage_diagnostics_fail_on_forbidden_overlap():
+    hierarchy = {"overlap_counts": {"exact_opponent": 1, "component_combination": 0}}
+
+    leakage = learned.leakage_diagnostics(hierarchy)
+
+    assert leakage["forbidden_key_overlap"] == {"status": "fail", "value": 1}
 
 
 def test_load_comparator_context_finds_matching_split(tmp_path):

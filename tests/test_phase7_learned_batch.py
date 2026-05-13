@@ -1,4 +1,5 @@
 import json
+import hashlib
 import importlib.util
 from dataclasses import replace
 from pathlib import Path
@@ -77,6 +78,14 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         hpo_seed=23,
         holdout_fraction=0.2,
         train_fraction=0.8,
+        honest_eval_usage="exploratory_selection",
+        primary_top_k=1,
+        promotion_metric="honest_eval_top_k_recall",
+        promotion_threshold=0.0,
+        claim_label="exploratory",
+        final_refit_policy="refit_selected_model_on_all_training_rows_after_selection",
+        candidate_universe="source_db_builds",
+        deployment_artifact="none",
         dependency_extra="surrogate",
     )
 
@@ -181,6 +190,14 @@ split_seed: 17
 hpo_seed: 23
 holdout_fraction: 0.2
 train_fraction: 0.8
+honest_eval_usage: exploratory_selection
+primary_top_k: 1
+promotion_metric: honest_eval_top_k_recall
+promotion_threshold: 0.0
+claim_label: exploratory
+final_refit_policy: refit_selected_model_on_all_training_rows_after_selection
+candidate_universe: source_db_builds
+deployment_artifact: none
 dependency_extra: surrogate
 """,
         encoding="utf-8",
@@ -194,6 +211,7 @@ dependency_extra: surrogate
     assert cfg.lease_renewal_interval_seconds == 60.0
     assert cfg.lease_grace_seconds == 300.0
     assert cfg.pending_instance_grace_seconds == 300.0
+    assert cfg.honest_eval_usage == "exploratory_selection"
     validate_batch_config(cfg)
 
 
@@ -239,8 +257,29 @@ def test_build_job_command_is_single_split_single_model_and_no_unsafe_flags(tmp_
     assert "--output" in command
     assert "--feature-profile" in command
     assert command[command.index("--feature-profile") + 1] == cfg.feature_profile
+    assert "--honest-eval-usage" in command
+    assert command[command.index("--honest-eval-usage") + 1] == cfg.honest_eval_usage
+    assert "--primary-top-k" in command
+    assert command[command.index("--primary-top-k") + 1] == str(cfg.primary_top_k)
     assert "--allow-missing-optional-models" not in command
-    assert "honest" not in " ".join(command).lower()
+
+
+def test_user_data_propagates_claim_boundary_flags(tmp_path):
+    cfg = make_config(tmp_path)
+
+    out = render_phase7_learned_batch_user_data(
+        cfg,
+        control_plane_url="http://100.64.0.1:9131",
+        bearer_token="secret-token",
+        bundle_sha256="a" * 64,
+    )
+
+    assert "--honest-eval-usage exploratory_selection" in out
+    assert "--primary-top-k 1" in out
+    assert "--promotion-metric honest_eval_top_k_recall" in out
+    assert "--final-refit-policy refit_selected_model_on_all_training_rows_after_selection" in out
+    assert "--candidate-universe source_db_builds" in out
+    assert "--deployment-artifact none" in out
 
 
 def test_bundle_paths_include_runtime_inputs(tmp_path):
@@ -346,6 +385,14 @@ def test_config_validation_rejects_unsorted_budget_warn_thresholds(tmp_path):
     bad = cfg.__class__(**{**cfg.__dict__, "ledger_warn_thresholds": (0.8, 0.5)})
 
     with pytest.raises(ValueError, match="ledger_warn_thresholds must be sorted"):
+        validate_batch_config(bad)
+
+
+def test_config_validation_rejects_final_claim_without_fresh_ledger(tmp_path):
+    cfg = make_config(tmp_path)
+    bad = replace(cfg, honest_eval_usage="final_claim", fresh_honest_eval_ledger_id=None)
+
+    with pytest.raises(ValueError, match="fresh_honest_eval_ledger_id"):
         validate_batch_config(bad)
 
 
@@ -612,6 +659,12 @@ def test_write_status_snapshot_contains_counts_and_budget(tmp_path):
 
 
 def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
+    registry = {
+        "a_x": {"family": "a", "template": "a_x", "parents": [], "leakage_risk": "low"},
+    }
+    registry_sha = hashlib.sha256(
+        json.dumps(registry, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
     return {
         "experiment_schema_version": 1,
         "feature_schema_version": 3,
@@ -637,6 +690,15 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
             "train_fraction": cfg.train_fraction,
             "top_k_values": list(cfg.top_k_values),
             "feature_profile": cfg.feature_profile,
+            "honest_eval_usage": cfg.honest_eval_usage,
+            "fresh_honest_eval_ledger_id": cfg.fresh_honest_eval_ledger_id,
+            "primary_top_k": cfg.primary_top_k,
+            "promotion_metric": cfg.promotion_metric,
+            "promotion_threshold": cfg.promotion_threshold,
+            "claim_label": cfg.claim_label,
+            "final_refit_policy": cfg.final_refit_policy,
+            "candidate_universe": cfg.candidate_universe,
+            "deployment_artifact": cfg.deployment_artifact,
             "batch_job_id": f"{split}__{model}",
             "batch_name": cfg.name,
             "batch_fleet_name": cfg.fleet_name,
@@ -652,12 +714,68 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
                 "status": "completed",
                 "split": split,
                 "model": model,
-                "target_variable": "honest_eval_fitness",
+                "target_variable": "training_matchups.target",
+                "claim_boundary": {
+                    "target_variable": "training_matchups.target",
+                    "honest_eval_diagnostic_target": "honest_eval_top_k",
+                    "primary_split": split,
+                    "primary_top_k": cfg.primary_top_k,
+                    "promotion_metric": cfg.promotion_metric,
+                    "promotion_threshold": cfg.promotion_threshold,
+                    "higher_is_better": True,
+                    "claim_label": cfg.claim_label,
+                    "honest_eval_usage": cfg.honest_eval_usage,
+                    "fresh_honest_eval_ledger_id": cfg.fresh_honest_eval_ledger_id,
+                },
+                "model_family_policy": {
+                    "policy_type": "fixed_matrix",
+                    "candidate_model_families": list(CANONICAL_MODELS),
+                    "selected_model_family": model,
+                    "selection_scope": "predeclared_fixed_matrix",
+                },
                 "feature_families": {
                     "feature_profile": cfg.feature_profile,
                     "column_count": 2,
                     "prefixes": ["a"],
                     "columns": ["a_x", "a_y"],
+                },
+                "feature_selection_protocol": {
+                    "policy_type": "fixed_profile_no_selector",
+                    "feature_profile": cfg.feature_profile,
+                    "feature_family_registry": registry,
+                    "feature_family_registry_sha256": registry_sha,
+                    "selected_feature_families": ["a"],
+                    "selected_feature_count": 1,
+                    "selector_family": "none",
+                    "selector_hyperparameters": {},
+                    "stability": "not_applicable",
+                    "heredity_policy": "not_applicable",
+                    "selection_scope": "no_feature_selection",
+                },
+                "deployment_policy": {
+                    "final_refit_policy": cfg.final_refit_policy,
+                    "candidate_universe": cfg.candidate_universe,
+                    "deployment_artifact": cfg.deployment_artifact,
+                },
+                "hierarchy_scorecard": {
+                    "split_level": split,
+                    "group_key_function": "held_out_build_split",
+                    "group_key_fields": ["build_key"],
+                    "claim_supported": "held_out_build_transfer",
+                    "forbidden_cross_split_keys": ["build_key"],
+                    "overlap_counts": {"exact_opponent": 0},
+                    "component_overlap_diagnostics": {
+                        "k1": {"status": "not_applicable", "reason": "fixture"},
+                        "k2": {"status": "not_applicable", "reason": "fixture"},
+                        "k3": {"status": "not_applicable", "reason": "fixture"},
+                    },
+                },
+                "leakage_diagnostics": {
+                    "forbidden_key_overlap": {"status": "pass", "value": 0},
+                    "adversarial_validation_auc": {"status": "not_applicable", "reason": "fixture"},
+                    "rare_combination_overlap": {"status": "not_applicable", "reason": "fixture"},
+                    "nearest_neighbor_overlap": {"status": "not_applicable", "reason": "fixture"},
+                    "sparse_id_ablation_delta": {"status": "not_applicable", "reason": "fixture"},
                 },
                 "n_train": 100,
                 "n_inner_train": 80,
@@ -721,6 +839,11 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
         validate_job_payload(cfg, job, payload, bundle_sha256="b" * 64)
 
     payload = one_job_payload(cfg, job.split, job.model)
+    payload["provenance"].pop("dependency_extra")
+    with pytest.raises(ValueError, match="dependency extra missing"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
     payload["results"][0]["leakage_checklist"] = {}
     with pytest.raises(ValueError, match="leakage checklist"):
         validate_job_payload(cfg, job, payload)
@@ -746,6 +869,11 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
         validate_job_payload(cfg, job, payload)
 
     payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["target_variable"] = "honest_eval_fitness"
+    with pytest.raises(ValueError, match="target variable mismatch"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
     payload["feature_profile"] = "geometry"
     with pytest.raises(ValueError, match="feature profile"):
         validate_job_payload(cfg, job, payload)
@@ -753,6 +881,27 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
     payload = one_job_payload(cfg, job.split, job.model)
     payload["results"][0]["feature_families"]["feature_profile"] = "geometry"
     with pytest.raises(ValueError, match="feature family profile"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0].pop("claim_boundary")
+    with pytest.raises(ValueError, match="missing fields"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["claim_boundary"]["honest_eval_usage"] = "final_claim"
+    payload["results"][0]["claim_boundary"]["fresh_honest_eval_ledger_id"] = None
+    with pytest.raises(ValueError, match="claim boundary field 'honest_eval_usage'"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["claim_boundary"]["honest_eval_usage"] = "diagnostic_only"
+    with pytest.raises(ValueError, match="claim boundary field 'honest_eval_usage'"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["feature_selection_protocol"]["feature_family_registry_sha256"] = "d" * 64
+    with pytest.raises(ValueError, match="registry digest"):
         validate_job_payload(cfg, job, payload)
 
 
@@ -866,6 +1015,9 @@ def test_merge_requires_all_jobs_and_promotes_atomically(tmp_path):
     merged = merge_job_artifacts(cfg)
 
     assert merged["result_count"] == 15
+    assert merged["claim_boundary"]["honest_eval_usage"] == cfg.honest_eval_usage
+    assert merged["feature_selection_protocol"]["policy_type"] == "fixed_profile_no_selector"
+    assert merged["deployment_policy"]["candidate_universe"] == cfg.candidate_universe
     assert (cfg.output_dir / "merged.json").exists()
     assert cfg.canonical_output_path.exists()
 

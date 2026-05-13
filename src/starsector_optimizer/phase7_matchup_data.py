@@ -99,6 +99,11 @@ def _build_json(build: Build) -> str:
     return json.dumps(_canonical_build_dict(build), sort_keys=True, separators=(",", ":"))
 
 
+def component_fingerprint_json(build: Build) -> str:
+    """Canonical full component fingerprint for component-holdout grouping."""
+    return _build_json(build)
+
+
 def build_key(build: Build) -> str:
     """Stable hash over canonical build JSON."""
     return sha256(_build_json(build).encode("utf-8")).hexdigest()[:BUILD_KEY_HEX_LENGTH]
@@ -675,9 +680,7 @@ def held_out_component_combination_split(
     groups = []
     for row in rows:
         build = build_lookup[row.build_key]
-        weapons = tuple(sorted(w for w in build.weapon_assignments.values() if w))
-        hullmods = tuple(sorted(build.hullmods))
-        groups.append(json.dumps({"w": weapons, "h": hullmods}, sort_keys=True))
+        groups.append(component_fingerprint_json(build))
     return _group_split(rows, groups, holdout_fraction, seed)
 
 

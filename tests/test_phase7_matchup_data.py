@@ -15,6 +15,7 @@ from starsector_optimizer.phase7_matchup_data import (
     TrainingMatchupRow,
     build_from_log_row,
     build_key,
+    component_fingerprint_json,
     forward_time_split,
     held_out_component_combination_split,
     held_out_build_split,
@@ -133,6 +134,16 @@ class TestCanonicalBuilds:
         assert build.weapon_assignments["WS 001"] == "heavyac"
         assert build.weapon_assignments["WS 002"] is None
         assert build.hullmods == frozenset({"fluxcoil", "armoredweapons"})
+
+    def test_component_fingerprint_uses_full_canonical_build(self):
+        a = Build("hammerhead", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 4, 2)
+        b = Build("hammerhead", {"WS 001": None, "WS 002": "heavyac"}, frozenset({"fluxcoil"}), 4, 2)
+        c = Build("enforcer", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 4, 2)
+        d = Build("hammerhead", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 5, 2)
+
+        assert component_fingerprint_json(a) != component_fingerprint_json(b)
+        assert component_fingerprint_json(a) != component_fingerprint_json(c)
+        assert component_fingerprint_json(a) != component_fingerprint_json(d)
 
 
 class TestLogRecovery:

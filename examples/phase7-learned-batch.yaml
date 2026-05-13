@@ -49,5 +49,13 @@ split_seed: 17
 hpo_seed: 23
 holdout_fraction: 0.2
 train_fraction: 0.8
+honest_eval_usage: exploratory_selection
+primary_top_k: 1
+promotion_metric: honest_eval_top_k_recall
+promotion_threshold: 0.0
+claim_label: exploratory
+final_refit_policy: refit_selected_model_on_all_training_rows_after_selection
+candidate_universe: source_db_builds
+deployment_artifact: none
 feature_profile: all
 dependency_extra: surrogate
