@@ -849,6 +849,14 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
         validate_job_payload(cfg, job, payload)
 
     payload = one_job_payload(cfg, job.split, job.model)
+    payload["results"][0]["leakage_diagnostics"]["forbidden_key_overlap"] = {
+        "status": "fail",
+        "value": 1,
+    }
+    with pytest.raises(ValueError, match="leakage diagnostics"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model)
     payload["provenance"]["code_version"] = "abc123+dirty"
     with pytest.raises(ValueError, match="code version"):
         validate_job_payload(cfg, job, payload)

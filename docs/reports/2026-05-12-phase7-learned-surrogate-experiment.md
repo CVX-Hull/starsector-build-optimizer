@@ -1,7 +1,8 @@
 ---
 type: report
-status: draft
+status: superseded
 last-validated: unvalidated
+superseded-by: 2026-05-14-phase7-v3-evidence-refresh.md
 ---
 
 # Phase 7 Learned Surrogate Experiment

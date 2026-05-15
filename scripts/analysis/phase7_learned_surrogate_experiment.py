@@ -64,7 +64,7 @@ DEFAULT_HPO_SEED = 23
 DEFAULT_HPO_TRIALS = 24
 DEFAULT_HPO_JOBS = 4
 DEFAULT_MODEL_THREAD_COUNT = 4
-DEFAULT_COMPARATOR_JSON = Path("data/phase7/wave1_comparator_gate_2026-05-11.json")
+DEFAULT_COMPARATOR_JSON = Path("data/phase7/wave1_comparator_gate_2026-05-14.json")
 SPLIT_CHOICES = baseline.SPLIT_CHOICES
 MODEL_CHOICES = ("random_forest_tuned", "catboost_regressor", "sparse_pairwise_ridge")
 TARGET_VARIABLE = "training_matchups.target"
@@ -723,7 +723,40 @@ def model_family_policy(config: LearnedExperimentConfig) -> dict[str, object]:
 
 
 def _feature_family_for_key(key: str) -> str:
-    return key.split("_", 1)[0]
+    normalized = key.removeprefix("build_").removeprefix("opponent_")
+    if "hullmod" in normalized:
+        return "hullmod"
+    if normalized.startswith("slot_") or "_slot_" in normalized or "geometry" in normalized or "arc_" in normalized:
+        return "slot_geometry"
+    if any(token in normalized for token in ("weapon", "dps", "damage", "range", "missile", "pd_", "beam")):
+        return "weapon_pressure"
+    if any(token in normalized for token in ("flux", "vent", "capacitor", "dissipation")):
+        return "flux"
+    if any(token in normalized for token in ("armor", "shield", "hull_points", "hitpoints", "ehp")):
+        return "defense"
+    if any(token in normalized for token in ("speed", "maneuver", "turn", "acceleration")):
+        return "mobility"
+    if key.startswith("opponent_"):
+        return "opponent_aggregate"
+    if key.startswith("build_"):
+        return "hull"
+    if key in {"campaign", "seed", "source_path", "trial_number", "row_kind", "source_kind"}:
+        return "provenance_context"
+    return "hull"
+
+
+def _feature_template_for_key(key: str) -> str:
+    if "__" in key:
+        return "sparse_indicator"
+    if "_minus_" in key or "_vs_" in key or "interaction" in key:
+        return "interaction"
+    if key.endswith("_id") or key.endswith("_type") or key.endswith("_size") or key.endswith("_designation"):
+        return "categorical_residual"
+    if any(token in key for token in ("mean", "total", "count", "sum", "min", "max", "std")):
+        return "aggregate"
+    if "norm" in key or "ratio" in key or "fraction" in key:
+        return "normalized_ratio"
+    return "raw_descriptor"
 
 
 def feature_family_registry(records: Sequence[Mapping[str, FeatureValue]]) -> dict[str, dict[str, object]]:
@@ -732,8 +765,12 @@ def feature_family_registry(records: Sequence[Mapping[str, FeatureValue]]) -> di
     return {
         key: {
             "family": _feature_family_for_key(key),
-            "template": key,
-            "parents": [],
+            "template": _feature_template_for_key(key),
+            "parents": (
+                ["weapon_pressure", "opponent_aggregate"]
+                if "_vs_" in key or "_minus_" in key or "interaction" in key
+                else []
+            ),
             "leakage_risk": "high" if key in excluded else "low",
         }
         for key in keys
@@ -802,16 +839,15 @@ def hierarchy_scorecard(
         }
     train = tuple(row for row in split.train if isinstance(row, TrainingMatchupRow))
     test = tuple(row for row in split.test if isinstance(row, TrainingMatchupRow))
-    train_components = {
-        component_fingerprint_json(build_lookup[row.build_key])
-        for row in train
-        if row.build_key in build_lookup
-    }
-    test_components = {
-        component_fingerprint_json(build_lookup[row.build_key])
-        for row in test
-        if row.build_key in build_lookup
-    }
+    overlap_counts = baseline.split_overlap_counts(train, test, build_lookup)
+    component_diagnostics: object = (
+        baseline.component_overlap_diagnostics(train, test, build_lookup)
+        if config.split == "component"
+        else {
+            "status": "not_applicable",
+            "reason": "not_component_split",
+        }
+    )
     return {
         "split_level": config.split,
         "group_key_function": {
@@ -842,49 +878,34 @@ def hierarchy_scorecard(
             "seed-cell": ["campaign", "seed"],
             "forward-time": ["future_rows"],
         }.get(config.split, []),
-        "overlap_counts": {
-            "exact_opponent": _overlap_count(
-                {row.opponent_variant_id for row in train},
-                {row.opponent_variant_id for row in test},
-            ),
-            "hull_id": _overlap_count(
-                {getattr(build_lookup[row.build_key], "hull_id", "") for row in train if row.build_key in build_lookup},
-                {getattr(build_lookup[row.build_key], "hull_id", "") for row in test if row.build_key in build_lookup},
-            ),
-            "component_combination": _overlap_count(train_components, test_components),
-            "campaign_cell": _overlap_count(
-                {f"{row.campaign}:{row.seed}" for row in train},
-                {f"{row.campaign}:{row.seed}" for row in test},
-            ),
-            "exact_matchup_group": _overlap_count(
-                {f"{row.build_key}:{row.opponent_variant_id}" for row in train},
-                {f"{row.build_key}:{row.opponent_variant_id}" for row in test},
-            ),
-        },
-        "component_key_definition": "canonical_full_component_fingerprint" if config.split == "component" else "not_applicable",
-        "component_overlap_diagnostics": {
-            "k1": (
-                _overlap_count(train_components, test_components)
-                if config.split == "component"
-                else {"status": "not_applicable", "reason": "not_component_split"}
-            ),
-            "k2": {"status": "not_applicable", "reason": "combination_overlap_k2_not_implemented"},
-            "k3": {"status": "not_applicable", "reason": "combination_overlap_k3_not_implemented"},
-        },
+        "overlap_counts": overlap_counts,
+        "component_key_definition": baseline.COMPONENT_KEY_DEFINITION if config.split == "component" else "not_applicable",
+        "component_overlap_diagnostics": component_diagnostics,
     }
 
 
 def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[str, object]:
     overlaps = hierarchy.get("overlap_counts") if isinstance(hierarchy, Mapping) else None
-    forbidden_overlap = max(
-        (int(value) for value in overlaps.values() if isinstance(value, int)),
-        default=0,
-    ) if isinstance(overlaps, Mapping) else 0
-    return {
-        "forbidden_key_overlap": {
+    split_level = hierarchy.get("split_level") if isinstance(hierarchy, Mapping) else None
+    forbidden_count_key = {
+        "build": "exact_build",
+        "opponent": "exact_opponent",
+        "component": "component_combination",
+        "seed-cell": "campaign_cell",
+        "forward-time": None,
+    }.get(split_level)
+    if split_level not in SPLIT_CHOICES:
+        forbidden_status = {"status": "not_applicable", "reason": "split_unavailable"}
+    elif forbidden_count_key is None:
+        forbidden_status = {"status": "not_applicable", "reason": "no_forbidden_overlap_key"}
+    else:
+        forbidden_overlap = int(overlaps.get(forbidden_count_key, 0)) if isinstance(overlaps, Mapping) else 0
+        forbidden_status = {
             "status": "pass" if forbidden_overlap == 0 else "fail",
             "value": forbidden_overlap,
-        },
+        }
+    return {
+        "forbidden_key_overlap": forbidden_status,
         "adversarial_validation_auc": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
         "rare_combination_overlap": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
         "nearest_neighbor_overlap": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
@@ -986,12 +1007,6 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
         "feature_families": feature_families(outer_train.records, config.feature_profile),
         "feature_family_registry": feature_protocol["feature_family_registry"],
         "feature_family_registry_sha256": feature_protocol["feature_family_registry_sha256"],
-        "claim_boundary": claim,
-        "model_family_policy": family_policy,
-        "feature_selection_protocol": feature_protocol,
-        "deployment_policy": deploy_policy,
-        "hierarchy_scorecard": hierarchy,
-        "leakage_diagnostics": leakage,
         "n_train": len(outer_train.rows),
         "n_inner_train": len(inner_train.rows),
         "n_inner_validation": len(inner_validation.rows),
@@ -1161,6 +1176,31 @@ def _experiment_payload(
 ) -> dict[str, object]:
     _validate_claim_config(config)
     feature_protocol = feature_selection_protocol((), config.feature_profile)
+    merged_registry: dict[str, dict[str, object]] = {}
+    comparator_contexts: dict[str, object] = {}
+    for result in results:
+        registry = result.get("feature_family_registry")
+        if isinstance(registry, Mapping):
+            for key, value in registry.items():
+                if isinstance(key, str) and isinstance(value, Mapping):
+                    merged_registry[key] = dict(value)
+        split = result.get("split")
+        model = result.get("model")
+        comparator_context = result.get("comparator_context")
+        if isinstance(split, str) and isinstance(model, str) and comparator_context is not None:
+            comparator_contexts[f"{split}:{model}"] = comparator_context
+    if merged_registry:
+        feature_protocol = {
+            **feature_protocol,
+            "feature_family_registry": merged_registry,
+            "feature_family_registry_sha256": _registry_digest(merged_registry),
+            "selected_feature_families": sorted({
+                item["family"]
+                for item in merged_registry.values()
+                if isinstance(item.get("family"), str)
+            }),
+            "selected_feature_count": len(merged_registry),
+        }
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
@@ -1178,6 +1218,9 @@ def _experiment_payload(
         "provenance": provenance(config),
         "model_families": list(MODEL_CHOICES if config.model == "all" else (config.model,)),
         "skipped_models": list(skipped),
+        "feature_family_registry": feature_protocol["feature_family_registry"],
+        "feature_family_registry_sha256": feature_protocol["feature_family_registry_sha256"],
+        "comparator_context": comparator_contexts,
         "result_count": len(results),
         "results": list(results),
     }

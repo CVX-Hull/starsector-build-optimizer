@@ -8,7 +8,7 @@ owner: codex
 related_docs:
   - docs/specs/31-phase7-matchup-data.md
   - docs/reports/2026-05-11-validation-to-phase7-roadmap.md
-implementation_commit: not_committed
+implementation_commit: d05ce8f
 post_impl_audit: passed
 ---
 

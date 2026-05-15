@@ -1,7 +1,8 @@
 ---
 type: report
-status: shipped
+status: superseded
 last-validated: 2026-05-11
+superseded-by: 2026-05-14-phase7-v3-evidence-refresh.md
 ---
 
 # Phase 7 Matchup Surrogate Preliminary

@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from starsector_optimizer.models import Build
 from starsector_optimizer.phase7_matchup_data import SplitIds, TrainingMatchupRow
 
 
@@ -23,7 +24,7 @@ def _config(**overrides):
     values = {
         "db_path": Path("data/phase7/wave1_matchups.sqlite"),
         "game_dir": Path("game/starsector"),
-        "comparator_json_path": Path("data/phase7/wave1_comparator_gate_2026-05-11.json"),
+        "comparator_json_path": Path("data/phase7/wave1_comparator_gate_2026-05-14.json"),
         "split": "build",
         "model": "random_forest_tuned",
         "holdout_fraction": 0.2,
@@ -139,7 +140,7 @@ def test_config_provenance_includes_ml_context():
     assert provenance["feature_profile"] == "all"
     assert provenance["honest_eval_usage"] == "diagnostic_only"
     assert provenance["primary_top_k"] == 1
-    assert provenance["comparator_json_path"].endswith("wave1_comparator_gate_2026-05-11.json")
+    assert provenance["comparator_json_path"].endswith("wave1_comparator_gate_2026-05-14.json")
 
 
 def test_final_claim_requires_fresh_honest_eval_ledger():
@@ -159,7 +160,9 @@ def test_artifact_contract_helpers_emit_registry_and_policies():
     assert protocol["policy_type"] == "fixed_profile_no_selector"
     assert protocol["selected_feature_count"] == 2
     assert len(protocol["feature_family_registry_sha256"]) == 64
-    assert protocol["feature_family_registry"]["weapon_range"]["family"] == "weapon"
+    assert protocol["feature_family_registry"]["weapon_range"]["family"] == "weapon_pressure"
+    assert protocol["feature_family_registry"]["slot_arc"]["family"] == "slot_geometry"
+    assert protocol["feature_family_registry"]["weapon_range"]["template"] == "raw_descriptor"
     assert protocol["feature_family_registry"]["weapon_range"]["parents"] == []
     assert protocol["feature_family_registry"]["weapon_range"]["leakage_risk"] == "low"
     assert learned.model_family_policy(cfg)["policy_type"] == "fixed_matrix"
@@ -172,15 +175,74 @@ def test_artifact_contract_helpers_emit_registry_and_policies():
         "nearest_neighbor_overlap",
         "sparse_id_ablation_delta",
     }
-    assert leakage["forbidden_key_overlap"]["status"] == "pass"
+    assert leakage["forbidden_key_overlap"] == {
+        "status": "not_applicable",
+        "reason": "split_unavailable",
+    }
 
 
 def test_leakage_diagnostics_fail_on_forbidden_overlap():
-    hierarchy = {"overlap_counts": {"exact_opponent": 1, "component_combination": 0}}
+    hierarchy = {
+        "split_level": "opponent",
+        "overlap_counts": {"exact_opponent": 1, "component_combination": 0},
+    }
 
     leakage = learned.leakage_diagnostics(hierarchy)
 
     assert leakage["forbidden_key_overlap"] == {"status": "fail", "value": 1}
+
+
+def test_leakage_diagnostics_uses_split_forbidden_key_only():
+    hierarchy = {
+        "split_level": "opponent",
+        "overlap_counts": {
+            "exact_opponent": 0,
+            "component_combination": 99,
+            "hull_id": 1,
+        },
+    }
+
+    leakage = learned.leakage_diagnostics(hierarchy)
+
+    assert leakage["forbidden_key_overlap"] == {"status": "pass", "value": 0}
+
+
+def test_leakage_diagnostics_top_level_split_all_is_not_applicable():
+    leakage = learned.leakage_diagnostics()
+
+    assert leakage["forbidden_key_overlap"] == {
+        "status": "not_applicable",
+        "reason": "split_unavailable",
+    }
+
+
+def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations():
+    split = SplitIds(
+        train=(TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0", 0, 1.0, "finalized"),),
+        test=(TrainingMatchupRow("p", "c0", 0, 1, "b1", "opp1", 0, 0.5, "finalized"),),
+    )
+    build_lookup = {
+        "b0": _make_build({"WS 001": "lightdualmg", "WS 002": "lightmg"}),
+        "b1": _make_build({"WS 001": "lightdualmg", "WS 002": "railgun"}),
+    }
+
+    scorecard = learned.hierarchy_scorecard(_config(split="component"), split, build_lookup)
+
+    diagnostics = scorecard["component_overlap_diagnostics"]
+    assert diagnostics["exact_full_fingerprint"]["overlap_unique"] == 0
+    assert diagnostics["k_1_component_combinations"]["overlap_unique"] == 5
+    assert diagnostics["k_2_component_combinations"]["overlap_unique"] == 10
+    assert diagnostics["k_3_component_combinations"]["overlap_unique"] == 10
+
+
+def _make_build(weapon_assignments):
+    return Build(
+        hull_id="hammerhead",
+        weapon_assignments=weapon_assignments,
+        hullmods=frozenset({"hardenedshieldemitter"}),
+        flux_vents=5,
+        flux_capacitors=1,
+    )
 
 
 def test_load_comparator_context_finds_matching_split(tmp_path):
@@ -317,6 +379,16 @@ def test_run_experiment_writes_incremental_checkpoint(monkeypatch, tmp_path):
             "split": config.split,
             "model": config.model,
             "status": "completed",
+            "feature_family_registry": {
+                f"{config.split}_feature": {
+                    "family": "hull",
+                    "template": "aggregate",
+                    "parents": [],
+                    "leakage_risk": "low",
+                }
+            },
+            "feature_family_registry_sha256": "0" * 64,
+            "comparator_context": {"comparison_status": "available"},
         }
 
     monkeypatch.setattr(learned, "run_one", fake_run_one)
@@ -326,5 +398,9 @@ def test_run_experiment_writes_incremental_checkpoint(monkeypatch, tmp_path):
 
     written = json.loads(output.read_text())
     assert payload["status"] == "completed"
+    assert payload["feature_family_registry"]["build_feature"]["family"] == "hull"
+    assert payload["feature_family_registry"]["opponent_feature"]["template"] == "aggregate"
+    assert len(payload["feature_family_registry_sha256"]) == 64
+    assert payload["comparator_context"]["build:random_forest_tuned"]["comparison_status"] == "available"
     assert written["status"] == "running"
     assert written["result_count"] == 2

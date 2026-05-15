@@ -11,6 +11,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from functools import lru_cache
+from itertools import combinations
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol, Sequence
 
@@ -31,10 +32,12 @@ from starsector_optimizer.matchup_features import (
     matchup_feature_row,
 )
 from starsector_optimizer.parser import load_game_data
+from starsector_optimizer.models import Build
 from starsector_optimizer.phase7_matchup_data import (
     HonestEvalMatchupRow,
     SplitIds,
     TrainingMatchupRow,
+    component_fingerprint_json,
     forward_time_split,
     held_out_build_split,
     held_out_component_combination_split,
@@ -55,6 +58,11 @@ ALL_AVAILABLE_CORES = -1
 DEFAULT_TOP_K_VALUES = (1, 3, 5)
 SCORE_REGIME_LOSS_MAX = -0.5
 SCORE_REGIME_WIN_MIN = 0.5
+COMPONENT_OVERLAP_K_VALUES = (1, 2, 3)
+COMPONENT_KEY_DEFINITION = (
+    "canonical_full_component_fingerprint:hull_id+slot_weapon_assignments+"
+    "hullmods+flux_vents+flux_capacitors"
+)
 SPLIT_CHOICES = ("build", "opponent", "component", "seed-cell", "forward-time")
 MODEL_CHOICES = (
     "global_mean",
@@ -279,6 +287,159 @@ def _split_rows(config: BaselineConfig) -> tuple[SplitIds, dict[str, object]]:
     return split, build_lookup
 
 
+def split_metadata(config: BaselineConfig) -> dict[str, object]:
+    if config.split == "build":
+        return {
+            "split_level": "build",
+            "group_key_function": "build_key",
+            "group_key_fields": ["training_matchups.build_key"],
+            "supported_claim": "Transfer to unseen repaired player builds drawn from the same broader build distribution.",
+            "claim_supported": "supported",
+        }
+    if config.split == "opponent":
+        return {
+            "split_level": "opponent",
+            "group_key_function": "opponent_variant_id",
+            "group_key_fields": ["training_matchups.opponent_variant_id"],
+            "supported_claim": "Transfer to unseen exact opponent variants/builds.",
+            "claim_supported": "supported",
+        }
+    if config.split == "component":
+        return {
+            "split_level": "component",
+            "group_key_function": "component_fingerprint_json",
+            "group_key_fields": [
+                "Build.hull_id",
+                "Build.weapon_assignments",
+                "Build.hullmods",
+                "Build.flux_vents",
+                "Build.flux_capacitors",
+            ],
+            "supported_claim": "Transfer away from selected full component combinations.",
+            "claim_supported": "supported",
+            "component_key_definition": COMPONENT_KEY_DEFINITION,
+        }
+    if config.split == "seed-cell":
+        return {
+            "split_level": "seed-cell",
+            "group_key_function": "campaign_seed",
+            "group_key_fields": ["training_matchups.campaign", "training_matchups.seed"],
+            "supported_claim": "Transfer across campaign cells/proposal contexts.",
+            "claim_supported": "supported",
+        }
+    if config.split == "forward-time":
+        return {
+            "split_level": "forward-time",
+            "group_key_function": "source_path_trial_number_opponent_index_order",
+            "group_key_fields": [
+                "training_matchups.source_path",
+                "training_matchups.trial_number",
+                "training_matchups.opponent_index",
+            ],
+            "supported_claim": "Forward deployment over later optimizer proposals in path-ordered source rows.",
+            "claim_supported": "supported",
+        }
+    raise ValueError(f"unknown split {config.split!r}")
+
+
+def _component_tokens(build: Build) -> tuple[str, ...]:
+    tokens = [f"hull:{build.hull_id}"]
+    tokens.extend(
+        f"weapon:{slot_id}:{weapon_id}"
+        for slot_id, weapon_id in sorted(build.weapon_assignments.items())
+    )
+    tokens.extend(f"hullmod:{hullmod_id}" for hullmod_id in sorted(build.hullmods))
+    tokens.append(f"flux_vents:{build.flux_vents}")
+    tokens.append(f"flux_capacitors:{build.flux_capacitors}")
+    return tuple(tokens)
+
+
+def _k_combinations(tokens: Sequence[str], k: int) -> set[tuple[str, ...]]:
+    if k > len(tokens):
+        return set()
+    return set(combinations(tokens, k))
+
+
+def _overlap_summary(train_items: set[object], test_items: set[object]) -> dict[str, int | float]:
+    overlap = train_items & test_items
+    return {
+        "train_unique": len(train_items),
+        "test_unique": len(test_items),
+        "overlap_unique": len(overlap),
+        "test_overlap_fraction": 0.0 if not test_items else len(overlap) / len(test_items),
+    }
+
+
+def _overlap_count(train_items: set[object], test_items: set[object]) -> int:
+    return len(train_items & test_items)
+
+
+def component_overlap_diagnostics(
+    train_rows: Sequence[TrainingMatchupRow],
+    test_rows: Sequence[TrainingMatchupRow],
+    build_lookup: Mapping[str, Build],
+) -> dict[str, object]:
+    train_builds = [build_lookup[row.build_key] for row in train_rows]
+    test_builds = [build_lookup[row.build_key] for row in test_rows]
+    train_fingerprints = {component_fingerprint_json(build) for build in train_builds}
+    test_fingerprints = {component_fingerprint_json(build) for build in test_builds}
+    diagnostics: dict[str, object] = {
+        "component_key_definition": COMPONENT_KEY_DEFINITION,
+        "exact_full_fingerprint": _overlap_summary(train_fingerprints, test_fingerprints),
+    }
+    for k in COMPONENT_OVERLAP_K_VALUES:
+        train_combos: set[tuple[str, ...]] = set()
+        test_combos: set[tuple[str, ...]] = set()
+        for build in train_builds:
+            train_combos.update(_k_combinations(_component_tokens(build), k))
+        for build in test_builds:
+            test_combos.update(_k_combinations(_component_tokens(build), k))
+        diagnostics[f"k_{k}_component_combinations"] = _overlap_summary(
+            train_combos, test_combos
+        )
+    return diagnostics
+
+
+def split_overlap_counts(
+    train_rows: Sequence[TrainingMatchupRow],
+    test_rows: Sequence[TrainingMatchupRow],
+    build_lookup: Mapping[str, Build],
+) -> dict[str, int]:
+    train_components = {
+        component_fingerprint_json(build_lookup[row.build_key])
+        for row in train_rows
+        if row.build_key in build_lookup
+    }
+    test_components = {
+        component_fingerprint_json(build_lookup[row.build_key])
+        for row in test_rows
+        if row.build_key in build_lookup
+    }
+    return {
+        "exact_build": _overlap_count(
+            {row.build_key for row in train_rows},
+            {row.build_key for row in test_rows},
+        ),
+        "exact_opponent": _overlap_count(
+            {row.opponent_variant_id for row in train_rows},
+            {row.opponent_variant_id for row in test_rows},
+        ),
+        "hull_id": _overlap_count(
+            {build_lookup[row.build_key].hull_id for row in train_rows if row.build_key in build_lookup},
+            {build_lookup[row.build_key].hull_id for row in test_rows if row.build_key in build_lookup},
+        ),
+        "component_combination": _overlap_count(train_components, test_components),
+        "campaign_cell": _overlap_count(
+            {f"{row.campaign}:{row.seed}" for row in train_rows},
+            {f"{row.campaign}:{row.seed}" for row in test_rows},
+        ),
+        "exact_matchup_group": _overlap_count(
+            {f"{row.build_key}:{row.opponent_variant_id}" for row in train_rows},
+            {f"{row.build_key}:{row.opponent_variant_id}" for row in test_rows},
+        ),
+    }
+
+
 def _feature_bundle(rows: Sequence[Row], build_lookup, config: BaselineConfig) -> FeatureBundle:
     game_data, manifest = _load_context(config.game_dir)
     records = []
@@ -452,17 +613,32 @@ def run_one(config: BaselineConfig) -> dict[str, object]:
     model.fit(train.rows, train.records, train.targets)
     result = model.predict(test.rows, test.records)
     metrics = regression_metrics(test.targets, result.predictions)
+    diagnostics: dict[str, object] = dict(result.diagnostics)
+    train_training_rows = [row for row in split.train if isinstance(row, TrainingMatchupRow)]
+    test_training_rows = [row for row in split.test if isinstance(row, TrainingMatchupRow)]
+    diagnostics["overlap_counts"] = split_overlap_counts(
+        train_training_rows,
+        test_training_rows,
+        build_lookup,
+    )
+    if config.split == "component":
+        diagnostics["component_overlap_diagnostics"] = component_overlap_diagnostics(
+            train_training_rows,
+            test_training_rows,
+            build_lookup,
+        )
     return {
         "db_path": str(config.db_path),
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_profile": config.feature_profile,
         "provenance": provenance(config),
+        "split_metadata": split_metadata(config),
         "split": config.split,
         "model": config.model,
         "n_train": len(train.rows),
         "n_test": len(test.rows),
         **metrics,
-        "diagnostics": result.diagnostics,
+        "diagnostics": diagnostics,
         "stratified": stratified_metrics(test, result.predictions),
         "honest_eval_top_k": honest_eval_top_k_for_model(model, build_lookup, config),
 }

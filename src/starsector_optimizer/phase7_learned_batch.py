@@ -1378,6 +1378,27 @@ def _leakage_ok(result: Mapping[str, Any]) -> bool:
     )
 
 
+def _leakage_diagnostics_pass(result: Mapping[str, Any]) -> bool:
+    leakage = result.get("leakage_diagnostics")
+    if not isinstance(leakage, dict):
+        return False
+    required = (
+        "forbidden_key_overlap",
+        "adversarial_validation_auc",
+        "rare_combination_overlap",
+        "nearest_neighbor_overlap",
+        "sparse_id_ablation_delta",
+    )
+    for key in required:
+        diagnostic = leakage.get(key)
+        if not isinstance(diagnostic, dict):
+            return False
+        status = diagnostic.get("status")
+        if status not in ("pass", "not_applicable"):
+            return False
+    return True
+
+
 def _contract_ok(result: Mapping[str, Any]) -> bool:
     claim = result.get("claim_boundary")
     model_policy = result.get("model_family_policy")
@@ -1568,6 +1589,8 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} result does not match job identity")
     if not _leakage_ok(result):
         raise ValueError(f"job {job.job_id} leakage checklist failed or missing")
+    if not _leakage_diagnostics_pass(result):
+        raise ValueError(f"job {job.job_id} leakage diagnostics failed or missing")
     if not _contract_ok(result):
         raise ValueError(f"job {job.job_id} artifact contract fields failed or missing")
     claim = result["claim_boundary"]

@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from starsector_optimizer.models import Build
 from starsector_optimizer.phase7_matchup_data import HonestEvalMatchupRow, TrainingMatchupRow
 
 
@@ -133,3 +134,81 @@ def test_provenance_shape():
     assert provenance["tree_count"] == 80
     assert provenance["top_k_values"] == [1, 3]
     assert provenance["feature_profile"] == "all"
+
+
+def test_split_metadata_names_component_key_definition():
+    config = baseline.BaselineConfig(
+        db_path=Path("db.sqlite"),
+        game_dir=Path("game/starsector"),
+        split="component",
+        model="global_mean",
+        holdout_fraction=0.2,
+        train_fraction=0.8,
+        seed=17,
+        tree_count=80,
+        ridge_alpha=10.0,
+        max_rows=None,
+        top_k_values=(1, 3),
+        progress=False,
+    )
+
+    metadata = baseline.split_metadata(config)
+
+    assert metadata["split_level"] == "component"
+    assert metadata["group_key_function"] == "component_fingerprint_json"
+    assert "flux_capacitors" in metadata["component_key_definition"]
+
+
+def test_component_overlap_diagnostics_reports_exact_and_k_combinations():
+    train = [
+        TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0", 0, 1.0, "finalized"),
+    ]
+    test = [
+        TrainingMatchupRow("p", "c0", 0, 1, "b1", "opp1", 0, 0.5, "finalized"),
+    ]
+    build_lookup = {
+        "b0": _make_build({"WS 001": "lightdualmg", "WS 002": "lightmg"}),
+        "b1": _make_build({"WS 001": "lightdualmg", "WS 002": "railgun"}),
+    }
+
+    diagnostics = baseline.component_overlap_diagnostics(train, test, build_lookup)
+
+    assert diagnostics["exact_full_fingerprint"]["overlap_unique"] == 0
+    assert diagnostics["k_1_component_combinations"]["overlap_unique"] == 5
+    assert diagnostics["k_1_component_combinations"]["test_unique"] == 6
+    assert diagnostics["k_2_component_combinations"]["overlap_unique"] == 10
+    assert diagnostics["k_2_component_combinations"]["test_unique"] == 15
+    assert diagnostics["k_3_component_combinations"]["overlap_unique"] == 10
+    assert diagnostics["k_3_component_combinations"]["test_unique"] == 20
+
+
+def test_split_overlap_counts_reports_stricter_hierarchy_counts():
+    train = [
+        TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0", 0, 1.0, "finalized"),
+    ]
+    test = [
+        TrainingMatchupRow("p", "c1", 1, 1, "b1", "opp1", 0, 0.5, "finalized"),
+    ]
+    build_lookup = {
+        "b0": _make_build({"WS 001": "lightdualmg"}),
+        "b1": _make_build({"WS 001": "lightdualmg"}),
+    }
+
+    counts = baseline.split_overlap_counts(train, test, build_lookup)
+
+    assert counts["exact_build"] == 0
+    assert counts["exact_opponent"] == 0
+    assert counts["hull_id"] == 1
+    assert counts["component_combination"] == 1
+    assert counts["campaign_cell"] == 0
+    assert counts["exact_matchup_group"] == 0
+
+
+def _make_build(weapon_assignments):
+    return Build(
+        hull_id="hammerhead",
+        weapon_assignments=weapon_assignments,
+        hullmods=frozenset({"hardenedshieldemitter"}),
+        flux_vents=5,
+        flux_capacitors=1,
+    )
