@@ -27,6 +27,9 @@ from starsector_optimizer.phase7_learned_batch import (
 )
 
 
+CANONICAL_JOB_COUNT = len(CANONICAL_SPLITS) * len(CANONICAL_MODELS)
+
+
 def load_batch_cli_module():
     path = Path("scripts/cloud/phase7_learned_batch.py")
     spec = importlib.util.spec_from_file_location("phase7_learned_batch_cli", path)
@@ -50,8 +53,8 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         instance_types=("c7i.4xlarge", "c7a.4xlarge"),
         ssh_key_name="starsector-probe",
         spot_allocation_strategy="price-capacity-optimized",
-        target_workers=15,
-        min_workers_to_start=15,
+        target_workers=CANONICAL_JOB_COUNT,
+        min_workers_to_start=CANONICAL_JOB_COUNT,
         budget_usd=20.0,
         max_lifetime_hours=2.0,
         max_job_attempts=4,
@@ -99,7 +102,7 @@ class FakeServer:
 
 
 class FakeProvider:
-    def __init__(self, *, instance_count: int = 15, active=None, price: float = 0.01) -> None:
+    def __init__(self, *, instance_count: int = CANONICAL_JOB_COUNT, active=None, price: float = 0.01) -> None:
         self.instance_count = instance_count
         self.active = active
         self.price = price
@@ -162,8 +165,8 @@ ami_ids_by_region:
 instance_types: [c7i.4xlarge, c7a.4xlarge]
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
-target_workers: 15
-min_workers_to_start: 15
+target_workers: 21
+min_workers_to_start: 21
 budget_usd: 20.0
 max_lifetime_hours: 2.0
 max_job_attempts: 4
@@ -353,8 +356,8 @@ def test_config_validation_rejects_job_matrix_mismatch_and_unknown_values(tmp_pa
         cfg,
         splits=("build",),
         models=("random_forest_tuned",),
-        target_workers=15,
-        min_workers_to_start=15,
+        target_workers=CANONICAL_JOB_COUNT,
+        min_workers_to_start=CANONICAL_JOB_COUNT,
     )
     with pytest.raises(ValueError, match="len\\(splits\\) \\* len\\(models\\)"):
         validate_batch_config(bad_count)
@@ -653,7 +656,7 @@ def test_write_status_snapshot_contains_counts_and_budget(tmp_path):
         timestamp="2026-05-12T00:00:00Z",
     )
 
-    assert payload["state"]["counts"]["pending"] == 15
+    assert payload["state"]["counts"]["pending"] == CANONICAL_JOB_COUNT
     assert payload["cumulative_usd"] == 1.25
     assert json.loads((cfg.output_dir / "status.json").read_text())["phase"] == "running"
 
@@ -1022,7 +1025,7 @@ def test_merge_requires_all_jobs_and_promotes_atomically(tmp_path):
 
     merged = merge_job_artifacts(cfg)
 
-    assert merged["result_count"] == 15
+    assert merged["result_count"] == CANONICAL_JOB_COUNT
     assert merged["claim_boundary"]["honest_eval_usage"] == cfg.honest_eval_usage
     assert merged["feature_selection_protocol"]["policy_type"] == "fixed_profile_no_selector"
     assert merged["deployment_policy"]["candidate_universe"] == cfg.candidate_universe
@@ -1130,7 +1133,7 @@ def test_run_live_batch_merges_and_tears_down_on_completion(tmp_path):
         on_poll=lambda state: complete_all_jobs(cfg, state),
     )
 
-    assert merged["result_count"] == 15
+    assert merged["result_count"] == CANONICAL_JOB_COUNT
     assert cfg.canonical_output_path.exists()
     assert server.shutdown_called
     assert provider.terminate_fleet_calls == 1
@@ -1224,7 +1227,7 @@ def test_run_live_batch_treats_initial_instances_as_pending_until_visible(tmp_pa
 
     class LaggingProvider(FakeProvider):
         def __init__(self) -> None:
-            super().__init__(instance_count=15)
+            super().__init__(instance_count=CANONICAL_JOB_COUNT)
             self.list_calls = 0
 
         def list_active(self, project_tag):
@@ -1250,8 +1253,8 @@ def test_run_live_batch_treats_initial_instances_as_pending_until_visible(tmp_pa
         ),
     )
 
-    assert merged["result_count"] == 15
-    assert [call["target_workers"] for call in provider.provision_calls] == [15]
+    assert merged["result_count"] == CANONICAL_JOB_COUNT
+    assert [call["target_workers"] for call in provider.provision_calls] == [CANONICAL_JOB_COUNT]
 
 
 def test_run_live_batch_fails_when_pending_instances_never_become_active(tmp_path):
@@ -1262,7 +1265,7 @@ def test_run_live_batch_fails_when_pending_instances_never_become_active(tmp_pat
     )
     server = FakeServer()
     clock = FakeClock(start=100.0)
-    provider = FakeProvider(instance_count=15, active=[])
+    provider = FakeProvider(instance_count=CANONICAL_JOB_COUNT, active=[])
 
     with pytest.raises(BatchLaunchFailed, match="pending workers"):
         run_live_batch(
@@ -1277,7 +1280,7 @@ def test_run_live_batch_fails_when_pending_instances_never_become_active(tmp_pat
             now_fn=clock.time,
         )
 
-    assert [call["target_workers"] for call in provider.provision_calls] == [15]
+    assert [call["target_workers"] for call in provider.provision_calls] == [CANONICAL_JOB_COUNT]
     assert provider.terminate_fleet_calls == 1
     assert provider.terminate_all_calls == 1
 

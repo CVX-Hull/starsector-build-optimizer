@@ -108,8 +108,10 @@ def test_all_configs_include_random_forest_without_replicate():
 
     configs = list(baseline._configs_to_run(config))
 
-    assert len(configs) == 30
+    assert len(configs) == 42
     assert "replicate" not in {item.split for item in configs}
+    assert "opponent-hull" in {item.split for item in configs}
+    assert "opponent-family" in {item.split for item in configs}
     assert "random_forest" in {item.model for item in configs}
 
 
@@ -159,6 +161,41 @@ def test_split_metadata_names_component_key_definition():
     assert "flux_capacitors" in metadata["component_key_definition"]
 
 
+def test_split_metadata_names_opponent_hierarchy_groups():
+    config = baseline.BaselineConfig(
+        db_path=Path("db.sqlite"),
+        game_dir=Path("game/starsector"),
+        split="opponent-family",
+        model="global_mean",
+        holdout_fraction=0.2,
+        train_fraction=0.8,
+        seed=17,
+        tree_count=80,
+        ridge_alpha=10.0,
+        max_rows=None,
+        top_k_values=(1, 3),
+        progress=False,
+    )
+
+    metadata = baseline.split_metadata(config)
+
+    assert metadata["split_level"] == "opponent-family"
+    assert metadata["group_key_function"] == "opponent_size_designation_manufacturer_family"
+    assert "opponent_hull_designation" in metadata["group_key_fields"]
+
+
+def test_opponent_group_maps_requires_family_fields(monkeypatch):
+    monkeypatch.setattr(baseline, "_load_context", lambda game_dir: (object(), object()))
+    monkeypatch.setattr(
+        baseline,
+        "opponent_feature_row",
+        lambda variant_id, game_dir, game_data: {"opponent_hull_id": "wolf"},
+    )
+
+    with pytest.raises(ValueError, match="missing family field"):
+        baseline.opponent_group_maps(Path("game/starsector"), _training_rows()[:1])
+
+
 def test_component_overlap_diagnostics_reports_exact_and_k_combinations():
     train = [
         TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0", 0, 1.0, "finalized"),
@@ -194,10 +231,18 @@ def test_split_overlap_counts_reports_stricter_hierarchy_counts():
         "b1": _make_build({"WS 001": "lightdualmg"}),
     }
 
-    counts = baseline.split_overlap_counts(train, test, build_lookup)
+    counts = baseline.split_overlap_counts(
+        train,
+        test,
+        build_lookup,
+        opponent_hull_by_variant={"opp0": "wolf", "opp1": "wolf"},
+        opponent_family_by_variant={"opp0": "FRIGATE:Frigate:High Tech", "opp1": "FRIGATE:Frigate:High Tech"},
+    )
 
     assert counts["exact_build"] == 0
     assert counts["exact_opponent"] == 0
+    assert counts["opponent_hull"] == 1
+    assert counts["opponent_family"] == 1
     assert counts["hull_id"] == 1
     assert counts["component_combination"] == 1
     assert counts["campaign_cell"] == 0

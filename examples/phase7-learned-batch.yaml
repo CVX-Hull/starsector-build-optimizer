@@ -14,8 +14,8 @@ instance_types:
   - m7a.4xlarge
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
-target_workers: 15
-min_workers_to_start: 15
+target_workers: 21
+min_workers_to_start: 21
 root_volume_size_gb: 128
 budget_usd: 20.0
 max_lifetime_hours: 2.0

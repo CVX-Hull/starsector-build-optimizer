@@ -37,6 +37,8 @@ from starsector_optimizer.phase7_matchup_data import (
     forward_time_split,
     held_out_build_split,
     held_out_component_combination_split,
+    held_out_opponent_family_split,
+    held_out_opponent_hull_split,
     held_out_opponent_split,
     held_out_seed_cell_split,
 )
@@ -388,21 +390,28 @@ def inner_validation_split(
     rows: Sequence[TrainingMatchupRow],
     build_lookup: Mapping[str, object],
 ) -> SplitIds | None:
-    try:
-        if config.split == "build":
-            split = held_out_build_split(rows, config.holdout_fraction, config.hpo_seed)
-        elif config.split == "opponent":
-            split = held_out_opponent_split(rows, config.holdout_fraction, config.hpo_seed)
-        elif config.split == "component":
-            split = held_out_component_combination_split(rows, build_lookup, config.holdout_fraction, config.hpo_seed)
-        elif config.split == "seed-cell":
-            split = held_out_seed_cell_split(rows, config.holdout_fraction, config.hpo_seed)
-        elif config.split == "forward-time":
-            split = forward_time_split(rows, config.train_fraction)
-        else:
-            raise ValueError(f"unknown split {config.split!r}")
-    except ValueError:
-        return None
+    if config.split == "build":
+        split = held_out_build_split(rows, config.holdout_fraction, config.hpo_seed)
+    elif config.split == "opponent":
+        split = held_out_opponent_split(rows, config.holdout_fraction, config.hpo_seed)
+    elif config.split == "opponent-hull":
+        opponent_hull_by_variant, _ = baseline.opponent_group_maps(config.game_dir, rows)
+        split = held_out_opponent_hull_split(
+            rows, opponent_hull_by_variant, config.holdout_fraction, config.hpo_seed
+        )
+    elif config.split == "opponent-family":
+        _, opponent_family_by_variant = baseline.opponent_group_maps(config.game_dir, rows)
+        split = held_out_opponent_family_split(
+            rows, opponent_family_by_variant, config.holdout_fraction, config.hpo_seed
+        )
+    elif config.split == "component":
+        split = held_out_component_combination_split(rows, build_lookup, config.holdout_fraction, config.hpo_seed)
+    elif config.split == "seed-cell":
+        split = held_out_seed_cell_split(rows, config.holdout_fraction, config.hpo_seed)
+    elif config.split == "forward-time":
+        split = forward_time_split(rows, config.train_fraction)
+    else:
+        raise ValueError(f"unknown split {config.split!r}")
     return split if split.train and split.test else None
 
 
@@ -839,7 +848,16 @@ def hierarchy_scorecard(
         }
     train = tuple(row for row in split.train if isinstance(row, TrainingMatchupRow))
     test = tuple(row for row in split.test if isinstance(row, TrainingMatchupRow))
-    overlap_counts = baseline.split_overlap_counts(train, test, build_lookup)
+    opponent_hull_by_variant, opponent_family_by_variant = baseline.opponent_group_maps(
+        config.game_dir, train + test
+    )
+    overlap_counts = baseline.split_overlap_counts(
+        train,
+        test,
+        build_lookup,
+        opponent_hull_by_variant,
+        opponent_family_by_variant,
+    )
     component_diagnostics: object = (
         baseline.component_overlap_diagnostics(train, test, build_lookup)
         if config.split == "component"
@@ -853,6 +871,8 @@ def hierarchy_scorecard(
         "group_key_function": {
             "build": "held_out_build_split",
             "opponent": "held_out_opponent_split",
+            "opponent-hull": "held_out_opponent_hull_split",
+            "opponent-family": "held_out_opponent_family_split",
             "component": "held_out_component_combination_split",
             "seed-cell": "held_out_seed_cell_split",
             "forward-time": "forward_time_split",
@@ -860,6 +880,12 @@ def hierarchy_scorecard(
         "group_key_fields": {
             "build": ["build_key"],
             "opponent": ["opponent_variant_id"],
+            "opponent-hull": ["opponent_hull_id"],
+            "opponent-family": [
+                "opponent_hull_size",
+                "opponent_hull_designation",
+                "opponent_hull_tech_manufacturer",
+            ],
             "component": ["hull_id", "weapon_assignments", "hullmods", "flux_vents", "flux_capacitors"],
             "seed-cell": ["campaign", "seed"],
             "forward-time": ["source_order"],
@@ -867,6 +893,8 @@ def hierarchy_scorecard(
         "claim_supported": {
             "build": "held_out_build_transfer",
             "opponent": "held_out_opponent_transfer",
+            "opponent-hull": "held_out_opponent_hull_transfer",
+            "opponent-family": "held_out_opponent_family_transfer",
             "component": "held_out_component_combination_transfer",
             "seed-cell": "held_out_campaign_seed_cell_transfer",
             "forward-time": "forward_time_transfer",
@@ -874,6 +902,8 @@ def hierarchy_scorecard(
         "forbidden_cross_split_keys": {
             "build": ["build_key"],
             "opponent": ["opponent_variant_id"],
+            "opponent-hull": ["opponent_hull_id"],
+            "opponent-family": ["opponent_hull_size", "opponent_hull_designation", "opponent_hull_tech_manufacturer"],
             "component": ["component_fingerprint"],
             "seed-cell": ["campaign", "seed"],
             "forward-time": ["future_rows"],
@@ -890,6 +920,8 @@ def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[s
     forbidden_count_key = {
         "build": "exact_build",
         "opponent": "exact_opponent",
+        "opponent-hull": "opponent_hull",
+        "opponent-family": "opponent_family",
         "component": "component_combination",
         "seed-cell": "campaign_cell",
         "forward-time": None,

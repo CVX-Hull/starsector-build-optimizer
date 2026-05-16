@@ -292,10 +292,12 @@ score:
 
 - **Random row split**: smoke/debug only; not transfer evidence.
 - **Exact-opponent holdout**: minimum anti-memorization gate.
-- **Hull holdout**: all variants/loadouts for selected hulls are test-only.
-- **Hull-family or archetype-cluster holdout**: harder transfer across related
-  opponent families; any learned clusters must be fit inside the training fold
-  or computed from outcome-free manifest/loadout descriptors.
+- **Hull holdout**: all variants/loadouts for selected hulls are test-only
+  through the implemented `opponent-hull` split.
+- **Hull-family or archetype holdout**: harder transfer across related
+  opponent families through the implemented `opponent-family` split, currently
+  keyed by outcome-free hull size, designation, and tech/manufacturer.
+  Learned clusters require a later train-fold-fitted implementation.
 - **Campaign/regime holdout**: only for claims that cross campaign cells,
   curricula, or proposal policies.
 
@@ -478,9 +480,9 @@ The staged roadmap is:
 1. Keep the completed honest-eval ledger and per-cell outputs materialized in
    the Phase 7 matchup DB with zero unresolved build keys.
 2. Validate the feature substrate with grouped splits and trivial comparators.
-3. Use the learned-surrogate research gate to write the next experiment plan:
-   candidate model families, HPO spaces, nested grouped validation, leakage
-   checklist, calibration policy, and provenance schema.
+3. Use the learned-surrogate research gate to run opponent-transfer hierarchy
+   diagnostics: exact opponent, opponent hull, opponent family, and then
+   feature-profile ablations under the same nested grouped validation contract.
 4. Promote learned baselines only after they beat the comparator ladder under
    that protocol.
 5. Feed validated predictions into online search as a prior mean, candidate

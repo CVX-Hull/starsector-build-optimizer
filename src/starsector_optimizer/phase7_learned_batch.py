@@ -33,6 +33,8 @@ logger = logging.getLogger(__name__)
 CANONICAL_SPLITS: tuple[str, ...] = (
     "build",
     "opponent",
+    "opponent-hull",
+    "opponent-family",
     "component",
     "seed-cell",
     "forward-time",

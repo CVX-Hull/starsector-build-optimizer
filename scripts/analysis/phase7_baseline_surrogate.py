@@ -30,6 +30,7 @@ from starsector_optimizer.matchup_features import (
     FEATURE_SCHEMA_VERSION,
     filter_feature_profile,
     matchup_feature_row,
+    opponent_feature_row,
 )
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.models import Build
@@ -41,6 +42,8 @@ from starsector_optimizer.phase7_matchup_data import (
     forward_time_split,
     held_out_build_split,
     held_out_component_combination_split,
+    held_out_opponent_family_split,
+    held_out_opponent_hull_split,
     held_out_opponent_split,
     held_out_seed_cell_split,
     load_honest_eval_matchups,
@@ -63,7 +66,15 @@ COMPONENT_KEY_DEFINITION = (
     "canonical_full_component_fingerprint:hull_id+slot_weapon_assignments+"
     "hullmods+flux_vents+flux_capacitors"
 )
-SPLIT_CHOICES = ("build", "opponent", "component", "seed-cell", "forward-time")
+SPLIT_CHOICES = (
+    "build",
+    "opponent",
+    "opponent-hull",
+    "opponent-family",
+    "component",
+    "seed-cell",
+    "forward-time",
+)
 MODEL_CHOICES = (
     "global_mean",
     "opponent_mean",
@@ -276,6 +287,16 @@ def _split_rows(config: BaselineConfig) -> tuple[SplitIds, dict[str, object]]:
         split = held_out_build_split(rows, config.holdout_fraction, config.seed)
     elif config.split == "opponent":
         split = held_out_opponent_split(rows, config.holdout_fraction, config.seed)
+    elif config.split == "opponent-hull":
+        opponent_hull_by_variant, _ = opponent_group_maps(config.game_dir, rows)
+        split = held_out_opponent_hull_split(
+            rows, opponent_hull_by_variant, config.holdout_fraction, config.seed
+        )
+    elif config.split == "opponent-family":
+        _, opponent_family_by_variant = opponent_group_maps(config.game_dir, rows)
+        split = held_out_opponent_family_split(
+            rows, opponent_family_by_variant, config.holdout_fraction, config.seed
+        )
     elif config.split == "component":
         split = held_out_component_combination_split(
             rows, build_lookup, config.holdout_fraction, config.seed
@@ -285,6 +306,32 @@ def _split_rows(config: BaselineConfig) -> tuple[SplitIds, dict[str, object]]:
     else:
         split = forward_time_split(rows, config.train_fraction)
     return split, build_lookup
+
+
+def opponent_group_maps(
+    game_dir: Path,
+    rows: Sequence[TrainingMatchupRow],
+) -> tuple[dict[str, str], dict[str, str]]:
+    game_data, _ = _load_context(game_dir)
+    hull_by_variant: dict[str, str] = {}
+    family_by_variant: dict[str, str] = {}
+    family_fields = (
+        "opponent_hull_size",
+        "opponent_hull_designation",
+        "opponent_hull_tech_manufacturer",
+    )
+    for variant_id in sorted({row.opponent_variant_id for row in rows}):
+        features = opponent_feature_row(variant_id, game_dir, game_data)
+        hull_id = str(features["opponent_hull_id"])
+        missing = [field for field in family_fields if field not in features]
+        if missing:
+            raise ValueError(
+                f"opponent variant {variant_id!r} is missing family field(s): "
+                f"{', '.join(missing)}"
+            )
+        hull_by_variant[variant_id] = hull_id
+        family_by_variant[variant_id] = ":".join(str(features[field]) for field in family_fields)
+    return hull_by_variant, family_by_variant
 
 
 def split_metadata(config: BaselineConfig) -> dict[str, object]:
@@ -302,6 +349,26 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
             "group_key_function": "opponent_variant_id",
             "group_key_fields": ["training_matchups.opponent_variant_id"],
             "supported_claim": "Transfer to unseen exact opponent variants/builds.",
+            "claim_supported": "supported",
+        }
+    if config.split == "opponent-hull":
+        return {
+            "split_level": "opponent-hull",
+            "group_key_function": "opponent_hull_id_from_stock_variant",
+            "group_key_fields": ["opponent_hull_id"],
+            "supported_claim": "Transfer to unseen opponent hulls using outcome-free stock variant descriptors.",
+            "claim_supported": "supported",
+        }
+    if config.split == "opponent-family":
+        return {
+            "split_level": "opponent-family",
+            "group_key_function": "opponent_size_designation_manufacturer_family",
+            "group_key_fields": [
+                "opponent_hull_size",
+                "opponent_hull_designation",
+                "opponent_hull_tech_manufacturer",
+            ],
+            "supported_claim": "Transfer to unseen outcome-free opponent hull-size/designation/manufacturer families.",
             "claim_supported": "supported",
         }
     if config.split == "component":
@@ -404,7 +471,11 @@ def split_overlap_counts(
     train_rows: Sequence[TrainingMatchupRow],
     test_rows: Sequence[TrainingMatchupRow],
     build_lookup: Mapping[str, Build],
+    opponent_hull_by_variant: Mapping[str, str] | None = None,
+    opponent_family_by_variant: Mapping[str, str] | None = None,
 ) -> dict[str, int]:
+    opponent_hull_by_variant = opponent_hull_by_variant or {}
+    opponent_family_by_variant = opponent_family_by_variant or {}
     train_components = {
         component_fingerprint_json(build_lookup[row.build_key])
         for row in train_rows
@@ -423,6 +494,30 @@ def split_overlap_counts(
         "exact_opponent": _overlap_count(
             {row.opponent_variant_id for row in train_rows},
             {row.opponent_variant_id for row in test_rows},
+        ),
+        "opponent_hull": _overlap_count(
+            {
+                opponent_hull_by_variant[row.opponent_variant_id]
+                for row in train_rows
+                if row.opponent_variant_id in opponent_hull_by_variant
+            },
+            {
+                opponent_hull_by_variant[row.opponent_variant_id]
+                for row in test_rows
+                if row.opponent_variant_id in opponent_hull_by_variant
+            },
+        ),
+        "opponent_family": _overlap_count(
+            {
+                opponent_family_by_variant[row.opponent_variant_id]
+                for row in train_rows
+                if row.opponent_variant_id in opponent_family_by_variant
+            },
+            {
+                opponent_family_by_variant[row.opponent_variant_id]
+                for row in test_rows
+                if row.opponent_variant_id in opponent_family_by_variant
+            },
         ),
         "hull_id": _overlap_count(
             {build_lookup[row.build_key].hull_id for row in train_rows if row.build_key in build_lookup},
@@ -616,10 +711,15 @@ def run_one(config: BaselineConfig) -> dict[str, object]:
     diagnostics: dict[str, object] = dict(result.diagnostics)
     train_training_rows = [row for row in split.train if isinstance(row, TrainingMatchupRow)]
     test_training_rows = [row for row in split.test if isinstance(row, TrainingMatchupRow)]
+    opponent_hull_by_variant, opponent_family_by_variant = opponent_group_maps(
+        config.game_dir, train_training_rows + test_training_rows
+    )
     diagnostics["overlap_counts"] = split_overlap_counts(
         train_training_rows,
         test_training_rows,
         build_lookup,
+        opponent_hull_by_variant,
+        opponent_family_by_variant,
     )
     if config.split == "component":
         diagnostics["component_overlap_diagnostics"] = component_overlap_diagnostics(

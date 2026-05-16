@@ -19,6 +19,8 @@ from starsector_optimizer.phase7_matchup_data import (
     forward_time_split,
     held_out_component_combination_split,
     held_out_build_split,
+    held_out_opponent_family_split,
+    held_out_opponent_hull_split,
     held_out_opponent_split,
     held_out_replicate_split,
     held_out_seed_cell_split,
@@ -366,6 +368,39 @@ class TestSplitBuilders:
         test_opps = {row.opponent_variant_id for row in split.test}
         assert train_opps.isdisjoint(test_opps)
         assert split.test
+
+    def test_held_out_opponent_hull_split_keeps_hulls_disjoint(self):
+        mapping = {"opp0": "enforcer", "opp1": "sunder", "opp2": "wolf"}
+
+        split = held_out_opponent_hull_split(
+            _split_rows(), mapping, holdout_fraction=0.34, seed=1
+        )
+
+        train_hulls = {mapping[row.opponent_variant_id] for row in split.train}
+        test_hulls = {mapping[row.opponent_variant_id] for row in split.test}
+        assert train_hulls.isdisjoint(test_hulls)
+        assert split.test
+
+    def test_held_out_opponent_family_split_keeps_families_disjoint(self):
+        mapping = {
+            "opp0": "DESTROYER:Destroyer:Low Tech",
+            "opp1": "DESTROYER:Destroyer:High Tech",
+            "opp2": "FRIGATE:Frigate:Low Tech",
+        }
+
+        split = held_out_opponent_family_split(
+            _split_rows(), mapping, holdout_fraction=0.34, seed=1
+        )
+
+        train_families = {mapping[row.opponent_variant_id] for row in split.train}
+        test_families = {mapping[row.opponent_variant_id] for row in split.test}
+        assert train_families.isdisjoint(test_families)
+
+    def test_opponent_group_split_requires_complete_mapping(self):
+        with pytest.raises(ValueError, match="missing an opponent hull group"):
+            held_out_opponent_hull_split(
+                _split_rows(), {"opp0": "enforcer"}, holdout_fraction=0.34, seed=1
+            )
 
     def test_held_out_replicate_split_keeps_replicate_groups_disjoint(self):
         rows = [

@@ -330,6 +330,18 @@ the conflict key.
 ```python
 def held_out_build_split(rows, holdout_fraction: float, seed: int) -> SplitIds: ...
 def held_out_opponent_split(rows, holdout_fraction: float, seed: int) -> SplitIds: ...
+def held_out_opponent_hull_split(
+    rows,
+    opponent_hull_by_variant: Mapping[str, str],
+    holdout_fraction: float,
+    seed: int,
+) -> SplitIds: ...
+def held_out_opponent_family_split(
+    rows,
+    opponent_family_by_variant: Mapping[str, str],
+    holdout_fraction: float,
+    seed: int,
+) -> SplitIds: ...
 def held_out_replicate_split(
     rows: Sequence[HonestEvalMatchupRow],
     holdout_fraction: float,
@@ -356,8 +368,8 @@ The supported split levels and their claim boundaries are:
 | `replicate` | exact `(build_key, opponent_variant_id)` with held-out replicate indices | Simulator-noise estimation only; not transfer evidence. |
 | `build` | `build_key` | Transfer to unseen repaired player builds drawn from the same broader build distribution. |
 | `opponent` | `opponent_variant_id` | Transfer to unseen exact opponent variants/builds. |
-| `opponent_hull` | opponent `hull_id` derived from the stock variant | Transfer to unseen opponent hulls. Requires a future split-builder implementation before reportable use. |
-| `opponent_family` | declared or derived opponent family/archetype key | Transfer to unseen opponent families/archetypes. Requires a future outcome-free or train-fold-fitted family builder before reportable use. |
+| `opponent-hull` | opponent `hull_id` derived from the stock variant | Transfer to unseen opponent hulls using outcome-free stock variant descriptors. |
+| `opponent-family` | opponent hull size, designation, and tech/manufacturer derived from parsed game data | Transfer to unseen coarse opponent families/archetypes. Learned or target-derived clusters require a separate train-fold-fitted implementation before reportable use. |
 | `component` | component-combination key defined below | Transfer away from selected component combinations, not from all components globally. |
 | `seed-cell` | `(campaign, seed)` or campaign-cell key when seed is absent | Transfer across campaign cells/proposal contexts. |
 | `forward-time` | source order key, normally `(source_path, trial_number, opponent_index)` | Forward deployment over later optimizer proposals. |
@@ -568,7 +580,8 @@ encoder or model without target fallback.
 Each learned model/split run uses nested validation:
 
 1. Build the outer split using one of the comparator-gate split names:
-   `build`, `opponent`, `component`, `seed-cell`, or `forward-time`.
+   `build`, `opponent`, `opponent-hull`, `opponent-family`, `component`,
+   `seed-cell`, or `forward-time`.
 2. Build the inner validation split from outer training rows only, using the
    same grouping stressor as the outer split.
 3. If the outer training rows cannot support that inner split, emit an
@@ -579,7 +592,7 @@ Each learned model/split run uses nested validation:
 5. Refit the selected model on the full outer training rows.
 6. Evaluate once on the outer test rows.
 
-The canonical 15-job matrix reports fixed model families across fixed splits;
+The canonical 21-job matrix reports fixed model families across fixed splits;
 it is a comparison matrix, not an automatically nested model-family selector.
 Any claim that names a single "best" learned model must either predeclare the
 model family and primary endpoint before the run, or implement model-family
@@ -617,7 +630,7 @@ open only for exploratory artifacts; confirmatory artifacts must define pass,
 warning, or fail semantics before the run.
 
 The learned script accepts `--comparator-json`, defaulting to
-`data/phase7/wave1_comparator_gate_2026-05-11.json`. Results include the
+`data/phase7/wave1_comparator_gate_2026-05-14.json`. Results include the
 comparator artifact path, matching comparator context for the same split, and
 default-vs-tuned deltas when tuning is used. If no matching comparator row
 exists, the result records `comparator_missing` instead of failing.
@@ -702,11 +715,12 @@ This spec owns the Phase 7 job matrix and artifact semantics.
 
 The canonical full-run batch job matrix is exactly:
 
-- splits: `build`, `opponent`, `component`, `seed-cell`, `forward-time`;
+- splits: `build`, `opponent`, `opponent-hull`, `opponent-family`,
+  `component`, `seed-cell`, `forward-time`;
 - model families: `random_forest_tuned`, `catboost_regressor`,
   `sparse_pairwise_ridge`.
 
-That produces 15 jobs. Each job runs
+That produces 21 jobs. Each job runs
 `scripts/analysis/phase7_learned_surrogate_experiment.py` with exactly one
 split and exactly one model family, plus the configured source DB, game dir,
 comparator JSON, HPO settings, split seeds, fractions, top-k values, progress
@@ -754,7 +768,7 @@ config was explicitly created for smoke/debug output.
 
 The batch merge step must validate every per-job artifact before publishing:
 
-- all 15 canonical job IDs are present exactly once and every artifact's
+- all 21 canonical job IDs are present exactly once and every artifact's
   stamped `batch_job.job_id` matches the expected file/job identity;
 - no job is failed, missing, duplicate, stale, or partial;
 - every artifact has the same `experiment_schema_version`,

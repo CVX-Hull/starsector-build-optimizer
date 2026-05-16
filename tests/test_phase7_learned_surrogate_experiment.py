@@ -69,13 +69,15 @@ def test_parser_exposes_learned_model_and_comparator_options():
     assert "--output" in text
 
 
-def test_all_configs_cover_five_splits_and_three_model_families():
+def test_all_configs_cover_opponent_hierarchy_splits_and_three_model_families():
     configs = learned.build_experiment_configs(_config(split="all", model="all"))
 
-    assert len(configs) == 15
+    assert len(configs) == 21
     assert {item.split for item in configs} == {
         "build",
         "opponent",
+        "opponent-hull",
+        "opponent-family",
         "component",
         "seed-cell",
         "forward-time",
@@ -207,6 +209,20 @@ def test_leakage_diagnostics_uses_split_forbidden_key_only():
     assert leakage["forbidden_key_overlap"] == {"status": "pass", "value": 0}
 
 
+def test_leakage_diagnostics_supports_opponent_hierarchy_splits():
+    hull_leakage = learned.leakage_diagnostics({
+        "split_level": "opponent-hull",
+        "overlap_counts": {"exact_opponent": 0, "opponent_hull": 1},
+    })
+    family_leakage = learned.leakage_diagnostics({
+        "split_level": "opponent-family",
+        "overlap_counts": {"opponent_hull": 2, "opponent_family": 0},
+    })
+
+    assert hull_leakage["forbidden_key_overlap"] == {"status": "fail", "value": 1}
+    assert family_leakage["forbidden_key_overlap"] == {"status": "pass", "value": 0}
+
+
 def test_leakage_diagnostics_top_level_split_all_is_not_applicable():
     leakage = learned.leakage_diagnostics()
 
@@ -216,7 +232,7 @@ def test_leakage_diagnostics_top_level_split_all_is_not_applicable():
     }
 
 
-def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations():
+def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations(monkeypatch):
     split = SplitIds(
         train=(TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0", 0, 1.0, "finalized"),),
         test=(TrainingMatchupRow("p", "c0", 0, 1, "b1", "opp1", 0, 0.5, "finalized"),),
@@ -225,6 +241,17 @@ def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations():
         "b0": _make_build({"WS 001": "lightdualmg", "WS 002": "lightmg"}),
         "b1": _make_build({"WS 001": "lightdualmg", "WS 002": "railgun"}),
     }
+    monkeypatch.setattr(
+        learned.baseline,
+        "opponent_group_maps",
+        lambda game_dir, rows: (
+            {"opp0": "wolf", "opp1": "enforcer"},
+            {
+                "opp0": "FRIGATE:Frigate:High Tech",
+                "opp1": "DESTROYER:Destroyer:Low Tech",
+            },
+        ),
+    )
 
     scorecard = learned.hierarchy_scorecard(_config(split="component"), split, build_lookup)
 
@@ -233,6 +260,68 @@ def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations():
     assert diagnostics["k_1_component_combinations"]["overlap_unique"] == 5
     assert diagnostics["k_2_component_combinations"]["overlap_unique"] == 10
     assert diagnostics["k_3_component_combinations"]["overlap_unique"] == 10
+
+
+def test_hierarchy_scorecard_reports_opponent_hierarchy_overlap_for_exact_opponent_split(monkeypatch):
+    split = SplitIds(
+        train=(TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0_a", 0, 1.0, "finalized"),),
+        test=(TrainingMatchupRow("p", "c0", 0, 1, "b1", "opp0_b", 0, 0.5, "finalized"),),
+    )
+    build_lookup = {
+        "b0": _make_build({"WS 001": "lightdualmg"}),
+        "b1": _make_build({"WS 001": "railgun"}),
+    }
+    monkeypatch.setattr(
+        learned.baseline,
+        "opponent_group_maps",
+        lambda game_dir, rows: (
+            {"opp0_a": "wolf", "opp0_b": "wolf"},
+            {
+                "opp0_a": "FRIGATE:Frigate:High Tech",
+                "opp0_b": "FRIGATE:Frigate:High Tech",
+            },
+        ),
+    )
+
+    scorecard = learned.hierarchy_scorecard(_config(split="opponent"), split, build_lookup)
+
+    assert scorecard["overlap_counts"]["exact_opponent"] == 0
+    assert scorecard["overlap_counts"]["opponent_hull"] == 1
+    assert scorecard["overlap_counts"]["opponent_family"] == 1
+
+
+def test_hierarchy_scorecard_names_opponent_family_fields(monkeypatch):
+    split = SplitIds(
+        train=(TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0", 0, 1.0, "finalized"),),
+        test=(TrainingMatchupRow("p", "c0", 0, 1, "b1", "opp1", 0, 0.5, "finalized"),),
+    )
+    build_lookup = {
+        "b0": _make_build({"WS 001": "lightdualmg"}),
+        "b1": _make_build({"WS 001": "railgun"}),
+    }
+    monkeypatch.setattr(
+        learned.baseline,
+        "opponent_group_maps",
+        lambda game_dir, rows: (
+            {"opp0": "wolf", "opp1": "enforcer"},
+            {
+                "opp0": "FRIGATE:Frigate:High Tech",
+                "opp1": "DESTROYER:Destroyer:Low Tech",
+            },
+        ),
+    )
+
+    scorecard = learned.hierarchy_scorecard(
+        _config(split="opponent-family"), split, build_lookup
+    )
+
+    assert scorecard["group_key_function"] == "held_out_opponent_family_split"
+    assert scorecard["forbidden_cross_split_keys"] == [
+        "opponent_hull_size",
+        "opponent_hull_designation",
+        "opponent_hull_tech_manufacturer",
+    ]
+    assert scorecard["overlap_counts"]["opponent_family"] == 0
 
 
 def _make_build(weapon_assignments):
@@ -337,6 +426,16 @@ def test_insufficient_inner_split_returns_diagnostic(monkeypatch):
     result = learned.inner_validation_split(_config(split="build"), _rows(), {})
 
     assert result is None
+
+
+def test_inner_split_propagates_opponent_descriptor_errors(monkeypatch):
+    def broken_maps(game_dir, rows):
+        raise ValueError("bad opponent descriptor")
+
+    monkeypatch.setattr(learned.baseline, "opponent_group_maps", broken_maps)
+
+    with pytest.raises(ValueError, match="bad opponent descriptor"):
+        learned.inner_validation_split(_config(split="opponent-hull"), _rows(), {})
 
 
 def test_catboost_missing_requires_explicit_skip(monkeypatch):

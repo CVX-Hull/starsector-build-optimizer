@@ -657,6 +657,47 @@ def held_out_opponent_split(
     )
 
 
+def held_out_opponent_hull_split(
+    rows: Sequence[TrainingMatchupRow],
+    opponent_hull_by_variant: Mapping[str, str],
+    holdout_fraction: float,
+    seed: int,
+) -> SplitIds:
+    return _group_split(
+        rows,
+        [_lookup_opponent_group(opponent_hull_by_variant, row.opponent_variant_id, "hull") for row in rows],
+        holdout_fraction,
+        seed,
+    )
+
+
+def held_out_opponent_family_split(
+    rows: Sequence[TrainingMatchupRow],
+    opponent_family_by_variant: Mapping[str, str],
+    holdout_fraction: float,
+    seed: int,
+) -> SplitIds:
+    return _group_split(
+        rows,
+        [_lookup_opponent_group(opponent_family_by_variant, row.opponent_variant_id, "family") for row in rows],
+        holdout_fraction,
+        seed,
+    )
+
+
+def _lookup_opponent_group(
+    mapping: Mapping[str, str],
+    opponent_variant_id: str,
+    group_name: str,
+) -> str:
+    try:
+        return mapping[opponent_variant_id]
+    except KeyError as exc:
+        raise ValueError(
+            f"opponent variant {opponent_variant_id!r} is missing an opponent {group_name} group"
+        ) from exc
+
+
 def held_out_replicate_split(
     rows: Sequence[HonestEvalMatchupRow], holdout_fraction: float, seed: int
 ) -> SplitIds:
