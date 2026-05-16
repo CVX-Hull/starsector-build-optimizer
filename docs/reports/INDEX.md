@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-05-14
+last-validated: 2026-05-16
 ---
 
 # Reports — Index
@@ -21,7 +21,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | shipped | [Wave 1 honest-eval stall checkpoint](2026-05-10-wave1-honest-eval-stall-checkpoint.md) | Snapshot of interrupted eval `…20260510T170431Z`; root causes, cleanup fixes, and resume path. The run is recoverable via `--resume-from` after teardown. |
 | 2026-05-11 | shipped | [Wave 1 honest-eval final](2026-05-11-wave1-honest-eval-final.md) | Final transform-free oracle verdict. c0a wins by mean top-K, c1 has the best individual build, c2 loses to both baselines, c3 warm-start remains quarantined, and all optimizer cells beat random-feasible. |
 | 2026-05-11 | shipped | [Validation-to-Phase-7 roadmap](2026-05-11-validation-to-phase7-roadmap.md) | Consolidates final honest-eval results, corrected Wave 1 analyses, Phase 7 feature-substrate findings, and the staged roadmap; 2026-05-12 text revision tightens learned-surrogate gates without changing 2026-05-11 evidence. |
-| 2026-05-14 | shipped | [Phase 7 v3 evidence refresh](2026-05-14-phase7-v3-evidence-refresh.md) | Current-contract feature-schema-v3 comparator and learned-surrogate matrix. CatBoost leads non-opponent splits; tuned random forest remains best on held-out opponent; all claims exploratory. |
+| 2026-05-16 | shipped | [Phase 7 seven-split evidence](2026-05-16-phase7-seven-split-evidence.md) | Current seven-split feature-schema-v3 comparator and learned-surrogate matrix. CatBoost leads non-opponent splits; tuned random forest leads opponent hierarchy splits by learned RMSE; all claims exploratory. |
 | 2026-05-09 | shipped | [Wave 0 validation](2026-05-09-wave0-validation.md) | V2 re-validation Wave 0 preflight gate. All gates passed post-fix; multi-worker LOADOUT_MISMATCH root-caused and verified clean. |
 
 ## Draft / In-Flight Reports
@@ -35,6 +35,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Pre-launch; fills in after `launch_wave2.sh` completes. |
 | 2026-05-11 | superseded | [Phase 7 matchup surrogate preliminary](2026-05-11-phase7-matchup-surrogate-preliminary.md) | V2 / legacy-component comparator evidence. Superseded for current-contract claims by the 2026-05-14 v3 evidence refresh. |
 | 2026-05-12 | superseded | [Phase 7 learned surrogate experiment](2026-05-12-phase7-learned-surrogate-experiment.md) | V2 learned-surrogate draft. Superseded for current-contract claims by the 2026-05-14 v3 evidence refresh. |
+| 2026-05-14 | superseded | [Phase 7 v3 evidence refresh](2026-05-14-phase7-v3-evidence-refresh.md) | Five-split feature-schema-v3 comparator and learned-surrogate matrix. Superseded for current seven-split claims by the 2026-05-16 seven-split evidence report. |
 
 ## Historical / Pre-V2 Reports
 

@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import math
+import sqlite3
 import subprocess
 import sys
 import time
@@ -415,6 +416,23 @@ def inner_validation_split(
     return split if split.train and split.test else None
 
 
+def inner_validation_metadata(config: LearnedExperimentConfig) -> dict[str, object]:
+    metadata = dict(baseline.split_metadata(_baseline_config(config)))
+    metadata.update(
+        {
+            "split_role": "inner_validation",
+            "source_rows": "outer_training_rows_only",
+            "seed": config.hpo_seed,
+            "holdout_fraction": config.holdout_fraction,
+            "random_row_fallback": False,
+            "fallback_behavior": "insufficient_inner_groups",
+        }
+    )
+    if config.split == "forward-time":
+        metadata["temporal_semantics"] = "blocked_prefix_suffix_within_outer_training_prefix"
+    return metadata
+
+
 def _sample_value(spec: object, rng: np.random.Generator) -> object:
     if isinstance(spec, list):
         return spec[int(rng.integers(0, len(spec)))]
@@ -706,7 +724,33 @@ def _validate_claim_config(config: LearnedExperimentConfig) -> None:
         raise ValueError("primary_top_k must be positive")
 
 
-def claim_boundary(config: LearnedExperimentConfig) -> dict[str, object]:
+def _honest_eval_lineage(db_path: Path) -> dict[str, object]:
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "select distinct source_path from honest_eval_matchups order by source_path"
+            ).fetchall()
+    except sqlite3.Error as exc:
+        return {
+            "status": "unavailable",
+            "reason": exc.__class__.__name__,
+            "source_paths": [],
+            "ledger_id": None,
+            "run_lineage": [],
+        }
+    source_paths = [str(row[0]) for row in rows if row and row[0]]
+    return {
+        "status": "available" if source_paths else "not_applicable",
+        "source_paths": source_paths,
+        "ledger_id": ";".join(source_paths) if source_paths else None,
+        "run_lineage": source_paths,
+    }
+
+
+def claim_boundary(
+    config: LearnedExperimentConfig,
+    honest_eval_lineage: Mapping[str, object] | None = None,
+) -> dict[str, object]:
     _validate_claim_config(config)
     return {
         "target_variable": TARGET_VARIABLE,
@@ -719,6 +763,8 @@ def claim_boundary(config: LearnedExperimentConfig) -> dict[str, object]:
         "claim_label": config.claim_label,
         "honest_eval_usage": config.honest_eval_usage,
         "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
+        "honest_eval_ledger_id": None if honest_eval_lineage is None else honest_eval_lineage.get("ledger_id"),
+        "honest_eval_run_lineage": [] if honest_eval_lineage is None else honest_eval_lineage.get("run_lineage", []),
     }
 
 
@@ -780,10 +826,27 @@ def feature_family_registry(records: Sequence[Mapping[str, FeatureValue]]) -> di
                 if "_vs_" in key or "_minus_" in key or "interaction" in key
                 else []
             ),
-            "leakage_risk": "high" if key in excluded else "low",
+            "leakage_risk": _feature_leakage_risk(key, excluded),
         }
         for key in keys
     }
+
+
+def _feature_leakage_risk(key: str, excluded: set[str]) -> str:
+    if key in excluded or key.startswith("target_derived_") or key.startswith("twfe_"):
+        return "high"
+    template = _feature_template_for_key(key)
+    if template == "sparse_indicator":
+        return "medium"
+    if template == "categorical_residual" and (
+        key.endswith("_id")
+        or key.endswith("variant_id")
+        or "weapon_id" in key
+        or "hullmod" in key
+        or "opponent_" in key
+    ):
+        return "medium"
+    return "low"
 
 
 def _registry_digest(registry: Mapping[str, object]) -> str:
@@ -947,17 +1010,19 @@ def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[s
 
 def missing_optional_model_result(config: LearnedExperimentConfig) -> dict[str, object]:
     _validate_claim_config(config)
+    honest_eval_lineage = _honest_eval_lineage(config.db_path)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
-        "claim_boundary": claim_boundary(config),
+        "claim_boundary": claim_boundary(config, honest_eval_lineage),
         "model_family_policy": model_family_policy(config),
         "feature_selection_protocol": feature_selection_protocol((), config.feature_profile),
         "deployment_policy": deployment_policy(config),
         "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
+        "inner_validation_metadata": inner_validation_metadata(config),
         "leakage_diagnostics": leakage_diagnostics(),
         "split": config.split,
         "model": config.model,
@@ -1015,7 +1080,8 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
     matching = comparator.get("matching_result") if isinstance(comparator.get("matching_result"), dict) else None
     feature_protocol = feature_selection_protocol(outer_train.records, config.feature_profile)
     hierarchy = hierarchy_scorecard(config, split, build_lookup)
-    claim = claim_boundary(config)
+    honest_eval_lineage = _honest_eval_lineage(config.db_path)
+    claim = claim_boundary(config, honest_eval_lineage)
     family_policy = model_family_policy(config)
     deploy_policy = deployment_policy(config)
     leakage = leakage_diagnostics(hierarchy)
@@ -1030,6 +1096,7 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
         "feature_selection_protocol": feature_protocol,
         "deployment_policy": deploy_policy,
         "hierarchy_scorecard": hierarchy,
+        "inner_validation_metadata": inner_validation_metadata(config),
         "leakage_diagnostics": leakage,
         "provenance": provenance(config),
         "split": config.split,
@@ -1069,17 +1136,19 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
 def _insufficient_result(config: LearnedExperimentConfig, reason: str) -> dict[str, object]:
     _validate_claim_config(config)
     feature_protocol = feature_selection_protocol((), config.feature_profile)
+    honest_eval_lineage = _honest_eval_lineage(config.db_path)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "db_path": str(config.db_path),
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
-        "claim_boundary": claim_boundary(config),
+        "claim_boundary": claim_boundary(config, honest_eval_lineage),
         "model_family_policy": model_family_policy(config),
         "feature_selection_protocol": feature_protocol,
         "deployment_policy": deployment_policy(config),
         "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
+        "inner_validation_metadata": inner_validation_metadata(config),
         "leakage_diagnostics": leakage_diagnostics(),
         "provenance": provenance(config),
         "split": config.split,
@@ -1122,6 +1191,7 @@ def leakage_checklist() -> dict[str, bool]:
 
 
 def provenance(config: LearnedExperimentConfig) -> dict[str, object]:
+    lineage = _honest_eval_lineage(config.db_path)
     return {
         "game_dir": str(config.game_dir),
         "comparator_json_path": None if config.comparator_json_path is None else str(config.comparator_json_path),
@@ -1138,6 +1208,8 @@ def provenance(config: LearnedExperimentConfig) -> dict[str, object]:
         "feature_profile": config.feature_profile,
         "honest_eval_usage": config.honest_eval_usage,
         "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
+        "honest_eval_ledger_id": lineage["ledger_id"],
+        "honest_eval_run_lineage": lineage["run_lineage"],
         "primary_top_k": config.primary_top_k,
         "promotion_metric": config.promotion_metric,
         "promotion_threshold": config.promotion_threshold,
@@ -1207,6 +1279,7 @@ def _experiment_payload(
     started: float,
 ) -> dict[str, object]:
     _validate_claim_config(config)
+    honest_eval_lineage = _honest_eval_lineage(config.db_path)
     feature_protocol = feature_selection_protocol((), config.feature_profile)
     merged_registry: dict[str, dict[str, object]] = {}
     comparator_contexts: dict[str, object] = {}
@@ -1238,10 +1311,11 @@ def _experiment_payload(
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_profile": config.feature_profile,
         "batch_job": batch_job_context(config),
-        "claim_boundary": claim_boundary(config),
+        "claim_boundary": claim_boundary(config, honest_eval_lineage),
         "model_family_policy": model_family_policy(config),
         "feature_selection_protocol": feature_protocol,
         "deployment_policy": deployment_policy(config),
+        "honest_eval_lineage": honest_eval_lineage,
         "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
         "leakage_diagnostics": leakage_diagnostics(),
         "db_path": str(config.db_path),

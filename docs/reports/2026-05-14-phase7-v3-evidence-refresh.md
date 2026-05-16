@@ -1,7 +1,8 @@
 ---
 type: report
-status: shipped
+status: superseded
 last-validated: 2026-05-14
+superseded-by: 2026-05-16-phase7-seven-split-evidence.md
 supersedes:
   - 2026-05-11-phase7-matchup-surrogate-preliminary.md
   - 2026-05-12-phase7-learned-surrogate-experiment.md

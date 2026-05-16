@@ -1,7 +1,7 @@
 ---
 type: reference
-status: draft
-last-validated: 2026-05-12
+status: shipped
+last-validated: 2026-05-16
 ---
 
 # Phase 7 — Featurized Matchup Surrogate
@@ -477,8 +477,9 @@ matrix live in
 
 The staged roadmap is:
 
-1. Keep the completed honest-eval ledger and per-cell outputs materialized in
-   the Phase 7 matchup DB with zero unresolved build keys.
+1. Keep the completed honest-eval ledger and per-cell outputs reproducibly
+   materializable in the Phase 7 matchup DB. Coverage counts belong in dated
+   reports, not in this reference.
 2. Validate the feature substrate with grouped splits and trivial comparators.
 3. Use the learned-surrogate research gate to run opponent-transfer hierarchy
    diagnostics: exact opponent, opponent hull, opponent family, and then
@@ -490,7 +491,10 @@ The staged roadmap is:
 6. Implement the custom structured BO sampler only after the cheaper
    model-assisted-search gates show value.
 
-The current roadmap checkpoint is recorded in
+Current dated Phase 7 surrogate evidence is recorded in
+[2026-05-16-phase7-seven-split-evidence.md](../reports/2026-05-16-phase7-seven-split-evidence.md).
+The broader validation-to-Phase-7 roadmap is recorded in
 [2026-05-11-validation-to-phase7-roadmap.md](../reports/2026-05-11-validation-to-phase7-roadmap.md).
-That report owns dated measurements; final honest-eval verdict details live in
+Those reports own dated measurements; final honest-eval verdict details live
+in
 [2026-05-11-wave1-honest-eval-final.md](../reports/2026-05-11-wave1-honest-eval-final.md).

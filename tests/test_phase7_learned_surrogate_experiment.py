@@ -141,6 +141,8 @@ def test_config_provenance_includes_ml_context():
     assert provenance["model_thread_count"] == 1
     assert provenance["feature_profile"] == "all"
     assert provenance["honest_eval_usage"] == "diagnostic_only"
+    assert provenance["honest_eval_ledger_id"]
+    assert provenance["honest_eval_run_lineage"]
     assert provenance["primary_top_k"] == 1
     assert provenance["comparator_json_path"].endswith("wave1_comparator_gate_2026-05-14.json")
 
@@ -152,21 +154,31 @@ def test_final_claim_requires_fresh_honest_eval_ledger():
 
 def test_artifact_contract_helpers_emit_registry_and_policies():
     cfg = _config(split="component", model="random_forest_tuned", honest_eval_usage="exploratory_selection")
-    records = [{"weapon_range": 700.0, "slot_arc": 90.0}]
+    records = [{"weapon_range": 700.0, "slot_arc": 90.0, "build_hullmod__heavyarmor": 1}]
     protocol = learned.feature_selection_protocol(records, "all")
-    claim = learned.claim_boundary(cfg)
+    claim = learned.claim_boundary(
+        cfg,
+        {
+            "ledger_id": "data/honest_eval/example/results.jsonl",
+            "run_lineage": ["data/honest_eval/example/results.jsonl"],
+        },
+    )
 
     assert claim["target_variable"] == "training_matchups.target"
     assert claim["honest_eval_diagnostic_target"] == "honest_eval_top_k"
     assert claim["honest_eval_usage"] == "exploratory_selection"
+    assert claim["honest_eval_ledger_id"] == "data/honest_eval/example/results.jsonl"
+    assert claim["honest_eval_run_lineage"] == ["data/honest_eval/example/results.jsonl"]
     assert protocol["policy_type"] == "fixed_profile_no_selector"
-    assert protocol["selected_feature_count"] == 2
+    assert protocol["selected_feature_count"] == 3
     assert len(protocol["feature_family_registry_sha256"]) == 64
     assert protocol["feature_family_registry"]["weapon_range"]["family"] == "weapon_pressure"
     assert protocol["feature_family_registry"]["slot_arc"]["family"] == "slot_geometry"
     assert protocol["feature_family_registry"]["weapon_range"]["template"] == "raw_descriptor"
     assert protocol["feature_family_registry"]["weapon_range"]["parents"] == []
     assert protocol["feature_family_registry"]["weapon_range"]["leakage_risk"] == "low"
+    assert protocol["feature_family_registry"]["build_hullmod__heavyarmor"]["template"] == "sparse_indicator"
+    assert protocol["feature_family_registry"]["build_hullmod__heavyarmor"]["leakage_risk"] == "medium"
     assert learned.model_family_policy(cfg)["policy_type"] == "fixed_matrix"
     assert learned.deployment_policy(cfg)["candidate_universe"] == "source_db_builds"
     leakage = learned.leakage_diagnostics()
@@ -417,6 +429,23 @@ def test_inner_split_uses_outer_training_rows_only(monkeypatch):
     assert seen["rows"] == tuple(rows)
 
 
+def test_inner_validation_metadata_documents_grouped_outer_training_contract():
+    metadata = learned.inner_validation_metadata(_config(split="opponent-family"))
+
+    assert metadata["split_role"] == "inner_validation"
+    assert metadata["source_rows"] == "outer_training_rows_only"
+    assert metadata["group_key_function"] == "opponent_size_designation_manufacturer_family"
+    assert metadata["random_row_fallback"] is False
+    assert metadata["fallback_behavior"] == "insufficient_inner_groups"
+
+
+def test_forward_time_inner_validation_metadata_documents_blocking():
+    metadata = learned.inner_validation_metadata(_config(split="forward-time"))
+
+    assert metadata["source_rows"] == "outer_training_rows_only"
+    assert metadata["temporal_semantics"] == "blocked_prefix_suffix_within_outer_training_prefix"
+
+
 def test_insufficient_inner_split_returns_diagnostic(monkeypatch):
     def fake_split(inner_rows, holdout_fraction, seed):
         return SplitIds(train=tuple(inner_rows), test=())
@@ -446,6 +475,8 @@ def test_catboost_missing_requires_explicit_skip(monkeypatch):
 
     skipped = learned.missing_optional_model_result(_config(model="catboost_regressor"))
     assert skipped["status"] == "skipped"
+    assert skipped["claim_boundary"]["honest_eval_ledger_id"]
+    assert skipped["claim_boundary"]["honest_eval_run_lineage"]
     assert skipped["reason"] == "missing_optional_dependency"
 
 
