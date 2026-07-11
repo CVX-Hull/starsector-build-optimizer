@@ -57,6 +57,7 @@ For every module: spec first, then tests, then implementation. Skills enforce qu
 | Post-implementation | After all tasks complete | [`post-impl-audit`](.claude/skills/post-impl-audit.md) |
 | Invariant check | When reviewing changes | [`design-invariants`](.claude/skills/design-invariants.md) |
 | Honest evaluation | After every major optimization run, before any report publishes findings | [`honest-evaluation`](.claude/skills/honest-evaluation.md) |
+| Doc & roadmap grooming | After filing a report, retiring a plan, completing a wave, or changing skills | [`doc-grooming`](.claude/skills/doc-grooming.md) |
 
 Task-triggered SOP skills (AWS ops, Java modding pitfalls, report writing) and the full skill catalogue: [.claude/skills/README.md](.claude/skills/README.md).
 

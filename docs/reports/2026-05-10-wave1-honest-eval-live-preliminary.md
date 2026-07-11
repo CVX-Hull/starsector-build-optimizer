@@ -1,6 +1,7 @@
 ---
 type: report
 status: superseded
+superseded-by: 2026-05-11-wave1-honest-eval-final.md
 last-validated: 2026-05-11
 ---
 

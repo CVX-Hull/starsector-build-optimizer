@@ -185,6 +185,8 @@ After implementation and post-implementation audit:
 4. Set `post_impl_audit` to `passed`, `failed`, or a relative link to the
    audit record.
 5. Move the file to `.claude/plans/archive/YYYY/`.
+6. Groom `docs/roadmap.md`: delete the delivered items, absorb any follow-up
+   work the plan surfaced (see [`doc-grooming`](doc-grooming.md) step 2).
 
 If the plan is replaced before implementation:
 

@@ -14,6 +14,7 @@ open the skill before acting in its domain.
 | [post-impl-audit](post-impl-audit.md) | After all tasks in an implementation complete. |
 | [design-invariants](design-invariants.md) | Reviewing any change — mechanical invariant checklist + grep commands. |
 | [honest-evaluation](honest-evaluation.md) | After every major optimization run, before any report publishes findings. |
+| [doc-grooming](doc-grooming.md) | After filing a report, retiring a plan, completing a wave, or changing skills — index/roadmap/skill hygiene + always-loaded budget. |
 
 ## SOPs (task-triggered)
 

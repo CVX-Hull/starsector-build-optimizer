@@ -80,6 +80,7 @@ override_in_message() {
 validate_agents_symlinks
 
 uv run python scripts/validate_active_plans.py
+uv run python scripts/validate_docs.py
 
 if needs_manifest_regen && ! manifest_was_regen; then
     if ! override_in_message "${1:-}"; then

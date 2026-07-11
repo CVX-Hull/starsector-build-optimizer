@@ -72,6 +72,7 @@ Use one canonical owner per kind of truth:
 | What is the current phase/status map? | `AGENTS.md` |
 | What is planned next (forward roadmap, open workstreams, paused debts)? | `docs/roadmap.md` |
 | Which skills exist and when does each apply? | `.claude/skills/README.md` |
+| When and how are docs/roadmap/skills groomed? | `doc-grooming` skill + `scripts/validate_docs.py` (pre-commit) |
 | Where does documentation belong? | `docs/CONVENTIONS.md` |
 | Which spec number maps to which module? | `docs/project-overview.md` plus `docs/specs/README.md` for gaps |
 | Which reference docs exist? | `docs/reference/README.md` |
