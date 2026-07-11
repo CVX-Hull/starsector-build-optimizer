@@ -25,9 +25,18 @@ from starsector_optimizer.phase7_learned_batch import (
     validate_batch_config,
     write_status_snapshot,
 )
+from starsector_optimizer.matchup_features import FEATURE_SCHEMA_VERSION
+from starsector_optimizer.phase7_matchup_data import (
+    CANONICAL_SPLIT_SEED_BANK,
+    RESERVED_CONFIRMATORY_SEED,
+    SEEDLESS_SPLITS,
+)
 
 
-CANONICAL_JOB_COUNT = len(CANONICAL_SPLITS) * len(CANONICAL_MODELS)
+SEEDED_SPLIT_COUNT = len(CANONICAL_SPLITS) - len(SEEDLESS_SPLITS)
+CANONICAL_JOB_COUNT = len(CANONICAL_MODELS) * (
+    SEEDED_SPLIT_COUNT * len(CANONICAL_SPLIT_SEED_BANK) + len(SEEDLESS_SPLITS)
+)
 
 
 def load_batch_cli_module():
@@ -72,21 +81,20 @@ def make_config(tmp_path: Path) -> LearnedBatchConfig:
         execution_enabled=True,
         source_db_path=Path("data/phase7/wave1_matchups.sqlite"),
         game_dir=Path("game/starsector"),
-        comparator_json_path=Path("data/phase7/wave1_comparator_gate_2026-05-11.json"),
         hpo_trials=24,
         hpo_jobs=4,
         model_thread_count=4,
         top_k_values=(1, 3, 5),
-        split_seed=17,
+        split_seeds=CANONICAL_SPLIT_SEED_BANK,
         hpo_seed=23,
         holdout_fraction=0.2,
         train_fraction=0.8,
         honest_eval_usage="exploratory_selection",
         primary_top_k=1,
-        promotion_metric="honest_eval_top_k_recall",
+        promotion_metric="mean_per_opponent_spearman",
         promotion_threshold=0.0,
         claim_label="exploratory",
-        final_refit_policy="refit_selected_model_on_all_training_rows_after_selection",
+        final_refit_policy="fit_outer_train_only_no_deployment_artifact",
         candidate_universe="source_db_builds",
         deployment_artifact="none",
         dependency_extra="surrogate",
@@ -184,21 +192,20 @@ publish_canonical: true
 execution_enabled: true
 source_db_path: data/phase7/wave1_matchups.sqlite
 game_dir: game/starsector
-comparator_json_path: data/phase7/wave1_comparator_gate_2026-05-11.json
 hpo_trials: 24
 hpo_jobs: 4
 model_thread_count: 4
 top_k: [1, 3, 5]
-split_seed: 17
+split_seeds: [101, 103, 107, 109, 113, 127, 131, 137, 139, 149]
 hpo_seed: 23
 holdout_fraction: 0.2
 train_fraction: 0.8
 honest_eval_usage: exploratory_selection
 primary_top_k: 1
-promotion_metric: honest_eval_top_k_recall
+promotion_metric: mean_per_opponent_spearman
 promotion_threshold: 0.0
 claim_label: exploratory
-final_refit_policy: refit_selected_model_on_all_training_rows_after_selection
+final_refit_policy: fit_outer_train_only_no_deployment_artifact
 candidate_universe: source_db_builds
 deployment_artifact: none
 dependency_extra: surrogate
@@ -221,10 +228,19 @@ dependency_extra: surrogate
 def test_generate_jobs_has_canonical_matrix(tmp_path):
     jobs = generate_jobs(make_config(tmp_path))
 
-    assert len(jobs) == len(CANONICAL_SPLITS) * len(CANONICAL_MODELS)
-    assert {job.job_id for job in jobs} == {
-        f"{split}__{model}" for split in CANONICAL_SPLITS for model in CANONICAL_MODELS
-    }
+    assert len(jobs) == CANONICAL_JOB_COUNT
+    expected = set()
+    for split in CANONICAL_SPLITS:
+        for model in CANONICAL_MODELS:
+            if split in SEEDLESS_SPLITS:
+                expected.add(f"{split}__{model}")
+            else:
+                expected.update(
+                    f"{split}__{model}__s{seed}" for seed in CANONICAL_SPLIT_SEED_BANK
+                )
+    assert {job.job_id for job in jobs} == expected
+    seedless = [job for job in jobs if job.split in SEEDLESS_SPLITS]
+    assert {job.split_seed for job in seedless} == {CANONICAL_SPLIT_SEED_BANK[0]}
 
 
 def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
@@ -232,6 +248,7 @@ def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
         make_config(tmp_path),
         splits=("build",),
         models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
         target_workers=2,
         min_workers_to_start=2,
         publish_canonical=False,
@@ -240,8 +257,8 @@ def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
     jobs = generate_jobs(cfg)
 
     assert [job.job_id for job in jobs] == [
-        "build__random_forest_tuned",
-        "build__catboost_regressor",
+        "build__random_forest_tuned__s101",
+        "build__catboost_regressor__s101",
     ]
     validate_batch_config(cfg)
 
@@ -279,8 +296,11 @@ def test_user_data_propagates_claim_boundary_flags(tmp_path):
 
     assert "--honest-eval-usage exploratory_selection" in out
     assert "--primary-top-k 1" in out
-    assert "--promotion-metric honest_eval_top_k_recall" in out
-    assert "--final-refit-policy refit_selected_model_on_all_training_rows_after_selection" in out
+    assert "--promotion-metric mean_per_opponent_spearman" in out
+    assert "--final-refit-policy fit_outer_train_only_no_deployment_artifact" in out
+    assert '--split-seed "$SPLIT_SEED"' in out
+    assert "--inner-cv-folds" in out
+    assert "--bootstrap-resamples" in out
     assert "--candidate-universe source_db_builds" in out
     assert "--deployment-artifact none" in out
 
@@ -292,7 +312,6 @@ def test_bundle_paths_include_runtime_inputs(tmp_path):
     paths = set(cli.bundle_paths(cfg))
 
     assert cfg.source_db_path in paths
-    assert cfg.comparator_json_path in paths
     assert Path("scripts/analysis/phase7_baseline_surrogate.py") in paths
     assert Path("game/starsector/data") in paths
     assert Path("game/starsector/manifest.json") in paths
@@ -315,7 +334,6 @@ def test_create_bundle_contains_runtime_inputs(tmp_path, monkeypatch):
     with tarfile.open(bundle, "r:gz") as tar:
         names = set(tar.getnames())
     assert str(cfg.source_db_path) in names
-    assert str(cfg.comparator_json_path) in names
     assert "scripts/analysis/phase7_baseline_surrogate.py" in names
     assert "game/starsector/manifest.json" in names
     assert cli.SOURCE_VERSION_ARCNAME in names
@@ -359,7 +377,7 @@ def test_config_validation_rejects_job_matrix_mismatch_and_unknown_values(tmp_pa
         target_workers=CANONICAL_JOB_COUNT,
         min_workers_to_start=CANONICAL_JOB_COUNT,
     )
-    with pytest.raises(ValueError, match="len\\(splits\\) \\* len\\(models\\)"):
+    with pytest.raises(ValueError, match="between 1 and the job count"):
         validate_batch_config(bad_count)
 
     bad_split = replace(
@@ -661,7 +679,16 @@ def test_write_status_snapshot_contains_counts_and_budget(tmp_path):
     assert json.loads((cfg.output_dir / "status.json").read_text())["phase"] == "running"
 
 
-def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
+def one_job_payload(
+    cfg: LearnedBatchConfig, split: str, model: str, split_seed: int | None = None
+) -> dict:
+    if split_seed is None:
+        split_seed = cfg.split_seeds[0]
+    job_id = (
+        f"{split}__{model}"
+        if split in SEEDLESS_SPLITS
+        else f"{split}__{model}__s{split_seed}"
+    )
     registry = {
         "a_x": {"family": "a", "template": "a_x", "parents": [], "leakage_risk": "low"},
     }
@@ -669,26 +696,30 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
         json.dumps(registry, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
     return {
-        "experiment_schema_version": 1,
-        "feature_schema_version": 3,
+        "experiment_schema_version": 2,
+        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_profile": cfg.feature_profile,
         "batch_job": {
-            "job_id": f"{split}__{model}",
+            "job_id": job_id,
             "batch_name": cfg.name,
             "fleet_name": cfg.fleet_name,
             "split": split,
             "model": model,
+            "split_seed": split_seed,
         },
         "db_path": str(cfg.source_db_path),
         "model_families": [model],
         "provenance": {
             "game_dir": str(cfg.game_dir),
-            "comparator_json_path": str(cfg.comparator_json_path),
-            "split_seed": cfg.split_seed,
+            "split_seed": split_seed,
             "hpo_seed": cfg.hpo_seed,
             "hpo_trials": cfg.hpo_trials,
             "hpo_jobs": cfg.hpo_jobs,
             "model_thread_count": cfg.model_thread_count,
+            "inner_cv_folds": cfg.inner_cv_folds,
+            "noise_floor_override": cfg.noise_floor_override,
+            "bootstrap_resamples": cfg.bootstrap_resamples,
+            "component_vocab_max_overshoot": cfg.component_vocab_max_overshoot,
             "holdout_fraction": cfg.holdout_fraction,
             "train_fraction": cfg.train_fraction,
             "top_k_values": list(cfg.top_k_values),
@@ -702,7 +733,7 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
             "final_refit_policy": cfg.final_refit_policy,
             "candidate_universe": cfg.candidate_universe,
             "deployment_artifact": cfg.deployment_artifact,
-            "batch_job_id": f"{split}__{model}",
+            "batch_job_id": job_id,
             "batch_name": cfg.name,
             "batch_fleet_name": cfg.fleet_name,
             "max_rows": None,
@@ -781,8 +812,6 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
                     "sparse_id_ablation_delta": {"status": "not_applicable", "reason": "fixture"},
                 },
                 "n_train": 100,
-                "n_inner_train": 80,
-                "n_inner_validation": 20,
                 "n_test": 25,
                 "mae": 0.1,
                 "rmse": 0.2,
@@ -790,13 +819,47 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
                 "hpo": {"selected_hyperparameters": {}, "inner_validation_metrics": {}},
                 "timing": {"fit_seconds": 0.1},
                 "honest_eval_top_k": {"top_k": [1, 3, 5]},
+                "rank_metrics": {
+                    "per_opponent": {"mean_spearman": 0.4, "included_opponents": 10},
+                    "build_aggregate": {
+                        "spearman": 0.5,
+                        "precision_at_k": {"1": 1.0},
+                        "regret_at_k": {"1": {"raw": 0.0, "normalized": 0.0}},
+                    },
+                    "bootstrap": {
+                        "mean_per_opponent_spearman": {"ci_low": 0.3, "ci_high": 0.5, "n_finite": 20},
+                    },
+                },
+                "skill_scores": {"mse_model": 0.04, "mse_train_mean": 0.5, "skill": 0.92},
+                "panel_target_stats": {"n": 25, "mean": 0.0, "sd": 0.7, "endpoint_mass_low": 0.4, "endpoint_mass_high": 0.1},
+                "noise_floor": {"noise_floor": 0.05, "source": "fallback"},
+                "inner_cv": {"fold_count": cfg.inner_cv_folds, "fold_construction": "grouped_kfold", "fold_sizes": []},
+                "outer_split_lineage": {
+                    "split_seed": split_seed,
+                    "seed_bank_label": "2026-07-bank-a",
+                    "confirmatory_reserved_seed": RESERVED_CONFIRMATORY_SEED,
+                    "reused_partition": split in SEEDLESS_SPLITS,
+                },
                 "leakage_checklist": {
                     "outer_test_targets_excluded_from_fit": True,
                     "honest_eval_targets_excluded_from_fit": True,
                     "feature_selection_inside_inner_fold": True,
                     "build_key_excluded_from_feature_vectors": True,
                 },
-                "comparator_context": {"diagnostic": "ok", "comparison_status": "comparable"},
+                "comparator_inline": {
+                    "random_forest": {
+                        "mae": 0.2,
+                        "rmse": 0.3,
+                        "spearman_rho": 0.2,
+                        "rank_metrics": {"per_opponent": {"mean_spearman": 0.2}},
+                    },
+                },
+                "comparator_delta": {
+                    "best_comparator": "random_forest",
+                    "delta_vs_best_comparator": {"rmse": -0.1},
+                    "matched_family": "random_forest",
+                    "delta_vs_matched_family": {"rmse": -0.1},
+                },
             }
         ],
     }
@@ -805,53 +868,53 @@ def one_job_payload(cfg: LearnedBatchConfig, split: str, model: str) -> dict:
 def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
     cfg = make_config(tmp_path)
     job = generate_jobs(cfg)[0]
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["provenance"].pop("bundle_sha256")
 
     with pytest.raises(ValueError, match="bundle_sha256"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["status"] = "running"
     with pytest.raises(ValueError, match="not complete"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload.pop("experiment_schema_version")
     with pytest.raises(ValueError, match="experiment schema"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
-    payload["results"][0]["comparator_context"] = "bad"
-    with pytest.raises(ValueError, match="comparator context"):
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    payload["results"][0]["comparator_inline"] = "bad"
+    with pytest.raises(ValueError, match="inline comparator"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
-    payload["feature_schema_version"] = 2
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    payload["feature_schema_version"] = FEATURE_SCHEMA_VERSION - 1
     with pytest.raises(ValueError, match="feature schema version mismatch"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["batch_job"]["job_id"] = "stale__artifact"
     with pytest.raises(ValueError, match="batch job field 'job_id'"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["provenance"]["bundle_sha256"] = "c" * 64
     with pytest.raises(ValueError, match="bundle_sha256 mismatch"):
         validate_job_payload(cfg, job, payload, bundle_sha256="b" * 64)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["provenance"].pop("dependency_extra")
     with pytest.raises(ValueError, match="dependency extra missing"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["leakage_checklist"] = {}
     with pytest.raises(ValueError, match="leakage checklist"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["leakage_diagnostics"]["forbidden_key_overlap"] = {
         "status": "fail",
         "value": 1,
@@ -859,58 +922,63 @@ def test_validate_job_payload_rejects_running_or_missing_bundle(tmp_path):
     with pytest.raises(ValueError, match="leakage diagnostics"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["provenance"]["code_version"] = "abc123+dirty"
     with pytest.raises(ValueError, match="code version"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
-    payload["results"][0]["comparator_context"]["comparison_status"] = "row_filter_mismatch"
-    with pytest.raises(ValueError, match="not comparable"):
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    payload["results"][0]["comparator_delta"] = {}
+    with pytest.raises(ValueError, match="comparator deltas"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    payload["results"][0]["outer_split_lineage"]["split_seed"] = 999
+    with pytest.raises(ValueError, match="lineage seed"):
+        validate_job_payload(cfg, job, payload)
+
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["rmse"] = float("nan")
     with pytest.raises(ValueError, match="metric 'rmse'"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0].pop("target_variable")
     with pytest.raises(ValueError, match="target variable"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["target_variable"] = "honest_eval_fitness"
     with pytest.raises(ValueError, match="target variable mismatch"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["feature_profile"] = "geometry"
     with pytest.raises(ValueError, match="feature profile"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["feature_families"]["feature_profile"] = "geometry"
     with pytest.raises(ValueError, match="feature family profile"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0].pop("claim_boundary")
     with pytest.raises(ValueError, match="missing fields"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["claim_boundary"]["honest_eval_usage"] = "final_claim"
     payload["results"][0]["claim_boundary"]["fresh_honest_eval_ledger_id"] = None
     with pytest.raises(ValueError, match="claim boundary field 'honest_eval_usage'"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["claim_boundary"]["honest_eval_usage"] = "diagnostic_only"
     with pytest.raises(ValueError, match="claim boundary field 'honest_eval_usage'"):
         validate_job_payload(cfg, job, payload)
 
-    payload = one_job_payload(cfg, job.split, job.model)
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
     payload["results"][0]["feature_selection_protocol"]["feature_family_registry_sha256"] = "d" * 64
     with pytest.raises(ValueError, match="registry digest"):
         validate_job_payload(cfg, job, payload)
@@ -934,7 +1002,7 @@ def test_control_plane_persists_accepted_result_for_merge(tmp_path):
         headers={"Authorization": "Bearer secret"},
         json={"worker_id": "i-1"},
     ).get_json()
-    payload = one_job_payload(cfg, leased["split"], leased["model"])
+    payload = one_job_payload(cfg, leased["split"], leased["model"], leased["split_seed"])
     payload["provenance"].pop("bundle_sha256")
 
     response = client.post(
@@ -970,7 +1038,7 @@ def test_control_plane_does_not_persist_rejected_or_duplicate_result(tmp_path):
         json={"worker_id": "i-1"},
     ).get_json()
     output_path = cfg.output_dir / "results" / f"{leased['job_id']}.json"
-    payload = one_job_payload(cfg, leased["split"], leased["model"])
+    payload = one_job_payload(cfg, leased["split"], leased["model"], leased["split_seed"])
 
     wrong_worker = client.post(
         f"/result/{leased['job_id']}",
@@ -996,7 +1064,7 @@ def test_control_plane_does_not_persist_rejected_or_duplicate_result(tmp_path):
     )
     assert accepted.status_code == 200
     original = json.loads(output_path.read_text(encoding="utf-8"))
-    duplicate_payload = one_job_payload(cfg, leased["split"], leased["model"])
+    duplicate_payload = one_job_payload(cfg, leased["split"], leased["model"], leased["split_seed"])
     duplicate_payload["results"][0]["rmse"] = 0.99
 
     duplicate = client.post(
@@ -1019,7 +1087,7 @@ def test_merge_requires_all_jobs_and_promotes_atomically(tmp_path):
     result_dir.mkdir(parents=True)
     for job in generate_jobs(cfg):
         (result_dir / f"{job.job_id}.json").write_text(
-            json.dumps(one_job_payload(cfg, job.split, job.model)),
+            json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
             encoding="utf-8",
         )
 
@@ -1039,7 +1107,7 @@ def test_merge_refuses_partial_batch_without_canonical_overwrite(tmp_path):
     result_dir.mkdir(parents=True)
     job = generate_jobs(cfg)[0]
     (result_dir / f"{job.job_id}.json").write_text(
-        json.dumps(one_job_payload(cfg, job.split, job.model)),
+        json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
         encoding="utf-8",
     )
 
@@ -1053,6 +1121,7 @@ def test_subset_merge_stays_batch_internal_and_reports_subset_models(tmp_path):
         make_config(tmp_path),
         splits=("build",),
         models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
         target_workers=2,
         min_workers_to_start=2,
         publish_canonical=False,
@@ -1062,7 +1131,7 @@ def test_subset_merge_stays_batch_internal_and_reports_subset_models(tmp_path):
     result_dir.mkdir(parents=True)
     for job in generate_jobs(cfg):
         (result_dir / f"{job.job_id}.json").write_text(
-            json.dumps(one_job_payload(cfg, job.split, job.model)),
+            json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
             encoding="utf-8",
         )
 
@@ -1087,7 +1156,7 @@ def test_merge_rechecks_canonical_publication_guard(tmp_path):
     result_dir.mkdir(parents=True)
     for job in generate_jobs(cfg):
         (result_dir / f"{job.job_id}.json").write_text(
-            json.dumps(one_job_payload(cfg, job.split, job.model)),
+            json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
             encoding="utf-8",
         )
 
@@ -1103,7 +1172,7 @@ def complete_all_jobs(cfg: LearnedBatchConfig, state: BatchState) -> None:
         lease = state.lease(now=100.0, worker_id="i-worker")
         if lease is None:
             break
-        payload = one_job_payload(cfg, lease.split, lease.model)
+        payload = one_job_payload(cfg, lease.split, lease.model, lease.split_seed)
         (result_dir / f"{lease.job_id}.json").write_text(json.dumps(payload), encoding="utf-8")
         state.record_result(
             lease.job_id,
@@ -1290,6 +1359,7 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
         make_config(tmp_path),
         splits=("build",),
         models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
         target_workers=2,
         min_workers_to_start=2,
         publish_canonical=False,
@@ -1355,7 +1425,7 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
                     assert lease is not None
                 else:
                     lease = leases[job_id]
-                payload = one_job_payload(cfg, lease.split, lease.model)
+                payload = one_job_payload(cfg, lease.split, lease.model, lease.split_seed)
                 (result_dir / f"{lease.job_id}.json").write_text(
                     json.dumps(payload),
                     encoding="utf-8",
@@ -1387,9 +1457,18 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
 
 
 def test_run_live_batch_logs_budget_warn_threshold_once(tmp_path, caplog):
-    cfg = make_config(tmp_path)
-    cfg = cfg.__class__(**{**cfg.__dict__, "budget_usd": 10.0, "ledger_warn_thresholds": (0.5,)})
-    provider = FakeProvider(price=21.0)
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+        budget_usd=1.0,
+        ledger_warn_thresholds=(0.5,),
+    )
+    provider = FakeProvider(instance_count=2, price=21.0)
     server = FakeServer()
 
     with caplog.at_level("WARNING"):
@@ -1513,3 +1592,181 @@ def test_check_key_pairs_available_rejects_missing_key(tmp_path):
 
     with pytest.raises(RuntimeError, match="key pair"):
         cli.check_key_pairs_available(Provider(), cfg)
+
+
+def test_config_validation_rejects_burned_and_reserved_seeds(tmp_path):
+    cfg = make_config(tmp_path)
+
+    with pytest.raises(ValueError, match="C4"):
+        validate_batch_config(
+            replace(cfg, split_seeds=(17, 101), publish_canonical=False, target_workers=1, min_workers_to_start=1)
+        )
+    with pytest.raises(ValueError, match="reserved confirmatory seed"):
+        validate_batch_config(
+            replace(
+                cfg,
+                split_seeds=(101, RESERVED_CONFIRMATORY_SEED),
+                publish_canonical=False,
+                target_workers=1,
+                min_workers_to_start=1,
+            )
+        )
+    with pytest.raises(ValueError, match="non-empty"):
+        validate_batch_config(
+            replace(cfg, split_seeds=(), publish_canonical=False, target_workers=1, min_workers_to_start=1)
+        )
+
+
+def test_publish_canonical_requires_full_seed_bank(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        split_seeds=(101, 103),
+        target_workers=10,
+        min_workers_to_start=10,
+    )
+
+    with pytest.raises(ValueError, match="seed-bank"):
+        validate_batch_config(cfg)
+
+
+def test_build_job_command_uses_per_job_seed_and_eval_flags(tmp_path):
+    cfg = make_config(tmp_path)
+    jobs = generate_jobs(cfg)
+    seeded = next(job for job in jobs if job.split not in SEEDLESS_SPLITS)
+    command = build_job_command(cfg, seeded)
+
+    assert command[command.index("--split-seed") + 1] == str(seeded.split_seed)
+    assert command[command.index("--inner-cv-folds") + 1] == str(cfg.inner_cv_folds)
+    assert command[command.index("--bootstrap-resamples") + 1] == str(cfg.bootstrap_resamples)
+    assert "--comparator-json" not in command
+
+
+def test_merge_emits_seed_aggregates_with_descriptive_spread(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build", "forward-time"),
+        models=("random_forest_tuned",),
+        split_seeds=(101, 103),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    result_dir = cfg.output_dir / "results"
+    result_dir.mkdir(parents=True)
+    for job in generate_jobs(cfg):
+        (result_dir / f"{job.job_id}.json").write_text(
+            json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
+            encoding="utf-8",
+        )
+
+    merged = merge_job_artifacts(cfg)
+
+    aggregates = merged["seed_aggregates"]
+    build_agg = aggregates["build:random_forest_tuned"]
+    assert build_agg["n_seeds"] == 2
+    assert build_agg["rmse"]["mean"] == pytest.approx(0.2)
+    assert build_agg["rmse"]["sd"] == pytest.approx(0.0)
+    assert build_agg["mean_per_opponent_spearman"]["n_finite"] == 2
+    forward_agg = aggregates["forward-time:random_forest_tuned"]
+    assert forward_agg["n_seeds"] == 1
+    assert forward_agg["rmse"]["sd"] is None
+    assert merged["split_seeds"] == [101, 103]
+
+
+def test_canonical_publish_refuses_to_overwrite_other_batch(tmp_path):
+    cfg = make_config(tmp_path)
+    result_dir = cfg.output_dir / "results"
+    result_dir.mkdir(parents=True)
+    for job in generate_jobs(cfg):
+        (result_dir / f"{job.job_id}.json").write_text(
+            json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
+            encoding="utf-8",
+        )
+    cfg.canonical_output_path.write_text(
+        json.dumps({"provenance": {"batch": {"name": "some-prior-wave"}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="prior-wave evidence"):
+        merge_job_artifacts(cfg)
+
+    # Re-publishing the same batch's own canonical artifact is allowed.
+    cfg.canonical_output_path.write_text(
+        json.dumps({"provenance": {"batch": {"name": cfg.name}}}),
+        encoding="utf-8",
+    )
+    merged = merge_job_artifacts(cfg)
+    assert merged["result_count"] == CANONICAL_JOB_COUNT
+
+
+def test_validate_job_payload_rejects_seed_outside_config_list(tmp_path):
+    cfg = make_config(tmp_path)
+    job = generate_jobs(cfg)[0]
+    rogue_job = replace(
+        job, split_seed=997, job_id=f"{job.split}__{job.model}__s997"
+    )
+    payload = one_job_payload(cfg, job.split, job.model, 997)
+
+    with pytest.raises(ValueError, match="not in the config seed list"):
+        validate_job_payload(cfg, rogue_job, payload)
+
+
+def test_lease_carries_split_seed(tmp_path):
+    cfg = make_config(tmp_path)
+    state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
+
+    lease = state.lease(now=100.0, worker_id="i-1")
+
+    assert lease is not None
+    assert isinstance(lease.split_seed, int)
+    assert lease.split_seed in cfg.split_seeds
+
+
+def insufficiency_payload(cfg: LearnedBatchConfig, job) -> dict:
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    result = payload["results"][0]
+    result["status"] = "degenerate_component_vocab_split"
+    for key in (
+        "mae", "rmse", "spearman_rho", "rank_metrics", "skill_scores",
+        "panel_target_stats", "noise_floor", "inner_cv", "comparator_inline",
+        "comparator_delta", "hpo", "timing", "n_train", "n_test",
+    ):
+        result.pop(key, None)
+    return payload
+
+
+def test_validate_job_payload_accepts_insufficiency_artifact(tmp_path):
+    cfg = make_config(tmp_path)
+    job = generate_jobs(cfg)[0]
+    payload = insufficiency_payload(cfg, job)
+
+    accepted = validate_job_payload(cfg, job, payload)
+
+    assert accepted["results"][0]["status"] == "degenerate_component_vocab_split"
+
+
+def test_merge_refuses_batches_containing_insufficiency_artifacts(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    result_dir = cfg.output_dir / "results"
+    result_dir.mkdir(parents=True)
+    jobs = generate_jobs(cfg)
+    (result_dir / f"{jobs[0].job_id}.json").write_text(
+        json.dumps(one_job_payload(cfg, jobs[0].split, jobs[0].model, jobs[0].split_seed)),
+        encoding="utf-8",
+    )
+    (result_dir / f"{jobs[1].job_id}.json").write_text(
+        json.dumps(insufficiency_payload(cfg, jobs[1])),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="insufficiency artifacts"):
+        merge_job_artifacts(cfg)
+    assert not (cfg.output_dir / "merged.json").exists()

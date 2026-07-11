@@ -27,6 +27,20 @@ from starsector_optimizer.matchup_features import (
     FEATURE_PROFILES,
     FEATURE_SCHEMA_VERSION,
 )
+from starsector_optimizer.phase7_eval import EvalMetricsConfig
+from starsector_optimizer.phase7_matchup_data import (
+    BURNED_SPLIT_SEEDS,
+    CANONICAL_SPLIT_SEED_BANK,
+    DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT,
+    DEFAULT_DEPENDENCY_EXTRA,
+    DEFAULT_FINAL_REFIT_POLICY,
+    DEFAULT_INNER_CV_FOLDS,
+    DEFAULT_PROMOTION_METRIC,
+    EXPERIMENT_SCHEMA_VERSION,
+    INSUFFICIENCY_STATUSES,
+    RESERVED_CONFIRMATORY_SEED,
+    SEEDLESS_SPLITS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +49,7 @@ CANONICAL_SPLITS: tuple[str, ...] = (
     "opponent",
     "opponent-hull",
     "opponent-family",
-    "component",
+    "component-vocab",
     "seed-cell",
     "forward-time",
 )
@@ -44,7 +58,10 @@ CANONICAL_MODELS: tuple[str, ...] = (
     "catboost_regressor",
     "sparse_pairwise_ridge",
 )
-DEFAULT_DEPENDENCY_EXTRA = "surrogate"
+# Contract constants (EXPERIMENT_SCHEMA_VERSION, DEFAULT_DEPENDENCY_EXTRA,
+# DEFAULT_FINAL_REFIT_POLICY, DEFAULT_PROMOTION_METRIC) are owned by
+# phase7_matchup_data so the experiment script and this validator cannot
+# drift.
 
 
 class BudgetExceeded(RuntimeError):
@@ -84,24 +101,27 @@ class LearnedBatchConfig:
     execution_enabled: bool
     source_db_path: Path
     game_dir: Path
-    comparator_json_path: Path
     hpo_trials: int
     hpo_jobs: int
     model_thread_count: int
     top_k_values: tuple[int, ...]
-    split_seed: int
+    split_seeds: tuple[int, ...]
     hpo_seed: int
     holdout_fraction: float
     train_fraction: float
     honest_eval_usage: str = "diagnostic_only"
     fresh_honest_eval_ledger_id: str | None = None
     primary_top_k: int = 1
-    promotion_metric: str = "honest_eval_top_k_recall"
+    promotion_metric: str = DEFAULT_PROMOTION_METRIC
     promotion_threshold: float = 0.0
     claim_label: str = "exploratory"
-    final_refit_policy: str = "refit_selected_model_on_all_training_rows_after_selection"
+    final_refit_policy: str = DEFAULT_FINAL_REFIT_POLICY
     candidate_universe: str = "source_db_builds"
     deployment_artifact: str = "none"
+    inner_cv_folds: int = DEFAULT_INNER_CV_FOLDS
+    noise_floor_override: float | None = None
+    bootstrap_resamples: int = EvalMetricsConfig().bootstrap_resamples
+    component_vocab_max_overshoot: float = DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT
     feature_profile: str = DEFAULT_FEATURE_PROFILE
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
     root_volume_size_gb: int | None = None
@@ -114,6 +134,7 @@ class LearnedBatchJob:
     job_id: str
     split: str
     model: str
+    split_seed: int
     output_path: Path
 
 
@@ -122,6 +143,7 @@ class JobLease:
     job_id: str
     split: str
     model: str
+    split_seed: int
     attempt: int
     worker_id: str
     lease_expires_at: float
@@ -179,6 +201,7 @@ class BatchState:
                     job_id=state.job.job_id,
                     split=state.job.split,
                     model=state.job.model,
+                    split_seed=state.job.split_seed,
                     attempt=state.attempt,
                     worker_id=worker_id,
                     lease_expires_at=state.lease_expires_at,
@@ -403,26 +426,39 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         execution_enabled=bool(expanded.get("execution_enabled", True)),
         source_db_path=Path(expanded["source_db_path"]),
         game_dir=Path(expanded["game_dir"]),
-        comparator_json_path=Path(expanded["comparator_json_path"]),
         hpo_trials=int(expanded["hpo_trials"]),
         hpo_jobs=int(expanded["hpo_jobs"]),
         model_thread_count=int(expanded["model_thread_count"]),
         top_k_values=tuple(int(v) for v in expanded["top_k"]),
-        split_seed=int(expanded["split_seed"]),
+        split_seeds=tuple(int(v) for v in expanded["split_seeds"]),
         hpo_seed=int(expanded["hpo_seed"]),
         holdout_fraction=float(expanded["holdout_fraction"]),
         train_fraction=float(expanded["train_fraction"]),
         honest_eval_usage=str(expanded.get("honest_eval_usage", "diagnostic_only")),
         fresh_honest_eval_ledger_id=expanded.get("fresh_honest_eval_ledger_id"),
         primary_top_k=int(expanded.get("primary_top_k", 1)),
-        promotion_metric=str(expanded.get("promotion_metric", "honest_eval_top_k_recall")),
+        promotion_metric=str(expanded.get("promotion_metric", DEFAULT_PROMOTION_METRIC)),
         promotion_threshold=float(expanded.get("promotion_threshold", 0.0)),
         claim_label=str(expanded.get("claim_label", "exploratory")),
         final_refit_policy=str(
-            expanded.get("final_refit_policy", "refit_selected_model_on_all_training_rows_after_selection")
+            expanded.get("final_refit_policy", DEFAULT_FINAL_REFIT_POLICY)
         ),
         candidate_universe=str(expanded.get("candidate_universe", "source_db_builds")),
         deployment_artifact=str(expanded.get("deployment_artifact", "none")),
+        inner_cv_folds=int(expanded.get("inner_cv_folds", DEFAULT_INNER_CV_FOLDS)),
+        noise_floor_override=(
+            None
+            if expanded.get("noise_floor_override") is None
+            else float(expanded["noise_floor_override"])
+        ),
+        bootstrap_resamples=int(
+            expanded.get("bootstrap_resamples", EvalMetricsConfig().bootstrap_resamples)
+        ),
+        component_vocab_max_overshoot=float(
+            expanded.get(
+                "component_vocab_max_overshoot", DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT
+            )
+        ),
         feature_profile=str(expanded.get("feature_profile", DEFAULT_FEATURE_PROFILE)),
         dependency_extra=str(expanded.get("dependency_extra", DEFAULT_DEPENDENCY_EXTRA)),
         root_volume_size_gb=(
@@ -464,9 +500,35 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("splits must not contain duplicates")
     if len(set(config.models)) != len(config.models):
         raise ValueError("models must not contain duplicates")
-    job_count = len(config.splits) * len(config.models)
-    if config.target_workers != job_count:
-        raise ValueError("target_workers must equal len(splits) * len(models)")
+    if not config.split_seeds:
+        raise ValueError("split_seeds must be non-empty")
+    if len(set(config.split_seeds)) != len(config.split_seeds):
+        raise ValueError("split_seeds must not contain duplicates")
+    burned = sorted(set(config.split_seeds) & BURNED_SPLIT_SEEDS)
+    if burned:
+        raise ValueError(
+            f"split_seeds {burned} are burned (methodology review C4); "
+            "use seeds from CANONICAL_SPLIT_SEED_BANK"
+        )
+    if RESERVED_CONFIRMATORY_SEED in config.split_seeds:
+        raise ValueError(
+            f"split_seeds must not include the reserved confirmatory seed "
+            f"{RESERVED_CONFIRMATORY_SEED}; it is spent only on a "
+            "promotion-grade predeclared claim"
+        )
+    if config.inner_cv_folds < 2:
+        raise ValueError("inner_cv_folds must be >= 2")
+    if config.bootstrap_resamples <= 0:
+        raise ValueError("bootstrap_resamples must be positive")
+    if config.component_vocab_max_overshoot < 0.0:
+        raise ValueError("component_vocab_max_overshoot must be >= 0")
+    if config.noise_floor_override is not None and config.noise_floor_override <= 0.0:
+        raise ValueError("noise_floor_override must be > 0 when set")
+    job_count = len(generate_jobs(config))
+    if not (1 <= config.target_workers <= job_count):
+        # Workers drain a lease queue; a fleet larger than the job count
+        # would idle instantly, and zero workers cannot start.
+        raise ValueError("target_workers must be between 1 and the job count")
     if config.target_workers % len(config.regions) != 0:
         raise ValueError(
             "target_workers must be divisible by region count because AWSProvider "
@@ -520,24 +582,43 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
     if tuple(sorted(config.top_k_values)) != config.top_k_values:
         raise ValueError("top_k values must be sorted")
     canonical_matrix = (
-        config.splits == CANONICAL_SPLITS and config.models == CANONICAL_MODELS
+        config.splits == CANONICAL_SPLITS
+        and config.models == CANONICAL_MODELS
+        and config.split_seeds == CANONICAL_SPLIT_SEED_BANK
     )
     if config.publish_canonical and not canonical_matrix:
-        raise ValueError("publish_canonical is allowed only for the full canonical matrix")
+        raise ValueError(
+            "publish_canonical is allowed only for the full canonical "
+            "split/model/seed-bank matrix"
+        )
 
 
 def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
+    """Job matrix: splits x models x split_seeds; seedless splits get one
+    instance per model (their partition is deterministic)."""
     result_dir = config.output_dir / "results"
-    return tuple(
-        LearnedBatchJob(
-            job_id=f"{split}__{model}",
-            split=split,
-            model=model,
-            output_path=result_dir / f"{split}__{model}.json",
+    jobs: list[LearnedBatchJob] = []
+    for split in config.splits:
+        seeds = (
+            (config.split_seeds[0],) if split in SEEDLESS_SPLITS else config.split_seeds
         )
-        for split in config.splits
-        for model in config.models
-    )
+        for model in config.models:
+            for seed in seeds:
+                job_id = (
+                    f"{split}__{model}"
+                    if split in SEEDLESS_SPLITS
+                    else f"{split}__{model}__s{seed}"
+                )
+                jobs.append(
+                    LearnedBatchJob(
+                        job_id=job_id,
+                        split=split,
+                        model=model,
+                        split_seed=seed,
+                        output_path=result_dir / f"{job_id}.json",
+                    )
+                )
+    return tuple(jobs)
 
 
 def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[str]:
@@ -549,8 +630,6 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         str(config.source_db_path),
         "--game-dir",
         str(config.game_dir),
-        "--comparator-json",
-        str(config.comparator_json_path),
         "--split",
         job.split,
         "--model",
@@ -560,7 +639,7 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         "--train-fraction",
         str(config.train_fraction),
         "--split-seed",
-        str(config.split_seed),
+        str(job.split_seed),
         "--hpo-seed",
         str(config.hpo_seed),
         "--hpo-trials",
@@ -569,6 +648,12 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         str(config.hpo_jobs),
         "--model-thread-count",
         str(config.model_thread_count),
+        "--inner-cv-folds",
+        str(config.inner_cv_folds),
+        "--bootstrap-resamples",
+        str(config.bootstrap_resamples),
+        "--component-vocab-max-overshoot",
+        str(config.component_vocab_max_overshoot),
         "--top-k",
         ",".join(str(value) for value in config.top_k_values),
         "--feature-profile",
@@ -598,6 +683,8 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         "--output",
         str(job.output_path),
     ]
+    if config.noise_floor_override is not None:
+        command.extend(["--noise-floor-override", str(config.noise_floor_override)])
     if config.fresh_honest_eval_ledger_id is not None:
         command.extend(["--fresh-honest-eval-ledger-id", config.fresh_honest_eval_ledger_id])
     return command
@@ -757,13 +844,17 @@ def render_phase7_learned_batch_user_data(
     top_k = shlex.quote(",".join(str(value) for value in config.top_k_values))
     source_db = shlex.quote(str(config.source_db_path))
     game_dir = shlex.quote(str(config.game_dir))
-    comparator_json = shlex.quote(str(config.comparator_json_path))
     dependency_extra = shlex.quote(config.dependency_extra)
     control_url = shlex.quote(control_plane_url)
     fresh_ledger_flag = (
         ""
         if config.fresh_honest_eval_ledger_id is None
         else f"    --fresh-honest-eval-ledger-id {shlex.quote(config.fresh_honest_eval_ledger_id)} \\\n"
+    )
+    noise_floor_flag = (
+        ""
+        if config.noise_floor_override is None
+        else f"    --noise-floor-override {config.noise_floor_override} \\\n"
     )
     return f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -923,6 +1014,7 @@ while (( SECONDS < DEADLINE )); do
   JOB_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<< "$LEASE_BODY")
   SPLIT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE_BODY")
   MODEL=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
+  SPLIT_SEED=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["split_seed"])' <<< "$LEASE_BODY")
   ATTEMPT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["attempt"])' <<< "$LEASE_BODY")
   OUTPUT="data/phase7/aws-job-$JOB_ID.json"
   LOG="data/phase7/aws-job-$JOB_ID.log"
@@ -942,16 +1034,18 @@ while (( SECONDS < DEADLINE )); do
   timeout "$JOB_TIMEOUT" "$UV_BIN" run python scripts/analysis/phase7_learned_surrogate_experiment.py \\
     {source_db} \\
     --game-dir {game_dir} \\
-    --comparator-json {comparator_json} \\
     --split "$SPLIT" \\
     --model "$MODEL" \\
     --holdout-fraction {config.holdout_fraction} \\
     --train-fraction {config.train_fraction} \\
-    --split-seed {config.split_seed} \\
+    --split-seed "$SPLIT_SEED" \\
     --hpo-seed {config.hpo_seed} \\
     --hpo-trials {config.hpo_trials} \\
     --hpo-jobs {config.hpo_jobs} \\
     --model-thread-count {config.model_thread_count} \\
+    --inner-cv-folds {config.inner_cv_folds} \\
+    --bootstrap-resamples {config.bootstrap_resamples} \\
+    --component-vocab-max-overshoot {config.component_vocab_max_overshoot} \\
     --top-k {top_k} \\
     --feature-profile {shlex.quote(config.feature_profile)} \\
     --honest-eval-usage {shlex.quote(config.honest_eval_usage)} \\
@@ -962,6 +1056,7 @@ while (( SECONDS < DEADLINE )); do
     --final-refit-policy {shlex.quote(config.final_refit_policy)} \\
     --candidate-universe {shlex.quote(config.candidate_universe)} \\
     --deployment-artifact {shlex.quote(config.deployment_artifact)} \\
+{noise_floor_flag}\
 {fresh_ledger_flag}\
     --batch-job-id "$JOB_ID" \\
     --batch-name {shlex.quote(config.name)} \\
@@ -1410,6 +1505,8 @@ def _contract_ok(result: Mapping[str, Any]) -> bool:
     leakage = result.get("leakage_diagnostics")
     registry = feature_protocol.get("feature_family_registry") if isinstance(feature_protocol, dict) else None
     registry_digest = feature_protocol.get("feature_family_registry_sha256") if isinstance(feature_protocol, dict) else None
+    rank_metrics = result.get("rank_metrics")
+    lineage = result.get("outer_split_lineage")
     return (
         isinstance(claim, dict)
         and claim.get("target_variable") == "training_matchups.target"
@@ -1428,6 +1525,19 @@ def _contract_ok(result: Mapping[str, Any]) -> bool:
         and isinstance(hierarchy.get("overlap_counts"), dict)
         and isinstance(hierarchy.get("component_overlap_diagnostics"), dict)
         and isinstance(deployment, dict)
+        and isinstance(rank_metrics, dict)
+        and isinstance(rank_metrics.get("per_opponent"), dict)
+        and isinstance(rank_metrics.get("build_aggregate"), dict)
+        and isinstance(rank_metrics.get("bootstrap"), dict)
+        and isinstance(result.get("skill_scores"), dict)
+        and isinstance(result.get("panel_target_stats"), dict)
+        and isinstance(result.get("noise_floor"), dict)
+        and isinstance(result.get("inner_cv"), dict)
+        and isinstance(lineage, dict)
+        and isinstance(lineage.get("split_seed"), int)
+        and isinstance(result.get("comparator_inline"), dict)
+        and bool(result.get("comparator_inline"))
+        and isinstance(result.get("comparator_delta"), dict)
         and isinstance(leakage, dict)
         and all(
             isinstance(leakage.get(key), dict) and "status" in leakage[key]
@@ -1456,8 +1566,11 @@ def validate_job_payload(
     bundle_sha256: str | None = None,
 ) -> dict[str, Any]:
     artifact = dict(payload)
-    if not isinstance(artifact.get("experiment_schema_version"), int):
-        raise ValueError(f"job {job.job_id} experiment schema version missing")
+    if artifact.get("experiment_schema_version") != EXPERIMENT_SCHEMA_VERSION:
+        raise ValueError(
+            f"job {job.job_id} experiment schema version must be "
+            f"{EXPERIMENT_SCHEMA_VERSION}"
+        )
     if not isinstance(artifact.get("feature_schema_version"), int):
         raise ValueError(f"job {job.job_id} feature schema version missing")
     if artifact["feature_schema_version"] != FEATURE_SCHEMA_VERSION:
@@ -1471,6 +1584,7 @@ def validate_job_payload(
         "fleet_name": config.fleet_name,
         "split": job.split,
         "model": job.model,
+        "split_seed": job.split_seed,
     }
     for key, expected in expected_batch_job.items():
         if batch_job.get(key) != expected:
@@ -1490,14 +1604,19 @@ def validate_job_payload(
     provenance = artifact.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError(f"job {job.job_id} provenance missing")
+    if job.split_seed not in config.split_seeds:
+        raise ValueError(f"job {job.job_id} split seed is not in the config seed list")
     expected_provenance = {
         "game_dir": str(config.game_dir),
-        "comparator_json_path": str(config.comparator_json_path),
-        "split_seed": config.split_seed,
+        "split_seed": job.split_seed,
         "hpo_seed": config.hpo_seed,
         "hpo_trials": config.hpo_trials,
         "hpo_jobs": config.hpo_jobs,
         "model_thread_count": config.model_thread_count,
+        "inner_cv_folds": config.inner_cv_folds,
+        "noise_floor_override": config.noise_floor_override,
+        "bootstrap_resamples": config.bootstrap_resamples,
+        "component_vocab_max_overshoot": config.component_vocab_max_overshoot,
         "holdout_fraction": config.holdout_fraction,
         "train_fraction": config.train_fraction,
         "top_k_values": list(config.top_k_values),
@@ -1542,7 +1661,14 @@ def validate_job_payload(
         "spearman_rho",
         "hpo",
         "timing",
-        "comparator_context",
+        "rank_metrics",
+        "skill_scores",
+        "panel_target_stats",
+        "noise_floor",
+        "inner_cv",
+        "outer_split_lineage",
+        "comparator_inline",
+        "comparator_delta",
         "leakage_checklist",
         "claim_boundary",
         "model_family_policy",
@@ -1551,19 +1677,31 @@ def validate_job_payload(
         "hierarchy_scorecard",
         "leakage_diagnostics",
     )
+    code_version = provenance.get("code_version")
+    if not isinstance(code_version, str) or code_version == "unknown" or code_version.endswith("+dirty"):
+        raise ValueError(f"job {job.job_id} code version is not clean")
+    if result.get("status") in INSUFFICIENCY_STATUSES:
+        # Structured insufficiency artifacts are terminal, non-retryable
+        # outcomes (spec 31): accepted here so a deterministic bad draw
+        # cannot burn lease retries; merge_job_artifacts refuses to merge
+        # while any exist.
+        if result.get("split") != job.split or result.get("model") != job.model:
+            raise ValueError(f"job {job.job_id} result does not match job identity")
+        lineage = result.get("outer_split_lineage")
+        if not isinstance(lineage, dict) or lineage.get("split_seed") != job.split_seed:
+            raise ValueError(f"job {job.job_id} outer split lineage seed mismatch")
+        artifact["provenance"] = provenance
+        return artifact
     missing = [field for field in required_result_fields if field not in result]
     if missing:
         raise ValueError(f"job {job.job_id} result missing fields: {', '.join(missing)}")
     if result.get("status") != "completed":
         raise ValueError(f"job {job.job_id} result is not complete")
-    code_version = provenance.get("code_version")
-    if not isinstance(code_version, str) or code_version == "unknown" or code_version.endswith("+dirty"):
-        raise ValueError(f"job {job.job_id} code version is not clean")
     for field in ("mae", "rmse", "spearman_rho"):
         value = result.get(field)
         if not isinstance(value, int | float) or not math.isfinite(float(value)):
             raise ValueError(f"job {job.job_id} metric {field!r} is not finite")
-    for field in ("n_train", "n_inner_train", "n_inner_validation", "n_test"):
+    for field in ("n_train", "n_test"):
         value = result.get(field)
         if not isinstance(value, int) or value < 0:
             raise ValueError(f"job {job.job_id} count {field!r} malformed")
@@ -1579,16 +1717,17 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} timing payload malformed")
     if not isinstance(result.get("honest_eval_top_k"), dict):
         raise ValueError(f"job {job.job_id} honest-eval top-k payload malformed")
-    comparator_context = result.get("comparator_context")
-    if not isinstance(comparator_context, dict):
-        raise ValueError(f"job {job.job_id} comparator context malformed")
-    if (
-        comparator_context.get("diagnostic") != "ok"
-        or comparator_context.get("comparison_status") != "comparable"
-    ):
-        raise ValueError(f"job {job.job_id} comparator context is not comparable")
+    comparator_inline = result.get("comparator_inline")
+    if not isinstance(comparator_inline, dict) or not comparator_inline:
+        raise ValueError(f"job {job.job_id} inline comparator results malformed")
+    comparator_delta = result.get("comparator_delta")
+    if not isinstance(comparator_delta, dict) or "best_comparator" not in comparator_delta:
+        raise ValueError(f"job {job.job_id} comparator deltas malformed")
     if result.get("split") != job.split or result.get("model") != job.model:
         raise ValueError(f"job {job.job_id} result does not match job identity")
+    lineage = result.get("outer_split_lineage")
+    if not isinstance(lineage, dict) or lineage.get("split_seed") != job.split_seed:
+        raise ValueError(f"job {job.job_id} outer split lineage seed mismatch")
     if not _leakage_ok(result):
         raise ValueError(f"job {job.job_id} leakage checklist failed or missing")
     if not _leakage_diagnostics_pass(result):
@@ -1642,14 +1781,18 @@ def _common_key(payload: Mapping[str, Any], config: LearnedBatchConfig) -> tuple
     provenance = payload.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("payload provenance missing")
+    # The split seed is per-job identity under the rotated-seed matrix and is
+    # validated against the job spec instead of joining the common key.
     return (
         payload.get("experiment_schema_version"),
         payload.get("feature_schema_version"),
         payload.get("db_path"),
         provenance.get("game_dir"),
-        provenance.get("comparator_json_path"),
-        provenance.get("split_seed"),
         provenance.get("hpo_seed"),
+        provenance.get("inner_cv_folds"),
+        provenance.get("noise_floor_override"),
+        provenance.get("bootstrap_resamples"),
+        provenance.get("component_vocab_max_overshoot"),
         provenance.get("hpo_trials"),
         provenance.get("hpo_jobs"),
         provenance.get("model_thread_count"),
@@ -1682,10 +1825,14 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     payloads: list[dict[str, Any]] = []
     common: tuple[Any, ...] | None = None
     results: list[dict[str, Any]] = []
+    insufficient: list[tuple[str, str]] = []
     for job in jobs:
         payload = _read_json(result_dir / f"{job.job_id}.json")
         payload = validate_job_payload(config, job, payload)
         result = payload["results"][0]
+        if result.get("status") in INSUFFICIENCY_STATUSES:
+            insufficient.append((job.job_id, str(result.get("status"))))
+            continue
         key = _common_key(payload, config)
         if common is None:
             common = key
@@ -1693,6 +1840,12 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
             raise ValueError(f"job {job.job_id} provenance does not match batch")
         payloads.append(payload)
         results.append(dict(result))
+    if insufficient:
+        details = ", ".join(f"{job_id} ({status})" for job_id, status in insufficient)
+        raise ValueError(
+            "batch contains structured insufficiency artifacts and cannot be "
+            f"merged: {details}; adjust seeds/config and re-run those cells"
+        )
 
     first = payloads[0]
     first_result = first["results"][0]
@@ -1710,6 +1863,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         "feature_profile": first["feature_profile"],
         "db_path": first["db_path"],
         "model_families": list(config.models),
+        "split_seeds": list(config.split_seeds),
         "claim_boundary": first.get("claim_boundary") or first_result.get("claim_boundary"),
         "model_family_policy": first.get("model_family_policy") or first_result.get("model_family_policy"),
         "feature_selection_protocol": first.get("feature_selection_protocol") or first_result.get("feature_selection_protocol"),
@@ -1719,6 +1873,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         "provenance": provenance,
         "result_count": len(results),
         "skipped_models": [],
+        "seed_aggregates": _seed_aggregates(results, config.primary_top_k),
         "results": results,
     }
 
@@ -1727,14 +1882,107 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     _atomic_write_json(merged_path, merged)
     if config.publish_canonical:
         canonical_matrix = (
-            config.splits == CANONICAL_SPLITS and config.models == CANONICAL_MODELS
+            config.splits == CANONICAL_SPLITS
+            and config.models == CANONICAL_MODELS
+            and config.split_seeds == CANONICAL_SPLIT_SEED_BANK
         )
-        if not canonical_matrix or len(jobs) != len(CANONICAL_SPLITS) * len(CANONICAL_MODELS):
+        if not canonical_matrix:
             raise ValueError(
-                "canonical publication requires the full canonical split/model matrix"
+                "canonical publication requires the full canonical "
+                "split/model/seed-bank matrix"
             )
+        _guard_canonical_overwrite(config)
         _atomic_write_json(config.canonical_output_path, merged)
     return merged
+
+
+# Headline metrics aggregated across seeds per (split, model). Paths are
+# (dotted) lookups into each completed result.
+SEED_AGGREGATE_METRIC_PATHS: dict[str, tuple[str, ...]] = {
+    "rmse": ("rmse",),
+    "spearman_rho": ("spearman_rho",),
+    "mean_per_opponent_spearman": ("rank_metrics", "per_opponent", "mean_spearman"),
+    "build_aggregate_spearman": ("rank_metrics", "build_aggregate", "spearman"),
+    "skill": ("skill_scores", "skill"),
+}
+
+
+def _lookup_path(result: Mapping[str, Any], path: tuple[str, ...]) -> Any:
+    value: Any = result
+    for key in path:
+        if not isinstance(value, Mapping):
+            return None
+        value = value.get(key)
+    return value
+
+
+def _seed_aggregates(
+    results: Sequence[Mapping[str, Any]],
+    primary_top_k: int,
+) -> dict[str, Any]:
+    """Descriptive spread over rotated-seed resplits per (split, model).
+
+    NOT a calibrated standard error (overlapping resplits of one dataset;
+    Nadeau-Bengio) — reports must present it as spread, never as SD/sqrt(n).
+    """
+    metric_paths = dict(SEED_AGGREGATE_METRIC_PATHS)
+    metric_paths["precision_at_primary_k"] = (
+        "rank_metrics", "build_aggregate", "precision_at_k", str(primary_top_k),
+    )
+    metric_paths["regret_at_primary_k"] = (
+        "rank_metrics", "build_aggregate", "regret_at_k", str(primary_top_k), "raw",
+    )
+    grouped: dict[str, list[Mapping[str, Any]]] = {}
+    for result in results:
+        key = f"{result.get('split')}:{result.get('model')}"
+        grouped.setdefault(key, []).append(result)
+    aggregates: dict[str, Any] = {}
+    for key, group in sorted(grouped.items()):
+        metrics: dict[str, Any] = {"n_seeds": len(group)}
+        for name, path in metric_paths.items():
+            values = [
+                float(value)
+                for value in (_lookup_path(result, path) for result in group)
+                if isinstance(value, int | float) and math.isfinite(float(value))
+            ]
+            metrics[name] = {
+                "mean": sum(values) / len(values) if values else None,
+                "sd": (
+                    float(_std(values)) if len(values) > 1 else None
+                ),
+                "min": min(values) if values else None,
+                "max": max(values) if values else None,
+                "n_finite": len(values),
+            }
+        aggregates[key] = metrics
+    return aggregates
+
+
+def _std(values: Sequence[float]) -> float:
+    mean = sum(values) / len(values)
+    return (sum((value - mean) ** 2 for value in values) / (len(values) - 1)) ** 0.5
+
+
+def _guard_canonical_overwrite(config: LearnedBatchConfig) -> None:
+    """Prior waves' canonical artifacts are dated evidence: never clobber a
+    canonical file produced by a different batch."""
+    path = config.canonical_output_path
+    if not path.exists():
+        return
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+        existing_batch = existing.get("provenance", {}).get("batch", {}).get("name")
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(
+            f"canonical output path {path} exists but is unreadable ({exc}); "
+            "refusing to overwrite"
+        ) from exc
+    if existing_batch != config.name:
+        raise ValueError(
+            f"canonical output path {path} was published by batch "
+            f"{existing_batch!r}; choose a new dated canonical path instead of "
+            "overwriting prior-wave evidence"
+        )
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:

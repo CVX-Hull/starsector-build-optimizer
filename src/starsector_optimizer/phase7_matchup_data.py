@@ -21,6 +21,53 @@ from .repair import is_feasible, repair_build
 
 BUILD_KEY_HEX_LENGTH = 16
 
+# Outer-split seed policy (spec 31, methodology review C4). This module is
+# the single owner; the analysis scripts and batch validation all reference
+# these constants. Seed 17 drove four adaptive evidence waves and must not
+# partition outer test sets again. The reserved confirmatory seed is spent
+# only on a promotion-grade claim with a predeclared family and endpoint.
+BURNED_SPLIT_SEEDS: frozenset[int] = frozenset({17})
+CANONICAL_SPLIT_SEED_BANK: tuple[int, ...] = (101, 103, 107, 109, 113, 127, 131, 137, 139, 149)
+CANONICAL_SPLIT_SEED_BANK_LABEL = "2026-07-bank-a"
+RESERVED_CONFIRMATORY_SEED = 151
+
+# Shared evaluation-procedure and experiment-contract constants (spec 31):
+# single owners referenced by the analysis scripts and batch orchestration so
+# the two layers cannot drift.
+DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT = 0.15
+DEFAULT_INNER_CV_FOLDS = 3
+EXPERIMENT_SCHEMA_VERSION = 2
+DEFAULT_PROMOTION_METRIC = "mean_per_opponent_spearman"
+DEFAULT_FINAL_REFIT_POLICY = "fit_outer_train_only_no_deployment_artifact"
+DEFAULT_DEPENDENCY_EXTRA = "surrogate"
+# The seedless split: its deterministic source-order partition has no seed
+# dimension in the batch job matrix.
+SEEDLESS_SPLITS: tuple[str, ...] = ("forward-time",)
+# Structured insufficiency statuses: terminal, non-retryable per-job outcomes
+# accepted by the batch control plane (a deterministic bad draw must not burn
+# lease retries) but blocking any merge/publication.
+INSUFFICIENCY_STATUSES: tuple[str, ...] = (
+    "degenerate_component_vocab_split",
+    "empty_outer_split",
+    "insufficient_inner_groups",
+)
+
+
+class ComponentVocabularyError(ValueError):
+    """A degenerate component-vocabulary draw (exhaustion, overshoot, or an
+    empty partition) — distinct from config errors so callers can convert
+    exactly these into structured insufficiency artifacts."""
+
+
+def reject_burned_split_seed(seed: int) -> None:
+    """Raise when an outer split would reuse a burned seed (review C4)."""
+    if seed in BURNED_SPLIT_SEEDS:
+        raise ValueError(
+            f"outer split seed {seed} is burned (methodology review C4: it "
+            "drove prior adaptive evidence waves); use a seed from "
+            "CANONICAL_SPLIT_SEED_BANK"
+        )
+
 
 class BuildSourceKind(StrEnum):
     EXACT_LOGGED_BUILD = "exact_logged_build"
@@ -712,17 +759,115 @@ def held_out_replicate_split(
     )
 
 
-def held_out_component_combination_split(
+def component_vocabulary(build: Build) -> tuple[str, ...]:
+    """Slot-agnostic component-ID tokens for vocabulary holdout (spec 31).
+
+    Hull ID and flux values are excluded: the training DB is single-hull, and
+    flux allocation is numeric rather than a component vocabulary.
+    """
+    tokens = {
+        f"weapon:{weapon_id}"
+        for weapon_id in build.weapon_assignments.values()
+        if weapon_id is not None
+    }
+    tokens.update(f"hullmod:{hullmod_id}" for hullmod_id in build.hullmods)
+    return tuple(sorted(tokens))
+
+
+@dataclass(frozen=True)
+class ComponentVocabularySplit:
+    split: SplitIds
+    held_out_components: tuple[str, ...]
+    realized_test_fraction: float
+
+
+def held_out_component_vocabulary_split(
     rows: Sequence[TrainingMatchupRow],
     build_lookup: Mapping[str, Build],
     holdout_fraction: float,
+    max_overshoot_fraction: float,
     seed: int,
-) -> SplitIds:
-    groups = []
+) -> ComponentVocabularySplit:
+    """Hold out component IDs so no train build contains a held-out component.
+
+    The candidate vocabulary is the union over builds that appear in ``rows``
+    (not all of ``build_lookup``): held-out component lists are stamped,
+    comparable artifact fields, and must not depend on builds that contribute
+    no rows to the split.
+    """
+    _validate_fraction("holdout_fraction", holdout_fraction)
+    if max_overshoot_fraction < 0.0:
+        raise ValueError(
+            f"max_overshoot_fraction must be >= 0, got {max_overshoot_fraction}"
+        )
+    row_build_keys = {row.build_key for row in rows}
+    vocab_by_build = {
+        key: frozenset(component_vocabulary(build_lookup[key])) for key in row_build_keys
+    }
+    vocabulary = sorted(set().union(*vocab_by_build.values()) if vocab_by_build else set())
+    rng = random.Random(seed)
+    rng.shuffle(vocabulary)
+    held_out: set[str] = set()
+    test_fraction = 0.0
+    for component in vocabulary:
+        held_out.add(component)
+        test_rows = sum(1 for row in rows if vocab_by_build[row.build_key] & held_out)
+        test_fraction = test_rows / len(rows) if rows else 0.0
+        if test_fraction >= holdout_fraction:
+            break
+    else:
+        raise ComponentVocabularyError(
+            "component vocabulary exhausted before reaching holdout_fraction "
+            f"{holdout_fraction} (reached {test_fraction:.3f})"
+        )
+    if test_fraction > holdout_fraction + max_overshoot_fraction:
+        raise ComponentVocabularyError(
+            f"component vocabulary holdout overshoot: realized test fraction "
+            f"{test_fraction:.3f} exceeds holdout_fraction {holdout_fraction} "
+            f"+ max_overshoot_fraction {max_overshoot_fraction}"
+        )
+    train: list[TrainingMatchupRow] = []
+    test: list[TrainingMatchupRow] = []
     for row in rows:
-        build = build_lookup[row.build_key]
-        groups.append(component_fingerprint_json(build))
-    return _group_split(rows, groups, holdout_fraction, seed)
+        (test if vocab_by_build[row.build_key] & held_out else train).append(row)
+    if not train or not test:
+        raise ComponentVocabularyError(
+            "component vocabulary holdout produced an empty train or test partition"
+        )
+    return ComponentVocabularySplit(
+        split=SplitIds(train=tuple(train), test=tuple(test)),
+        held_out_components=tuple(sorted(held_out)),
+        realized_test_fraction=test_fraction,
+    )
+
+
+def grouped_kfold(
+    rows: Sequence[TrainingMatchupRow | HonestEvalMatchupRow],
+    groups: Sequence[str],
+    n_folds: int,
+    seed: int,
+) -> tuple[SplitIds, ...]:
+    """Grouped k-fold: round-robin unique groups into folds; fold i is validation.
+
+    Returns ``()`` when there are fewer unique groups than folds; callers emit
+    ``insufficient_inner_groups`` instead of falling back to row-random splits.
+    """
+    if n_folds < 2:
+        raise ValueError(f"n_folds must be >= 2, got {n_folds}")
+    unique = sorted(set(groups))
+    if len(unique) < n_folds:
+        return ()
+    rng = random.Random(seed)
+    rng.shuffle(unique)
+    fold_of_group = {group: idx % n_folds for idx, group in enumerate(unique)}
+    folds = []
+    for fold_idx in range(n_folds):
+        train: list[TrainingMatchupRow | HonestEvalMatchupRow] = []
+        test: list[TrainingMatchupRow | HonestEvalMatchupRow] = []
+        for row, group in zip(rows, groups, strict=True):
+            (test if fold_of_group[group] == fold_idx else train).append(row)
+        folds.append(SplitIds(train=tuple(train), test=tuple(test)))
+    return tuple(folds)
 
 
 def held_out_seed_cell_split(
@@ -736,9 +881,15 @@ def held_out_seed_cell_split(
     )
 
 
+def forward_time_order_key(row: TrainingMatchupRow) -> tuple[str, int, int]:
+    """Canonical source-order key for forward-time semantics (outer split and
+    rolling-origin inner folds must agree on this ordering)."""
+    return (row.source_path, row.trial_number, row.opponent_index)
+
+
 def forward_time_split(rows: Sequence[TrainingMatchupRow], train_fraction: float) -> SplitIds:
     _validate_fraction("train_fraction", train_fraction)
-    ordered = sorted(rows, key=lambda row: (row.source_path, row.trial_number, row.opponent_index))
+    ordered = sorted(rows, key=forward_time_order_key)
     if not ordered:
         return SplitIds(train=(), test=())
     split_idx = max(1, min(len(ordered) - 1, round(len(ordered) * train_fraction)))

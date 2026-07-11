@@ -34,14 +34,27 @@ from starsector_optimizer.matchup_features import (
 )
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.models import Build
+from starsector_optimizer.phase7_eval import (
+    EvalMetricsConfig,
+    build_aggregate_rank_metrics,
+    honest_eval_build_metrics,
+    panel_target_stats,
+    per_opponent_rank_metrics,
+    resolve_noise_floor,
+    sample_sd,
+    skill_scores,
+    two_way_cluster_bootstrap,
+)
 from starsector_optimizer.phase7_matchup_data import (
+    DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT,
     HonestEvalMatchupRow,
     SplitIds,
     TrainingMatchupRow,
     component_fingerprint_json,
+    component_vocabulary,
     forward_time_split,
     held_out_build_split,
-    held_out_component_combination_split,
+    held_out_component_vocabulary_split,
     held_out_opponent_family_split,
     held_out_opponent_hull_split,
     held_out_opponent_split,
@@ -49,11 +62,12 @@ from starsector_optimizer.phase7_matchup_data import (
     load_honest_eval_matchups,
     load_recovered_builds,
     load_training_matchups,
+    reject_burned_split_seed,
 )
 
 DEFAULT_HOLDOUT_FRACTION = 0.2
 DEFAULT_TRAIN_FRACTION = 0.8
-DEFAULT_RANDOM_SEED = 17
+DEFAULT_RANDOM_SEED = 101
 DEFAULT_TREE_COUNT = 200
 DEFAULT_MIN_SAMPLES_LEAF = 2
 DEFAULT_RIDGE_ALPHA = 10.0
@@ -66,12 +80,13 @@ COMPONENT_KEY_DEFINITION = (
     "canonical_full_component_fingerprint:hull_id+slot_weapon_assignments+"
     "hullmods+flux_vents+flux_capacitors"
 )
+COMPONENT_VOCAB_KEY_DEFINITION = "slot_agnostic_weapon_and_hullmod_vocabulary"
 SPLIT_CHOICES = (
     "build",
     "opponent",
     "opponent-hull",
     "opponent-family",
-    "component",
+    "component-vocab",
     "seed-cell",
     "forward-time",
 )
@@ -110,6 +125,8 @@ class BaselineConfig:
     top_k_values: tuple[int, ...]
     progress: bool
     feature_profile: str = DEFAULT_FEATURE_PROFILE
+    eval_metrics: EvalMetricsConfig = EvalMetricsConfig()
+    component_vocab_max_overshoot: float = DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT
 
 
 @dataclass(frozen=True)
@@ -258,6 +275,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", default=",".join(str(item) for item in DEFAULT_TOP_K_VALUES))
     parser.add_argument("--max-rows", type=int, default=None)
     parser.add_argument("--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE)
+    parser.add_argument("--noise-floor-override", type=float, default=None)
+    parser.add_argument(
+        "--bootstrap-resamples", type=int, default=EvalMetricsConfig().bootstrap_resamples
+    )
+    parser.add_argument(
+        "--component-vocab-max-overshoot",
+        type=float,
+        default=DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT,
+    )
     parser.add_argument("--no-progress", action="store_true")
     return parser
 
@@ -277,12 +303,17 @@ def row_build_key(row: Row) -> str:
     raise ValueError("training matchup row has no build_key")
 
 
-def _split_rows(config: BaselineConfig) -> tuple[SplitIds, dict[str, object]]:
+def _split_rows(
+    config: BaselineConfig,
+) -> tuple[SplitIds, dict[str, object], dict[str, object]]:
+    """Build the outer split; returns (split, build_lookup, split_extras)."""
+    reject_burned_split_seed(config.seed)
     build_lookup = {item.build_key: item.build for item in load_recovered_builds(config.db_path)}
     rows = list(load_training_matchups(config.db_path))
     if config.max_rows is not None:
         rows = rows[:config.max_rows]
     rows = [row for row in rows if row.build_key in build_lookup]
+    extras: dict[str, object] = {}
     if config.split == "build":
         split = held_out_build_split(rows, config.holdout_fraction, config.seed)
     elif config.split == "opponent":
@@ -297,15 +328,24 @@ def _split_rows(config: BaselineConfig) -> tuple[SplitIds, dict[str, object]]:
         split = held_out_opponent_family_split(
             rows, opponent_family_by_variant, config.holdout_fraction, config.seed
         )
-    elif config.split == "component":
-        split = held_out_component_combination_split(
-            rows, build_lookup, config.holdout_fraction, config.seed
+    elif config.split == "component-vocab":
+        vocab_split = held_out_component_vocabulary_split(
+            rows,
+            build_lookup,
+            config.holdout_fraction,
+            config.component_vocab_max_overshoot,
+            config.seed,
         )
+        split = vocab_split.split
+        extras = {
+            "held_out_components": list(vocab_split.held_out_components),
+            "realized_test_fraction": vocab_split.realized_test_fraction,
+        }
     elif config.split == "seed-cell":
         split = held_out_seed_cell_split(rows, config.holdout_fraction, config.seed)
     else:
         split = forward_time_split(rows, config.train_fraction)
-    return split, build_lookup
+    return split, build_lookup, extras
 
 
 def opponent_group_maps(
@@ -371,20 +411,17 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
             "supported_claim": "Transfer to unseen outcome-free opponent hull-size/designation/manufacturer families.",
             "claim_supported": "supported",
         }
-    if config.split == "component":
+    if config.split == "component-vocab":
         return {
-            "split_level": "component",
-            "group_key_function": "component_fingerprint_json",
+            "split_level": "component-vocab",
+            "group_key_function": "component_vocabulary_membership",
             "group_key_fields": [
-                "Build.hull_id",
                 "Build.weapon_assignments",
                 "Build.hullmods",
-                "Build.flux_vents",
-                "Build.flux_capacitors",
             ],
-            "supported_claim": "Transfer away from selected full component combinations.",
+            "supported_claim": "Transfer to builds containing weapon/hullmod IDs never seen in training.",
             "claim_supported": "supported",
-            "component_key_definition": COMPONENT_KEY_DEFINITION,
+            "component_key_definition": COMPONENT_VOCAB_KEY_DEFINITION,
         }
     if config.split == "seed-cell":
         return {
@@ -473,9 +510,14 @@ def split_overlap_counts(
     build_lookup: Mapping[str, Build],
     opponent_hull_by_variant: Mapping[str, str] | None = None,
     opponent_family_by_variant: Mapping[str, str] | None = None,
+    held_out_components: Sequence[str] | None = None,
 ) -> dict[str, int]:
     opponent_hull_by_variant = opponent_hull_by_variant or {}
     opponent_family_by_variant = opponent_family_by_variant or {}
+    train_vocabulary: set[str] = set()
+    for row in train_rows:
+        if row.build_key in build_lookup:
+            train_vocabulary.update(component_vocabulary(build_lookup[row.build_key]))
     train_components = {
         component_fingerprint_json(build_lookup[row.build_key])
         for row in train_rows
@@ -486,7 +528,7 @@ def split_overlap_counts(
         for row in test_rows
         if row.build_key in build_lookup
     }
-    return {
+    counts = {
         "exact_build": _overlap_count(
             {row.build_key for row in train_rows},
             {row.build_key for row in test_rows},
@@ -533,6 +575,13 @@ def split_overlap_counts(
             {f"{row.build_key}:{row.opponent_variant_id}" for row in test_rows},
         ),
     }
+    if held_out_components is not None:
+        # component-vocab forbidden-key count: held-out component IDs seen in
+        # any train build. Must be zero for a valid vocabulary holdout. The
+        # key is emitted only when a vocabulary holdout exists, so a 0 can
+        # never be misread as a passed gate on other splits.
+        counts["component_vocabulary"] = len(set(held_out_components) & train_vocabulary)
+    return counts
 
 
 def _feature_bundle(rows: Sequence[Row], build_lookup, config: BaselineConfig) -> FeatureBundle:
@@ -617,6 +666,17 @@ def _group_metric(rows: Sequence[Row], records: Sequence[Mapping[str, FeatureVal
             group = _score_regime(float(target))
         elif group_key == "campaign":
             group = getattr(row, "campaign", None) or "unknown"
+        elif group_key == "opponent_variant_id":
+            group = row.opponent_variant_id
+        elif group_key == "opponent_family":
+            group = ":".join(
+                str(record.get(field, "unknown"))
+                for field in (
+                    "opponent_hull_size",
+                    "opponent_hull_designation",
+                    "opponent_hull_tech_manufacturer",
+                )
+            )
         else:
             group = str(record.get(group_key, "unknown"))
         grouped_true[group].append(float(target))
@@ -632,6 +692,12 @@ def _group_metric(rows: Sequence[Row], records: Sequence[Mapping[str, FeatureVal
 
 def stratified_metrics(bundle: FeatureBundle, pred: np.ndarray) -> dict[str, object]:
     return {
+        "opponent_variant_id": _group_metric(
+            bundle.rows, bundle.records, bundle.targets, pred, "opponent_variant_id"
+        ),
+        "opponent_family": _group_metric(
+            bundle.rows, bundle.records, bundle.targets, pred, "opponent_family"
+        ),
         "opponent_hull_size": _group_metric(
             bundle.rows, bundle.records, bundle.targets, pred, "opponent_hull_size"
         ),
@@ -680,7 +746,86 @@ def top_k_recall(
     return out
 
 
-def honest_eval_top_k_for_model(model: BaselineModel, build_lookup, config: BaselineConfig) -> dict[str, object]:
+def degenerate_opponents_for_panel(
+    rows: Sequence[Row],
+    targets: np.ndarray,
+    noise_floor: float,
+) -> frozenset[str]:
+    """Opponents whose within-opponent target SD sits below the noise floor.
+
+    Computed once per (split, seed) from the full test panel and held fixed
+    (spec 31: not recomputed per bootstrap resample).
+    """
+    grouped: dict[str, list[float]] = defaultdict(list)
+    for row, target in zip(rows, targets, strict=True):
+        grouped[row.opponent_variant_id].append(float(target))
+    return frozenset(
+        opponent
+        for opponent, values in grouped.items()
+        if sample_sd(values) < noise_floor
+    )
+
+
+def evaluation_metric_suite(
+    train: FeatureBundle,
+    test: FeatureBundle,
+    predictions: np.ndarray,
+    config: BaselineConfig,
+    primary_k: int,
+    *,
+    include_bootstrap: bool = True,
+) -> dict[str, object]:
+    """Spec 31 evaluation-metric suite over an outer test panel."""
+    noise = resolve_noise_floor(
+        config.eval_metrics, load_honest_eval_matchups(config.db_path)
+    )
+    floor = float(noise["noise_floor"])
+    opponents = [row.opponent_variant_id for row in test.rows]
+    builds = [row_build_key(row) for row in test.rows]
+    degenerate = degenerate_opponents_for_panel(test.rows, test.targets, floor)
+    rank_metrics: dict[str, object] = {
+        "per_opponent": per_opponent_rank_metrics(
+            builds, opponents, test.targets, predictions, floor, config.eval_metrics
+        ),
+        "build_aggregate": build_aggregate_rank_metrics(
+            builds,
+            opponents,
+            test.targets,
+            predictions,
+            degenerate,
+            config.top_k_values,
+            config.eval_metrics,
+        ),
+    }
+    if include_bootstrap:
+        rank_metrics["bootstrap"] = two_way_cluster_bootstrap(
+            builds,
+            opponents,
+            test.targets,
+            predictions,
+            floor,
+            degenerate,
+            primary_k,
+            config.eval_metrics,
+        )
+    return {
+        "noise_floor": noise,
+        "degenerate_opponents": sorted(degenerate),
+        "rank_metrics": rank_metrics,
+        "skill_scores": skill_scores(
+            test.targets, predictions, float(np.mean(train.targets)), config.eval_metrics
+        ),
+        "panel_target_stats": panel_target_stats(test.targets),
+    }
+
+
+def honest_eval_diagnostic_for_model(
+    model: BaselineModel,
+    build_lookup,
+    config: BaselineConfig,
+    outer_train_build_keys: frozenset[str],
+    primary_k: int,
+) -> dict[str, object]:
     rows = [
         row for row in load_honest_eval_matchups(config.db_path)
         if row.build_key is not None and row.build_key in build_lookup
@@ -691,15 +836,29 @@ def honest_eval_top_k_for_model(model: BaselineModel, build_lookup, config: Base
         return {"honest_eval_builds": 0}
     bundle = _feature_bundle(rows, build_lookup, config)
     pred = model.predict(bundle.rows, bundle.records).predictions
-    return top_k_recall(
-        [row for row in bundle.rows if isinstance(row, HonestEvalMatchupRow)],
+    honest_rows = [row for row in bundle.rows if isinstance(row, HonestEvalMatchupRow)]
+    out = top_k_recall(honest_rows, pred, config.top_k_values)
+    noise = resolve_noise_floor(config.eval_metrics, honest_rows)
+    floor = float(noise["noise_floor"])
+    out["build_metrics"] = honest_eval_build_metrics(
+        [row_build_key(row) for row in honest_rows],
+        [row.opponent_variant_id for row in honest_rows],
+        bundle.targets,
         pred,
-        config.top_k_values,
+        degenerate_opponents=degenerate_opponents_for_panel(
+            honest_rows, bundle.targets, floor
+        ),
+        outer_train_build_keys=outer_train_build_keys,
+        k_values=config.top_k_values,
+        primary_k=primary_k,
+        config=config.eval_metrics,
     )
+    out["noise_floor"] = noise
+    return out
 
 
 def run_one(config: BaselineConfig) -> dict[str, object]:
-    split, build_lookup = _split_rows(config)
+    split, build_lookup, split_extras = _split_rows(config)
     if not split.train or not split.test:
         raise SystemExit("selected split produced an empty train or test partition")
     train = _feature_bundle(split.train, build_lookup, config)
@@ -720,27 +879,38 @@ def run_one(config: BaselineConfig) -> dict[str, object]:
         build_lookup,
         opponent_hull_by_variant,
         opponent_family_by_variant,
+        held_out_components=split_extras.get("held_out_components"),
     )
-    if config.split == "component":
+    if config.split == "component-vocab":
         diagnostics["component_overlap_diagnostics"] = component_overlap_diagnostics(
             train_training_rows,
             test_training_rows,
             build_lookup,
         )
+    suite = evaluation_metric_suite(
+        train, test, result.predictions, config, min(config.top_k_values)
+    )
+    outer_train_build_keys = frozenset(
+        row.build_key for row in train_training_rows if row.build_key is not None
+    )
     return {
         "db_path": str(config.db_path),
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_profile": config.feature_profile,
         "provenance": provenance(config),
-        "split_metadata": split_metadata(config),
+        "split_metadata": {**split_metadata(config), **split_extras},
         "split": config.split,
         "model": config.model,
         "n_train": len(train.rows),
         "n_test": len(test.rows),
         **metrics,
+        **suite,
         "diagnostics": diagnostics,
         "stratified": stratified_metrics(test, result.predictions),
-        "honest_eval_top_k": honest_eval_top_k_for_model(model, build_lookup, config),
+        "honest_eval_top_k": honest_eval_diagnostic_for_model(
+            model, build_lookup, config, outer_train_build_keys,
+            min(config.top_k_values),
+        ),
 }
 
 
@@ -755,6 +925,9 @@ def provenance(config: BaselineConfig) -> dict[str, object]:
         "top_k_values": list(config.top_k_values),
         "max_rows": config.max_rows,
         "feature_profile": config.feature_profile,
+        "noise_floor_override": config.eval_metrics.noise_floor_override,
+        "bootstrap_resamples": config.eval_metrics.bootstrap_resamples,
+        "component_vocab_max_overshoot": config.component_vocab_max_overshoot,
     }
 
 
@@ -777,6 +950,8 @@ def _configs_to_run(config: BaselineConfig) -> Iterable[BaselineConfig]:
                 top_k_values=config.top_k_values,
                 progress=config.progress,
                 feature_profile=config.feature_profile,
+                eval_metrics=config.eval_metrics,
+                component_vocab_max_overshoot=config.component_vocab_max_overshoot,
             )
 
 
@@ -812,6 +987,11 @@ def main() -> None:
         top_k_values=parse_top_k_values(args.top_k),
         progress=not args.no_progress,
         feature_profile=args.feature_profile,
+        eval_metrics=EvalMetricsConfig(
+            noise_floor_override=args.noise_floor_override,
+            bootstrap_resamples=args.bootstrap_resamples,
+        ),
+        component_vocab_max_overshoot=args.component_vocab_max_overshoot,
     )
     configs = list(_configs_to_run(config))
     results = []

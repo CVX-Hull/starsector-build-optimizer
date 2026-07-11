@@ -103,7 +103,7 @@ DDD (Document Driven Development) + TDD. Module specifications in `docs/specs/` 
 
 | Spec | Module | Contents |
 |---|---|---|
-| [31-phase7-matchup-data](./specs/31-phase7-matchup-data.md) | `phase7_matchup_data.py`, `matchup_features.py` | Recover prior-run builds from JSONL logs and Optuna DBs, materialize derived matchup tables, and extract flat contextual matchup features |
+| [31-phase7-matchup-data](./specs/31-phase7-matchup-data.md) | `phase7_matchup_data.py`, `matchup_features.py`, `phase7_eval.py`, `phase7_learned_batch.py` | Recover prior-run builds, materialize derived matchup tables, extract flat contextual matchup features, compute the rank-fidelity evaluation-metric suite, and orchestrate the AWS learned batch |
 
 Spec number registry (gaps at 02, 20, 21): see [specs/README.md](./specs/README.md).
 

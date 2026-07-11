@@ -34,6 +34,13 @@ from starsector_optimizer.phase7_learned_batch import (
 
 SOURCE_VERSION_ARCNAME = ".phase7_source_version"
 
+# local-smoke bounds: keep the end-to-end contract check fast by shrinking
+# every expensive knob, not just rows/trials.
+SMOKE_MAX_ROWS = 200
+SMOKE_HPO_TRIALS = 1
+SMOKE_INNER_CV_FOLDS = 2
+SMOKE_BOOTSTRAP_RESAMPLES = 20
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -57,7 +64,6 @@ def bundle_paths(cfg) -> tuple[Path, ...]:
         Path("pyproject.toml"),
         Path("uv.lock"),
         cfg.source_db_path,
-        cfg.comparator_json_path,
         Path("game/starsector/data"),
         Path("game/starsector/manifest.json"),
     )
@@ -153,7 +159,12 @@ def local_smoke(config_path: Path, max_jobs: int) -> int:
     jobs = generate_jobs(cfg)[:max_jobs]
     for job in jobs:
         command = build_job_command(cfg, job)
-        command.extend(["--max-rows", "200", "--hpo-trials", "1"])
+        command.extend([
+            "--max-rows", str(SMOKE_MAX_ROWS),
+            "--hpo-trials", str(SMOKE_HPO_TRIALS),
+            "--inner-cv-folds", str(SMOKE_INNER_CV_FOLDS),
+            "--bootstrap-resamples", str(SMOKE_BOOTSTRAP_RESAMPLES),
+        ])
         print(" ".join(command), flush=True)
         subprocess.run(command, check=True)
     return 0

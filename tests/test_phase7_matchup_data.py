@@ -9,15 +9,19 @@ import pytest
 from starsector_optimizer.models import Build
 from starsector_optimizer.repair import is_feasible
 from starsector_optimizer.phase7_matchup_data import (
+    BURNED_SPLIT_SEEDS,
     BuildSourceKind,
+    ComponentVocabularySplit,
     HonestEvalMatchupRow,
     RecoveredBuild,
     TrainingMatchupRow,
     build_from_log_row,
     build_key,
     component_fingerprint_json,
+    component_vocabulary,
     forward_time_split,
-    held_out_component_combination_split,
+    grouped_kfold,
+    held_out_component_vocabulary_split,
     held_out_build_split,
     held_out_opponent_family_split,
     held_out_opponent_hull_split,
@@ -418,24 +422,106 @@ class TestSplitBuilders:
         }
         assert train_groups.isdisjoint(test_groups)
 
-    def test_held_out_component_combination_split_keeps_components_disjoint(self):
+    def test_burned_split_seeds_names_seed_seventeen(self):
+        assert BURNED_SPLIT_SEEDS == frozenset({17})
+
+    def test_component_vocabulary_is_slot_agnostic_weapons_and_hullmods(self):
+        build = Build(
+            "hammerhead",
+            {"WS 001": "heavyac", "WS 002": "heavyac", "WS 003": None},
+            frozenset({"fluxcoil"}),
+            4,
+            2,
+        )
+        vocab = component_vocabulary(build)
+        assert vocab == ("hullmod:fluxcoil", "weapon:heavyac")
+        assert not any(token.startswith(("hull:", "flux")) for token in vocab)
+
+    def test_component_vocabulary_split_holds_out_components_entirely(self):
         rows = _split_rows()
         build_lookup = {
             f"b{i}": Build(
                 "hammerhead",
-                {"WS 001": "heavyac" if i % 2 == 0 else "heavymortar"},
-                frozenset({"fluxcoil"} if i < 2 else {"armoredweapons"}),
+                {"WS 001": f"weapon{i}"},
+                frozenset({f"mod{i}"}),
                 0,
                 0,
             )
             for i in range(4)
         }
-        split = held_out_component_combination_split(
-            rows, build_lookup, holdout_fraction=0.25, seed=1
+        result = held_out_component_vocabulary_split(
+            rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.5, seed=1
         )
-        train_builds = {row.build_key for row in split.train}
-        test_builds = {row.build_key for row in split.test}
-        assert train_builds.isdisjoint(test_builds)
+        assert isinstance(result, ComponentVocabularySplit)
+        held_out = set(result.held_out_components)
+        assert held_out
+        assert result.realized_test_fraction >= 0.25
+        for row in result.split.train:
+            assert held_out.isdisjoint(component_vocabulary(build_lookup[row.build_key]))
+        for row in result.split.test:
+            assert held_out & set(component_vocabulary(build_lookup[row.build_key]))
+
+    def test_component_vocabulary_split_is_deterministic(self):
+        rows = _split_rows()
+        build_lookup = {
+            f"b{i}": Build("hammerhead", {"WS 001": f"weapon{i}"}, frozenset(), 0, 0)
+            for i in range(4)
+        }
+        a = held_out_component_vocabulary_split(
+            rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.5, seed=3
+        )
+        b = held_out_component_vocabulary_split(
+            rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.5, seed=3
+        )
+        assert a == b
+
+    def test_component_vocabulary_split_overshoot_bound_raises(self):
+        # One component covers 3 of 4 builds: the only possible first pick
+        # jumps realized fraction to 0.75 > 0.25 + 0.1.
+        rows = _split_rows()
+        build_lookup = {
+            f"b{i}": Build(
+                "hammerhead",
+                {"WS 001": "shared" if i < 3 else None},
+                frozenset(),
+                0,
+                0,
+            )
+            for i in range(4)
+        }
+        with pytest.raises(ValueError, match="overshoot"):
+            held_out_component_vocabulary_split(
+                rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.1, seed=1
+            )
+
+    def test_component_vocabulary_split_exhaustion_raises(self):
+        # Only 1 of 4 builds has any component; 25% of rows can never reach 50%.
+        rows = _split_rows()
+        build_lookup = {
+            f"b{i}": Build(
+                "hammerhead",
+                {"WS 001": "solo" if i == 0 else None},
+                frozenset(),
+                0,
+                0,
+            )
+            for i in range(4)
+        }
+        with pytest.raises(ValueError, match="exhaust"):
+            held_out_component_vocabulary_split(
+                rows, build_lookup, holdout_fraction=0.5, max_overshoot_fraction=0.5, seed=1
+            )
+
+    def test_component_vocabulary_split_empty_train_raises(self):
+        rows = _split_rows()
+        build_lookup = {
+            f"b{i}": Build("hammerhead", {"WS 001": "common"}, frozenset(), 0, 0)
+            for i in range(4)
+        }
+        with pytest.raises(ValueError, match="empty"):
+            held_out_component_vocabulary_split(
+                rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=1.0, seed=1
+            )
 
     def test_held_out_seed_cell_split_keeps_cell_seed_groups_disjoint(self):
         rows = [
@@ -459,3 +545,71 @@ class TestSplitBuilders:
             held_out_build_split(_split_rows(), holdout_fraction=1.0, seed=1)
         with pytest.raises(ValueError):
             forward_time_split(_split_rows(), train_fraction=0.0)
+
+
+class TestGroupedKfold:
+    def test_folds_partition_groups_and_rows(self):
+        rows = _split_rows()
+        groups = [row.build_key for row in rows]
+        folds = grouped_kfold(rows, groups, n_folds=2, seed=1)
+        assert len(folds) == 2
+        validation_groups = []
+        for fold in folds:
+            train_groups = {row.build_key for row in fold.train}
+            test_groups = {row.build_key for row in fold.test}
+            assert train_groups.isdisjoint(test_groups)
+            assert len(fold.train) + len(fold.test) == len(rows)
+            validation_groups.append(test_groups)
+        assert set().union(*validation_groups) == set(groups)
+        assert validation_groups[0].isdisjoint(validation_groups[1])
+
+    def test_deterministic_under_seed(self):
+        rows = _split_rows()
+        groups = [row.build_key for row in rows]
+        assert grouped_kfold(rows, groups, 2, seed=5) == grouped_kfold(rows, groups, 2, seed=5)
+
+    def test_too_few_groups_returns_empty(self):
+        rows = _split_rows()
+        groups = ["same"] * len(rows)
+        assert grouped_kfold(rows, groups, 2, seed=1) == ()
+
+    def test_fewer_than_two_folds_raises(self):
+        rows = _split_rows()
+        with pytest.raises(ValueError):
+            grouped_kfold(rows, [row.build_key for row in rows], 1, seed=1)
+
+
+class TestComponentVocabularyError:
+    def test_degenerate_draws_raise_dedicated_exception(self):
+        from starsector_optimizer.phase7_matchup_data import ComponentVocabularyError
+
+        rows = _split_rows()
+        build_lookup = {
+            f"b{i}": Build("hammerhead", {"WS 001": "common"}, frozenset(), 0, 0)
+            for i in range(4)
+        }
+        with pytest.raises(ComponentVocabularyError):
+            held_out_component_vocabulary_split(
+                rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=1.0, seed=1
+            )
+        # Config errors stay plain ValueError, NOT the draw-failure subclass.
+        with pytest.raises(ValueError) as excinfo:
+            held_out_component_vocabulary_split(
+                rows, build_lookup, holdout_fraction=1.5, max_overshoot_fraction=0.1, seed=1
+            )
+        assert not isinstance(excinfo.value, ComponentVocabularyError)
+
+    def test_vocabulary_restricted_to_builds_in_rows(self):
+        rows = _split_rows()  # builds b0..b3
+        build_lookup = {
+            f"b{i}": Build("hammerhead", {"WS 001": f"weapon{i}"}, frozenset(), 0, 0)
+            for i in range(4)
+        }
+        # An extra lookup-only build must not contribute vocabulary.
+        build_lookup["orphan"] = Build(
+            "hammerhead", {"WS 001": "orphan_weapon"}, frozenset(), 0, 0
+        )
+        result = held_out_component_vocabulary_split(
+            rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.5, seed=1
+        )
+        assert "weapon:orphan_weapon" not in result.held_out_components

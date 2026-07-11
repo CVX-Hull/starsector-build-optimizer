@@ -42,7 +42,9 @@ class TestBuildFeatureRow:
         row = build_feature_row(_hammerhead_build(), hull, game_data, manifest)
 
         assert row["build_hull_id"] == "hammerhead"
-        assert row["feature_schema_version"] == FEATURE_SCHEMA_VERSION
+        # Schema version is provenance, not data (spec 31 / review L1): it must
+        # never appear as a feature column.
+        assert "feature_schema_version" not in row
         assert row["build_hull_size"] == hull.hull_size.value
         assert row["build_weapon_count"] == 6
         assert row["build_empty_slot_count"] == 2
@@ -116,7 +118,9 @@ class TestOpponentFeatureRow:
         row = opponent_feature_row("enforcer_Balanced", game_dir, game_data)
 
         assert row["opponent_variant_id"] == "enforcer_Balanced"
-        assert row["feature_schema_version"] == FEATURE_SCHEMA_VERSION
+        # Schema version is provenance, not data (spec 31 / review L1): it must
+        # never appear as a feature column.
+        assert "feature_schema_version" not in row
         assert row["opponent_hull_id"] == "enforcer"
         assert row["opponent_weapon_count"] > 0
         assert row["opponent_hull_size"] == game_data.hulls["enforcer"].hull_size.value

@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: 2026-05-12
+last-validated: 2026-07-11
 ---
 
 # Spec 31 — Phase 7 Matchup Data
@@ -78,11 +78,16 @@ class RecoveredBuild:
 ## Feature Rows
 
 Feature rows are versioned by the module-level integer
-`FEATURE_SCHEMA_VERSION`. Every row returned by this module includes
-`feature_schema_version`. Any script that reports model metrics must also emit
-that version, the selected `feature_profile`, and the source DB path in its
-JSON output. Feature schema v3 is the structured static-game-data feature
-surface. Historical v2 artifacts remain valid only as v2 evidence.
+`FEATURE_SCHEMA_VERSION`. The version is provenance, not data: feature rows
+must NOT contain a `feature_schema_version` column (a constant column in the
+model input is a schema leak — methodology review L1). Any script that
+reports model metrics must emit the module-level version, the selected
+`feature_profile`, and the source DB path in its JSON output. Feature
+schema v4 is the structured static-game-data feature surface with no
+schema-version column (v3 minus that constant column — the same version
+number must never name two different column sets, so removing the column
+bumped the version). Historical v2/v3 artifacts remain valid only as
+evidence at their own versions.
 
 `matchup_features.py` exposes:
 
@@ -328,6 +333,15 @@ the conflict key.
 ## Split Builders
 
 ```python
+BURNED_SPLIT_SEEDS: frozenset[int]  # {17} — retired outer-split seeds
+
+@dataclass(frozen=True)
+class ComponentVocabularySplit:
+    split: SplitIds
+    held_out_components: tuple[str, ...]
+    realized_test_fraction: float
+
+def component_vocabulary(build: Build) -> tuple[str, ...]: ...
 def held_out_build_split(rows, holdout_fraction: float, seed: int) -> SplitIds: ...
 def held_out_opponent_split(rows, holdout_fraction: float, seed: int) -> SplitIds: ...
 def held_out_opponent_hull_split(
@@ -347,19 +361,44 @@ def held_out_replicate_split(
     holdout_fraction: float,
     seed: int,
 ) -> SplitIds: ...
-def held_out_component_combination_split(
+def held_out_component_vocabulary_split(
     rows,
     build_lookup: Mapping[str, Build],
     holdout_fraction: float,
+    max_overshoot_fraction: float,
     seed: int,
-) -> SplitIds: ...
+) -> ComponentVocabularySplit: ...
 def held_out_seed_cell_split(rows, holdout_fraction: float, seed: int) -> SplitIds: ...
 def forward_time_split(rows, train_fraction: float) -> SplitIds: ...
+def grouped_kfold(rows, groups, n_folds: int, seed: int) -> tuple[SplitIds, ...]: ...
 ```
 
 `holdout_fraction` and `train_fraction` must be in `(0, 1)`, otherwise raise
 `ValueError`. The group named by each split must not appear in both train and
 test.
+
+### Seed policy
+
+`BURNED_SPLIT_SEEDS` is the single owner of outer-split seed retirement.
+Seed 17 drove four adaptive evidence waves (05-11 through 05-16; methodology
+review C4) and is burned: the baseline script, the learned experiment
+script, and batch-config validation must all reject burned outer-split seeds
+with an error naming C4. Script seed defaults are the first canonical bank
+seed (101), not 17. The canonical rotated seed bank and the reserved
+confirmatory seed live beside `BURNED_SPLIT_SEEDS` in
+`phase7_matchup_data.py` (`CANONICAL_SPLIT_SEED_BANK = (101, 103, 107, 109,
+113, 127, 131, 137, 139, 149)`, `RESERVED_CONFIRMATORY_SEED = 151`); batch
+validation references them. `phase7_matchup_data.py` is likewise the single
+owner of the shared experiment-contract constants —
+`EXPERIMENT_SCHEMA_VERSION` (2), `DEFAULT_PROMOTION_METRIC`,
+`DEFAULT_FINAL_REFIT_POLICY`, `DEFAULT_DEPENDENCY_EXTRA`,
+`DEFAULT_INNER_CV_FOLDS`, `DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT`,
+`SEEDLESS_SPLITS`, and `INSUFFICIENCY_STATUSES`
+(`degenerate_component_vocab_split`, `empty_outer_split`,
+`insufficient_inner_groups`) — so the experiment script and the batch
+validator cannot drift. The reserved seed must not
+appear in any batch seed list; it is spent only on a promotion-grade
+confirmatory claim with a predeclared model family and endpoint.
 
 The supported split levels and their claim boundaries are:
 
@@ -370,29 +409,76 @@ The supported split levels and their claim boundaries are:
 | `opponent` | `opponent_variant_id` | Transfer to unseen exact opponent variants/builds. |
 | `opponent-hull` | opponent `hull_id` derived from the stock variant | Transfer to unseen opponent hulls using outcome-free stock variant descriptors. |
 | `opponent-family` | opponent hull size, designation, and tech/manufacturer derived from parsed game data | Transfer to unseen coarse opponent families/archetypes. Learned or target-derived clusters require a separate train-fold-fitted implementation before reportable use. |
-| `component` | component-combination key defined below | Transfer away from selected component combinations, not from all components globally. |
+| `component-vocab` | component-vocabulary membership (slot-agnostic weapon/hullmod IDs) | Transfer to builds containing weapon/hullmod IDs never seen in training. |
 | `seed-cell` | `(campaign, seed)` or campaign-cell key when seed is absent | Transfer across campaign cells/proposal contexts. |
-| `forward-time` | source order key, normally `(source_path, trial_number, opponent_index)` | Forward deployment over later optimizer proposals. |
+| `forward-time` | source order key, normally `(source_path, trial_number, opponent_index)` | Forward deployment over later optimizer proposals. Its deterministic partition predates the seed bank and absorbed the burned waves; artifacts stamp `reused_partition: true` and reports must caveat it. |
 
 Each result must record `split_level`, the exact group-key function or field
 set, the supported claim, and overlap counts for stricter hierarchy levels
 when available. Random-row splits may be implemented only as smoke/debug
 diagnostics and must set `claim_supported` to `debug_only`.
 
-The component split key is the canonical full component fingerprint by
-default: sorted weapon IDs including slot IDs, sorted hullmods, hull ID, and
-flux allocation. Future k-combination stress tests may use weapon multisets,
-hullmod sets, or weapon-hullmod pairs/triples, but the artifact must name the
-component key definition. Reports that use component holdout must include
-train/test overlap diagnostics for exact full fingerprints and component
-combinations at `k = 1`, `k = 2`, and `k = 3` where computable.
+### Component keys
 
-Inner validation must use a split compatible with the outer claim. For grouped
-splits, the inner training rows must contain enough unique groups for the
-declared inner fold count; otherwise emit `insufficient_inner_groups` instead
-of falling back to row-random validation. For `forward-time`, the inner split
-must declare the ordering key and use blocked or rolling-origin semantics
-within the outer-training prefix.
+Two component-key definitions exist, with different jobs:
+
+- `canonical_full_component_fingerprint` — `component_fingerprint_json`:
+  hull ID, slot-qualified weapon assignments, sorted hullmods, and flux
+  allocation. Used only for overlap diagnostics (exact-fingerprint and
+  k-combination counts at `k = 1, 2, 3`). The former component *split* built
+  on this key was retired (methodology review C2): the fingerprint is the
+  canonical build JSON verbatim, so that split was the build split under a
+  different shuffle.
+- `slot_agnostic_weapon_and_hullmod_vocabulary` — `component_vocabulary`:
+  tokens `weapon:<id>` and `hullmod:<id>`, no slot qualification, no hull or
+  flux tokens (single-hull DB; flux is numeric). This is the
+  `component-vocab` split's group definition and the question BO acquisition
+  needs answered: transfer to component IDs never seen in training.
+
+`held_out_component_vocabulary_split` builds its candidate vocabulary from
+the union over builds that appear in the given rows (never from lookup-only
+builds — held-out component lists are stamped, comparable artifact fields),
+shuffles it with `random.Random(seed)`, and moves components into the
+held-out set one at a time; after each addition the test-row set is
+recomputed (rows whose build contains ≥ 1 held-out component); it stops when
+test rows ≥ `holdout_fraction` of all rows. Invariant: no train build
+contains any held-out component. Degenerate draws — vocabulary exhaustion,
+an empty partition, or `realized_test_fraction > holdout_fraction +
+max_overshoot_fraction` (unbounded overshoot makes rotated-seed panels
+incomparable) — raise `ComponentVocabularyError` (a `ValueError` subclass);
+config errors such as invalid fractions raise plain `ValueError`. Callers
+running inside batch jobs catch exactly `ComponentVocabularyError` and emit
+structured insufficiency artifacts (`degenerate_component_vocab_split`)
+rather than crashing, so a deterministic bad draw cannot burn lease retries;
+config errors propagate. Artifacts must name the component key definition
+and record `held_out_components` and `realized_test_fraction`.
+
+### Inner validation
+
+Inner validation must use a split compatible with the outer claim, built
+from outer-training rows only, with `inner_cv_folds` (default 3) inner
+train/validation pairs:
+
+- Grouped splits (`build`, `opponent`, `opponent-hull`, `opponent-family`,
+  `seed-cell`): `grouped_kfold` on the outer split's group key, seeded with
+  the HPO seed. `grouped_kfold` shuffles unique groups with
+  `random.Random(seed)` and deals them round-robin into `n_folds` folds
+  (fold i = validation, rest = train). It raises `ValueError` for
+  `n_folds < 2` and returns `()` when unique groups < `n_folds`; the caller
+  emits `insufficient_inner_groups` instead of falling back to row-random
+  validation.
+- `component-vocab` is not a row partition, so inner validation uses
+  `inner_cv_folds` independent vocabulary-holdout draws within outer-train,
+  draw `i` seeded `hpo_seed + i`, with the outer `holdout_fraction` and
+  overshoot bound.
+- `forward-time` uses rolling-origin semantics: `inner_cv_folds` ordered
+  prefix/suffix origins within the outer-training prefix, declaring the
+  ordering key.
+
+Hyperparameter selection minimizes the **mean** inner-validation RMSE across
+folds (tie-breakers on fold means). Every trial fit and the final refit use
+the same model seed (the HPO seed): the selected configuration's inner
+scores must have been produced under its shipping seed.
 
 ## Baseline Evaluation
 
@@ -432,20 +518,135 @@ Reported metrics:
 - `n_train`
 - `n_test`
 - fallback counts when applicable
+- the evaluation-metric suite below (`rank_metrics`, `skill_scores`,
+  `panel_target_stats`, `noise_floor`)
 
-The script also reports stratified diagnostics where labels are available:
+Pooled row-level metrics are retained but demoted: 69.8% of target variance
+is between-opponent (methodology review C1), so pooled Spearman measures
+opponent-difficulty prediction, not build ranking. Rank metrics are the
+primary evidence.
 
+### Evaluation-metric suite
+
+Owned by `src/starsector_optimizer/phase7_eval.py`, configured by the frozen
+dataclass `EvalMetricsConfig` (all thresholds are config fields):
+
+```python
+@dataclass(frozen=True)
+class EvalMetricsConfig:
+    min_builds_per_opponent: int = 5
+    min_opponents_per_build: int = 3
+    top_fraction: float = 0.1
+    min_top_fraction_rows: int = 3
+    bootstrap_resamples: int = 500
+    bootstrap_seed: int = 7717
+    bootstrap_ci_level: float = 0.95
+    noise_floor_override: float | None = None
+    noise_floor_fallback: float = 0.05
+    degenerate_denominator_epsilon: float = 1e-12
+```
+
+The module never imports from `scripts/`; caller-specific values (top-k
+lists and the primary k) arrive as parameters. Every metric function
+collapses replicate rows to (build, opponent) cell means first: replicated
+panels (honest-eval: 30 replicates per cell) must not weight aggregates by
+replicate multiplicity, satisfy panel-size gates via replicates, or feed
+duplicate rows into rank statistics. All SD comparisons against the noise
+floor use the sample SD (ddof=1, `sample_sd`) matching the floor's
+derivation; fewer than two observations is degenerate by definition.
+Correlation degeneracy uses the same `degenerate_denominator_epsilon`
+threshold on input ranges.
+
+**Degenerate-value rule (applies to every function):** any statistic whose
+denominator (variance, MSE, range) falls below
+`degenerate_denominator_epsilon`, or whose inputs are constant, is emitted
+as `None` with a named exclusion/degeneracy counter — never `inf`/`NaN`.
+All outputs must survive `json.dumps` unchanged. Rotated seeds will produce
+degenerate panels (the seed-17 opponent-hull holdout had 4/5 variants with
+zero within-opponent variance), so this is a load-bearing rule, not an edge
+case.
+
+**Noise floor.** `noise_floor_from_replicates(honest_eval_rows)` returns the
+median within-`(build_key, opponent_variant_id)` target SD over groups with
+≥ 2 replicates, with `n_groups` and source. Resolution order:
+`noise_floor_override` → replicate-derived → `noise_floor_fallback`; the
+resolved value and source are recorded in every artifact. Carve-out to the
+honest-eval leakage rule: deriving the evaluation noise floor from
+honest-eval replicate targets is permitted usage — the targets define
+evaluation resolution (tie handling, opponent exclusion), are never fitted
+on, and the derivation is stamped in the artifact.
+
+**Per-opponent rank metrics** (`per_opponent_rank_metrics(builds,
+opponents, y_true, y_pred, noise_floor, config)`): for each test opponent
+with ≥ `min_builds_per_opponent` distinct builds AND within-opponent target
+sample SD ≥ noise floor — Spearman ρ, Kendall τ-b, sparse Kendall τ (targets
+quantized to noise-floor bins before τ-b), top-fraction Kendall τ (τ-b over
+rows in the observed top `top_fraction` of that opponent's targets when
+≥ `min_top_fraction_rows` such rows exist, else `None`). Opponents with a
+constant prediction vector yield `None` correlations, counted separately
+(comparators like `opponent_mean` predict constants within every opponent).
+Output: per-opponent table, aggregate mean/median over non-`None` values,
+and counters `included_opponents`, `excluded_low_variance`,
+`excluded_small_n`, `null_prediction_degenerate`.
+
+**Build-aggregate rank metrics** (`build_aggregate_rank_metrics`): the
+degenerate-opponent set (within-opponent SD < noise floor) is computed once
+per (split, seed) from the full test panel and held fixed. Per-build
+aggregate = mean over the build's non-degenerate test opponents; builds with
+< `min_opponents_per_build` contributing opponents are excluded and counted
+(outer-test panels are TPE-log-unbalanced; honest-eval panels are balanced).
+Output: Spearman, Kendall τ-b, `precision_at_k` (|top-k pred ∩ top-k true|
+/ k), `regret_at_k` (best true aggregate − best true aggregate among top-k
+predicted; raw always, normalized-by-range `None` when the range is
+degenerate) per configured k; per-build panel sizes (min/median/max).
+Top-k tie-break is deterministic: descending value, then ascending build
+key.
+
+**Skill scores** (`skill_scores`): `1 − MSE(pred)/MSE(train-mean predictor)`
+plus both MSEs; `None` when the denominator is degenerate. Raw RMSE must
+never be compared across panels without the accompanying
+`panel_target_stats` (n, mean, SD, endpoint mass at ±1.0).
+
+**Two-way cluster bootstrap** (`two_way_cluster_bootstrap`):
+pigeonhole-style resampling that never feeds duplicated rows into a rank
+statistic (duplication manufactures ties and biases ρ/τ downward). Each
+resample draws a multiset of builds and a multiset of opponents with
+replacement (seeded `bootstrap_seed` + resample index). Mean per-opponent
+Spearman: each drawn opponent copy contributes its ρ over the rows
+restricted to the distinct drawn-build set (multiplicity acts as a weight in
+the outer mean only). Build-aggregate statistics: distinct drawn builds,
+aggregates weighted by opponent-draw multiplicity, rank statistics over
+distinct builds with the deterministic tie-break. CI = percentile interval
+at `bootstrap_ci_level` over resamples with a finite statistic, reporting
+the finite-resample count. Known property: rank statistics on distinct
+clusters are mildly anti-conservative on the duplicated axis — bootstrap
+CIs are **descriptive spread, not calibrated standard errors**, and reports
+must present them as such.
+
+Stratified diagnostics where labels are available:
+
+- exact opponent variant (`opponent_variant_id`),
 - opponent family using opponent hull size, designation, and manufacturer,
 - score regime using fixed target bands (`loss`, `timeout_like`, `win`),
 - campaign cell using `TrainingMatchupRow.campaign`.
 
-Honest-eval top-k recall is required for this gate. The protocol is:
+The honest-eval diagnostic is required for this gate. The protocol is:
 
 1. Fit the model on training-log matchups only.
 2. Predict every resolved honest-eval matchup using build/opponent features.
-3. Aggregate predicted and observed honest-eval targets by `build_key`.
-4. Report `top_k_recall` for configured `k` values against the observed
-   honest-eval build ranking.
+3. Aggregate predicted and observed honest-eval targets by `build_key`,
+   excluding degenerate opponents from the aggregates.
+4. Report `honest_eval_build_metrics` (bootstrap at the caller-passed
+   primary k — the learned script passes `primary_top_k`, the comparator
+   gate passes its smallest configured k): build-mean rank correlations
+   (Spearman/Kendall), `precision_at_k` with the chance level `k/n`
+   alongside, `regret_at_k`, the overlap curve over all `k = 1..n`,
+   build-level bootstrap CIs, and `outer_train_build_overlap` — the count of
+   honest-eval builds whose `build_key` appears in outer-train, recording
+   that this diagnostic is NOT clean holdout (honest-eval candidates were
+   drawn from the same Wave-1 logs). `top_k_recall` is retained as a
+   secondary continuity metric; top-1 recall over ~54 builds is a Bernoulli
+   draw and must never be a promotion metric (methodology review H3).
 5. Do not tune features, model choice, or hyperparameters on the same
    honest-eval rows cited by a report.
 
@@ -499,13 +700,12 @@ Parallel execution policy:
 The learned-baseline script exposes:
 
 ```python
-EXPERIMENT_SCHEMA_VERSION: int
+EXPERIMENT_SCHEMA_VERSION: int  # 2
 
 @dataclass(frozen=True)
 class LearnedExperimentConfig:
     db_path: Path
     game_dir: Path
-    comparator_json_path: Path | None
     split: str
     model: str
     holdout_fraction: float
@@ -523,12 +723,16 @@ class LearnedExperimentConfig:
     honest_eval_usage: str = "diagnostic_only"
     fresh_honest_eval_ledger_id: str | None = None
     primary_top_k: int = 1
-    promotion_metric: str = "honest_eval_top_k_recall"
+    promotion_metric: str = "mean_per_opponent_spearman"
     promotion_threshold: float = 0.0
     claim_label: str = "exploratory"
-    final_refit_policy: str = "refit_selected_model_on_all_training_rows_after_selection"
+    final_refit_policy: str = "fit_outer_train_only_no_deployment_artifact"
     candidate_universe: str = "source_db_builds"
     deployment_artifact: str = "none"
+    inner_cv_folds: int = 3
+    noise_floor_override: float | None = None
+    bootstrap_resamples: int = 500
+    component_vocab_max_overshoot: float = 0.15
     batch_job_id: str | None = None
     batch_name: str | None = None
     batch_fleet_name: str | None = None
@@ -580,20 +784,29 @@ encoder or model without target fallback.
 Each learned model/split run uses nested validation:
 
 1. Build the outer split using one of the comparator-gate split names:
-   `build`, `opponent`, `opponent-hull`, `opponent-family`, `component`,
-   `seed-cell`, or `forward-time`.
-2. Build the inner validation split from outer training rows only, using the
-   same grouping stressor as the outer split.
+   `build`, `opponent`, `opponent-hull`, `opponent-family`,
+   `component-vocab`, `seed-cell`, or `forward-time`. Outer split seeds in
+   `BURNED_SPLIT_SEEDS` are rejected. A degenerate component-vocab draw
+   (vocabulary exhaustion, empty partition, overshoot bound) is emitted as a
+   `degenerate_component_vocab_split` insufficiency result, not a crash.
+2. Build `inner_cv_folds` inner train/validation pairs from outer training
+   rows only, per the §"Inner validation" rules (grouped k-fold; repeated
+   vocabulary draws for component-vocab; rolling-origin for forward-time).
 3. If the outer training rows cannot support that inner split, emit an
    `insufficient_inner_groups` result for the model/split instead of using a
    random row split.
-4. Select hyperparameters by minimizing inner-validation RMSE. Tie breakers are
-   higher Spearman rho and then lower fit/predict runtime.
+4. Select hyperparameters by minimizing the mean inner-validation RMSE
+   across folds. Tie breakers are higher mean Spearman rho and then lower
+   fit/predict runtime. Every trial fit uses the same model seed as the
+   final refit.
 5. Refit the selected model on the full outer training rows.
-6. Evaluate once on the outer test rows.
+6. Evaluate once on the outer test rows, emitting the full
+   evaluation-metric suite (rank metrics with bootstrap CIs, skill scores,
+   panel stats) alongside pooled metrics.
 
-The canonical 21-job matrix reports fixed model families across fixed splits;
-it is a comparison matrix, not an automatically nested model-family selector.
+The canonical job matrix reports fixed model families across fixed splits
+and rotated seeds (21 (split, model) cells; 183 jobs); it is a comparison
+matrix, not an automatically nested model-family selector.
 Any claim that names a single "best" learned model must either predeclare the
 model family and primary endpoint before the run, or implement model-family
 choice inside the inner validation procedure and evaluate that full selection
@@ -618,7 +831,9 @@ as exploratory-only.
 Hierarchy-aware split metadata is required for feature-selection claims. Each
 result must record the split unit, claim supported by that split, forbidden
 cross-split keys, and overlap counts for exact opponent, hull ID, component
-combination, campaign cell, and exact matchup group where those labels are
+combination, component vocabulary (held-out component IDs appearing in any
+train build — the component-vocab split's forbidden-key count, which must be
+zero), campaign cell, and exact matchup group where those labels are
 available. Random-row splits may be emitted as smoke/debug diagnostics, but
 they are not evidence for held-out-opponent transfer.
 
@@ -629,11 +844,18 @@ nearest-neighbor overlap, and sparse-ID ablation delta. Diagnostics may fail
 open only for exploratory artifacts; confirmatory artifacts must define pass,
 warning, or fail semantics before the run.
 
-The learned script accepts `--comparator-json`, defaulting to
-`data/phase7/wave1_comparator_gate_2026-05-14.json`. Results include the
-comparator artifact path, matching comparator context for the same split, and
-default-vs-tuned deltas when tuning is used. If no matching comparator row
-exists, the result records `comparator_missing` instead of failing.
+Comparator context is computed **inline**: each learned run fits the six
+comparator-gate models on its exact outer split (same rows, same seed) and
+records per-comparator metrics (pooled + rank), `best_comparator` (minimum
+finite RMSE), `delta_vs_best_comparator`, and `delta_vs_matched_family`.
+Matched families are defined only where a natural analog exists:
+`random_forest_tuned` → `random_forest`, `sparse_pairwise_ridge` →
+`ridge_hybrid`, `catboost_regressor` → `null` (its headline is
+`delta_vs_best_comparator`). There is no external comparator JSON: matching
+a stale artifact from a different seed was the C3 comparability defect.
+Known residual caveat, which reports must state: comparators run at fixed
+defaults while learned families are tuned, so `delta_vs_best_comparator` is
+a floor comparison, not a tuned-family comparison.
 
 The learned script accepts `--output <path>` and writes the JSON payload there
 instead of requiring shell redirection. Parent directories are created when
@@ -646,24 +868,39 @@ that flag is set, the JSON output records the skipped model and reason.
 
 The learned experiment JSON output includes:
 
-- `experiment_schema_version`
+- `experiment_schema_version` (2)
 - `feature_schema_version`
 - `feature_profile`
 - source DB path and game directory
-- comparator JSON path
 - code/version provenance, or `unknown`
 - split seed and HPO seed
 - train/holdout fractions
 - model-family list and skipped-model list
 - per-result target, feature-family summary, split family, HPO space, HPO
-  trace summary, selected hyperparameters, metrics, comparator context,
-  honest-eval diagnostic, timing, feature profile, and leakage checklist
+  trace summary (per-trial fold means for mae/rmse/Spearman plus the
+  per-trial RMSE fold SD), selected
+  hyperparameters, pooled metrics, `rank_metrics` (per-opponent +
+  build-aggregate + bootstrap CIs), `skill_scores`, `panel_target_stats`,
+  `noise_floor` (resolved value + source), `comparator_inline`, `inner_cv`
+  (fold count, per-fold sizes), `outer_split_lineage`, honest-eval
+  diagnostic, timing, feature profile, and leakage checklist
 - feature-family registry digest, feature-selection protocol, selected-family
   summary, hierarchy scorecard, and model-specific regularization settings
   when those are applicable to the run
 - `honest_eval_usage` with one of `diagnostic_only`, `exploratory_selection`,
   or `final_claim`, plus the honest-eval ledger identifier and run-lineage
   pointer when honest-eval diagnostics are emitted
+
+`outer_split_lineage` is the C4 reuse ledger, parallel to
+`honest_eval_usage`: `{split_seed, seed_bank_label,
+confirmatory_reserved_seed, reused_partition}`. `reused_partition` is `true`
+for `forward-time` (its deterministic partition predates the seed bank);
+seed history across waves is tracked by `seed_bank_label` plus the
+burned-seed registry, not per-seed ledgers. The promotion
+metric is `mean_per_opponent_spearman` on the outer test panel; the
+honest-eval diagnostic's primary readout is build-aggregate Spearman with
+CI. Any claim naming a single best model family must be predeclared and, for
+promotion-grade confirmation, spend the reserved confirmatory seed.
 
 The artifact contract uses these stable JSON object names at both the top level
 and per-result where the object is result-specific:
@@ -693,6 +930,19 @@ and per-result where the object is result-specific:
   diagnostics are represented as `not_applicable` objects with reasons.
 - `deployment_policy`: `final_refit_policy`, `candidate_universe`, and
   `deployment_artifact`.
+- `rank_metrics`: `per_opponent` (table + aggregates + exclusion counters),
+  `build_aggregate` (rank correlations, precision@k, regret@k, panel sizes),
+  and `bootstrap` (percentile CIs + finite-resample counts) per the
+  evaluation-metric suite.
+- `skill_scores`, `panel_target_stats`, `noise_floor`: as defined in the
+  evaluation-metric suite.
+- `comparator_inline`: per-comparator pooled and rank metrics.
+- `comparator_delta`: `best_comparator`, `delta_vs_best_comparator`,
+  `matched_family`, `delta_vs_matched_family`.
+- `inner_cv`: `fold_count`, per-fold train/validation sizes, and fold
+  construction (`grouped_kfold` | `vocabulary_draws` | `rolling_origin`).
+- `outer_split_lineage`: `split_seed`, `seed_bank_label`,
+  `confirmatory_reserved_seed`, `reused_partition`.
 
 The standalone learned script defaults `honest_eval_usage` to
 `diagnostic_only`. Current-ledger batch configs that informed roadmap decisions
@@ -716,25 +966,38 @@ This spec owns the Phase 7 job matrix and artifact semantics.
 The canonical full-run batch job matrix is exactly:
 
 - splits: `build`, `opponent`, `opponent-hull`, `opponent-family`,
-  `component`, `seed-cell`, `forward-time`;
+  `component-vocab`, `seed-cell`, `forward-time`;
 - model families: `random_forest_tuned`, `catboost_regressor`,
-  `sparse_pairwise_ridge`.
+  `sparse_pairwise_ridge`;
+- split seeds: `CANONICAL_SPLIT_SEED_BANK` (10 rotated seeds) for every
+  split except `forward-time`, which is deterministic and runs one instance
+  per model.
 
-That produces 21 jobs. Each job runs
-`scripts/analysis/phase7_learned_surrogate_experiment.py` with exactly one
-split and exactly one model family, plus the configured source DB, game dir,
-comparator JSON, HPO settings, split seeds, fractions, top-k values, progress
-flag, `--feature-profile`, claim-boundary options, and an explicit per-job
-`--output` path. The
-generated command must not include honest-eval training inputs or unsafe
-feature/model-selection flags.
+That produces 6 × 3 × 10 + 1 × 3 = 183 jobs. Seeded job IDs are
+`{split}__{model}__s{seed}`; forward-time job IDs are `{split}__{model}`.
+Each job runs `scripts/analysis/phase7_learned_surrogate_experiment.py` with
+exactly one split, one model family, and one split seed (carried in the
+lease payload), plus the configured source DB, game dir, HPO settings,
+fractions, top-k values, `--feature-profile`,
+`--inner-cv-folds`, noise-floor/bootstrap/overshoot options, claim-boundary
+options, and an explicit per-job `--output` path. The generated command must
+not include honest-eval training inputs or unsafe feature/model-selection
+flags.
 
-Batch configs may define explicit `splits` and `models` subsets for smoke or
-debug runs. In every config, `target_workers` must equal
-`len(splits) * len(models)`, and `min_workers_to_start` must equal
-`target_workers`. Subset batches are diagnostic only. `publish_canonical` must
-be false for any subset matrix, and the implementation must reject configs
-that combine `publish_canonical: true` with anything other than the full
+Batch configs define `split_seeds` explicitly. Config validation rejects
+seed lists that are empty, intersect `BURNED_SPLIT_SEEDS`, or contain
+`RESERVED_CONFIRMATORY_SEED`. When `publish_canonical: true`, `split_seeds`
+must equal the canonical bank.
+
+Batch configs may define explicit `splits`, `models`, and `split_seeds`
+subsets for smoke or debug runs. Workers drain a lease queue, so
+`target_workers` must satisfy `1 ≤ target_workers ≤ job_count`;
+`min_workers_to_start` must equal `target_workers`, and `target_workers`
+must be divisible by the region count (provisioning is split evenly across
+regions; the implementation currently restricts configs to exactly one
+region until replacement provisioning supports per-region allocation). Subset batches are diagnostic only. `publish_canonical` must be
+false for any subset matrix, and the implementation must reject configs that
+combine `publish_canonical: true` with anything other than the full
 canonical matrix.
 `max_job_attempts` controls the lease retry budget and must be positive. A job
 lease is not a wall-clock runtime cap: workers must renew the lease while the
@@ -759,29 +1022,56 @@ and a bounded stdout/stderr tail before the shell exits.
 
 Per-job artifacts are normal learned-experiment JSON payloads with one
 completed result. Each per-job artifact must include a top-level `batch_job`
-object with `job_id`, `batch_name`, `fleet_name`, `split`, and `model`, and
-matching `batch_job_id`, `batch_name`, and `batch_fleet_name` in provenance.
+object with `job_id`, `batch_name`, `fleet_name`, `split`, `model`, and
+`split_seed`, and matching `batch_job_id`, `batch_name`,
+`batch_fleet_name`, and `dependency_extra` in provenance (the experiment
+script stamps its required dependency set; result validation rejects
+artifacts without it).
 Worker telemetry may additionally record attempt, instance ID, region,
-instance type, bundle SHA256, and timestamps in event logs. A skipped optional
-model is a failed canonical job for full-run publication unless the batch
-config was explicitly created for smoke/debug output.
+instance type, bundle SHA256, and timestamps in event logs. A skipped
+optional model is rejected at result acceptance for every control-plane
+batch; smoke/debug output that tolerates missing optional dependencies runs
+through `local-smoke`, which bypasses the control plane.
 
 The batch merge step must validate every per-job artifact before publishing:
 
-- all 21 canonical job IDs are present exactly once and every artifact's
-  stamped `batch_job.job_id` matches the expected file/job identity;
-- no job is failed, missing, duplicate, stale, or partial;
-- every artifact has the same `experiment_schema_version`,
+- all expected job IDs (the configured splits × models × seeds matrix) are
+  present exactly once and every artifact's stamped `batch_job.job_id`
+  matches the expected file/job identity;
+- no job is failed, missing, duplicate, stale, or partial; structured
+  insufficiency artifacts (statuses in `INSUFFICIENCY_STATUSES`) are
+  ACCEPTED at result time — identity- and provenance-validated with the
+  completed-result field checks skipped — so a deterministic bad draw
+  terminates its job without burning lease retries, but any insufficiency
+  artifact in the batch makes the merge refuse with an error naming the
+  affected jobs (no `merged.json`, no publication);
+- every artifact has the same `experiment_schema_version` (2),
   `feature_schema_version`, `feature_profile`, source DB path, game dir,
-  comparator JSON path, split/HPO seeds, train/holdout fractions, top-k values,
-  dependency extra, source bundle SHA256, and code provenance;
+  HPO seed, train/holdout fractions, top-k values, dependency extra, source
+  bundle SHA256, and code provenance — the split seed is per-job identity,
+  validated against the job spec and required to be in the config's
+  `split_seeds`;
 - every result has a present and passing leakage checklist;
-- every result's `split` and `model` match its job ID;
-- comparator context is present for every result.
+- every result's `split`, `model`, and `split_seed` match its job ID;
+- `comparator_inline`, `rank_metrics`, `skill_scores`,
+  `panel_target_stats`, `inner_cv`, and `outer_split_lineage` are present
+  for every completed result.
+
+Merged output carries a top-level `seed_aggregates` object keyed
+`"split:model"`, one block per group: mean, SD, min/max, and `n_seeds` over the
+headline metrics (pooled Spearman/RMSE, mean per-opponent Spearman,
+build-aggregate Spearman, precision@k, regret@k, skill score); SD is `null`
+when `n_seeds == 1` (forward-time). `seed_aggregate` is descriptive spread
+over overlapping resplits of one dataset — not a calibrated standard error
+(Nadeau–Bengio); reports must not present SD/√n as inference.
 
 Valid merge always writes a batch-internal `merged.json`. It atomically
-promotes the canonical full-run artifact to
-`data/phase7/learned_surrogate_full_2026-05-12.json` only when
+promotes the canonical full-run artifact to the config's
+`canonical_output_path` — a dated, per-wave path (the schema-v2 wave uses
+`data/phase7/learned_surrogate_full_v2_2026-07.json`) — only when
 `publish_canonical: true` and the validated matrix is the full canonical
-matrix. Partial batches may write batch-internal artifacts only; they must not
-overwrite the canonical full-run path.
+matrix. Publishing refuses to overwrite an existing canonical file whose
+`batch_name` differs: prior waves' canonical artifacts (including the
+schema-v1 `learned_surrogate_full_2026-05-12.json`) are dated evidence and
+must remain on disk. Partial batches may write batch-internal artifacts
+only; they must not write any canonical path.

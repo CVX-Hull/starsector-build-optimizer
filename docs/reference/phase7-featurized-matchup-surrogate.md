@@ -1,7 +1,7 @@
 ---
 type: reference
 status: shipped
-last-validated: 2026-05-16
+last-validated: 2026-07-11
 ---
 
 # Phase 7 — Featurized Matchup Surrogate
@@ -281,8 +281,11 @@ Use at least these splits:
   the rule that all repeats of an exact matchup stay in the same fold.
 - **Held-out opponent**: train on some opponents, test on unseen opponents.
 - **Held-out build**: all rows for selected builds are test-only.
-- **Held-out component combination**: test on builds containing weapon/hullmod
-  combinations not seen together in train.
+- **Held-out component vocabulary**: test on builds containing weapon/hullmod
+  IDs never seen in train (`component-vocab`, spec 31). The earlier
+  full-fingerprint "component combination" split was retired 2026-07-11: its
+  grouping key was the canonical build JSON verbatim, making it the build
+  split under a different shuffle (methodology review C2).
 - **Held-out seed/cell**: train on some campaign cells or seeds, test on others.
 - **Forward-time split**: train on earlier optimizer proposals, test on later
   proposals to mimic online deployment.

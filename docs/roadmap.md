@@ -13,7 +13,7 @@ must not accumulate their own live next-step lists — when a report's "next
 steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
-Groomed: 2026-07-11. Re-groom whenever a wave completes or a decision changes
+Groomed: 2026-07-11 (evening: item 1 implementation shipped). Re-groom whenever a wave completes or a decision changes
 scope; update `last-validated`.
 
 ## Active workstream — Phase 7 surrogate evidence program
@@ -24,12 +24,15 @@ Owner of rationale: [2026-07-11 methodology review](reports/2026-07-11-phase7-me
 Compute runs on AWS learned-batch — decision + costs:
 [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md).
 
-1. **Evaluation-harness fix** (gates all later items): per-opponent rank
-   metrics with noise-floor ties, sparse/top-decile Kendall τ, precision@k /
-   regret@k, build-aggregate metrics, skill scores, cluster-bootstrap CIs;
-   repeated grouped splits with rotated seeds; component split redefined as
-   component-vocabulary holdout; grouped k-fold inner CV with aligned seeds.
-   Then re-run the existing matrix under the fixed harness.
+1. **Evaluation-harness fix** (gates all later items): **implemented
+   2026-07-11** (plan `2026-07-11-phase7-eval-harness-fix`; spec 31 schema v2)
+   — per-opponent rank metrics with noise-floor ties, sparse/top-decile
+   Kendall τ, precision@k / regret@k, build-aggregate metrics, skill scores,
+   cluster-bootstrap CIs, rotated 10-seed bank (+ reserved confirmatory seed
+   151), component-vocabulary split, grouped k-fold inner CV with aligned
+   seeds, inline comparators, outer-split lineage. **Open: the 183-job AWS
+   re-run of the canonical matrix under the fixed harness** (cost-gated
+   launch), then the re-run report.
 2. **Feature-profile ablations** on repeated opponent-family/opponent splits,
    under the fixed harness.
 3. **FM / low-rank bilinear interaction features** as a new model family
@@ -89,6 +92,18 @@ Evidence context: [Wave 1 honest-eval final](reports/2026-05-11-wave1-honest-eva
 
 ## Deferred
 
+- **H1 two-part censored model** (score-regime classifier + contested-regime
+  magnitude, heteroscedastic noise from honest-eval replicates) — methodology
+  review H1 remedy; no current owner. Closest kin is item 4's noise-floor
+  machinery.
+- **M2 leakage diagnostics** (adversarial-validation AUC, nearest-neighbor
+  overlap, rare-combination overlap, sparse-ID ablation) — parked under
+  item 2's ablation wave (our assignment; the review left them unowned).
+  Until they exist, build-split rank numbers read as interpolation within a
+  TPE-concentrated cloud.
+- **Comparator tuning-budget parity** (C3 residue): comparators run at fixed
+  defaults vs tuned learned families; a tuned-comparator arm only if a
+  model-family claim ever needs it.
 - **Phase 5G — adversarial PSRO opponent curriculum**: researched, revisit
   after the opponent-representation work (items 3/7 above) lands.
 - **Weapon-group decisions in the search space** (fidelity limitation recorded

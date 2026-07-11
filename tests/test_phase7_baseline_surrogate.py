@@ -91,91 +91,87 @@ def test_build_parser_help_constructs():
 
 
 def test_all_configs_include_random_forest_without_replicate():
-    config = baseline.BaselineConfig(
-        db_path=Path("db.sqlite"),
-        game_dir=Path("game/starsector"),
-        split="all",
-        model="all",
-        holdout_fraction=0.2,
-        train_fraction=0.8,
-        seed=17,
-        tree_count=80,
-        ridge_alpha=10.0,
-        max_rows=None,
-        top_k_values=(1, 3),
-        progress=False,
-    )
+    config = _baseline_config(split="all", model="all")
 
     configs = list(baseline._configs_to_run(config))
 
     assert len(configs) == 42
     assert "replicate" not in {item.split for item in configs}
+    assert "component-vocab" in {item.split for item in configs}
+    assert "component" not in {item.split for item in configs}
     assert "opponent-hull" in {item.split for item in configs}
     assert "opponent-family" in {item.split for item in configs}
     assert "random_forest" in {item.model for item in configs}
 
 
 def test_provenance_shape():
-    config = baseline.BaselineConfig(
-        db_path=Path("db.sqlite"),
-        game_dir=Path("game/starsector"),
-        split="build",
-        model="global_mean",
-        holdout_fraction=0.2,
-        train_fraction=0.8,
-        seed=17,
-        tree_count=80,
-        ridge_alpha=10.0,
-        max_rows=12,
-        top_k_values=(1, 3),
-        progress=False,
-    )
+    config = _baseline_config(max_rows=12)
 
     provenance = baseline.provenance(config)
 
     assert provenance["tree_count"] == 80
     assert provenance["top_k_values"] == [1, 3]
     assert provenance["feature_profile"] == "all"
+    assert provenance["bootstrap_resamples"] == 500
+    assert provenance["component_vocab_max_overshoot"] == pytest.approx(0.15)
 
 
-def test_split_metadata_names_component_key_definition():
-    config = baseline.BaselineConfig(
-        db_path=Path("db.sqlite"),
-        game_dir=Path("game/starsector"),
-        split="component",
-        model="global_mean",
-        holdout_fraction=0.2,
-        train_fraction=0.8,
-        seed=17,
-        tree_count=80,
-        ridge_alpha=10.0,
-        max_rows=None,
-        top_k_values=(1, 3),
-        progress=False,
-    )
+def test_split_metadata_names_component_vocab_key_definition():
+    config = _baseline_config(split="component-vocab")
 
     metadata = baseline.split_metadata(config)
 
-    assert metadata["split_level"] == "component"
-    assert metadata["group_key_function"] == "component_fingerprint_json"
-    assert "flux_capacitors" in metadata["component_key_definition"]
+    assert metadata["split_level"] == "component-vocab"
+    assert metadata["group_key_function"] == "component_vocabulary_membership"
+    assert metadata["component_key_definition"] == "slot_agnostic_weapon_and_hullmod_vocabulary"
+
+
+def test_default_seed_is_first_bank_seed_not_burned():
+    assert baseline.DEFAULT_RANDOM_SEED == 101
+
+
+def test_split_rows_rejects_burned_seed():
+    config = _baseline_config(split="build", seed=17, db_path=Path("does-not-exist.sqlite"))
+
+    with pytest.raises(ValueError, match="C4"):
+        baseline._split_rows(config)
+
+
+def test_group_metric_supports_opponent_variant_stratum():
+    rows = _training_rows()
+    grouped = baseline._group_metric(
+        rows,
+        [{}, {}, {}],
+        np.asarray([1.0, 0.5, -1.0]),
+        np.asarray([0.9, 0.4, -0.8]),
+        "opponent_variant_id",
+    )
+
+    assert set(grouped) == {"opp0", "opp1", "opp2"}
+    assert grouped["opp0"]["n"] == 1
+
+
+def _baseline_config(**overrides):
+    values = {
+        "db_path": Path("db.sqlite"),
+        "game_dir": Path("game/starsector"),
+        "split": "build",
+        "model": "global_mean",
+        "holdout_fraction": 0.2,
+        "train_fraction": 0.8,
+        "seed": 101,
+        "tree_count": 80,
+        "ridge_alpha": 10.0,
+        "max_rows": None,
+        "top_k_values": (1, 3),
+        "progress": False,
+    }
+    values.update(overrides)
+    return baseline.BaselineConfig(**values)
 
 
 def test_split_metadata_names_opponent_hierarchy_groups():
-    config = baseline.BaselineConfig(
-        db_path=Path("db.sqlite"),
-        game_dir=Path("game/starsector"),
-        split="opponent-family",
-        model="global_mean",
-        holdout_fraction=0.2,
-        train_fraction=0.8,
-        seed=17,
-        tree_count=80,
-        ridge_alpha=10.0,
-        max_rows=None,
-        top_k_values=(1, 3),
-        progress=False,
-    )
+    config = _baseline_config(split="opponent-family")
 
     metadata = baseline.split_metadata(config)
 
@@ -237,6 +233,7 @@ def test_split_overlap_counts_reports_stricter_hierarchy_counts():
         build_lookup,
         opponent_hull_by_variant={"opp0": "wolf", "opp1": "wolf"},
         opponent_family_by_variant={"opp0": "FRIGATE:Frigate:High Tech", "opp1": "FRIGATE:Frigate:High Tech"},
+        held_out_components=["weapon:lightdualmg", "weapon:railgun"],
     )
 
     assert counts["exact_build"] == 0
@@ -245,6 +242,8 @@ def test_split_overlap_counts_reports_stricter_hierarchy_counts():
     assert counts["opponent_family"] == 1
     assert counts["hull_id"] == 1
     assert counts["component_combination"] == 1
+    # weapon:lightdualmg appears in the train build b0; railgun does not.
+    assert counts["component_vocabulary"] == 1
     assert counts["campaign_cell"] == 0
     assert counts["exact_matchup_group"] == 0
 

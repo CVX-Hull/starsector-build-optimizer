@@ -1,5 +1,5 @@
-name: phase7-learned-batch-20260512
-project_tag: starsector-phase7-learned-batch-20260512
+name: phase7-learned-batch-v2-202607
+project_tag: starsector-phase7-learned-batch-v2-202607
 fleet_name: learned-surrogate
 regions:
   - us-east-1
@@ -14,11 +14,12 @@ instance_types:
   - m7a.4xlarge
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
-target_workers: 21
-min_workers_to_start: 21
+# Workers drain the lease queue; 183 jobs do not need 183 workers.
+target_workers: 24
+min_workers_to_start: 24
 root_volume_size_gb: 128
-budget_usd: 20.0
-max_lifetime_hours: 2.0
+budget_usd: 150.0
+max_lifetime_hours: 8.0
 max_job_attempts: 6
 lease_renewal_interval_seconds: 60.0
 lease_grace_seconds: 300.0
@@ -31,13 +32,12 @@ ledger_warn_thresholds:
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
 control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
 control_plane_port: 9131
-output_dir: data/phase7/learned_surrogate_batch_2026-05-12
-canonical_output_path: data/phase7/learned_surrogate_full_2026-05-12.json
+output_dir: data/phase7/learned_surrogate_batch_v2_2026-07
+canonical_output_path: data/phase7/learned_surrogate_full_v2_2026-07.json
 publish_canonical: false
 execution_enabled: false
 source_db_path: data/phase7/wave1_matchups.sqlite
 game_dir: game/starsector
-comparator_json_path: data/phase7/wave1_comparator_gate_2026-05-11.json
 hpo_trials: 24
 hpo_jobs: 4
 model_thread_count: 4
@@ -45,16 +45,31 @@ top_k:
   - 1
   - 3
   - 5
-split_seed: 17
+# CANONICAL_SPLIT_SEED_BANK (spec 31): rotated seeds; 17 is burned (C4) and
+# 151 is the reserved confirmatory seed — neither may appear here.
+split_seeds:
+  - 101
+  - 103
+  - 107
+  - 109
+  - 113
+  - 127
+  - 131
+  - 137
+  - 139
+  - 149
 hpo_seed: 23
+inner_cv_folds: 3
+bootstrap_resamples: 500
+component_vocab_max_overshoot: 0.15
 holdout_fraction: 0.2
 train_fraction: 0.8
 honest_eval_usage: exploratory_selection
 primary_top_k: 1
-promotion_metric: honest_eval_top_k_recall
+promotion_metric: mean_per_opponent_spearman
 promotion_threshold: 0.0
 claim_label: exploratory
-final_refit_policy: refit_selected_model_on_all_training_rows_after_selection
+final_refit_policy: fit_outer_train_only_no_deployment_artifact
 candidate_universe: source_db_builds
 deployment_artifact: none
 feature_profile: all

@@ -25,7 +25,7 @@ from .variant import load_variant_file, variant_to_build
 
 
 FeatureValue = float | int | str
-FEATURE_SCHEMA_VERSION = 3
+FEATURE_SCHEMA_VERSION = 4
 EMPTY_SENTINEL = "EMPTY"
 UNKNOWN_SENTINEL = "UNKNOWN"
 DEFAULT_FEATURE_PROFILE = "all"
@@ -397,7 +397,6 @@ def build_feature_row(
         if wid is not None and wid not in known_weapon_ids
     )
     row: dict[str, FeatureValue] = {
-        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "build_hull_id": build.hull_id,
         "build_hull_size": hull.hull_size.value,
         "build_hull_designation": hull.designation,
@@ -457,7 +456,6 @@ def opponent_feature_row(
         raise ValueError(f"opponent variant {variant_id!r} has malformed wings field")
     weapons = _weapons_for_build(build, hull, game_data)
     row: dict[str, FeatureValue] = {
-        "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "opponent_variant_id": variant_id,
         "opponent_hull_id": hull.id,
         "opponent_hull_size": hull.hull_size.value,
@@ -587,7 +585,7 @@ def filter_feature_profile(
     if feature_profile == "opponent-parity":
         return {
             key: value for key, value in row.items()
-            if (key == "feature_schema_version" or key.startswith(("build_", "opponent_")))
+            if key.startswith(("build_", "opponent_"))
             and not _is_sparse_component_key(key)
             and not key.startswith("interaction_")
         }
