@@ -1063,11 +1063,15 @@ while (( SECONDS < DEADLINE )); do
     --batch-fleet-name {shlex.quote(config.fleet_name)} \\
     --output "$OUTPUT" >"$LOG" 2>&1 &
   RUN_PID=$!
-  wait "$RUN_PID"
-  RUN_CODE=$?
+  # The ERR trap fires on any failing simple command even under `set +e`, and
+  # its handler clobbers $?. Fold each wait into an || list so an expected
+  # non-zero exit (failed experiment, SIGTERM'd renew loop) is captured
+  # without tripping on_failure.
+  RUN_CODE=0
+  wait "$RUN_PID" || RUN_CODE=$?
   kill "$RENEW_PID" >/dev/null 2>&1 || true
-  wait "$RENEW_PID" >/dev/null 2>&1
-  RENEW_CODE=$?
+  RENEW_CODE=0
+  wait "$RENEW_PID" >/dev/null 2>&1 || RENEW_CODE=$?
   RUN_PID=""
   set -e
   if [[ "$RENEW_CODE" == "70" ]]; then

@@ -1,6 +1,7 @@
 import json
 import hashlib
 import importlib.util
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -627,6 +628,52 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert "log_tail" in out
     assert "post_worker_event \"bootstrap_start\"" in out
     assert "/worker-event" in out
+
+
+def test_user_data_wait_reaps_do_not_fire_err_trap(tmp_path):
+    """Regression: bash ERR traps fire on failing simple commands even under
+    `set +e`, so a bare `wait` on the SIGTERM'd renew loop (exit 143) invoked
+    on_failure after every successful experiment — posting worker_failed and
+    shutting the instance down before the result upload could land
+    (2026-07-11 batch, 0/183 results accepted)."""
+    cfg = make_config(tmp_path)
+    out = render_phase7_learned_batch_user_data(
+        cfg,
+        control_plane_url="http://100.64.0.1:9131",
+        bearer_token="secret-token",
+        bundle_sha256="a" * 64,
+    )
+
+    assert 'wait "$RUN_PID" || RUN_CODE=$?' in out
+    assert 'wait "$RENEW_PID" >/dev/null 2>&1 || RENEW_CODE=$?' in out
+    for line in out.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("wait "):
+            assert "||" in stripped, f"unprotected wait fires the ERR trap: {line!r}"
+
+
+def test_bash_err_trap_fires_under_set_plus_e_unless_wait_is_protected():
+    """Pin the bash semantics the userdata relies on: the ERR trap fires for a
+    failing bare `wait` even under `set +e`, and an `|| CODE=$?` list both
+    suppresses the trap and captures the real exit status."""
+    script = """
+set -euo pipefail
+trapped=0
+on_failure() { trapped=1; }
+trap on_failure ERR
+sleep 30 & PID=$!
+set +e
+kill "$PID" >/dev/null 2>&1 || true
+CODE=0
+wait "$PID" >/dev/null 2>&1 || CODE=$?
+set -e
+echo "trapped=$trapped code=$CODE"
+"""
+    proc = subprocess.run(
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "trapped=0 code=143"
 
 
 def test_budget_heartbeat_writes_ledger_and_raises_at_cap(tmp_path):
