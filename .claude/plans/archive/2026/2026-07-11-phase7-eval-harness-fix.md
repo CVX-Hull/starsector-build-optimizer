@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: approved
+status: implemented
 created: 2026-07-11
 approved: 2026-07-11
-implemented: null
+implemented: 2026-07-11
 owner: agent
 related_docs:
   - docs/specs/31-phase7-matchup-data.md
@@ -11,8 +11,8 @@ related_docs:
   - docs/reference/phase7-surrogate-methodology-gaps.md
   - docs/reports/2026-07-11-aws-cost-analysis.md
   - docs/roadmap.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: d39869c
+post_impl_audit: passed (see Post-implementation audit record)
 superseded_by: null
 ---
 
@@ -612,7 +612,8 @@ fixed provenance (see step 8).
 
 ## Retirement checklist
 
-- [ ] status: implemented, dates, commit hash
-- [ ] post_impl_audit result recorded
-- [ ] move to `.claude/plans/archive/2026/`
-- [ ] groom `docs/roadmap.md` (item 1 delivered; follow-ups absorbed)
+- [x] status: implemented, dates, commit hash (d39869c)
+- [x] post_impl_audit result recorded
+- [x] move to `.claude/plans/archive/2026/`
+- [x] groom `docs/roadmap.md` (item 1 implementation delivered; the 183-job
+      AWS re-run remains the open sub-item, cost-gated on the user)
