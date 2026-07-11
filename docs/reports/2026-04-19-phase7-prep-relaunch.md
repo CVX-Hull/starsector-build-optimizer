@@ -6,6 +6,10 @@ last-validated: 2026-04-19
 
 # Pre-Phase-7-prep relaunch checklist (2026-04-19)
 
+> **Status (2026-07-11):** pre-V2 checklist; its must-do items shipped with
+> Phase-7-prep. Do not work from this list — see [docs/roadmap.md](../roadmap.md).
+
+
 > **V1 invalidation note (2026-05-10):** This report was authored before
 > the V2 combat-harness loadout fix (commit `dc71e3b`). Internal-sim
 > magnitudes cited herein reflect the V1-confounded measurement context.

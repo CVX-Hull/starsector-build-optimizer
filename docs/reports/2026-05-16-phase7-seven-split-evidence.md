@@ -334,6 +334,13 @@ memorized sparse fingerprints.
 
 ## 4. Open Questions / Next Steps
 
+> **Superseded as a next-step list (2026-07-11):** the live next-wave plan is
+> [docs/roadmap.md](../roadmap.md), redesigned by the
+> [methodology review](2026-07-11-phase7-methodology-review.md), which also
+> revises how this report's metrics should be read. The AWS out-of-scope
+> decision below was lifted the same day (see the
+> [AWS cost analysis](2026-07-11-aws-cost-analysis.md)).
+
 - Run feature-profile ablations on `opponent-family`, `opponent`, and
   `opponent-hull`, with family-level selection treated as part of the
   estimator.

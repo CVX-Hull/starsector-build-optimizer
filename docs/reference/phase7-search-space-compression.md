@@ -41,7 +41,17 @@ blocks, priors, and acquisition features should be restricted or regularized
 according to the nested grouped feature-selection evidence.
 
 The current dated roadmap checkpoint is
-[../reports/2026-05-11-validation-to-phase7-roadmap.md](../reports/2026-05-11-validation-to-phase7-roadmap.md).
+[../reports/2026-07-11-phase7-methodology-review.md](../reports/2026-07-11-phase7-methodology-review.md),
+which revises the readings and next-wave plan of the
+[2026-05-11 roadmap](../reports/2026-05-11-validation-to-phase7-roadmap.md).
+Its companion literature synthesis
+([phase7-surrogate-methodology-gaps.md](phase7-surrogate-methodology-gaps.md))
+also updates this doc's kernel plan in two places: the GP baseline should
+start from dimension-scaled vanilla lengthscale priors (Hvarfner et al., ICML
+2024, arXiv:2402.02229 — the BoTorch default since 0.12) with SAAS added only
+if small-budget performance demands it, and acquisition optimization over the
+categorical subspace needs Casmopolitan-style trust regions with Hamming-ball
+local search (Wan et al., ICML 2021, arXiv:2102.07188).
 
 This design is the synthesis of a multi-lane 2026-04-17 literature sweep plus
 a follow-up compiler-autotuning deep-dive:

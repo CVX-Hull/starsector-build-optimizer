@@ -6,6 +6,11 @@ last-validated: 2026-05-11
 
 # Validation-To-Phase-7 Roadmap
 
+> **Roadmap status (2026-07-11):** the staged sequence in this report is no
+> longer the live plan. Canonical forward roadmap: [docs/roadmap.md](../roadmap.md);
+> revised readings: [2026-07-11 methodology review](2026-07-11-phase7-methodology-review.md).
+
+
 ## Abstract
 
 This report consolidates the final Wave 1 honest-eval validation state,

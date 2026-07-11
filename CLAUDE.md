@@ -1,7 +1,7 @@
 ---
 type: always-loaded
 status: shipped
-last-validated: 2026-05-10
+last-validated: 2026-07-11
 ---
 
 # Starsector Ship Build Optimizer
@@ -18,15 +18,14 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 | 2 — Combat harness mod (Java AI-vs-AI sim) | shipped | specs `09–16, 19, 27`; [combat-harness/AGENTS.md](combat-harness/AGENTS.md) |
 | 3 — Instance manager (parallel JVMs via Xvfb) | shipped | specs `17, 18` |
 | 4 — Optimizer integration (Optuna TPE + opponent pool + importance) | shipped | specs `23–26` |
-| 5A–5F — Signal quality (TWFE / pruner / opponent curriculum / EB shrinkage / Box-Cox / regime segmentation) | shipped, pending re-val | [docs/reference/phase5*.md](docs/reference/) |
-| 5G — Adversarial PSRO opponent curriculum | deferred | researched; revisit post-5E/5F |
+| 5A–5F — Signal quality (TWFE / pruner / opponent curriculum / EB shrinkage / Box-Cox / regime segmentation) | shipped, re-val paused | [docs/reference/phase5*.md](docs/reference/) |
 | 6 — Cloud worker federation (AWS spot fleet, Tailscale mesh, Redis reliable queue) | shipped, Tier-2 live | [phase6-cloud-worker-federation.md](docs/reference/phase6-cloud-worker-federation.md), spec `22`, [.claude/skills/cloud-worker-ops.md](.claude/skills/cloud-worker-ops.md) |
 | Phase-7-prep — Manifest-as-oracle refactor (deletes `hullmod_effects.py` + `timeout_tuner.py`) | shipped | spec `29` |
 | Phase 7 data substrate — featurized matchup recovery and baseline validation | shipped | spec `31`, [phase7-featurized-matchup-surrogate.md](docs/reference/phase7-featurized-matchup-surrogate.md) |
-| 7 — Structured search-space rep (BoTorch composed-kernel GP) | planned | [phase7-search-space-compression.md](docs/reference/phase7-search-space-compression.md) |
-| 7.5 — Infra & reproducibility | planned | [phase7.5-infrastructure-reproducibility.md](docs/reference/phase7.5-infrastructure-reproducibility.md) |
+| Phase 7 surrogate evidence program (evaluation-harness redesign → ablations → FM/ranking models → replay ablation → opponent-panel wave; runs on AWS) | **active** | [docs/roadmap.md](docs/roadmap.md), [2026-07-11 methodology review](docs/reports/2026-07-11-phase7-methodology-review.md) |
+| 7 — Structured search-space rep (BoTorch GP sampler) · 7.5 — Infra & repro · 5G — PSRO curriculum | planned/deferred, gated on the evidence program | [docs/roadmap.md](docs/roadmap.md) |
 
-Spec number registry (gaps at 02/20/21): [docs/specs/README.md](docs/specs/README.md). Reports index: [docs/reports/INDEX.md](docs/reports/INDEX.md). Phase-grouped tour: [docs/project-overview.md](docs/project-overview.md).
+**Forward roadmap (canonical): [docs/roadmap.md](docs/roadmap.md).** Spec number registry (gaps at 02/20/21): [docs/specs/README.md](docs/specs/README.md). Reports index: [docs/reports/INDEX.md](docs/reports/INDEX.md). Phase-grouped tour: [docs/project-overview.md](docs/project-overview.md).
 
 ## Commands
 
@@ -59,7 +58,7 @@ For every module: spec first, then tests, then implementation. Skills enforce qu
 | Invariant check | When reviewing changes | [`design-invariants`](.claude/skills/design-invariants.md) |
 | Honest evaluation | After every major optimization run, before any report publishes findings | [`honest-evaluation`](.claude/skills/honest-evaluation.md) |
 
-For Java modding pitfalls (sandbox, file I/O, Janino, combat plugin patterns), see [`starsector-modding`](.claude/skills/starsector-modding.md).
+Task-triggered SOP skills (AWS ops, Java modding pitfalls, report writing) and the full skill catalogue: [.claude/skills/README.md](.claude/skills/README.md).
 
 ## Documentation
 
@@ -70,7 +69,7 @@ Six categories — full system: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 - **reports** ([docs/reports/](docs/reports/)) — dated empirical evidence (the only place internal-sim numbers belong).
 - **skills** ([.claude/skills/](.claude/skills/)) — procedural how-to / SOP.
 - **always-loaded** — this file (`AGENTS.md`), [combat-harness/AGENTS.md](combat-harness/AGENTS.md), [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
-- **indices** — [docs/project-overview.md](docs/project-overview.md), [docs/reference/README.md](docs/reference/README.md), [docs/reports/INDEX.md](docs/reports/INDEX.md), [experiments/INDEX.md](experiments/INDEX.md), [docs/specs/README.md](docs/specs/README.md).
+- **indices** — [docs/project-overview.md](docs/project-overview.md), [docs/roadmap.md](docs/roadmap.md), [docs/reference/README.md](docs/reference/README.md), [docs/reports/INDEX.md](docs/reports/INDEX.md), [experiments/INDEX.md](experiments/INDEX.md), [docs/specs/README.md](docs/specs/README.md), [.claude/skills/README.md](.claude/skills/README.md).
 
 **Empirical-numbers rule**: specs and references contain NO inline empirical numbers; reports own all dated measurements. See CONVENTIONS §"The empirical-numbers rule" for carve-outs (engine constants, list prices, designed thresholds).
 

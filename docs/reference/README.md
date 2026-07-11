@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-05-16
+last-validated: 2026-07-11
 ---
 
 # Reference — Index
@@ -37,6 +37,7 @@ module contracts; reports own dated empirical measurements. See
 | [phase6-cloud-worker-federation](phase6-cloud-worker-federation.md) | AWS spot-worker federation design. |
 | [phase7-featurized-matchup-surrogate](phase7-featurized-matchup-surrogate.md) | Contextual matchup-surrogate plan using non-atomic hull, weapon, hullmod, and opponent features; current dated evidence: [Phase 7 seven-split evidence](../reports/2026-05-16-phase7-seven-split-evidence.md). |
 | [phase7-learned-surrogate-research](phase7-learned-surrogate-research.md) | Literature-first gate for Phase 7 learned-surrogate model development, including grouped validation, feature selection, hierarchy-aware leakage checks, regularization, HPO, calibration, candidate model families, and optimizer-integration constraints. |
+| [phase7-surrogate-methodology-gaps](phase7-surrogate-methodology-gaps.md) | Literature synthesis for the 2026-07-11 methodology-review gaps: opponent/context representation, low-rank bilinear interactions (FM/blade-chest/ICM), adaptive holdout reuse, ranking-aware surrogate validation, post-SAAS mixed-space BO; ranked adoption shortlist. |
 | [phase7-search-space-compression](phase7-search-space-compression.md) | Planned structured search-space representation. |
 | [phase7.5-infrastructure-reproducibility](phase7.5-infrastructure-reproducibility.md) | Planned reproducibility and infrastructure improvements. |
 
@@ -45,10 +46,9 @@ module contracts; reports own dated empirical measurements. See
 | Document | Topic |
 |---|---|
 | [cross-domain-optimization-research](cross-domain-optimization-research.md) | Cross-domain optimization analogues. |
-| [implementation-roadmap](implementation-roadmap.md) | Historical phased build plan; current status is in the root workflow file. |
+| [implementation-roadmap](implementation-roadmap.md) | **Deprecated** historical phased build plan; shipped status: root workflow file; forward roadmap: [docs/roadmap.md](../roadmap.md). |
 | [literature-review](literature-review.md) | Broad literature survey. |
-| [multi-fidelity-strategy](multi-fidelity-strategy.md) | Historical evaluation-fidelity design notes; current contracts live in specs. |
-| [phase5d-covariate-adjustment](phase5d-covariate-adjustment.md) | Includes rejected alternatives and historical validation notes. |
-| [quality-diversity](quality-diversity.md) | Historical QD design notes; see banner before using for implementation. |
-| [system-architecture](system-architecture.md) | Deprecated historical architecture tour; specs own implementation contracts. |
+| [multi-fidelity-strategy](multi-fidelity-strategy.md) | **Deprecated** historical evaluation-fidelity design notes; current contracts live in specs. |
+| [quality-diversity](quality-diversity.md) | **Deprecated** historical QD design notes; see banner before using for implementation. |
+| [system-architecture](system-architecture.md) | **Deprecated** historical architecture tour; specs own implementation contracts. |
 | [tech-debt](tech-debt.md) | Current technical-debt ledger. |
