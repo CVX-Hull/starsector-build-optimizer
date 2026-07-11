@@ -87,6 +87,28 @@ the same change. Do not let broad reference docs become second owners for
 current module contracts, phase status, or empirical verdicts; they should link
 to the owning spec, index, or report.
 
+### Doc-system principles
+
+1. **Discoverability — two hops, always indexed.** Every doc is reachable as
+   always-loaded → index → owning doc. Every report / reference / spec / skill
+   file must be linked from its owning index (mechanically enforced by
+   `scripts/validate_docs.py` in pre-commit).
+2. **Always-loaded is a paid budget.** The always-loaded set costs context
+   every turn; it has numeric line caps (owned by the `doc-grooming` skill,
+   step 5). Over budget → extract procedure to a skill or replace prose with a
+   pointer; never add a new always-loaded file to dodge the cap.
+3. **Supersede vs. banner.** A new doc that *replaces evidence* supersedes via
+   frontmatter (both ends). A new doc that only *revises how older evidence
+   should be read* adds a dated banner to the affected section instead — the
+   old measurements still stand.
+4. **Say it once.** One canonical statement per checklist, list, or decision;
+   everything else links. Skills do not restate other skills' checklists;
+   reports do not keep live next-step lists (the roadmap owns open work);
+   indices route, they do not explain.
+5. **Indices stay scannable.** One line per doc, grouped by currency (current
+   / draft / superseded / historical), superseded entries quarantined in their
+   own group, and no content in index rows beyond a routing hook.
+
 ### General Applicability
 
 Durable project docs and portable skills should be tool-agnostic. Prefer
