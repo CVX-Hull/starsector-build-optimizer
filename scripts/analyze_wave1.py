@@ -24,7 +24,7 @@ import sys
 from collections import defaultdict
 from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CELLS = ("c0a", "c0b", "c1", "c2", "c3")
@@ -269,7 +269,15 @@ def build_hash(build: dict[str, Any]) -> str:
     return "|".join(parts)
 
 
-def loocv_anchor_spearman(jsonl_rows: list[dict[str, Any]], fitness_field: str) -> dict[str, float]:
+class AnchorSpearman(TypedDict):
+    """5-anchor LOOO Spearman result: mean ρ, per-anchor ρ, row count."""
+
+    mean: float
+    anchors: dict[str, float]
+    n: int
+
+
+def loocv_anchor_spearman(jsonl_rows: list[dict[str, Any]], fitness_field: str) -> AnchorSpearman:
     """5-anchor LOOO Spearman ρ for `fitness_field` against held-out anchor's raw α̂.
 
     Returns ρ per anchor + mean ρ. Anchors are the most-frequent opp_ids in the post-burn-in JSONL.

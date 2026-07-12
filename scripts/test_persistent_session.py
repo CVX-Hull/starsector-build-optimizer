@@ -18,7 +18,7 @@ def make_matchup(name, enemy):
             variant_id="test_build",
             hull_id="hammerhead",
             weapon_assignments={"WS 001": "heavyac", "WS 002": "heavyac"},
-            hullmods=["heavyarmor"],
+            hullmods=("heavyarmor",),
             flux_vents=10,
             flux_capacitors=5,
             cr=0.7,

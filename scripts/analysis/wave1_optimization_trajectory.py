@@ -295,7 +295,7 @@ def section_01_best_so_far(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
     log.info("[01] Best-so-far convergence per (cell, seed)")
     fig, axes = plt.subplots(1, 5, figsize=(20, 4.6), sharey=True)
     out: dict[str, dict] = {}
-    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
         ax.grid(True, linewidth=0.6, alpha=0.7)
         seed_finals = {}
         for seed in SEEDS:
@@ -450,7 +450,7 @@ def section_04_cross_seed_cv(data: dict[tuple[str, str], list[TrialRow]]) -> dic
     out: dict[str, dict] = {}
     Ts_eval = np.arange(20, 220, 5)
     for cell in CELLS:
-        cvs = []
+        cvs: list[float] = []
         for T in Ts_eval:
             vals = []
             for seed in SEEDS:
@@ -461,9 +461,9 @@ def section_04_cross_seed_cv(data: dict[tuple[str, str], list[TrialRow]]) -> dic
             if len(vals) >= 2:
                 mean = np.mean(vals)
                 std = np.std(vals, ddof=1)
-                cvs.append(std / mean if mean > 0 else np.nan)
+                cvs.append(float(std / mean) if mean > 0 else float("nan"))
             else:
-                cvs.append(np.nan)
+                cvs.append(float("nan"))
         ax.plot(Ts_eval, cvs, label=cell, linewidth=1.6)
         # Headline: CV at T=200 (or last available)
         last_finite = next((c for c in reversed(cvs) if np.isfinite(c)), None)
@@ -492,7 +492,7 @@ def section_05_pruner_trajectory(data: dict[tuple[str, str], list[TrialRow]]) ->
         if not all_rows:
             continue
         max_T = max(r.trial_number for r in all_rows)
-        buckets: list[tuple[int, int]] = []
+        buckets: list[tuple[int, int, int]] = []
         for lo in range(0, max_T + 1, BUCKET_W):
             hi = lo + BUCKET_W
             in_bucket = [r for r in all_rows if lo <= r.trial_number < hi]
@@ -605,8 +605,8 @@ def section_07_unique_builds_window(data: dict[tuple[str, str], list[TrialRow]])
             T_max = min(xs[-1] for xs in xs_per_seed)
             grid = np.arange(T_min, T_max + 1, 5)
             stacked = []
-            for xs, ys in zip(xs_per_seed, ys_per_seed):
-                stacked.append(np.interp(grid, xs, ys))
+            for xs_arr, ys_arr in zip(xs_per_seed, ys_per_seed, strict=True):
+                stacked.append(np.interp(grid, xs_arr, ys_arr))
             mean_curve = np.mean(np.array(stacked), axis=0)
             ax.plot(grid, mean_curve, label=cell, linewidth=1.6)
         out[cell] = {
@@ -648,6 +648,8 @@ def section_08_proposal_distance(data: dict[tuple[str, str], list[TrialRow]]) ->
             dists: list[tuple[int, float]] = []
             prev_hm: set | None = None
             for r in rows:
+                if r.build_id is None:  # filtered above; narrows for mypy
+                    continue
                 hm = set(r.build_id[2])  # hullmods tuple at index 2
                 if prev_hm is not None:
                     dists.append((r.trial_number, _jaccard_dist(prev_hm, hm)))
@@ -670,7 +672,8 @@ def section_08_proposal_distance(data: dict[tuple[str, str], list[TrialRow]]) ->
             if T_max > T_min:
                 grid = np.arange(T_min, T_max + 1, 5)
                 stacked = [np.interp(grid, xs, ys)
-                           for xs, ys in zip(all_curves_xs, all_curves_ys)]
+                           for xs, ys in zip(all_curves_xs, all_curves_ys,
+                                             strict=True)]
                 ax.plot(grid, np.mean(stacked, axis=0), label=cell, linewidth=1.6)
         out[cell] = {
             "mean_proposal_distance_per_seed": per_seed_means,
@@ -714,7 +717,7 @@ def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> d
         ("twfe_fitness",     "TWFE α",     "#FF800E", "--"),
         ("eb_fitness",       "EB-shrunk α", "#C85200", ":"),
     ]
-    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
         cell_out: dict[str, dict] = {}
         for field, label, color, ls in AXES:
             stacked: list[np.ndarray] = []
@@ -735,7 +738,7 @@ def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> d
             T_max = max(g[-1] for g in grids)
             grid = np.arange(0, T_max + 1, 5)
             interp_curves = []
-            for xs, ys in zip(grids, stacked):
+            for xs, ys in zip(grids, stacked, strict=True):
                 yi = np.interp(grid, xs, ys, left=np.nan, right=np.nan)
                 interp_curves.append(yi)
             curve = np.nanmedian(np.array(interp_curves), axis=0)
@@ -792,10 +795,10 @@ def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
     rankings under each axis.
     """
     log.info("[10] Q4 — shape transform fidelity ρ(eb, fitness)")
-    from scipy.stats import spearmanr  # type: ignore[import-untyped]
+    from scipy.stats import spearmanr
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     out: dict[str, dict] = {}
-    for ax, cell in zip(axes, ["c2", "c3"]):
+    for ax, cell in zip(axes, ["c2", "c3"], strict=True):
         cell_out: dict[str, dict] = {"per_seed": {}}
         ebs_pool: list[float] = []
         fits_pool: list[float] = []
@@ -910,7 +913,7 @@ def section_12_combat_budget_pooled(
     per_cell_finals: dict[str, dict] = {}
     cross_axis_table: list[dict] = []
 
-    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
         seed_finals: dict[str, float] = {}
         cell_seff: dict[str, list[float]] = {f"B={B}": [] for B in BUDGET_CHECKPOINTS}
         for seed in SEEDS:
@@ -936,7 +939,7 @@ def section_12_combat_budget_pooled(
                 ax.plot(xs, ys, label=f"seed {seed}", linewidth=1.4)
                 seed_finals[seed] = float(ys[-1])
             for B in BUDGET_CHECKPOINTS:
-                vals_at_B = [y for x, y in zip(xs, ys) if x <= B]
+                vals_at_B = [y for x, y in zip(xs, ys, strict=True) if x <= B]
                 if vals_at_B:
                     cell_seff[f"B={B}"].append(vals_at_B[-1])
         ax.set_xlabel("combat-sim count, B")
@@ -994,10 +997,11 @@ def section_11_early_stop(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
     THRESHOLDS = [1e-3, 2.5e-3, 5e-3, 1e-2, 2e-2]
 
     fig, ax = plt.subplots(figsize=(10, 4.8))
-    out: dict[str, dict] = {"slope_window_W": SLOPE_W,
-                            "k_consec": K_CONSEC,
-                            "thresholds": THRESHOLDS,
-                            "per_cell": {}}
+    per_cell: dict[str, dict] = {}
+    out: dict[str, object] = {"slope_window_W": SLOPE_W,
+                              "k_consec": K_CONSEC,
+                              "thresholds": THRESHOLDS,
+                              "per_cell": per_cell}
     for cell in CELLS:
         cell_results: dict[float, dict] = {}
         for thresh in THRESHOLDS:
@@ -1037,7 +1041,7 @@ def section_11_early_stop(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
                     "per_seed_captured": [float(c) for c in captured],
                     "per_seed_stop_T": stopped_T,
                 }
-        out["per_cell"][cell] = cell_results
+        per_cell[cell] = cell_results
         thresh_xs = []
         cap_ys = []
         for thresh in THRESHOLDS:

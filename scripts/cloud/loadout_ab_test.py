@@ -44,7 +44,9 @@ from starsector_optimizer.cloud_provider import AWSProvider
 from starsector_optimizer.cloud_userdata import render_user_data
 from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
 from starsector_optimizer.game_manifest import GameManifest
-from starsector_optimizer.models import BuildSpec, MatchupConfig, WorkerConfig
+from starsector_optimizer.models import (
+    BuildSpec, CombatResult, MatchupConfig, WorkerConfig,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -223,7 +225,7 @@ def main() -> int:
         )
         with pool:
             logger.info("dispatching %d matchups (2 concurrent slots)", len(matchups))
-            results: list[tuple[MatchupConfig, object]] = []
+            results: list[tuple[MatchupConfig, CombatResult]] = []
             with ThreadPoolExecutor(max_workers=2) as ex:
                 futures = {ex.submit(pool.run_matchup, m): m for m in matchups}
                 for fut in as_completed(futures):

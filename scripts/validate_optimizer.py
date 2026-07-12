@@ -22,10 +22,10 @@ from starsector_optimizer.opponent_pool import (
     OpponentPool, generate_matchups, hp_differential, get_opponents,
 )
 from starsector_optimizer.optimizer import (
-    OptimizerConfig, BuildCache, define_distributions,
+    OptimizerConfig, BuildCache, _CachedTrialResult, define_distributions,
     trial_params_to_build, warm_start,
 )
-from starsector_optimizer.models import HullSize, REGIME_ENDGAME
+from starsector_optimizer.models import CombatResult, HullSize, REGIME_ENDGAME
 
 GAME_DIR = Path("game/starsector")
 NUM_INSTANCES = 8
@@ -79,7 +79,7 @@ try:
     print(f"\n4. Running {SIM_BUDGET} builds in batches of {BUILDS_PER_BATCH}...", flush=True)
     cache = BuildCache()
     results_log = []
-    best_fitness = -999
+    best_fitness = -999.0
     t_start = time.monotonic()
     num_batches = SIM_BUDGET // BUILDS_PER_BATCH
 
@@ -114,7 +114,7 @@ try:
             all_results.append(pool.run_matchup(m))
 
         # Map results back to each build
-        results_by_build = {vid: [] for vid in variant_ids}
+        results_by_build: dict[str, list[CombatResult]] = {vid: [] for vid in variant_ids}
         for r in all_results:
             # Find which build this result belongs to
             for vid in variant_ids:
@@ -124,7 +124,7 @@ try:
 
         # Tell results to study
         batch_elapsed = time.monotonic() - t_batch
-        for j, (trial, build, vid) in enumerate(zip(trials, builds, variant_ids)):
+        for j, (trial, build, vid) in enumerate(zip(trials, builds, variant_ids, strict=True)):
             build_results = results_by_build[vid]
             if not build_results:
                 study.tell(trial, -1.0)  # No results = worst
@@ -132,7 +132,14 @@ try:
 
             from starsector_optimizer.combat_fitness import aggregate_combat_fitness
             fitness = aggregate_combat_fitness(build_results, mode="mean")
-            cache.put(build, fitness)
+            # This validation script has no EB/TWFE pipeline; the raw mean
+            # fitness stands in for all three cached fitness fields.
+            cache.put(build, _CachedTrialResult(
+                shaped_fitness=fitness,
+                eb_fitness=fitness,
+                twfe_fitness=fitness,
+                origin_trial_number=trial.number,
+            ))
             study.tell(trial, fitness)
             best_fitness = max(best_fitness, fitness)
 

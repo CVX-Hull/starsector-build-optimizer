@@ -8,21 +8,39 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import TypedDict
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CELLS = ("c0a", "c0b", "c1", "c2", "c3")
 SEEDS = (0, 1, 2)
 
 
-def cell_status(cell: str) -> dict:
+class SeedCounts(TypedDict):
+    complete: int
+    pruned: int
+    running: int
+    fail: int
+
+
+class CellStatus(TypedDict, total=False):
+    status: str
+    seeds: dict[int, SeedCounts | str]
+    cost_usd: float
+    loadout_mismatch: int
+    loadout_ok: int
+    mismatch_rate: float
+
+
+def cell_status(cell: str) -> CellStatus:
     db_dir = REPO_ROOT / "data" / "study_dbs" / f"wave1-{cell}"
     if not db_dir.exists():
         return {"status": "not started"}
-    out = {"status": "running", "seeds": {}}
+    seeds: dict[int, SeedCounts | str] = {}
+    out: CellStatus = {"status": "running", "seeds": seeds}
     for seed in SEEDS:
         db = db_dir / f"hammerhead__early__tpe__seed{seed}.db"
         if not db.exists():
-            out["seeds"][seed] = "missing"
+            seeds[seed] = "missing"
             continue
         conn = sqlite3.connect(str(db))
         try:
@@ -32,7 +50,7 @@ def cell_status(cell: str) -> dict:
             n_fail = conn.execute("SELECT COUNT(*) FROM trials WHERE state='FAIL'").fetchone()[0]
         finally:
             conn.close()
-        out["seeds"][seed] = {
+        seeds[seed] = {
             "complete": n_complete, "pruned": n_pruned,
             "running": n_running, "fail": n_fail,
         }

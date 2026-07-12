@@ -1125,7 +1125,10 @@ class StagedEvaluator:
             return  # anchors already locked
 
         build_idx = self._builds_evaluated - 1  # 0-indexed
-        for opp_id, raw in zip(ifb.opponents, ifb.raw_scores):
+        # Equal lengths by construction (_handle_result appends one score
+        # per consumed opponent); a mismatch would silently corrupt anchor
+        # discrimination, so fail fast even mid-run.
+        for opp_id, raw in zip(ifb.opponents, ifb.raw_scores, strict=True):
             self._burn_in_scores.setdefault(opp_id, []).append((build_idx, raw))
         self._burn_in_fitness.append((build_idx, twfe_fitness))
 

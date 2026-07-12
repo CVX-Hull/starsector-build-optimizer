@@ -10,6 +10,7 @@ import sys
 sys.path.insert(0, "src")
 
 from pathlib import Path
+from typing import TypedDict
 
 from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.models import (
@@ -35,7 +36,16 @@ _ABLATION_ENV_VARS = (
 )
 
 
-def _resolve_ablation_overrides() -> dict[str, object]:
+class _AblationOverrides(TypedDict, total=False):
+    """Typed kwargs for the OptimizerConfig fields the ablation env vars set."""
+
+    eb: EBShrinkageConfig
+    shape: ShapeConfig
+    twfe: TWFEConfig
+    warm_start_n: int
+
+
+def _resolve_ablation_overrides() -> _AblationOverrides:
     """Read ablation env vars; return a kwargs dict for OptimizerConfig.
 
     Env-var values are parsed as int. Unset vars don't appear in the dict
@@ -43,7 +53,7 @@ def _resolve_ablation_overrides() -> dict[str, object]:
     line "ablation overrides" summary when any var is set, so the JSONL +
     operator log carry a record of which cell ran.
     """
-    overrides: dict[str, object] = {}
+    overrides: _AblationOverrides = {}
     if (v := os.environ.get("STARSECTOR_EB_MIN_BUILDS")) is not None:
         overrides["eb"] = EBShrinkageConfig(eb_min_builds=int(v))
     if (v := os.environ.get("STARSECTOR_SHAPE_MIN_SAMPLES")) is not None:
@@ -162,7 +172,7 @@ def main():
 
     # Analyze importance mode
     if args.analyze_importance:
-        if not args.study_db:
+        if storage is None:
             print("Error: --analyze-importance requires --study-db")
             sys.exit(1)
         import optuna

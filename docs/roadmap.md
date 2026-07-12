@@ -60,13 +60,6 @@ From [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md)
 - Measure learned-batch tail-job walltime at scale (gates fleet teardown).
 - Stale-AMI hygiene: run `audit_amis.sh` + `cleanup_amis.sh` after every
   re-bake (done 2026-07-11; keep as post-bake SOP step).
-- Quality-tooling staged follow-ups (from the 2026-07-12 adoption; evidence:
-  [2026-07-12 tooling research](reports/2026-07-12-quality-tooling-research.md)):
-  B905 `zip(strict=)` pass (20 sites, each a human judgment); mypy on
-  `scripts/` + per-module `ignore_missing_imports` tightening; one-shot
-  `ruff format` decision (would reformat ~87/94 files); periodic
-  `vulture --min-confidence 80` audit; re-evaluate `ty` at 1.0;
-  pytest-xdist if the suite crosses ~2–3 min serial.
 
 ## Planned phases (unchanged in scope, gated)
 

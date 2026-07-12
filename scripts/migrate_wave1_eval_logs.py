@@ -37,7 +37,15 @@ import sys
 from collections import defaultdict
 from datetime import datetime, timedelta, UTC
 from pathlib import Path
+from typing import TypedDict
 import itertools
+
+
+class CellMeta(TypedDict):
+    cell: str
+    ts_lo: datetime
+    ts_hi: datetime
+    trial_numbers: set[int]
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WAVE1_CELLS = ("c0a", "c0b", "c1", "c2", "c3")
@@ -88,13 +96,13 @@ def _cell_db_path(cell: str, seed: int) -> Path:
     )
 
 
-def _load_cell_metadata(seed: int) -> list[dict]:
+def _load_cell_metadata(seed: int) -> list[CellMeta]:
     """For each cell at this seed, read SQLite and return:
         - cell name
         - overall (ts_start, ts_complete) range
         - set of trial numbers in this study (any state)
     """
-    out = []
+    out: list[CellMeta] = []
     for cell in WAVE1_CELLS:
         db_path = _cell_db_path(cell, seed)
         if not db_path.exists():
@@ -135,7 +143,7 @@ def _load_cell_metadata(seed: int) -> list[dict]:
 
 
 def _classify_line(
-    data: dict, cell_meta: list[dict],
+    data: dict, cell_meta: list[CellMeta],
 ) -> str | None:
     """Return the cell name this JSONL row belongs to, or None if it
     cannot be confidently classified.
@@ -248,7 +256,7 @@ def verify_migration(seed: int) -> dict:
     call, which fires on completion). Pruned trials may also appear,
     so we expect lines >= COMPLETE count.
     """
-    out = {"seed": seed, "per_cell": {}}
+    per_cell: dict[str, dict[str, object]] = {}
     for cell in WAVE1_CELLS:
         db_path = _cell_db_path(cell, seed)
         log_path = _migrated_log_path(cell, seed)
@@ -263,13 +271,13 @@ def verify_migration(seed: int) -> dict:
         finally:
             conn.close()
         n_log = sum(1 for _ in log_path.open())
-        out["per_cell"][cell] = {
+        per_cell[cell] = {
             "complete": n_complete,
             "pruned": n_pruned,
             "log_lines": n_log,
             "ok": n_log >= n_complete,
         }
-    return out
+    return {"seed": seed, "per_cell": per_cell}
 
 
 def main() -> int:

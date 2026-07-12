@@ -630,7 +630,7 @@ class TestRandomBaseline:
         b = synthesize_random_baseline_builds(
             hammerhead_hull, game_data, manifest, n=3, seed=7,
         )
-        for bp_a, bp_b in zip(a, b):
+        for bp_a, bp_b in zip(a, b, strict=True):
             assert bp_a.build == bp_b.build
 
     def test_different_seeds_produce_different_builds(
@@ -646,7 +646,7 @@ class TestRandomBaseline:
             hammerhead_hull, game_data, manifest, n=3, seed=1,
         )
         # Should not all be the same.
-        assert any(bp_a.build != bp_b.build for bp_a, bp_b in zip(a, b))
+        assert any(bp_a.build != bp_b.build for bp_a, bp_b in zip(a, b, strict=True))
 
 
 class TestLedgerResume:

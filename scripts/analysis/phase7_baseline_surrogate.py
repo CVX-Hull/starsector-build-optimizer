@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TypeVar
 from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
@@ -306,7 +306,7 @@ def row_build_key(row: Row) -> str:
 
 def _split_rows(
     config: BaselineConfig,
-) -> tuple[SplitIds, dict[str, object], dict[str, object]]:
+) -> tuple[SplitIds, dict[str, Build], dict[str, object]]:
     """Build the outer split; returns (split, build_lookup, split_extras)."""
     reject_burned_split_seed(config.seed)
     build_lookup = {item.build_key: item.build for item in load_recovered_builds(config.db_path)}
@@ -465,7 +465,10 @@ def _k_combinations(tokens: Sequence[str], k: int) -> set[tuple[str, ...]]:
     return set(combinations(tokens, k))
 
 
-def _overlap_summary(train_items: set[object], test_items: set[object]) -> dict[str, int | float]:
+_ItemT = TypeVar("_ItemT")
+
+
+def _overlap_summary(train_items: set[_ItemT], test_items: set[_ItemT]) -> dict[str, int | float]:
     overlap = train_items & test_items
     return {
         "train_unique": len(train_items),
@@ -475,7 +478,7 @@ def _overlap_summary(train_items: set[object], test_items: set[object]) -> dict[
     }
 
 
-def _overlap_count(train_items: set[object], test_items: set[object]) -> int:
+def _overlap_count(train_items: set[_ItemT], test_items: set[_ItemT]) -> int:
     return len(train_items & test_items)
 
 
@@ -767,6 +770,14 @@ def degenerate_opponents_for_panel(
     )
 
 
+def _noise_floor_value(noise: Mapping[str, object]) -> float:
+    """Extract the resolved floor; resolve_noise_floor guarantees a float."""
+    floor = noise["noise_floor"]
+    if not isinstance(floor, float):
+        raise TypeError(f"noise_floor must be float, got {type(floor).__name__}")
+    return floor
+
+
 def evaluation_metric_suite(
     train: FeatureBundle,
     test: FeatureBundle,
@@ -780,7 +791,7 @@ def evaluation_metric_suite(
     noise = resolve_noise_floor(
         config.eval_metrics, load_honest_eval_matchups(config.db_path)
     )
-    floor = float(noise["noise_floor"])
+    floor = _noise_floor_value(noise)
     opponents = [row.opponent_variant_id for row in test.rows]
     builds = [row_build_key(row) for row in test.rows]
     degenerate = degenerate_opponents_for_panel(test.rows, test.targets, floor)
@@ -838,9 +849,9 @@ def honest_eval_diagnostic_for_model(
     bundle = _feature_bundle(rows, build_lookup, config)
     pred = model.predict(bundle.rows, bundle.records).predictions
     honest_rows = [row for row in bundle.rows if isinstance(row, HonestEvalMatchupRow)]
-    out = top_k_recall(honest_rows, pred, config.top_k_values)
+    out: dict[str, object] = dict(top_k_recall(honest_rows, pred, config.top_k_values))
     noise = resolve_noise_floor(config.eval_metrics, honest_rows)
-    floor = float(noise["noise_floor"])
+    floor = _noise_floor_value(noise)
     out["build_metrics"] = honest_eval_build_metrics(
         [row_build_key(row) for row in honest_rows],
         [row.opponent_variant_id for row in honest_rows],
@@ -874,13 +885,19 @@ def run_one(config: BaselineConfig) -> dict[str, object]:
     opponent_hull_by_variant, opponent_family_by_variant = opponent_group_maps(
         config.game_dir, train_training_rows + test_training_rows
     )
+    held_out_components = split_extras.get("held_out_components")
+    if held_out_components is not None and not isinstance(held_out_components, list):
+        raise TypeError(
+            "split_extras['held_out_components'] must be a list, got "
+            f"{type(held_out_components).__name__}"
+        )
     diagnostics["overlap_counts"] = split_overlap_counts(
         train_training_rows,
         test_training_rows,
         build_lookup,
         opponent_hull_by_variant,
         opponent_family_by_variant,
-        held_out_components=split_extras.get("held_out_components"),
+        held_out_components=held_out_components,
     )
     if config.split == "component-vocab":
         diagnostics["component_overlap_diagnostics"] = component_overlap_diagnostics(

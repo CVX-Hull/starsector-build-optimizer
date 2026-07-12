@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, SupportsFloat, SupportsIndex, TYPE_CHECKING
 from collections.abc import Mapping, Sequence
 
 import numpy as np
@@ -43,6 +43,7 @@ from starsector_optimizer.phase7_matchup_data import (
     EXPERIMENT_SCHEMA_VERSION,
     RESERVED_CONFIRMATORY_SEED,
     ComponentVocabularyError,
+    HonestEvalMatchupRow,
     SplitIds,
     TrainingMatchupRow,
     forward_time_order_key,
@@ -56,6 +57,13 @@ try:
     from catboost import CatBoostRegressor
 except ImportError:  # pragma: no cover - exercised by monkeypatch tests.
     CatBoostRegressor = None
+
+if TYPE_CHECKING:
+    # Runtime loads the baseline module via importlib (scripts/analysis is not
+    # a package); this import exists purely so annotations can name its types.
+    from phase7_baseline_surrogate import BaselineConfig, FeatureBundle
+
+    from starsector_optimizer.models import Build
 
 
 _BASELINE_PATH = Path(__file__).with_name("phase7_baseline_surrogate.py")
@@ -84,6 +92,14 @@ MATCHED_COMPARATOR_FAMILY: dict[str, str | None] = {
 }
 TARGET_VARIABLE = "training_matchups.target"
 HONEST_EVAL_DIAGNOSTIC_TARGET = "honest_eval_top_k"
+# Columns never fed to the models — identifiers and target-derived leaks.
+EXCLUDED_FEATURE_COLUMNS = (
+    "build_key",
+    "target_derived_build_mean",
+    "target_derived_opponent_mean",
+    "twfe_residual",
+    "honest_eval_target",
+)
 ALL_AVAILABLE_CORES = -1
 HONEST_EVAL_USAGE_CHOICES = ("diagnostic_only", "exploratory_selection", "final_claim")
 DEFAULT_HONEST_EVAL_USAGE = "diagnostic_only"
@@ -145,6 +161,9 @@ DEFAULT_HYPERPARAMETERS: dict[str, dict[str, object]] = {
 
 
 FeatureValue = float | int | str
+# Mirrors phase7_baseline_surrogate.Row: model fit/predict rows may come from
+# either the training panel or the honest-eval panel (records carry features).
+MatchupRow = TrainingMatchupRow | HonestEvalMatchupRow
 
 
 @dataclass(frozen=True)
@@ -200,7 +219,7 @@ class TrialResult:
 class LearnedModel(Protocol):
     def fit(
         self,
-        rows: Sequence[TrainingMatchupRow],
+        rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
         targets: np.ndarray,
     ) -> None:
@@ -208,7 +227,7 @@ class LearnedModel(Protocol):
 
     def predict(
         self,
-        rows: Sequence[TrainingMatchupRow],
+        rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
     ) -> PredictionResult:
         ...
@@ -220,7 +239,7 @@ class PipelineModel:
 
     def fit(
         self,
-        rows: Sequence[TrainingMatchupRow],
+        rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
         targets: np.ndarray,
     ) -> None:
@@ -228,7 +247,7 @@ class PipelineModel:
 
     def predict(
         self,
-        rows: Sequence[TrainingMatchupRow],
+        rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
     ) -> PredictionResult:
         return PredictionResult(np.asarray(self.pipeline.predict(list(records)), dtype=float), {})
@@ -269,7 +288,7 @@ class CatBoostModel:
 
     def fit(
         self,
-        rows: Sequence[TrainingMatchupRow],
+        rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
         targets: np.ndarray,
     ) -> None:
@@ -278,7 +297,7 @@ class CatBoostModel:
 
     def predict(
         self,
-        rows: Sequence[TrainingMatchupRow],
+        rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
     ) -> PredictionResult:
         frame = self._frame(records, fit=False)
@@ -360,7 +379,7 @@ def build_experiment_configs(config: LearnedExperimentConfig) -> list[LearnedExp
     ]
 
 
-def _baseline_config(config: LearnedExperimentConfig) -> baseline.BaselineConfig:
+def _baseline_config(config: LearnedExperimentConfig) -> BaselineConfig:
     return baseline.BaselineConfig(
         db_path=config.db_path,
         game_dir=config.game_dir,
@@ -427,7 +446,7 @@ def _rolling_origin_folds(
 def inner_cv_splits(
     config: LearnedExperimentConfig,
     rows: Sequence[TrainingMatchupRow],
-    build_lookup: Mapping[str, object],
+    build_lookup: Mapping[str, Build],
 ) -> tuple[SplitIds, ...]:
     """Inner train/validation folds from outer-training rows only (spec 31).
 
@@ -482,6 +501,36 @@ def inner_validation_metadata(config: LearnedExperimentConfig) -> dict[str, obje
     return metadata
 
 
+def _require_int(params: Mapping[str, object], key: str) -> int:
+    value = params[key]
+    if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
+        raise TypeError(
+            f"hyperparameter {key!r} must be an int, got {type(value).__name__}"
+        )
+    return int(value)
+
+
+def _require_float(params: Mapping[str, object], key: str) -> float:
+    value = params[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float, np.floating)):
+        raise TypeError(
+            f"hyperparameter {key!r} must be numeric, got {type(value).__name__}"
+        )
+    return float(value)
+
+
+def _as_float(value: object, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"{label} must be numeric, got {type(value).__name__}")
+    return float(value)
+
+
+def _require_mapping(value: object, label: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{label} must be a mapping, got {type(value).__name__}")
+    return value
+
+
 def _sample_value(spec: object, rng: np.random.Generator) -> object:
     if isinstance(spec, list):
         return spec[int(rng.integers(0, len(spec)))]
@@ -510,9 +559,9 @@ def make_model(
         return PipelineModel(Pipeline([
             ("features", DictVectorizer(sparse=True)),
             ("model", RandomForestRegressor(
-                n_estimators=int(params["n_estimators"]),
+                n_estimators=_require_int(params, "n_estimators"),
                 max_depth=params["max_depth"],
-                min_samples_leaf=int(params["min_samples_leaf"]),
+                min_samples_leaf=_require_int(params, "min_samples_leaf"),
                 max_features=params["max_features"],
                 bootstrap=bool(params["bootstrap"]),
                 max_samples=params["max_samples"],
@@ -528,15 +577,15 @@ def make_model(
         transformer = FeatureUnion([
             ("identity", SparseIdentity()),
             ("pairwise", PolynomialCountSketch(
-                degree=int(params["degree"]),
-                n_components=int(params["n_components"]),
+                degree=_require_int(params, "degree"),
+                n_components=_require_int(params, "n_components"),
                 random_state=hpo_seed,
             )),
         ])
         return PipelineModel(Pipeline([
             ("features", DictVectorizer(sparse=True)),
             ("interactions", transformer),
-            ("model", Ridge(alpha=float(params["alpha"]), random_state=hpo_seed)),
+            ("model", Ridge(alpha=_require_float(params, "alpha"), random_state=hpo_seed)),
         ]))
     raise ValueError(f"unknown model {model!r}")
 
@@ -544,8 +593,8 @@ def make_model(
 def _fit_score(
     model_name: str,
     hyperparameters: Mapping[str, object],
-    train: baseline.FeatureBundle,
-    test: baseline.FeatureBundle,
+    train: FeatureBundle,
+    test: FeatureBundle,
     hpo_seed: int,
     model_thread_count: int,
     trial_index: int = -1,
@@ -570,11 +619,26 @@ def _fold_mean_metrics(
     """Mean of per-fold metrics; SD recorded for RMSE. None-fold metrics drop."""
     out: dict[str, float | None] = {}
     for key in ("mae", "rmse", "spearman_rho"):
-        values = [m[key] for m in fold_metrics if m.get(key) is not None]
+        values = [v for m in fold_metrics if (v := m.get(key)) is not None]
         out[key] = float(np.mean(values)) if values else None
-    rmse_values = [m["rmse"] for m in fold_metrics if m.get("rmse") is not None]
+    rmse_values = [v for m in fold_metrics if (v := m.get("rmse")) is not None]
     out["rmse_fold_sd"] = float(np.std(rmse_values)) if len(rmse_values) > 1 else None
     out["fold_count"] = len(fold_metrics)
+    return out
+
+
+def _metric_delta_dict(
+    tuned: Mapping[str, float | None],
+    default: Mapping[str, float | None],
+    keys: Sequence[str],
+) -> dict[str, float]:
+    """Per-key (tuned - default) deltas, skipping keys where either is None."""
+    out: dict[str, float] = {}
+    for key in keys:
+        tuned_value = tuned[key]
+        default_value = default[key]
+        if tuned_value is not None and default_value is not None:
+            out[key] = tuned_value - default_value
     return out
 
 
@@ -591,15 +655,17 @@ def _trial_sort_key(trial: TrialResult) -> tuple[float, float, float]:
 def _metric_text(value: object) -> str:
     if value is None:
         return "null"
-    try:
-        return f"{float(value):.6g}"
-    except (TypeError, ValueError):
-        return str(value)
+    if isinstance(value, (str, SupportsFloat, SupportsIndex)):
+        try:
+            return f"{float(value):.6g}"
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
 
 
 def tune_hyperparameters(
     config: LearnedExperimentConfig,
-    folds: Sequence[tuple[baseline.FeatureBundle, baseline.FeatureBundle]],
+    folds: Sequence[tuple[FeatureBundle, FeatureBundle]],
 ) -> dict[str, object]:
     started = time.monotonic()
     _progress(
@@ -695,8 +761,8 @@ def tune_hyperparameters(
 
 def run_inline_comparators(
     config: LearnedExperimentConfig,
-    train: baseline.FeatureBundle,
-    test: baseline.FeatureBundle,
+    train: FeatureBundle,
+    test: FeatureBundle,
 ) -> dict[str, dict[str, object]]:
     """Fit the six comparator-gate models on this job's exact outer split.
 
@@ -731,12 +797,12 @@ def comparator_deltas(
     comparators: Mapping[str, Mapping[str, object]],
 ) -> dict[str, object]:
     """Deltas vs the split's best comparator and the matched family (if any)."""
-    finite = {
-        name: result
-        for name, result in comparators.items()
-        if isinstance(result.get("rmse"), float) and math.isfinite(result["rmse"])
-    }
-    best_name = min(finite, key=lambda name: float(finite[name]["rmse"])) if finite else None
+    finite_rmse: dict[str, float] = {}
+    for name, result in comparators.items():
+        rmse = result.get("rmse")
+        if isinstance(rmse, float) and math.isfinite(rmse):
+            finite_rmse[name] = rmse
+    best_name = min(finite_rmse, key=lambda name: finite_rmse[name]) if finite_rmse else None
 
     def _delta(comparator: Mapping[str, object]) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -744,11 +810,24 @@ def comparator_deltas(
             learned_value = learned_metrics.get(key)
             comparator_value = comparator.get(key)
             if learned_value is not None and comparator_value is not None:
-                out[key] = float(learned_value) - float(comparator_value)
-        learned_mean = learned_rank_metrics["per_opponent"]["mean_spearman"]
-        comparator_mean = comparator["rank_metrics"]["per_opponent"]["mean_spearman"]
+                out[key] = (
+                    _as_float(learned_value, f"learned {key}")
+                    - _as_float(comparator_value, f"comparator {key}")
+                )
+        learned_mean = _require_mapping(
+            learned_rank_metrics["per_opponent"], "learned per_opponent"
+        )["mean_spearman"]
+        comparator_mean = _require_mapping(
+            _require_mapping(comparator["rank_metrics"], "comparator rank_metrics")[
+                "per_opponent"
+            ],
+            "comparator per_opponent",
+        )["mean_spearman"]
         if learned_mean is not None and comparator_mean is not None:
-            out["mean_per_opponent_spearman"] = float(learned_mean) - float(comparator_mean)
+            out["mean_per_opponent_spearman"] = (
+                _as_float(learned_mean, "learned mean_spearman")
+                - _as_float(comparator_mean, "comparator mean_spearman")
+            )
         return out
 
     matched_name = MATCHED_COMPARATOR_FAMILY[model]
@@ -879,7 +958,7 @@ def _feature_template_for_key(key: str) -> str:
 
 def feature_family_registry(records: Sequence[Mapping[str, FeatureValue]]) -> dict[str, dict[str, object]]:
     keys = sorted({key for record in records for key in record})
-    excluded = set(feature_families((), DEFAULT_FEATURE_PROFILE)["excluded"])
+    excluded = set(EXCLUDED_FEATURE_COLUMNS)
     return {
         key: {
             "family": _feature_family_for_key(key),
@@ -922,7 +1001,11 @@ def feature_selection_protocol(
     feature_profile: str,
 ) -> dict[str, object]:
     registry = feature_family_registry(records)
-    selected = sorted({item["family"] for item in registry.values() if isinstance(item.get("family"), str)})
+    selected = sorted({
+        family
+        for item in registry.values()
+        if isinstance((family := item.get("family")), str)
+    })
     return {
         "policy_type": "fixed_profile_no_selector",
         "feature_profile": feature_profile,
@@ -1052,7 +1135,8 @@ def hierarchy_scorecard(
 
 def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[str, object]:
     overlaps = hierarchy.get("overlap_counts") if isinstance(hierarchy, Mapping) else None
-    split_level = hierarchy.get("split_level") if isinstance(hierarchy, Mapping) else None
+    split_level_raw = hierarchy.get("split_level") if isinstance(hierarchy, Mapping) else None
+    split_level = split_level_raw if isinstance(split_level_raw, str) else None
     forbidden_count_key = {
         "build": "exact_build",
         "opponent": "exact_opponent",
@@ -1061,7 +1145,8 @@ def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[s
         "component-vocab": "component_vocabulary",
         "seed-cell": "campaign_cell",
         "forward-time": None,
-    }.get(split_level)
+    }.get(split_level) if split_level is not None else None
+    forbidden_status: dict[str, object]
     if split_level not in SPLIT_CHOICES:
         forbidden_status = {"status": "not_applicable", "reason": "split_unavailable"}
     elif forbidden_count_key is None:
@@ -1166,6 +1251,7 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
     status, constructed = construct_splits(config)
     if status is not None:
         return _insufficient_result(config, status)
+    assert constructed is not None  # construct_splits pairs None status with data
     split, build_lookup, split_extras, inner_folds = constructed
 
     fold_bundles = [
@@ -1189,7 +1275,7 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
     )
     final_model, final_trial, final_prediction = _fit_score(
         config.model,
-        hpo["selected_hyperparameters"],
+        _require_mapping(hpo["selected_hyperparameters"], "selected_hyperparameters"),
         outer_train,
         outer_test,
         config.hpo_seed,
@@ -1271,11 +1357,9 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
             "duration_seconds": default_trial.duration_seconds,
             "diagnostics": default_prediction.diagnostics,
         },
-        "default_vs_tuned_delta": {
-            key: final_trial.metrics[key] - default_trial.metrics[key]
-            for key in ("mae", "rmse")
-            if final_trial.metrics[key] is not None and default_trial.metrics[key] is not None
-        },
+        "default_vs_tuned_delta": _metric_delta_dict(
+            final_trial.metrics, default_trial.metrics, ("mae", "rmse")
+        ),
         "comparator_inline": comparators,
         "comparator_delta": deltas,
         "timing": {"fit_predict_seconds": final_trial.duration_seconds},
@@ -1322,13 +1406,7 @@ def feature_families(
         "column_count": len(keys),
         "prefixes": sorted({key.split("_", 2)[0] for key in keys}),
         "columns": keys,
-        "excluded": [
-            "build_key",
-            "target_derived_build_mean",
-            "target_derived_opponent_mean",
-            "twfe_residual",
-            "honest_eval_target",
-        ],
+        "excluded": list(EXCLUDED_FEATURE_COLUMNS),
     }
 
 
@@ -1458,9 +1536,9 @@ def _experiment_payload(
             "feature_family_registry": merged_registry,
             "feature_family_registry_sha256": _registry_digest(merged_registry),
             "selected_feature_families": sorted({
-                item["family"]
+                family
                 for item in merged_registry.values()
-                if isinstance(item.get("family"), str)
+                if isinstance((family := item.get("family")), str)
             }),
             "selected_feature_count": len(merged_registry),
         }

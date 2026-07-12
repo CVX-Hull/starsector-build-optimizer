@@ -49,12 +49,14 @@ import sys
 from collections import Counter, defaultdict
 from pathlib import Path
 from collections.abc import Sequence
+from typing import cast
 
 import matplotlib
 
 matplotlib.use("Agg")  # headless
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.collections import PolyCollection
 
 # --- publication-quality matplotlib defaults ----------------------------------
 # Applied once at import. All sections inherit these. The principles:
@@ -194,7 +196,7 @@ def section_01_topk_per_cell(k: int = 5) -> dict:
                              sharey=True)
     out: dict[str, dict] = {}
     im = None
-    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
         ax.grid(False)
         records = load_records(_cell_log_paths(cell))
         rankings = {n: METHOD_FNS[n](records, k=k) for n in METHOD_ORDER}
@@ -216,6 +218,7 @@ def section_01_topk_per_cell(k: int = 5) -> dict:
                         fontsize=9)
         out[cell] = {"matrix": mat.tolist(), "n_trials": len(records)}
     fig.suptitle(f"Top-{k} Jaccard agreement between rankers, per cell")
+    assert im is not None  # CELLS is non-empty, so the loop always ran
     fig.colorbar(im, ax=axes.tolist(), shrink=0.85,
                  label=f"Jaccard similarity J(top-{k}_a, top-{k}_b)")
     fig.savefig(CHARTS_DIR / "01_top_k_agreement_per_cell.png")
@@ -264,8 +267,8 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
             mat_rho_full[i, j] = spearman_rho(
                 rankings_full[a], rankings_full[b]
             )
-    out["full_spearman"] = [[None if np.isnan(v) else v for v in row]
-                            for row in mat_rho_full.tolist()]
+    full_spearman = [[None if np.isnan(v) else v for v in row]
+                     for row in mat_rho_full.tolist()]
 
     # Headline chart: K=5 Jaccard.
     k_main = 5
@@ -297,6 +300,7 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
     return {
         "n_trials_pooled": len(records),
         "n_matchups_pooled": sum(len(r.matches) for r in records),
+        "full_spearman": full_spearman,
         **out,
     }
 
@@ -329,7 +333,10 @@ def section_03_alpha_distribution() -> dict:
     parts = ax.violinplot(data, showmeans=False, showmedians=False,
                           showextrema=False)
     palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-    for pc, color in zip(parts["bodies"], palette):
+    # The stub types violinplot() as dict[str, Collection] but "bodies" is a
+    # list of PolyCollection at runtime — cast to the real shape.
+    bodies = cast("list[PolyCollection]", parts["bodies"])
+    for pc, color in zip(bodies, palette, strict=False):  # 10-color palette cycle longer than the 5 violin bodies
         pc.set_alpha(0.45)
         pc.set_facecolor(color)
         pc.set_edgecolor("black")
@@ -365,7 +372,7 @@ def section_04_eb_shrinkage_scatter() -> dict:
     fig, axes = plt.subplots(1, 5, figsize=(18, 4.6), sharey=True)
     out: dict[str, dict] = {}
     sc = None
-    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS)):
+    for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
         records = load_records(_cell_log_paths(cell))
         ranked_twfe = {r.build_id: r for r in rank_twfe(records, k=10**6)}
         ranked_eb = rank_twfe_eb(records, k=10**6)
@@ -377,18 +384,19 @@ def section_04_eb_shrinkage_scatter() -> dict:
             x.append(tw.score)
             y.append(r.score)
             n.append(r.n_matches)
-        x = np.asarray(x)
-        y = np.asarray(y)
-        n = np.asarray(n)
-        sc = ax.scatter(x, y, c=n, cmap="plasma", s=18, alpha=0.7,
+        x_arr = np.asarray(x)
+        y_arr = np.asarray(y)
+        n_arr = np.asarray(n)
+        sc = ax.scatter(x_arr, y_arr, c=n_arr, cmap="plasma", s=18, alpha=0.7,
                         edgecolors="none")
-        lo, hi = float(min(x.min(), y.min())), float(max(x.max(), y.max()))
+        lo = float(min(x_arr.min(), y_arr.min()))
+        hi = float(max(x_arr.max(), y_arr.max()))
         ax.plot([lo, hi], [lo, hi], color="black", ls="--", lw=0.8,
                 label="y = x  (no shrinkage)")
         ax.axvline(0, color="grey", lw=0.5, ls=":")
         ax.axhline(0, color="grey", lw=0.5, ls=":")
-        if x.std() > 0:
-            slope = float(np.polyfit(x, y, 1)[0])
+        if x_arr.std() > 0:
+            slope = float(np.polyfit(x_arr, y_arr, 1)[0])
         else:
             slope = float("nan")
         ax.set_title(f"({chr(97 + ax_i)}) {cell}\n"
@@ -398,11 +406,12 @@ def section_04_eb_shrinkage_scatter() -> dict:
             ax.legend(loc="lower right")
         out[cell] = {
             "shrinkage_slope": slope,
-            "n_builds": len(x),
-            "mean_alpha_twfe": float(x.mean()) if len(x) else float("nan"),
-            "mean_alpha_eb": float(y.mean()) if len(y) else float("nan"),
+            "n_builds": len(x_arr),
+            "mean_alpha_twfe": float(x_arr.mean()) if len(x_arr) else float("nan"),
+            "mean_alpha_eb": float(y_arr.mean()) if len(y_arr) else float("nan"),
         }
     axes[0].set_ylabel(r"$\hat{\alpha}^{\mathrm{EB}}_i$  (TWFE + Empirical Bayes)")
+    assert sc is not None  # CELLS is non-empty, so the loop always ran
     fig.colorbar(sc, ax=axes.tolist(), shrink=0.85,
                  label=r"$n_i$  (matchups per build)")
     fig.suptitle(
@@ -421,8 +430,8 @@ def section_05_boxcox_saturation() -> dict:
     """% non-pruned trials with eb_fitness ≥ 0.99 per cell."""
     log.info("[05] Box-Cox saturation rate per cell")
     out: dict[str, dict] = {}
-    counts_total = Counter()
-    counts_sat = Counter()
+    counts_total: Counter[str] = Counter()
+    counts_sat: Counter[str] = Counter()
     for cell, _seed, d in _iter_log_rows(_all_logs()):
         if d.get("pruned"):
             continue
@@ -456,7 +465,7 @@ def section_05_boxcox_saturation() -> dict:
         "Box-Cox ceiling saturation per cell  "
         "(F2a gate: orange = exceeds 1 %)"
     )
-    for i, (b, n) in enumerate(zip(bars, n_obs)):
+    for i, (b, n) in enumerate(zip(bars, n_obs, strict=True)):
         ax.text(i, b + max(0.05, 0.02 * max([*bars, SAT_FAIL_FRAC * 100])),
                 f"{b:.2f} %\n(n = {n})",
                 ha="center", va="bottom", fontsize=9)
@@ -496,7 +505,7 @@ def section_06_pruner_rate() -> dict:
         xs = np.arange(n_cells) + (j - 1) * width
         ax.bar(xs, ys, width, label=f"seed {seed}",
                edgecolor="black", linewidth=0.4)
-        for x_, y_ in zip(xs, ys):
+        for x_, y_ in zip(xs, ys, strict=True):
             ax.text(x_, y_ + 0.012, f"{y_*100:.0f}%",
                     ha="center", va="bottom", fontsize=8)
     ax.axhspan(0.10, 0.60, alpha=0.12, color="#C85200",
@@ -911,7 +920,7 @@ def section_11_f1c_gate(n_boot: int = BOOTSTRAP_ITERS) -> dict:
                  comparisons[f"c2_vs_{ctrl}"]["branch"])
 
     # Best cell by honest mean α̂_EB
-    best_cell = max(point_estimates, key=point_estimates.get)
+    best_cell = max(point_estimates, key=lambda cell: point_estimates[cell])
     return {
         "point_top3_alpha_eb": point_estimates,
         "point_top3_bt_skill": bt_top3,
@@ -949,13 +958,13 @@ def section_12_eb_shrinkage_diagnostics() -> dict:
         if not zs:
             out[cell] = {"n_builds": 0}
             continue
-        zs = np.asarray(zs)
+        zs_arr = np.asarray(zs)
         out[cell] = {
-            "n_builds": len(zs),
-            "mean_z": float(zs.mean()),
-            "std_z": float(zs.std(ddof=1)) if len(zs) > 1 else float("nan"),
-            "median_abs_z": float(np.median(np.abs(zs))),
-            "max_abs_z": float(np.max(np.abs(zs))),
+            "n_builds": len(zs_arr),
+            "mean_z": float(zs_arr.mean()),
+            "std_z": float(zs_arr.std(ddof=1)) if len(zs_arr) > 1 else float("nan"),
+            "median_abs_z": float(np.median(np.abs(zs_arr))),
+            "max_abs_z": float(np.max(np.abs(zs_arr))),
             "n_match_min": int(np.min(n_arr)),
             "n_match_max": int(np.max(n_arr)),
             "n_match_mean": float(np.mean(n_arr)),
@@ -1017,8 +1026,7 @@ def section_13_pruner_boxcox() -> dict:
         corr = float(np.corrcoef(pr, sr)[0, 1])
     else:
         corr = float("nan")
-    out["overall_pearson_pr_vs_sat"] = corr
-    return out
+    return {**out, "overall_pearson_pr_vs_sat": corr}
 
 
 # ----------------------------------------------------------------- driver ---

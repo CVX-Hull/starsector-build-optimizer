@@ -5,7 +5,7 @@ import logging
 import time
 from pathlib import Path
 
-from starsector_optimizer.models import MatchupConfig
+from starsector_optimizer.models import BuildSpec, MatchupConfig
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -21,17 +21,29 @@ config = InstanceConfig(
     heartbeat_timeout_seconds=180.0,
 )
 
+# Minimal explicit player build — MatchupConfig takes BuildSpecs, not stock
+# variant ids, for the player side (same pattern as test_persistent_session.py).
+_PLAYER_BUILD = BuildSpec(
+    variant_id="integration_hammerhead",
+    hull_id="hammerhead",
+    weapon_assignments={"WS 001": "heavyac", "WS 002": "heavyac"},
+    hullmods=("heavyarmor",),
+    flux_vents=10,
+    flux_capacitors=5,
+    cr=0.7,
+)
+
 matchups = [
     MatchupConfig(
         matchup_id="integration_001",
-        player_variants=("eagle_Assault",),
+        player_builds=(_PLAYER_BUILD,),
         enemy_variants=("dominator_Assault",),
         time_limit_seconds=180,
         time_mult=3.0,
     ),
     MatchupConfig(
         matchup_id="integration_002",
-        player_variants=("onslaught_Elite",),
+        player_builds=(_PLAYER_BUILD,),
         enemy_variants=("lasher_CS",),
         time_limit_seconds=180,
         time_mult=3.0,

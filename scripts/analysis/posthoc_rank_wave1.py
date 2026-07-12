@@ -118,7 +118,7 @@ def main() -> int:
         return 0
 
     # Per-cell: 5 cells, each pooled across 3 seeds.
-    by_cell = {}
+    by_cell: dict[str, list[Path]] = {}
     for fp in logs:
         cell = fp.parent.parent.name.removeprefix("wave1-")
         by_cell.setdefault(cell, []).append(fp)

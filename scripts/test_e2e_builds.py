@@ -149,7 +149,7 @@ try:
     print("[PASS] All 3 matchups completed")
 
     # Check 2: Bare build should lose (enemy wins or timeout with low player HP)
-    _, _, bare_result = results[2]
+    _bare_label, _bare_build, bare_result = results[2]
     bare_player = bare_result.player_ships[0]
     assert bare_result.winner in ("ENEMY", "TIMEOUT"), \
         f"Bare build unexpectedly won: {bare_result.winner}"
@@ -163,7 +163,7 @@ try:
 
     # Check 4: Armed builds should deal more damage than bare
     for i in range(2):  # builds A and B
-        label, _, armed_result = results[i]
+        label, _armed_build, armed_result = results[i]
         armed_player = armed_result.player_ships[0]
         armed_dmg = (armed_player.damage_dealt.shield +
                      armed_player.damage_dealt.armor +
@@ -174,7 +174,7 @@ try:
 
     # Check 5: Damage dealt differs across builds (proves builds are applied)
     damages = []
-    for _label, _, r in results:
+    for _label, _r_build, r in results:
         p = r.player_ships[0]
         dmg = p.damage_dealt.shield + p.damage_dealt.armor + p.damage_dealt.hull
         damages.append(dmg)

@@ -25,7 +25,7 @@ def main():
         player_builds=(BuildSpec(
             variant_id="test_build", hull_id="hammerhead",
             weapon_assignments={"WS 001": "heavyac", "WS 002": "heavyac"},
-            hullmods=["heavyarmor"], flux_vents=10, flux_capacitors=5, cr=0.7,
+            hullmods=("heavyarmor",), flux_vents=10, flux_capacitors=5, cr=0.7,
         ),),
         enemy_variants=("buffalo_Standard",),
         time_limit_seconds=60, time_mult=5.0,
@@ -64,7 +64,8 @@ def main():
         os.system(f"DISPLAY={display} import -window root {fname} 2>/dev/null")
         print(f"  +{5 + (i+1)*2}s  screenshot taken")
 
-    print(f"\nGame alive: {inst.game_process.poll() is None}")
+    game_alive = inst.game_process is not None and inst.game_process.poll() is None
+    print(f"\nGame alive: {game_alive}")
     pool.teardown()
     print("Done. Check /tmp/dismiss_*.png")
 

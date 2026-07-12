@@ -283,8 +283,8 @@ def launch(config_path: Path, *, execute: bool) -> int:
     check_key_pairs_available(provider, cfg)
     check_split_feasibility(cfg)
 
-    cleanup = f"scripts/cloud/teardown.sh {cfg.name}"
-    print(f"Cleanup command: {cleanup}", flush=True)
+    cleanup_command = f"scripts/cloud/teardown.sh {cfg.name}"
+    print(f"Cleanup command: {cleanup_command}", flush=True)
     if not execute:
         print("Launch preflight passed. Re-run with --execute to provision AWS resources.")
         return 0

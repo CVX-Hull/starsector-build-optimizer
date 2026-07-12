@@ -21,6 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import logging
 import os
 import shutil
@@ -176,15 +177,25 @@ def _start_game(work_dir: Path, display_num: int) -> tuple[subprocess.Popen, Pat
 
 
 _LAUNCHER_CLICK_SETTLE_SECONDS = 0.3
+
+
+def _instance_config_default(field_name: str) -> float:
+    """Read a float default off InstanceConfig, rejecting fields without one."""
+    default = _InstanceConfig.__dataclass_fields__[field_name].default
+    if default is dataclasses.MISSING:
+        raise RuntimeError(f"InstanceConfig.{field_name} has no default")
+    return float(default)
+
+
 # Single-source the Play-button position fractions from the production
 # InstanceConfig defaults — keeps the manifest dump and the production
 # launcher dispatch in lockstep across version updates.
-_LAUNCHER_PLAY_X_FRACTION: float = _InstanceConfig.__dataclass_fields__[
+_LAUNCHER_PLAY_X_FRACTION: float = _instance_config_default(
     "launcher_play_button_x_fraction"
-].default
-_LAUNCHER_PLAY_Y_FRACTION: float = _InstanceConfig.__dataclass_fields__[
+)
+_LAUNCHER_PLAY_Y_FRACTION: float = _instance_config_default(
     "launcher_play_button_y_fraction"
-].default
+)
 
 
 def _click_launcher(

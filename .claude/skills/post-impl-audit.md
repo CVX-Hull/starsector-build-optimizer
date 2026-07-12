@@ -36,6 +36,11 @@ uv run pytest tests/ -v
 uv run ruff check .
 uv run mypy
 uv run deptry .
+
+# 1c. After large refactors or deletions: dead-code audit (judgment, not a
+# hard gate — 80% confidence is the measured signal threshold; see
+# docs/reports/2026-07-12-quality-tooling-research.md)
+uvx vulture src/ --min-confidence 80
 # Java, when combat-harness changed (-Werror + Error Prone + NullAway):
 # cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew jar test
 

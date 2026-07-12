@@ -47,7 +47,7 @@ print(f"   Eagle: {len(space.weapon_options)} weapon slots, "
 
 # Generate and score builds with heuristic
 print("\n2. Generating diverse builds...")
-builds = generate_diverse_builds(hull, game_data, n=1000)
+builds = generate_diverse_builds(hull, game_data, manifest, n=1000)
 scored = [(b, heuristic_score(b, hull, game_data)) for b in builds]
 scored.sort(key=lambda x: -x[1].composite_score)
 top3 = scored[:3]

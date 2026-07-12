@@ -52,7 +52,7 @@ class TestGenerateDiverseBuilds:
         eagle = game_data.hulls["eagle"]
         builds1 = generate_diverse_builds(eagle, game_data, manifest, 10, seed=42)
         builds2 = generate_diverse_builds(eagle, game_data, manifest, 10, seed=42)
-        for b1, b2 in zip(builds1, builds2):
+        for b1, b2 in zip(builds1, builds2, strict=True):
             assert b1 == b2
 
 

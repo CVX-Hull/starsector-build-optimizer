@@ -197,10 +197,13 @@ moved enforcement to an env var; see the adoption plan's I-F1.)
    excluded initially), Error Prone 2.42.0 (pinned) + NullAway 0.13.7 +
    `-Xlint:all -Werror`, deptry, internal-link validation in
    `validate_docs.py`.
-3. **Staged follow-ups** (tracked in docs/roadmap.md): B905 `zip(strict=)`
-   pass (20 sites), mypy on `scripts/` + per-module
-   `ignore_missing_imports` tightening, one-shot `ruff format` decision,
-   periodic `vulture --min-confidence 80` audits, re-evaluate `ty` at 1.0.
+3. **Staged follow-ups** — all delivered 2026-07-12 by the tightening
+   plan (same day, per user directive): B905 `zip(strict=)` pass, mypy on
+   `scripts/` + per-module import-checking tightening (stub packages for
+   yaml/requests/boto3; overrides only for scipy/sklearn), `ruff format`
+   one-shot + `--check` gate. The vulture periodic audit's operative home
+   is the post-impl-audit skill's mechanical block; remaining
+   premise-conditional watches live in §Open questions below.
 4. **Standing rejections** (revisit only on changed premises): bandit,
    SpotBugs, PMD, Checkstyle, codespell/typos, markdownlint, shfmt,
    pre-commit framework, CI expansion, pyright-as-second-checker.
@@ -214,6 +217,12 @@ moved enforcement to an env var; see the adoption plan's I-F1.)
   serial.
 - If collaborators join (PRs stop being dormant), the CI rejection
   premise changes.
+- Re-evaluate `ty` when it reaches 1.0 (rejected at v0.0.58 for FP
+  cascades, but it was the only checker to catch the requires-python
+  floor bug).
+- `vulture --min-confidence 80` after large refactors/deletions (2/2
+  true-positive rate at that threshold; too noisy below it) — operative
+  procedure owned by the post-impl-audit skill.
 
 ## Appendix — file map
 
@@ -223,8 +232,7 @@ moved enforcement to an env var; see the adoption plan's I-F1.)
 - **Raw data:** none retained beyond this report (tool runs are
   regenerable from the pinned versions above against commit `4e24f00`).
 - **Charts:** none.
-- **Dependent docs:** the adoption plan
+- **Dependent docs:** the adoption and tightening plans
   (`.claude/plans/` → archived under 2026 after implementation);
   [2026-07-12-phase7-batch-v2-incidents.md](2026-07-12-phase7-batch-v2-incidents.md)
-  (owns the ERR-trap incident the shellcheck negative result references);
-  docs/roadmap.md (staged follow-ups).
+  (owns the ERR-trap incident the shellcheck negative result references).
