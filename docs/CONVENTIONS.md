@@ -1,7 +1,7 @@
 ---
 type: always-loaded
 status: shipped
-last-validated: 2026-07-11
+last-validated: 2026-07-12
 ---
 
 # Documentation Conventions

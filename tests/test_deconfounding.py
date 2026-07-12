@@ -16,7 +16,7 @@ class TestTWFEConfig:
         """TWFEConfig is a frozen dataclass."""
         config = TWFEConfig()
         with pytest.raises(AttributeError):
-            config.ridge = 0.5  # type: ignore[misc]
+            config.ridge = 0.5  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_defaults(self):
         config = TWFEConfig()

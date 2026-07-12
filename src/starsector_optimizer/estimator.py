@@ -193,8 +193,10 @@ def format_estimate_report(
     lines.append("=" * 70)
     lines.append("Cost Estimates")
     lines.append("=" * 70)
-    lines.append(f"{'Provider':<25} {'$/hr':>8} {'Total $':>10}")
-    lines.append("-" * 45)
+    name_w, rate_w, total_w = 25, 8, 10  # display column widths
+    rule_w = name_w + rate_w + total_w + 2  # +2 column separators
+    lines.append(f"{'Provider':<{name_w}} {'$/hr':>{rate_w}} {'Total $':>{total_w}}")
+    lines.append("-" * rule_w)
     for name, cost in sorted(estimate.cost_estimates.items(), key=lambda x: x[1]):
         provider = next((p for p in DEFAULT_PROVIDERS if p.name == name), None)
         if provider:

@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: active
+status: implemented
 created: 2026-07-12
 approved: 2026-07-12
-implemented: null
+implemented: 2026-07-12
 owner: agent
 related_docs:
   - CLAUDE.md
@@ -11,8 +11,8 @@ related_docs:
   - .claude/skills/design-invariants.md
   - .claude/skills/post-impl-audit.md
   - combat-harness/CLAUDE.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: 80921d2, 661f68c, c24830a, 0704168 (+ audit fixes in the retirement commit)
+post_impl_audit: passed (3 lanes, 0 high/medium; findings I-F7/I-F8 + 2 LOW/1 INFO all fixed in the retirement commit)
 superseded_by: null
 ---
 
@@ -530,6 +530,35 @@ No high-severity findings. All valid findings resolved by plan edits:
   exposed that its feeder `opponents = get_opponents(...)` was also
   unused at that scope (pure lookup, re-done by both `preflight_check`
   and the objective); both removed.
+- **I-F4 (C-F1 resolution):** the "15th NullAway test finding" does not
+  exist — empirical re-run at the pre-change commit found exactly 14 test
+  findings (all the intentional pass-null pattern); the 15th was a *real
+  main-source* finding miscounted into the test tally (`ResultWriter.java:43`
+  delegating an untyped-nullable `traceContext`), fixed via `@Nullable`.
+- **I-F5 (trial-vs-implementation deltas, W-D):** 5 `NullAway.Init`
+  suppressions needed (not 2–3 — the three matchup-lifecycle fields are
+  also assigned outside `init`); 13 `@Nullable` sites (not ~7 — six
+  ManifestDumper null-tolerant helpers annotated as real contracts);
+  three unpredicted Error Prone classes (`PatternMatchingInstanceof` ×4,
+  `StatementSwitchToExpressionSwitch` ×1, `StringSplitter` ×1) fixed
+  properly with no suppressions.
+- **I-F6 (idiom collision):** mypy (frozen-dataclass mutation tests) and
+  ruff B010 conflict on the `setattr` workaround; resolved with direct
+  assignment + per-site `# type: ignore[misc]` + reason (14 sites) —
+  `warn_unused_ignores` keeps them from going stale.
+- **I-F7 (post-impl audit, accepted wart):** the `[tool.mypy]` and
+  `[tool.deptry]` config blocks landed in the tier-1 commit (80921d2)
+  whose message claims W-A/B/E/G only; mypy was red at that commit but
+  nothing gated it until the hook wiring in c24830a, so no gate broke.
+  Disposition: documented here rather than rewriting local history —
+  bisect hygiene wart only, no behavior implication.
+- **I-F8 (post-impl audit, spec-lane fixes):** spec 29 still described
+  the dead commit-message override (fixed → env-var description);
+  spec 03 / CONVENTIONS `last-validated` refreshed; research report
+  brought to empirical-report-skill compliance (Methods numbering,
+  Results preambles, not-covered sentence, mypy config-row
+  disambiguation, and a precise restatement of the 47/15 Error Prone
+  split — the 15th test finding is a StringSplitter, not NullAway).
 
 ## Plan Review Gate
 
@@ -565,18 +594,23 @@ sub-agents. Additional mechanical checks specific to this plan:
 - `ruff check .`, `mypy`, `deptry .` exit 0.
 - `gradlew jar test` exits 0 (proving `-Werror` + ErrorProne gates hold).
 - `grep -rn "cmaes\|lifelines\|optunahub" pyproject.toml` → empty.
-- `grep -n "mod_dirs" -r src/ tests/ scripts/ docs/specs/` → empty
-  (or the parameter retained with a caller, per the W-C disposition).
+- `grep -n "mod_dirs" -r src/ tests/ scripts/ docs/specs/` → empty in
+  code trees; the single remaining docs/specs hit is spec 03's
+  intentional removal note (disposition: historical record, not a
+  regression — post-impl audit F8).
 - New shellcheck tests are NOT skipped in the local run (shellcheck-py
   resolvable).
 
 ## Retirement checklist
 
-- [ ] All scope items classified DONE or DEFERRED (with user approval).
-- [ ] `status: implemented`, `implemented:`, `implementation_commit` set.
-- [ ] `post_impl_audit` recorded.
-- [ ] Move to `.claude/plans/archive/2026/`.
-- [ ] Groom docs/roadmap.md (absorb the staged follow-ups: B905 pass,
-      mypy-on-scripts, format decision, vulture cadence, ty-at-1.0).
-- [ ] AMI re-bake reminder still visible wherever the next-launch checklist
-      lives (owed for src/ + combat-harness changes).
+- [x] All scope items classified DONE (W-A..W-J complete; deferrals are
+      the enumerated Out-of-scope items, absorbed into docs/roadmap.md).
+- [x] `status: implemented`, `implemented:`, `implementation_commit` set.
+- [x] `post_impl_audit` recorded.
+- [x] Move to `.claude/plans/archive/2026/`.
+- [x] Groomed docs/roadmap.md (staged follow-ups under AWS/infra action
+      items, 2026-07-12).
+- [x] AMI re-bake owed before the NEXT cloud launch (src/ +
+      combat-harness changed; attempt 3 unaffected) — recorded here and
+      in the session's standing notes; the pre-launch gate memory covers
+      the check.

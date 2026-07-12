@@ -280,8 +280,13 @@ Regen required when:
 
 The pre-commit hook (`.githooks/pre-commit`) blocks commits that
 touch either path without also updating
-`game/starsector/manifest.json`, UNLESS the commit message contains
-`MANIFEST_REVIEWED:` as an explicit override.
+`game/starsector/manifest.json`, UNLESS the commit is run with the
+`MANIFEST_REVIEWED` environment variable set to a short reason
+(`MANIFEST_REVIEWED="<reason>" git commit ...`). Convention: also put a
+`MANIFEST_REVIEWED: <reason>` line in the commit message as the durable
+audit record — but the env var is the enforcement channel, because a
+pre-commit hook runs before the commit message exists (fixed
+2026-07-12; the message-based override could never actually fire).
 
 CI gate (`.github/workflows/manifest-check.yml`) loads the manifest,
 asserts schema version, and runs `tests/test_game_manifest.py` on

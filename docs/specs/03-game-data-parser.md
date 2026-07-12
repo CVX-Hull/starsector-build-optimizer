@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-07-12
 ---
 
 # Game Data Parser Specification

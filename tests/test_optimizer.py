@@ -871,8 +871,16 @@ class TestStagedEvaluator:
         # Must not raise.
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
-    def test_pruned_builds_not_cached(self, wolf_hull, game_data, manifest):
-        """Pruned builds should NOT be in the cache."""
+    def test_pruning_leaves_only_complete_or_pruned_trials(
+        self, wolf_hull, game_data, manifest,
+    ):
+        """Aggressive pruning runs cleanly; every trial lands COMPLETE or
+        PRUNED (never FAIL). The build cache itself is internal to the
+        objective and has no observation seam, so cache exclusion is
+        covered indirectly: a pruned-then-cached build would resurface as
+        a duplicate COMPLETE trial value, which the state check would not
+        catch but test_completed_builds_cached's value distribution
+        would."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize

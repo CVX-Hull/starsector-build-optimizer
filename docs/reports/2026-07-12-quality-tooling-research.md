@@ -30,11 +30,15 @@ positives), markdownlint (77 style-noise findings on 2 files), shfmt
 expansion, `ty` (pre-1.0), and pyright-as-second-checker. A critical
 negative result: **shellcheck passes the exact ERR-trap `wait` pattern
 that caused the attempt-1 worker loss** — executable bash-semantics tests
-remain the only guard for that bug class.
+remain the only guard for that bug class. This report covers only the
+tool-selection evidence; the adoption implementation itself (commits,
+fix-to-green details, discovered defect dispositions) is recorded in the
+2026-07-12 quality-tooling-adoption plan, and the ERR-trap incident is
+owned by the batch-v2 incidents report.
 
 ## Methods
 
-### Data
+### §1.1 Data
 
 - **Unit of analysis:** tool runs against the working tree at commit
   `4e24f00` (2026-07-12), before any tooling was adopted. Codebase at
@@ -54,7 +58,7 @@ remain the only guard for that bug class.
 - Environment: macOS (darwin), JDK 17.0.19 (Homebrew), Gradle 9.4.1,
   Python 3.13 (`.python-version`).
 
-### Definitions
+### §1.2 Definitions
 
 - **True/false positive judgments** are the researching agent's read of
   each sampled finding against the surrounding code, spot-verified for the
@@ -67,11 +71,15 @@ remain the only guard for that bug class.
 
 ### Python
 
+**Method (§1.1, §1.2).** Tool runs via `uvx` against the pre-adoption
+tree; per-finding judgments per §1.2.
+
 | Tool | Config | Findings | Judgment |
 |---|---|---:|---|
 | ruff | default (E4/E7/E9/F) over src+scripts+tests | 135 | 1 real bug (F821, below), 4 F811 shadowed imports, 68 dead imports, rest mechanical |
 | ruff | broad families (B, UP, SIM, C4, RUF, DTZ, PL, ARG, PTH, ISC, PIE, RET) | 824 | dominated by RUF001-003 Unicode (304, house typography) and ARG (331, interface conformance) — both excluded from adoption |
 | mypy | default + ignore-missing-imports, src only | 50 in 8/30 files | 3 real annotation-drift defects; worst: optimizer.py (11), game_manifest.py (11), parser.py (9) |
+| mypy | + `check_untyped_defs` (the adopted config), src only | 51 in 8/30 files | same defect set; the adopted-config number the Abstract cites |
 | mypy | `--strict`, src | 125 in 18 files | ~60% bureaucracy (43 bare generics, 18 no-untyped-def) — rejected |
 | pyright | basic, src | 44 | heavy overlap with mypy — rejected as second checker |
 | ty 0.0.58 | default, src | 52 | only checker to flag the `requires-python`/StrEnum mismatch, but FP cascade from the same resolution — pre-1.0, revisit later |
@@ -96,11 +104,14 @@ annotation hidden behind a pre-existing `type: ignore` in
 
 ### Java (combat-harness)
 
+**Method (§1.1).** Scratch Gradle init-script trials (`gradlew -I`),
+read-only against the repo; JDK 17.0.19 host.
+
 | Tool | Findings | Judgment |
 |---|---:|---|
 | `javac -Xlint:all` | 3 | all one pattern: raw `Iterator` from the game's old org.json — fix then `-Werror` |
 | Error Prone 2.42.0 + NullAway | 62 (47 main / 15 test) | EmptyCatch 21 = deliberate obfuscated-API wrappers (disable); NullAway 27 (see below); 2 real dead constants; 2 real lossy `float +=` accumulations (`ResultWriter.java:74,83`, feeds results JSON) |
-| NullAway detail | 13 main / 14 test | main: 6 lifecycle-init + 7 missing `@Nullable` on verified-null-checked contracts (no latent NPEs); test: intentional pass-null-to-exercise-defaults |
+| NullAway detail | 13 main / 14 test | main: 6 lifecycle-init + 7 missing `@Nullable` on verified-null-checked contracts (no latent NPEs); test: intentional pass-null-to-exercise-defaults. The 15th *test* finding is not NullAway — it is a StringSplitter finding (`ResultWriterTest.java:42`); an earlier synthesis conflated the two tallies (implementation recount, 2026-07-12) |
 | SpotBugs 4.10.2 | 10 | 10/10 deliberate-by-design (System.exit shutdown protocol, exposed internals inherent to plugin architecture) — rejected |
 | PMD 7.26.0 quickstart | 229 | style-dominated; exactly 1 unique real signal (unused import) — rejected |
 | Checkstyle | not trialed | format-only, zero bug-finding — rejected |
@@ -119,6 +130,9 @@ Starsector API optimistically, so API calls contribute zero warnings;
 checked — the existing defensive-catch pattern remains that mitigation.
 
 ### Shell / docs
+
+**Method (§1.1, §1.2).** shellcheck 0.11.0 over `scripts/**` and the
+rendered userdata templates; docs tools over `docs/` + skills.
 
 - **Repo scripts:** 15 findings over 27 files — 10 warning / 4 info /
   1 style. Real: dead `CALLER_ACCT` in `cleanup_amis.sh` (redundant with
@@ -155,6 +169,9 @@ checked — the existing defensive-catch pattern remains that mitigation.
   `lychee` remains an occasional ad-hoc command.
 
 ### Integration
+
+**Method (§1.1).** Read-only inventory of existing gate mechanisms plus
+the framework-fit assessments below; no tool runs.
 
 The repo already had: an active opt-in `.githooks/pre-commit` (symlink
 check, plan/docs validators, manifest gate), a dormant PR-only GitHub
