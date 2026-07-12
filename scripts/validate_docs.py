@@ -10,6 +10,11 @@ half of grooming lives in .claude/skills/doc-grooming.md):
    and ``status:``; ``status: superseded`` requires ``superseded-by:``.
 3. Canonical roadmap — docs/roadmap.md exists, is typed ``index``, and
    carries a parseable ``last-validated`` date.
+4. Internal links — every relative markdown link in docs/ (including the
+   index files, roadmap, and project overview), .claude/skills/, and the
+   root/combat-harness CLAUDE.md resolves to an existing file. Links inside
+   fenced code blocks or inline code spans are examples, not navigation,
+   and are ignored.
 
 Exit 0 = clean; exit 1 = violations listed on stderr.
 """
@@ -48,8 +53,45 @@ def frontmatter(path: Path) -> dict[str, str]:
     return fields
 
 
+# Fenced blocks first (their body may contain backticks), then inline code
+# spans (`...` or ``...``) — both are example text, not navigation.
+_CODE_FENCE_RE = re.compile(r"^(?:```|~~~).*?^(?:```|~~~)\s*$", re.S | re.M)
+_CODE_SPAN_RE = re.compile(r"``[^`]*``|`[^`]*`")
+_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)(?:\s+\"[^\"]*\")?\)")
+
+
+def _link_check_files(root: Path) -> list[Path]:
+    files = sorted(root.glob("docs/**/*.md"))
+    files += sorted(root.glob(".claude/skills/*.md"))
+    for extra in (root / "CLAUDE.md", root / "combat-harness" / "CLAUDE.md"):
+        if extra.exists():
+            files.append(extra)
+    return files
+
+
+def check_links(root: Path) -> list[str]:
+    """Return one error string per relative link that resolves to nothing."""
+    errors: list[str] = []
+    for path in _link_check_files(root):
+        text = _CODE_SPAN_RE.sub("", _CODE_FENCE_RE.sub("", path.read_text(encoding="utf-8")))
+        for match in _LINK_RE.finditer(text):
+            target = match.group(1)
+            if target.startswith(("http://", "https://", "mailto:", "#")):
+                continue
+            if "<" in target:  # template placeholder, e.g. charts/<campaign>/…
+                continue
+            target_path = (path.parent / target.split("#", 1)[0]).resolve()
+            if not target_path.exists():
+                errors.append(
+                    f"{path.relative_to(root)}: broken link -> {target}"
+                )
+    return errors
+
+
 def main() -> int:
     errors: list[str] = []
+
+    errors.extend(check_links(ROOT))
 
     for member_dir, exclude, index_path in INDEX_RULES:
         index_text = index_path.read_text(encoding="utf-8")

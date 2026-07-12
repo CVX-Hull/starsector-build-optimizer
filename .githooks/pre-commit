@@ -86,6 +86,13 @@ validate_agents_symlinks
 uv run python scripts/validate_active_plans.py
 uv run python scripts/validate_docs.py
 
+# Quality gates (adopted 2026-07-12; evidence: docs/reports/
+# 2026-07-12-quality-tooling-research.md). Shellcheck sweeps live in
+# tests/test_shellcheck.py, not here — one mechanism per check.
+uv run ruff check .
+uv run mypy
+uv run deptry .
+
 if needs_manifest_regen && ! manifest_was_regen; then
     if ! manifest_override_active; then
         cat >&2 <<EOF

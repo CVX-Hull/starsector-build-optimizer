@@ -4,7 +4,7 @@ description: Mechanical checks and sub-agent verification after completing imple
 disable-model-invocation: true
 type: skill
 status: shipped
-last-validated: 2026-05-10
+last-validated: 2026-07-12
 ---
 
 # Post-Implementation Audit
@@ -31,6 +31,13 @@ Run these for ALL changes. Check results and fix any issues:
 ```bash
 # 1. Full test suite
 uv run pytest tests/ -v
+
+# 1b. Quality gates (adopted 2026-07-12; must all exit 0)
+uv run ruff check .
+uv run mypy
+uv run deptry .
+# Java, when combat-harness changed (-Werror + Error Prone + NullAway):
+# cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew jar test
 
 # 2. Stale references after renames or removals (substitute actual old name)
 grep -rn "OLD_NAME" --include="*.md" --include="*.py" src/ tests/ docs/

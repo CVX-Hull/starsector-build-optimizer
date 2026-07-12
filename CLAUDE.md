@@ -30,6 +30,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 ## Commands
 
 - Python tests: `uv run pytest tests/ -v`
+- Quality gates (pre-commit-enforced): `uv run ruff check . && uv run mypy && uv run deptry .`; Java gates run inside the Gradle build. Evidence: [2026-07-12 tooling research](docs/reports/2026-07-12-quality-tooling-research.md).
 - Combat harness build/test/deploy: `cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew {jar,test,deploy}` — see [combat-harness/AGENTS.md](combat-harness/AGENTS.md)
 - Optimizer (heuristic-only): `uv run python scripts/run_optimizer.py --hull <id> --game-dir game/starsector --heuristic-only`
 - Optimizer (sim, local Linux): add `--num-instances <N> --sim-budget <N> --study-db data/<id>.db`. **Cap: `os.cpu_count() // 3`** (preflight-enforced; each JVM consumes ~2.5 cores).

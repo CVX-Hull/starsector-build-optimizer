@@ -4,7 +4,7 @@ description: Architectural invariant checklist for the Starsector ship build opt
 disable-model-invocation: true
 type: skill
 status: shipped
-last-validated: 2026-05-10
+last-validated: 2026-07-12
 ---
 
 # Design Invariants Checklist
@@ -81,6 +81,14 @@ Source: the root workflow file's engineering principles. These apply to every ch
 ```bash
 # Verify all tests pass
 uv run pytest tests/ -v
+
+# Quality gates (adopted 2026-07-12 — also enforced by .githooks/pre-commit;
+# evidence: docs/reports/2026-07-12-quality-tooling-research.md)
+uv run ruff check .
+uv run mypy
+uv run deptry .
+# Java gates run inside the Gradle build (-Werror + Error Prone + NullAway):
+# cd combat-harness && JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew jar test
 
 # Check for stale references after renames
 grep -rn "OLD_NAME" --include="*.md" --include="*.py" src/ tests/ docs/

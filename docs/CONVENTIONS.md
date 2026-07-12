@@ -91,8 +91,10 @@ to the owning spec, index, or report.
 
 1. **Discoverability — two hops, always indexed.** Every doc is reachable as
    always-loaded → index → owning doc. Every report / reference / spec / skill
-   file must be linked from its owning index (mechanically enforced by
-   `scripts/validate_docs.py` in pre-commit).
+   file must be linked from its owning index, and every relative link in the
+   doc system must resolve to an existing file (both mechanically enforced by
+   `scripts/validate_docs.py` in pre-commit; links shown inside code fences or
+   inline code spans are examples and exempt).
 2. **Always-loaded is a paid budget.** The always-loaded set costs context
    every turn; it has numeric line caps (owned by the `doc-grooming` skill,
    step 5). Over budget → extract procedure to a skill or replace prose with a

@@ -16,6 +16,7 @@ Java mod for Starsector 0.98a that runs automated AI-vs-AI combat and exports re
 - Build + test + deploy: `JAVA_HOME="$STARSECTOR_JDK_HOME" ./gradlew clean jar test deploy`
 - Launch game with mod (Linux only): `cd ../game/starsector && ./starsector.sh`
 - `STARSECTOR_JDK_HOME` = JDK 17 (matching the bundled JRE). macOS Homebrew: `/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home`. Linux: `/usr/lib/jvm/java-17-openjdk` (Gradle 9.4 tolerates higher build hosts).
+- **Build gates** (every `gradlew jar`): `-Xlint:all -Werror` + Error Prone + NullAway-as-error. Error Prone is **pinned at 2.42.0** — 2.43.0+ ship JDK-21 class files and crash the JDK-17 compiler; do not bump without moving the build to a JDK 21 toolchain with `options.release = 17` (a deliberate convention change, not a version bump). `EmptyCatch` is disabled (deliberate `catch (Throwable ignored)` wrappers around obfuscated game API); NullAway enforcement is scoped to `starsector.combatharness` + `data.missions` (the game API is unannotated and treated optimistically — nulls returned by game API calls are NOT checked; keep the defensive-catch pattern there). Evidence: [2026-07-12 tooling research](../docs/reports/2026-07-12-quality-tooling-research.md).
 
 ## Architecture (one matchup per mission cycle)
 
