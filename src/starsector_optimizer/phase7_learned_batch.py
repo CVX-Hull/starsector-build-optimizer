@@ -871,16 +871,19 @@ def render_phase7_learned_batch_user_data(
     game_dir = shlex.quote(str(config.game_dir))
     dependency_extra = shlex.quote(config.dependency_extra)
     control_url = shlex.quote(control_plane_url)
-    fresh_ledger_flag = (
-        ""
-        if config.fresh_honest_eval_ledger_id is None
-        else f"    --fresh-honest-eval-ledger-id {shlex.quote(config.fresh_honest_eval_ledger_id)} \\\n"
-    )
+    if config.fresh_honest_eval_ledger_id is None:
+        fresh_ledger_flag = ""
+    else:
+        ledger_id = shlex.quote(config.fresh_honest_eval_ledger_id)
+        fresh_ledger_flag = f"    --fresh-honest-eval-ledger-id {ledger_id} \\\n"
     noise_floor_flag = (
         ""
         if config.noise_floor_override is None
         else f"    --noise-floor-override {config.noise_floor_override} \\\n"
     )
+    # Rendered bash template: several lines exceed the line limit, but wrapping
+    # them would change the rendered script bytes (tests pin the output), so
+    # E501 is suppressed at the closing quotes.
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
@@ -1134,7 +1137,7 @@ while (( SECONDS < DEADLINE )); do
   post_event "result_uploaded"
   JOB_ID=""
 done
-"""
+"""  # noqa: E501
 
 
 def record_budget_heartbeat(
@@ -1387,7 +1390,8 @@ def run_live_batch(
                 if budget_fraction >= threshold and threshold not in warned_budget_thresholds:
                     warned_budget_thresholds.add(threshold)
                     logger.warning(
-                        "batch budget threshold crossed: threshold=%.2f cumulative=%.4f budget=%.4f",
+                        "batch budget threshold crossed: "
+                        "threshold=%.2f cumulative=%.4f budget=%.4f",
                         threshold,
                         cumulative_usd,
                         config.budget_usd,

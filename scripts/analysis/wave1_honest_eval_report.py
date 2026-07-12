@@ -137,7 +137,8 @@ def render_md(rows: list[CellRow]) -> str:
         )
     else:
         out.append(
-            "- One or more required cells (wave1-c0a, wave1-c0b, wave1-c2) missing — F1c gate not evaluated."
+            "- One or more required cells (wave1-c0a, wave1-c0b, wave1-c2) "
+            "missing — F1c gate not evaluated."
         )
     out.append("")
     out.append("### Random-baseline existence check")

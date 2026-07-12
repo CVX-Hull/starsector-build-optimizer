@@ -728,5 +728,6 @@ class TestRepairBoundary:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     assert "repair" not in alias.name, (
-                        f"worker_agent.py imports '{alias.name}' — repair runs orchestrator-side only"
+                        f"worker_agent.py imports '{alias.name}' — "
+                        "repair runs orchestrator-side only"
                     )

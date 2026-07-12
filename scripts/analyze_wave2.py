@@ -67,7 +67,8 @@ def load_study_trial_params(
         out = []
         for trial_id, number, value in rows:
             param_rows = conn.execute(
-                "SELECT param_name, param_value, distribution_json FROM trial_params WHERE trial_id = ?",
+                "SELECT param_name, param_value, distribution_json "
+                "FROM trial_params WHERE trial_id = ?",
                 (trial_id,),
             ).fetchall()
             params: dict[str, Any] = {}
@@ -107,7 +108,10 @@ def cross_regime_overlap_gate() -> dict[str, Any]:
     if len(mid_all) < len(early_top):
         return {
             "passes": False,
-            "reason": f"mid study has only {len(mid_all)} trials; need at least {len(early_top)} to compare",
+            "reason": (
+                f"mid study has only {len(mid_all)} trials; "
+                f"need at least {len(early_top)} to compare"
+            ),
             "n_early": len(early_top),
             "n_mid": len(mid_all),
         }

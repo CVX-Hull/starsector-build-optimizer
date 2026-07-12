@@ -271,7 +271,8 @@ def _fixture_game_data_with_tagged_components():
     """Minimal GameData with a tiered, tagged hullmod set and tagged weapons.
 
     Hullmods: mt0 (tier 0, clean), mt1 (tier 1, clean), mt3 (tier 3, clean),
-              mt_nds (tier 2, tagged `no_drop_salvage`), mt_rare (tier 3, tagged `codex_unlockable`).
+              mt_nds (tier 2, tagged `no_drop_salvage`),
+              mt_rare (tier 3, tagged `codex_unlockable`).
     Weapons: w_clean (no tags), w_rare (`rare_bp`), w_codex (`codex_unlockable`).
     """
     hull = _hull(

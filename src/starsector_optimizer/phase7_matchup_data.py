@@ -313,7 +313,8 @@ def recover_study_db_builds(
             feasible, violations = is_feasible(repaired, hull, game_data, manifest)
             if not feasible:
                 raise ValueError(
-                    f"DB-reconstructed trial {number} from {db_path} is infeasible after repair: {violations}"
+                    f"DB-reconstructed trial {number} from {db_path} "
+                    f"is infeasible after repair: {violations}"
                 )
             out.append(
                 RecoveredBuild(
@@ -534,7 +535,8 @@ def materialize_sqlite(
     con.executemany(
         """
         insert or replace into recovered_builds
-        (row_key, build_key, source_kind, campaign, study, seed, rank, trial_number, score, source_path, build_json)
+        (row_key, build_key, source_kind, campaign, study, seed, rank,
+         trial_number, score, source_path, build_json)
         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
@@ -565,7 +567,8 @@ def materialize_sqlite(
     con.executemany(
         """
         insert or replace into training_matchups
-        (source_path, campaign, seed, trial_number, build_key, opponent_variant_id, opponent_index, target, row_kind)
+        (source_path, campaign, seed, trial_number, build_key,
+         opponent_variant_id, opponent_index, target, row_kind)
         values (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [

@@ -1,0 +1,5 @@
+# Commits to skip in git blame (format-only, no semantic content).
+# One-time setup per clone:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+# Only dedicated format-only commits belong here.
+0e4235938a25754629afae0c9975afb4e72779ac

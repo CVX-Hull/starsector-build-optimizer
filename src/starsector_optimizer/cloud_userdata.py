@@ -193,6 +193,9 @@ def _render_jar_override_block(url: str, sha256: str) -> str:
     """
     if not url:
         return ""
+    # Rendered bash template: the sha256-mismatch echo line exceeds the line
+    # limit, but wrapping it would change the rendered script bytes, so E501
+    # is suppressed at the closing quotes.
     return f"""
 # --- Optional combat-harness.jar overlay (Java-only fast iteration) ---
 # When set, fetches a freshly built jar from the operator's workstation
@@ -216,7 +219,7 @@ fi
 install -m 0644 -o ubuntu -g ubuntu "$JAR_TMP" {_BAKED_MOD_JAR_PATH}
 rm -f "$JAR_TMP"
 echo "[mod-jar-overlay] installed jar (sha256=$JAR_OVERRIDE_SHA256)"
-"""
+"""  # noqa: E501
 
 
 def render_probe_user_data(campaign_id: str) -> str:

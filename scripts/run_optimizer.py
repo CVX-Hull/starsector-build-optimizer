@@ -198,7 +198,8 @@ def main():
 
     if args.hull not in game_data.hulls:
         print(
-            f"Error: hull '{args.hull}' not found. Available: {sorted(game_data.hulls.keys())[:10]}..."
+            f"Error: hull '{args.hull}' not found. "
+            f"Available: {sorted(game_data.hulls.keys())[:10]}..."
         )
         sys.exit(1)
 

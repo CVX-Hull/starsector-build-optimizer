@@ -206,7 +206,8 @@ def render(
     out.append("# Wave 1 Honest-Eval Partial Snapshot")
     out.append("")
     out.append(
-        "Read-only preliminary analysis. Rankings below are provisional because the ledger is prefix-ordered by dispatch, not a randomized complete panel."
+        "Read-only preliminary analysis. Rankings below are provisional because "
+        "the ledger is prefix-ordered by dispatch, not a randomized complete panel."
     )
     out.append("")
     out.append("## Progress")
@@ -229,7 +230,8 @@ def render(
     out.append("## Cell Coverage")
     out.append("")
     out.append(
-        "| cell | builds observed | complete builds | results | coverage | complete-build mean oracle | observed-build mean oracle |"
+        "| cell | builds observed | complete builds | results | coverage "
+        "| complete-build mean oracle | observed-build mean oracle |"
     )
     out.append("|---|---:|---:|---:|---:|---:|---:|")
     cells = sorted({item.key.cell for item in stats})
@@ -258,7 +260,8 @@ def render(
         for i, item in enumerate(sorted(complete, key=lambda x: x.mean, reverse=True)[:15], 1):
             out.append(
                 f"| {i} | {item.key.cell} | {item.key.seed} | {item.key.rank} | {item.n} | "
-                f"{fmt(item.mean)} | {item.sem:.4f} | {fmt(item.min_score)} | {fmt(item.max_score)} |"
+                f"{fmt(item.mean)} | {item.sem:.4f} | "
+                f"{fmt(item.min_score)} | {fmt(item.max_score)} |"
             )
     else:
         out.append("No build has a complete 1,620-matchup panel yet.")
@@ -307,11 +310,13 @@ def render(
             and cell_complete_mean[cell] > cell_complete_mean["random-baseline"]
         )
         out.append(
-            f"- Random-baseline existence check: {beats}/5 cells beat the complete-panel random-baseline mean."
+            f"- Random-baseline existence check: {beats}/5 cells beat "
+            "the complete-panel random-baseline mean."
         )
     else:
         out.append(
-            "- Random-baseline existence check: not estimable yet; random-baseline panels have not completed."
+            "- Random-baseline existence check: not estimable yet; "
+            "random-baseline panels have not completed."
         )
     out.append("")
 

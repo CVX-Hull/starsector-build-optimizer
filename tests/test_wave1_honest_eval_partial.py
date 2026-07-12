@@ -24,8 +24,10 @@ def test_log_health_rate_handles_midnight_rollover(tmp_path: Path) -> None:
     log.write_text(
         "\n".join(
             [
-                '23:59:50 werkzeug INFO: 127.0.0.1 - - [10/May/2026 23:59:50] "POST /result HTTP/1.1" 200 -',
-                '00:00:10 werkzeug INFO: 127.0.0.1 - - [11/May/2026 00:00:10] "POST /result HTTP/1.1" 200 -',
+                "23:59:50 werkzeug INFO: 127.0.0.1 - - "
+                '[10/May/2026 23:59:50] "POST /result HTTP/1.1" 200 -',
+                "00:00:10 werkzeug INFO: 127.0.0.1 - - "
+                '[11/May/2026 00:00:10] "POST /result HTTP/1.1" 200 -',
             ]
         )
     )
@@ -41,8 +43,10 @@ def test_log_health_bins_are_chronological_across_midnight(tmp_path: Path) -> No
     log.write_text(
         "\n".join(
             [
-                '23:45:00 werkzeug INFO: 127.0.0.1 - - [10/May/2026 23:45:00] "POST /result HTTP/1.1" 200 -',
-                '00:01:00 werkzeug INFO: 127.0.0.1 - - [11/May/2026 00:01:00] "POST /result HTTP/1.1" 200 -',
+                "23:45:00 werkzeug INFO: 127.0.0.1 - - "
+                '[10/May/2026 23:45:00] "POST /result HTTP/1.1" 200 -',
+                "00:01:00 werkzeug INFO: 127.0.0.1 - - "
+                '[11/May/2026 00:01:00] "POST /result HTTP/1.1" 200 -',
             ]
         )
     )

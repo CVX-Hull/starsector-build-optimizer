@@ -124,7 +124,8 @@ def main() -> int:
         mr = s["mismatch_rate"] * 100
         print(
             f"  {cell}: ${cost:.2f}  {' | '.join(seeds_str_parts)}  "
-            f"loadout mismatch {s['loadout_mismatch']}/{s['loadout_ok'] + s['loadout_mismatch']} ({mr:.2f}%)"
+            f"loadout mismatch {s['loadout_mismatch']}"
+            f"/{s['loadout_ok'] + s['loadout_mismatch']} ({mr:.2f}%)"
         )
         total_cost += cost
         total_mismatch += s["loadout_mismatch"]

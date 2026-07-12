@@ -1677,7 +1677,8 @@ def run_experiment(
         elapsed = time.monotonic() - started
         _progress(
             f"{idx}/{len(configs)} done split={item.split} model={item.model} "
-            f"duration={baseline._format_duration(duration)} elapsed={baseline._format_duration(elapsed)} "
+            f"duration={baseline._format_duration(duration)} "
+            f"elapsed={baseline._format_duration(elapsed)} "
             f"eta={baseline._format_duration(remaining)}",
             config.progress,
         )

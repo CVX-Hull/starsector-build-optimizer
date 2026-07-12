@@ -413,7 +413,10 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
             "split_level": "build",
             "group_key_function": "build_key",
             "group_key_fields": ["training_matchups.build_key"],
-            "supported_claim": "Transfer to unseen repaired player builds drawn from the same broader build distribution.",
+            "supported_claim": (
+                "Transfer to unseen repaired player builds drawn from the same "
+                "broader build distribution."
+            ),
             "claim_supported": "supported",
         }
     if config.split == "opponent":
@@ -429,7 +432,9 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
             "split_level": "opponent-hull",
             "group_key_function": "opponent_hull_id_from_stock_variant",
             "group_key_fields": ["opponent_hull_id"],
-            "supported_claim": "Transfer to unseen opponent hulls using outcome-free stock variant descriptors.",
+            "supported_claim": (
+                "Transfer to unseen opponent hulls using outcome-free stock variant descriptors."
+            ),
             "claim_supported": "supported",
         }
     if config.split == "opponent-family":
@@ -441,7 +446,10 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
                 "opponent_hull_designation",
                 "opponent_hull_tech_manufacturer",
             ],
-            "supported_claim": "Transfer to unseen outcome-free opponent hull-size/designation/manufacturer families.",
+            "supported_claim": (
+                "Transfer to unseen outcome-free opponent "
+                "hull-size/designation/manufacturer families."
+            ),
             "claim_supported": "supported",
         }
     if config.split == "component-vocab":
@@ -452,7 +460,9 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
                 "Build.weapon_assignments",
                 "Build.hullmods",
             ],
-            "supported_claim": "Transfer to builds containing weapon/hullmod IDs never seen in training.",
+            "supported_claim": (
+                "Transfer to builds containing weapon/hullmod IDs never seen in training."
+            ),
             "claim_supported": "supported",
             "component_key_definition": COMPONENT_VOCAB_KEY_DEFINITION,
         }
@@ -473,7 +483,9 @@ def split_metadata(config: BaselineConfig) -> dict[str, object]:
                 "training_matchups.trial_number",
                 "training_matchups.opponent_index",
             ],
-            "supported_claim": "Forward deployment over later optimizer proposals in path-ordered source rows.",
+            "supported_claim": (
+                "Forward deployment over later optimizer proposals in path-ordered source rows."
+            ),
             "claim_supported": "supported",
         }
     raise ValueError(f"unknown split {config.split!r}")

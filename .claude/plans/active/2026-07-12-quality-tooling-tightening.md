@@ -266,6 +266,26 @@ Engineering & Design Invariants). Consolidated (T-labels):
   `scripts/cloud/phase7_learned_batch.py` display string `cleanup`
   shadowed by `def cleanup()` (runtime-correct, mypy no-redef) →
   renamed `cleanup_command`.
+- **mypy-on-scripts real bugs (7):** three scripts dead against the
+  current API (`test_instance_manager.py` used a removed MatchupConfig
+  field; `test_optimizer_integration.py` + `estimate_throughput.py`
+  missing the post-manifest-refactor `manifest` argument);
+  `validate_optimizer.py` stored a bare float where `BuildCache` expects
+  `_CachedTrialResult`; a lying 2-tuple annotation over 3-tuple data; a
+  wrong `dict[str, float]` return contract (now a TypedDict); the
+  learned-experiment `fit/predict` signatures under-declared their row
+  union. Tallies: ~55 typed changes, 1 justified cast (matplotlib
+  violinplot stub genuinely wrong), 0 new type-ignores, 1 stale ignore
+  removed. One remaining override added: `catboost.*` (no stubs exist).
+- **E501 decision (W-5 item 9):** post-format residue was 52 — the
+  small branch, so E501 is ENABLED: 44 wrapped (rendered/asserted text
+  byte-identical), 8 findings suppressed via 2 `# noqa: E501`
+  directives on the closing quotes of the two bash userdata template
+  strings, each with a reason comment (wrapping would change rendered
+  script bytes that tests pin).
+- **Format one-shot:** commit `0e42359` (93/96 files), listed in
+  `.git-blame-ignore-revs`; `blame.ignoreRevsFile` configured in this
+  clone.
 
 ## Plan Review Gate
 

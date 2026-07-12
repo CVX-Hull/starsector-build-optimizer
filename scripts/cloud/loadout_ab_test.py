@@ -130,6 +130,12 @@ def _summarize(matchup: MatchupConfig, result) -> dict:
     eship = result.enemy_ships[0] if result.enemy_ships else None
     pd = pship.damage_dealt if pship else None
     ed = eship.damage_dealt if eship else None
+    if pd:
+        dealt_breakdown = (
+            f"shield={round(pd.shield, 1)} armor={round(pd.armor, 1)} hull={round(pd.hull, 1)}"
+        )
+    else:
+        dealt_breakdown = "(no player ship)"
     return {
         "matchup": matchup.matchup_id,
         "winner": result.winner,
@@ -138,9 +144,7 @@ def _summarize(matchup: MatchupConfig, result) -> dict:
             (pd.shield + pd.armor + pd.hull) if pd else 0.0,
             1,
         ),
-        "player_dealt_breakdown": f"shield={round(pd.shield, 1)} armor={round(pd.armor, 1)} hull={round(pd.hull, 1)}"
-        if pd
-        else "(no player ship)",
+        "player_dealt_breakdown": dealt_breakdown,
         "player_hull_remaining": round(pship.hull_fraction, 3) if pship else "?",
         "enemy_hull_remaining": round(eship.hull_fraction, 3) if eship else "?",
         "enemy_dealt_total": round(
@@ -261,10 +265,12 @@ def main() -> int:
                 print(f"  {s['matchup']}")
                 print(f"    winner={s['winner']:7s}  duration={s['duration']:6.1f}s")
                 print(
-                    f"    player_hull_remaining={s['player_hull_remaining']}  enemy_hull_remaining={s['enemy_hull_remaining']}"
+                    f"    player_hull_remaining={s['player_hull_remaining']}  "
+                    f"enemy_hull_remaining={s['enemy_hull_remaining']}"
                 )
                 print(
-                    f"    player_dealt_total={s['player_dealt_total']:8.1f}  ({s['player_dealt_breakdown']})"
+                    f"    player_dealt_total={s['player_dealt_total']:8.1f}  "
+                    f"({s['player_dealt_breakdown']})"
                 )
                 print(f"    enemy_dealt_total ={s['enemy_dealt_total']:8.1f}")
         print()

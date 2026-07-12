@@ -74,7 +74,7 @@ extend-exclude = ["notebooks"]
 # Bug-finder families only; style-taste families (SIM/ARG/PTH/RET) and
 # format enforcement deliberately excluded — rationale in
 # docs/reports/2026-07-12-quality-tooling-research.md.
-select = ["E4", "E7", "E9", "F", "B", "UP", "C4", "PLE", "PLW", "RUF", "DTZ", "ISC"]
+select = ["E4", "E7", "E9", "E501", "F", "B", "UP", "C4", "PLE", "PLW", "RUF", "DTZ", "ISC"]
 ignore = [
     "RUF001", "RUF002", "RUF003",  # deliberate ×/—/§ house typography in docstrings
     "ISC001",  # single-line implicit concat: conflicts with the ruff formatter

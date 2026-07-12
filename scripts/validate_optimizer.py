@@ -195,7 +195,8 @@ try:
     print(f"Total: {len(results_log)} builds in {total:.0f}s ({total / 60:.1f}min)", flush=True)
     print(f"Per build: {total / len(results_log):.1f}s", flush=True)
     print(
-        f"Fitness: [{min(fitnesses):+.3f}, {max(fitnesses):+.3f}], mean={sum(fitnesses) / len(fitnesses):+.3f}",
+        f"Fitness: [{min(fitnesses):+.3f}, {max(fitnesses):+.3f}], "
+        f"mean={sum(fitnesses) / len(fitnesses):+.3f}",
         flush=True,
     )
     winners = sum(1 for f in fitnesses if f > 0)

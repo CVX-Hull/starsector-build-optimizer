@@ -34,6 +34,7 @@ uv run pytest tests/ -v
 
 # 1b. Quality gates (adopted 2026-07-12; must all exit 0)
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy
 uv run deptry .
 

@@ -85,6 +85,7 @@ uv run pytest tests/ -v
 # Quality gates (adopted 2026-07-12 — also enforced by .githooks/pre-commit;
 # evidence: docs/reports/2026-07-12-quality-tooling-research.md)
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy
 uv run deptry .
 # Java gates run inside the Gradle build (-Werror + Error Prone + NullAway):

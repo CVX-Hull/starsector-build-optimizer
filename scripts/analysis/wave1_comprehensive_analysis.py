@@ -507,7 +507,8 @@ def section_05_boxcox_saturation() -> dict:
         label=f"F2a threshold = {SAT_FAIL_FRAC * 100:.0f} %",
     )
     ax.set_ylabel(
-        r"saturation rate  $\frac{|\{i: \mathrm{eb\_fitness}_i \geq 0.99\}|}{N_{\mathrm{nonpruned}}}$  (%)"
+        r"saturation rate  $\frac{|\{i: \mathrm{eb\_fitness}_i \geq 0.99\}|}"
+        r"{N_{\mathrm{nonpruned}}}$  (%)"
     )
     ax.set_xlabel("cell (configuration)")
     ax.set_title("Box-Cox ceiling saturation per cell  (F2a gate: orange = exceeds 1 %)")

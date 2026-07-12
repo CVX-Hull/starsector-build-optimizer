@@ -96,7 +96,8 @@ def _write_fixture_study_db(path: Path, *, unsupported: bool = False) -> None:
         "insert into trials (trial_id, number, study_id, state) values (1, 0, 1, 'COMPLETE')"
     )
     con.execute(
-        "insert into trial_values (trial_id, objective, value, value_type) values (1, 0, 0.25, 'FINITE')"
+        "insert into trial_values (trial_id, objective, value, value_type) "
+        "values (1, 0, 0.25, 'FINITE')"
     )
     params = [
         (
@@ -138,7 +139,9 @@ def _write_fixture_study_db(path: Path, *, unsupported: bool = False) -> None:
         params.append(("bad_param", 0.0, {"name": "UnsupportedDistribution", "attributes": {}}))
     for idx, (name, value, dist) in enumerate(params, start=1):
         con.execute(
-            "insert into trial_params (param_id, trial_id, param_name, param_value, distribution_json) values (?, 1, ?, ?, ?)",
+            "insert into trial_params "
+            "(param_id, trial_id, param_name, param_value, distribution_json) "
+            "values (?, 1, ?, ?, ?)",
             (idx, name, value, json.dumps(dist)),
         )
     con.commit()

@@ -229,7 +229,10 @@ def triple_goal_rho_delta(jsonl_rows: list[dict[str, Any]]) -> dict[str, Any]:
         "diagnostic": True,
         "spearman_rho_twfe_eb": float(rho),
         "n_pairs": len(pairs),
-        "note": "diagnostic only; the true gate requires a triple_goal=False ablation cell not present in Wave 1",
+        "note": (
+            "diagnostic only; the true gate requires a triple_goal=False "
+            "ablation cell not present in Wave 1"
+        ),
     }
 
 
@@ -312,7 +315,8 @@ def loocv_anchor_spearman(jsonl_rows: list[dict[str, Any]], fitness_field: str) 
     if len(finalized) < 30:
         return {"mean": float("nan"), "anchors": {}, "n": len(finalized)}
     # Find anchor opps: the 5 opponents most frequently appearing in opponent_results.
-    # JSONL schema: opponent_results = list of {opponent, winner, duration_seconds, hp_differential}.
+    # JSONL schema: opponent_results = list of
+    # {opponent, winner, duration_seconds, hp_differential}.
     opp_counts: dict[str, int] = defaultdict(int)
     for r in finalized:
         for opp_result in r["opponent_results"]:
@@ -766,7 +770,9 @@ def evaluate_gates(cells: dict[str, dict[str, Any]]) -> dict[str, Any]:
                 cells["c2"]["all_jsonl_rows"],
                 cells["c0b"]["all_jsonl_rows"],
                 "eb_fitness",
-                "eb_fitness",  # C0b also writes eb_fitness; the meaningful difference is the underlying ablation
+                # C0b also writes eb_fitness; the meaningful difference is
+                # the underlying ablation.
+                "eb_fitness",
             ),
             "threshold": EB_DELTA_RHO_GATE,
             "note": "C0b ran with scalar CV legacy path; EB shrinkage off",
@@ -815,7 +821,9 @@ def render_console(cells: dict[str, dict[str, Any]], gates: dict[str, Any]) -> N
             continue
         c = cells[cell_name]
         print(
-            f"\n[cell {cell_name}]  cost=${c['cost_usd']:.2f}  loadout_mismatches={c['loadout_mismatch_count']}  anchor_locks={c['anchor_locks_in_log']}"
+            f"\n[cell {cell_name}]  cost=${c['cost_usd']:.2f}  "
+            f"loadout_mismatches={c['loadout_mismatch_count']}  "
+            f"anchor_locks={c['anchor_locks_in_log']}"
         )
         thr = c["throughput"]
         thr_str = (
@@ -824,14 +832,16 @@ def render_console(cells: dict[str, dict[str, Any]], gates: dict[str, Any]) -> N
             else "n/a"
         )
         print(
-            f"  throughput: {thr_str} matchups/hr/VM  ({thr['matchups']} matchups / {thr['vm_hours']:.1f} VM-hr)"
+            f"  throughput: {thr_str} matchups/hr/VM  "
+            f"({thr['matchups']} matchups / {thr['vm_hours']:.1f} VM-hr)"
         )
         for seed, s in c["seeds"].items():
             if not isinstance(s, dict) or "n_finalized" not in s:
                 print(f"    seed{seed}: {s.get('status', 'unknown')}")
                 continue
             print(
-                f"    seed{seed}: complete={s['n_complete']:3d} pruned={s['n_pruned']:3d} running={s['n_running']:2d} "
+                f"    seed{seed}: complete={s['n_complete']:3d} "
+                f"pruned={s['n_pruned']:3d} running={s['n_running']:2d} "
                 f"prune_ratio={s['pruner_ratio']:.2f} engine_null={s['engine_stats_null_count']} "
                 f"boxcox_ceil={s['boxcox_ceiling']:.3f} jsonl={s['jsonl_rows_in_window']}"
             )

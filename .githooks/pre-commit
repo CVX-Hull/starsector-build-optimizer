@@ -90,6 +90,7 @@ uv run python scripts/validate_docs.py
 # 2026-07-12-quality-tooling-research.md). Shellcheck sweeps live in
 # tests/test_shellcheck.py, not here — one mechanism per check.
 uv run ruff check .
+uv run ruff format --check .
 uv run mypy
 uv run deptry .
 

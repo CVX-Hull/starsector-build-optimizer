@@ -190,7 +190,8 @@ try:
     print(f"\n[INFO] Damage dealt per build: {[f'{d:.0f}' for d in damages]}")
     print(f"[INFO] Winners: {[r.winner for _, _, r in results]}")
     print(
-        f"[INFO] Player hull remaining: {[f'{r.player_ships[0].hull_fraction:.2f}' for _, _, r in results]}"
+        "[INFO] Player hull remaining: "
+        f"{[f'{r.player_ships[0].hull_fraction:.2f}' for _, _, r in results]}"
     )
 
     unique_damages = len({round(d, -1) for d in damages})

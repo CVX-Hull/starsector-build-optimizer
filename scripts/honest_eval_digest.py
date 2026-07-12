@@ -36,7 +36,10 @@ def cell_summary(cell: str) -> dict:
     for eb in builds:
         rows.append(
             {
-                "build_id": f"{eb['source_campaign']}__s{eb['source_study_idx']}__seed{eb['source_seed_idx']}__rank{eb['source_rank']}",
+                "build_id": (
+                    f"{eb['source_campaign']}__s{eb['source_study_idx']}"
+                    f"__seed{eb['source_seed_idx']}__rank{eb['source_rank']}"
+                ),
                 "training_value": eb.get("source_value"),
                 "honest_mean": eb.get("oracle_score"),
                 "honest_sem": eb.get("oracle_se"),
@@ -70,7 +73,8 @@ def main() -> int:
 
     print("\n## Top-1 honest fitness across cells (the headline)\n")
     print(
-        f"{'Cell':<14} {'top-1 honest':>12} {'top-1 training':>15} {'Δ(honest-train)/σ':>18} {'build':<60}"
+        f"{'Cell':<14} {'top-1 honest':>12} {'top-1 training':>15} "
+        f"{'Δ(honest-train)/σ':>18} {'build':<60}"
     )
     print("-" * 122)
     cells_with_data = [

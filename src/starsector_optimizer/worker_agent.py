@@ -296,7 +296,8 @@ def _read_game_log_tails() -> str:
                 f.seek(max(0, size - _GAME_LOG_TAIL_BYTES_PER_INSTANCE))
                 content = f.read().decode("utf-8", errors="replace")
             chunks.append(
-                f"=== {log_path} (size={size}; tail={_GAME_LOG_TAIL_BYTES_PER_INSTANCE}B) ===\n{content}"
+                f"=== {log_path} (size={size}; "
+                f"tail={_GAME_LOG_TAIL_BYTES_PER_INSTANCE}B) ===\n{content}"
             )
         except OSError as e:
             chunks.append(f"=== {log_path}: read error: {e} ===")
