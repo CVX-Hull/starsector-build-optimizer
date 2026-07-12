@@ -59,9 +59,16 @@ From [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md)
 - One instrumented run to resolve the matchups-per-trial accounting spread
   (blocks phase7-prep budgeting); includes the never-landed wolf (non-meta
   hull) measurement.
-- Measure learned-batch tail-job walltime at scale (gates fleet teardown).
+- Measure learned-batch tail-job walltime at scale (gates fleet
+  teardown / scale-down-on-drain). The attempt-3 ledger + event logs
+  (36 workers, 183 jobs, 2026-07-12) now carry the data — closable by
+  analysis alone, no new spend.
 - Stale-AMI hygiene: run `audit_amis.sh` + `cleanup_amis.sh` after every
   re-bake (done 2026-07-11; keep as post-bake SOP step).
+- Seed-bank split-uniqueness check (spec 31, small): component-vocab seeds
+  107 and 149 produced byte-identical splits in the 2026-07 wave —
+  dedupe-or-reject at split construction; evidence:
+  [attempt-3 results §2.4](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
 
 ## Planned phases (unchanged in scope, gated)
 
@@ -102,7 +109,9 @@ Evidence context: [Wave 1 honest-eval final](reports/2026-05-11-wave1-honest-eva
   overlap, rare-combination overlap, sparse-ID ablation) — parked under
   item 2's ablation wave (our assignment; the review left them unowned).
   Until they exist, build-split rank numbers read as interpolation within a
-  TPE-concentrated cloud.
+  TPE-concentrated cloud. The v2 artifacts now stamp all four as
+  `diagnostic_not_implemented`; adversarial-validation AUC first — it
+  directly qualifies the attempt-3 interpolation reading (§2.4).
 - **Comparator tuning-budget parity** (C3 residue): comparators run at fixed
   defaults vs tuned learned families; a tuned-comparator arm only if a
   model-family claim ever needs it.
