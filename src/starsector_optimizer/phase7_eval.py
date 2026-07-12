@@ -154,7 +154,7 @@ def _opponent_row_metrics(
     y_pred: np.ndarray,
     noise_floor: float,
     config: EvalMetricsConfig,
-) -> dict[str, object]:
+) -> dict[str, float | None]:
     epsilon = config.degenerate_denominator_epsilon
     quantized = np.round(y_true / noise_floor)
     top_cut = np.quantile(y_true, 1.0 - config.top_fraction)
@@ -197,7 +197,7 @@ def per_opponent_rank_metrics(
     indices: dict[str, list[int]] = defaultdict(list)
     for idx, opponent in enumerate(opponents):
         indices[opponent].append(idx)
-    per_opponent: dict[str, dict[str, object]] = {}
+    per_opponent: dict[str, dict[str, float | None]] = {}
     excluded_small_n = 0
     excluded_low_variance = 0
     null_prediction_degenerate = 0
@@ -269,7 +269,7 @@ def _build_aggregates(
             continue
         if build_subset is not None and build not in build_subset:
             continue
-        weight = 1 if opponent_weights is None else opponent_weights.get(opponent, 0)
+        weight = 1.0 if opponent_weights is None else opponent_weights.get(opponent, 0.0)
         if weight == 0:
             continue
         true_sums[build] += weight * float(truth)
@@ -539,15 +539,18 @@ def honest_eval_build_metrics(
         degenerate_opponents, config.min_opponents_per_build,
     )
     n_builds = len(true_agg)
+    precision_at_k: dict[str, float | None] = {}
+    chance_level: dict[str, float] = {}
+    regret_at_k: dict[str, dict[str, float | None]] = {}
     out: dict[str, object] = {
         "n_builds": n_builds,
         "excluded_small_panel": excluded_small_panel,
         "outer_train_build_overlap": len(set(true_agg) & set(outer_train_build_keys)),
         "spearman": None,
         "kendall": None,
-        "precision_at_k": {},
-        "chance_level": {},
-        "regret_at_k": {},
+        "precision_at_k": precision_at_k,
+        "chance_level": chance_level,
+        "regret_at_k": regret_at_k,
         "overlap_curve": [],
         "bootstrap": {},
     }
@@ -562,9 +565,9 @@ def honest_eval_build_metrics(
         precision, raw, normalized = _precision_regret(
             true_agg, pred_agg, k, config.degenerate_denominator_epsilon
         )
-        out["precision_at_k"][str(k)] = precision
-        out["chance_level"][str(k)] = min(k, n_builds) / n_builds
-        out["regret_at_k"][str(k)] = {"raw": raw, "normalized": normalized}
+        precision_at_k[str(k)] = precision
+        chance_level[str(k)] = min(k, n_builds) / n_builds
+        regret_at_k[str(k)] = {"raw": raw, "normalized": normalized}
     true_order = _top_k_order(true_agg)
     pred_order = _top_k_order(pred_agg)
     out["overlap_curve"] = [

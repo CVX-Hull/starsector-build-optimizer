@@ -111,14 +111,19 @@ Weapon type and size come from .wpn files. For weapons without .wpn files, infer
 | `hidden` | is_hidden | Combined: hidden OR hiddenEverywhere |
 | `script` | script | |
 
-### load_game_data(game_dir: Path, mod_dirs: list[Path] | None = None) -> GameData
+### load_game_data(game_dir: Path) -> GameData
 1. Parse ship CSV from `{game_dir}/data/hulls/ship_data.csv`
 2. Merge with .ship files from `{game_dir}/data/hulls/`
 3. Parse weapon CSV + .wpn files from `{game_dir}/data/weapons/`
 4. Parse hullmod CSV from `{game_dir}/data/hullmods/hull_mods.csv`
-5. If mod_dirs: merge mod data (same structure, mod entries override vanilla)
-6. Run `validate_registry(game_data)` and log warnings
-7. Return GameData
+5. Parse wing CSV from `{game_dir}/data/hulls/wing_data.csv` into `GameData.wings`
+6. Return GameData
+
+Registry validation moved to the game manifest in Phase-7-prep
+(`GameManifest.load()` and its test suite own content invariants); the
+parser only logs a load summary. A former `mod_dirs` merge parameter was
+removed 2026-07-12: it was documented but never implemented, and no caller
+passed it.
 
 ## Edge Cases
 - Empty CSV fields → default 0 for numeric, "" for string

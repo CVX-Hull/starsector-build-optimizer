@@ -130,7 +130,8 @@ class TestFrozenDataclasses:
         from starsector_optimizer.campaign import load_campaign_config
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         with pytest.raises(dataclasses.FrozenInstanceError):
-            config.budget_usd = 999.0
+            # deliberately mutates a frozen dataclass: exercises the error path
+            config.budget_usd = 999.0  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_study_config_frozen(self):
         from starsector_optimizer.models import StudyConfig
@@ -139,7 +140,8 @@ class TestFrozenDataclasses:
             budget_per_study=200, workers_per_study=12, sampler="tpe",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
-            s.hull = "eagle"
+            # deliberately mutates a frozen dataclass: exercises the error path
+            s.hull = "eagle"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_worker_config_frozen(self):
         from starsector_optimizer.models import WorkerConfig
@@ -149,7 +151,8 @@ class TestFrozenDataclasses:
             http_endpoint="http://h/result", bearer_token="t",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
-            w.bearer_token = "different"
+            # deliberately mutates a frozen dataclass: exercises the error path
+            w.bearer_token = "different"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_cost_ledger_entry_frozen(self):
         from starsector_optimizer.models import CostLedgerEntry
@@ -159,13 +162,15 @@ class TestFrozenDataclasses:
             hours_elapsed=1.0, delta_usd=0.15, cumulative_usd=0.15,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
-            e.cumulative_usd = 999.0
+            # deliberately mutates a frozen dataclass: exercises the error path
+            e.cumulative_usd = 999.0  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_global_auto_stop_config_frozen(self):
         from starsector_optimizer.models import GlobalAutoStopConfig
         g = GlobalAutoStopConfig()
         with pytest.raises(dataclasses.FrozenInstanceError):
-            g.on_budget = "soft"
+            # deliberately mutates a frozen dataclass: exercises the error path
+            g.on_budget = "soft"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 class TestSecretRedaction:

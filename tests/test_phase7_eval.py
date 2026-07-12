@@ -2,6 +2,8 @@
 
 import json
 import math
+from collections.abc import Set as AbstractSet
+from typing import Any
 
 import numpy as np
 import pytest
@@ -23,6 +25,18 @@ from starsector_optimizer.phase7_matchup_data import HonestEvalMatchupRow
 CONFIG = EvalMetricsConfig()
 
 
+def _as_dict(value: object) -> dict[str, Any]:
+    """Narrow a metrics sub-structure (typed `object` in src) to a dict."""
+    assert isinstance(value, dict)
+    return value
+
+
+def _as_list(value: object) -> list[Any]:
+    """Narrow a metrics sub-structure (typed `object` in src) to a list."""
+    assert isinstance(value, list)
+    return value
+
+
 def _replicate_rows(groups: dict[tuple[str, str], list[float]]) -> list[HonestEvalMatchupRow]:
     rows = []
     for (build, opponent), targets in groups.items():
@@ -35,7 +49,7 @@ def _ranked_panel(
     n_builds: int,
     n_opponents: int,
     *,
-    invert_for: set[str] = frozenset(),
+    invert_for: AbstractSet[str] = frozenset(),
     constant_opponents: dict[str, float] | None = None,
 ):
     """Panel where y_true increases with build index; predictions follow or invert."""
@@ -104,7 +118,7 @@ class TestPerOpponentRankMetrics:
         assert out["included_opponents"] == 2
         assert out["mean_spearman"] == pytest.approx(1.0)
         assert out["mean_kendall"] == pytest.approx(1.0)
-        for row in out["per_opponent"].values():
+        for row in _as_dict(out["per_opponent"]).values():
             assert row["spearman"] == pytest.approx(1.0)
 
     def test_inverted_opponent_lowers_mean(self):
@@ -119,7 +133,7 @@ class TestPerOpponentRankMetrics:
         out = per_opponent_rank_metrics(builds, opponents, y_true, y_pred, 0.05, CONFIG)
         assert out["included_opponents"] == 2
         assert out["excluded_low_variance"] == 1
-        assert "opp2" not in out["per_opponent"]
+        assert "opp2" not in _as_dict(out["per_opponent"])
 
     def test_small_n_opponents_excluded(self):
         builds, opponents, y_true, y_pred = _ranked_panel(8, 1)
@@ -164,7 +178,7 @@ class TestPerOpponentRankMetrics:
         y_pred = np.zeros_like(y_true)
         out = per_opponent_rank_metrics(builds, opponents, y_true, y_pred, 0.05, CONFIG)
         assert out["null_prediction_degenerate"] == 1
-        assert out["per_opponent"]["opp0"]["spearman"] is None
+        assert _as_dict(out["per_opponent"])["opp0"]["spearman"] is None
         assert out["mean_spearman"] is None
 
     def test_sparse_kendall_quantizes_targets_into_ties(self):
@@ -174,7 +188,7 @@ class TestPerOpponentRankMetrics:
         y_pred = np.asarray([0.0, -1.0, 2.0, 3.0])  # inverts the within-bin pair
         config = EvalMetricsConfig(min_builds_per_opponent=2)
         out = per_opponent_rank_metrics([f"b{i}" for i in range(4)], opponents, y_true, y_pred, 0.5, config)
-        row = out["per_opponent"]["o"]
+        row = _as_dict(out["per_opponent"])["o"]
         assert row["sparse_kendall"] is not None
         assert row["sparse_kendall"] > row["kendall"]
 
@@ -182,10 +196,10 @@ class TestPerOpponentRankMetrics:
         builds, opponents, y_true, y_pred = _ranked_panel(8, 1)
         # top 10% of 8 rows = 1 row < min_top_fraction_rows -> None
         out = per_opponent_rank_metrics(builds, opponents, y_true, y_pred, 0.05, CONFIG)
-        assert out["per_opponent"]["opp0"]["top_fraction_kendall"] is None
+        assert _as_dict(out["per_opponent"])["opp0"]["top_fraction_kendall"] is None
         wide = EvalMetricsConfig(top_fraction=0.5)
         out = per_opponent_rank_metrics(builds, opponents, y_true, y_pred, 0.05, wide)
-        assert out["per_opponent"]["opp0"]["top_fraction_kendall"] == pytest.approx(1.0)
+        assert _as_dict(out["per_opponent"])["opp0"]["top_fraction_kendall"] == pytest.approx(1.0)
 
 
 class TestBuildAggregateRankMetrics:
@@ -195,8 +209,8 @@ class TestBuildAggregateRankMetrics:
             builds, opponents, y_true, y_pred, frozenset(), (1, 3), CONFIG
         )
         assert out["spearman"] == pytest.approx(1.0)
-        assert out["precision_at_k"]["1"] == 1.0
-        assert out["regret_at_k"]["1"]["raw"] == pytest.approx(0.0)
+        assert _as_dict(out["precision_at_k"])["1"] == 1.0
+        assert _as_dict(out["regret_at_k"])["1"]["raw"] == pytest.approx(0.0)
         assert out["n_builds"] == 6
 
     def test_degenerate_opponents_excluded_from_aggregates(self):
@@ -208,7 +222,7 @@ class TestBuildAggregateRankMetrics:
         )
         # aggregates use only opp0..opp2; ranking still perfect
         assert out["spearman"] == pytest.approx(1.0)
-        assert out["panel_sizes"]["max"] == 3
+        assert _as_dict(out["panel_sizes"])["max"] == 3
 
     def test_min_opponents_per_build_exclusion(self):
         builds, opponents, y_true, y_pred = _ranked_panel(4, 3)
@@ -232,8 +246,8 @@ class TestBuildAggregateRankMetrics:
         out = build_aggregate_rank_metrics(
             builds, opponents, y_true, y_pred, frozenset(), (1,), config
         )
-        assert out["regret_at_k"]["1"]["raw"] == pytest.approx(1.0)
-        assert out["regret_at_k"]["1"]["normalized"] == pytest.approx(0.5)
+        assert _as_dict(out["regret_at_k"])["1"]["raw"] == pytest.approx(1.0)
+        assert _as_dict(out["regret_at_k"])["1"]["normalized"] == pytest.approx(0.5)
 
     def test_normalized_regret_none_on_degenerate_range(self):
         builds = ["b0", "b1"] * 3
@@ -244,8 +258,8 @@ class TestBuildAggregateRankMetrics:
         out = build_aggregate_rank_metrics(
             builds, opponents, y_true, y_pred, frozenset(), (1,), config
         )
-        assert out["regret_at_k"]["1"]["raw"] == pytest.approx(0.0)
-        assert out["regret_at_k"]["1"]["normalized"] is None
+        assert _as_dict(out["regret_at_k"])["1"]["raw"] == pytest.approx(0.0)
+        assert _as_dict(out["regret_at_k"])["1"]["normalized"] is None
         assert out["spearman"] is None  # constant true aggregates
 
     def test_top_k_tie_break_is_deterministic(self):
@@ -259,7 +273,7 @@ class TestBuildAggregateRankMetrics:
             builds, opponents, y_true, y_pred, frozenset(), (1,), config
         )
         # top-1 predicted = "a" (tie broken by key); true top-1 = "z"
-        assert out["precision_at_k"]["1"] == 0.0
+        assert _as_dict(out["precision_at_k"])["1"] == 0.0
 
 
 class TestScalarMetrics:
@@ -308,12 +322,12 @@ class TestBootstrap:
             "precision_at_k",
             "regret_at_k",
         ):
-            stat = out[name]
+            stat = _as_dict(out[name])
             assert stat["n_finite"] <= config.bootstrap_resamples
             if stat["n_finite"]:
                 assert stat["ci_low"] <= stat["ci_high"]
         # Perfect signal: spearman CI collapses at 1.0.
-        assert out["mean_per_opponent_spearman"]["ci_high"] == pytest.approx(1.0)
+        assert _as_dict(out["mean_per_opponent_spearman"])["ci_high"] == pytest.approx(1.0)
 
     def test_degenerate_panel_reports_zero_finite_not_nan(self):
         builds = ["b0", "b1"] * 3
@@ -324,7 +338,7 @@ class TestBootstrap:
         out = two_way_cluster_bootstrap(
             builds, opponents, y_true, y_pred, 0.05, frozenset(), 1, config
         )
-        stat = out["mean_per_opponent_spearman"]
+        stat = _as_dict(out["mean_per_opponent_spearman"])
         assert stat["n_finite"] == 0
         assert stat["ci_low"] is None and stat["ci_high"] is None
         json.dumps(out)
@@ -346,11 +360,12 @@ class TestHonestEvalBuildMetrics:
             config=config,
         )
         assert out["spearman"] == pytest.approx(1.0)
-        assert out["chance_level"]["1"] == pytest.approx(1 / 6)
-        assert len(out["overlap_curve"]) == 6
-        assert out["overlap_curve"][-1] == pytest.approx(1.0)
+        assert _as_dict(out["chance_level"])["1"] == pytest.approx(1 / 6)
+        overlap_curve = _as_list(out["overlap_curve"])
+        assert len(overlap_curve) == 6
+        assert overlap_curve[-1] == pytest.approx(1.0)
         assert out["outer_train_build_overlap"] == 2
-        assert out["bootstrap"]["spearman"]["n_finite"] > 0
+        assert _as_dict(out["bootstrap"])["spearman"]["n_finite"] > 0
 
     def test_json_safe_with_degenerate_everything(self):
         builds = ["b0", "b1"] * 3

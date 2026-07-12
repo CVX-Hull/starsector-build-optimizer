@@ -28,6 +28,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import optuna
@@ -591,8 +592,10 @@ class StagedEvaluator:
         self._incumbent_opponents: tuple[str, ...] | None = None
         self._incumbent_fitness: float = float("-inf")
         self._anchors: tuple[str, ...] = ()
-        self._burn_in_scores: dict[str, list[float]] = {}
-        self._burn_in_fitness: list[float] = []
+        # (build_idx, raw score) / (build_idx, TWFE fitness) pairs;
+        # build_idx keys the alignment in _compute_anchors().
+        self._burn_in_scores: dict[str, list[tuple[int, float]]] = {}
+        self._burn_in_fitness: list[tuple[int, float]] = []
         self._builds_evaluated: int = 0
         # A2′: EB shrinkage — per-build covariate cache for every finalized build
         self._completed_records: dict[int, _EBRecord] = {}
@@ -776,12 +779,12 @@ class StagedEvaluator:
 
         # Phase 2: Ask for new trial
         while self._trials_asked < self._config.sim_budget:
-            ifb = self._ask_new_trial()
-            if ifb is None:
+            new_ifb = self._ask_new_trial()
+            if new_ifb is None:
                 continue  # cache hit, already told Optuna
-            self._queue.append(ifb)
-            self._dispatched.add(ifb.trial.number)
-            return ifb, self._make_matchup(ifb)
+            self._queue.append(new_ifb)
+            self._dispatched.add(new_ifb.trial.number)
+            return new_ifb, self._make_matchup(new_ifb)
 
         return None
 
@@ -1319,7 +1322,8 @@ def _enqueue_warm_start_from_regime(
         t for t in source_study.trials
         if t.state == TrialState.COMPLETE and t.value is not None
     ]
-    completed.sort(key=lambda t: t.value, reverse=True)
+    # t.value is non-None for every element (filtered above).
+    completed.sort(key=lambda t: cast(float, t.value), reverse=True)
     top = completed[:top_m]
 
     enqueued = 0

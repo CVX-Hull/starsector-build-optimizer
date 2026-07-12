@@ -3,6 +3,7 @@
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -19,7 +20,7 @@ from starsector_optimizer.variant import (
 
 
 def _hull(**kw):
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": "eagle", "name": "Eagle", "hull_size": HullSize.CRUISER, "designation": "Cruiser",
         "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
         "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": 100,
@@ -146,7 +147,8 @@ class TestBuildToBuildSpec:
         build = Build("eagle", {}, frozenset(), 0, 0)
         spec = build_to_build_spec(build, _hull(), _game_data(), "test")
         with pytest.raises(AttributeError):
-            spec.hull_id = "wolf"
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            spec.hull_id = "wolf"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 class TestWriteAndLoadVariant:

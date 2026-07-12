@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from flask import Flask, jsonify, request
-from werkzeug.serving import make_server
+from werkzeug.serving import BaseWSGIServer, make_server
 
 from .campaign import run_janitor_pass
 from .evaluator_pool import (
@@ -313,7 +313,7 @@ class CloudWorkerPool(EvaluatorPool):
 
         self._stop_event = threading.Event()
         self._janitor_thread: threading.Thread | None = None
-        self._server = None
+        self._server: BaseWSGIServer | None = None
         self._server_thread: threading.Thread | None = None
 
         self.app = self._build_app()
@@ -390,7 +390,7 @@ class CloudWorkerPool(EvaluatorPool):
                         return jsonify({"status": "duplicate"}), 409
                     signatures.add(signature)
                     self._mismatch_discard_count += 1
-                    failure = ResultEnvelopeMismatchRejected(
+                    failure: Exception = ResultEnvelopeMismatchRejected(
                         f"matchup_id={matchup_id} received result for "
                         f"{parsed.matchup_id}; discarded stale result and "
                         "retrying with a fresh combat"

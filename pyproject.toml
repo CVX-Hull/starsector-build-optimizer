@@ -100,3 +100,6 @@ DEP002 = [
     "docling", "pymupdf4llm", "pypdf", "unstructured",
     "botorch", "catboost", "gpytorch", "pyro-ppl", "torch",
 ]
+# matplotlib is dev-group by design: only analysis scripts/notebooks import
+# it; the shipped package (src/) never does.
+DEP004 = ["matplotlib"]

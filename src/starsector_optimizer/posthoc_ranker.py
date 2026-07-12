@@ -217,8 +217,8 @@ def _build_score_matrix(
     for (i, j), vs in cells.items():
         matrix[i, j] = float(np.mean(vs))
 
-    inv_builds = sorted(builds, key=builds.get)
-    inv_opps = sorted(opps, key=opps.get)
+    inv_builds = sorted(builds, key=builds.__getitem__)
+    inv_opps = sorted(opps, key=opps.__getitem__)
     return matrix, inv_builds, inv_opps
 
 
@@ -412,8 +412,10 @@ def rank_bradley_terry(
         nll = float(np.sum(w_a * ce))
         sig = 1.0 / (1.0 + np.exp(-z))
         resid = w_a * (sig - y_a)
-        d_alpha = np.bincount(bidx_a, weights=resid, minlength=n_b)
-        d_beta = -np.bincount(oidx_a, weights=resid, minlength=n_o)
+        # numpy stubs type bincount as an int array even with weights=;
+        # it returns float64 at runtime. Annotate rather than astype-copy.
+        d_alpha: np.ndarray = np.bincount(bidx_a, weights=resid, minlength=n_b)
+        d_beta: np.ndarray = -np.bincount(oidx_a, weights=resid, minlength=n_o)
         # Ridge prior on all parameters.
         nll += 0.5 * cfg.ridge * float(np.dot(theta, theta))
         d_alpha = d_alpha + cfg.ridge * alpha
@@ -438,7 +440,7 @@ def rank_bradley_terry(
     # n per build = number of weighted matches (non-zero weight)
     n_per = np.bincount(bidx_a, weights=(w_a > 0).astype(float), minlength=n_b).astype(int)
 
-    inv_builds = sorted(builds, key=builds.get)
+    inv_builds = sorted(builds, key=builds.__getitem__)
     ranked = []
     for i, bid in enumerate(inv_builds):
         ranked.append(RankedBuild(

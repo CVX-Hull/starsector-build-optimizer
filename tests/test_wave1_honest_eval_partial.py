@@ -1,3 +1,4 @@
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -35,4 +36,6 @@ def test_log_health_bins_are_chronological_across_midnight(tmp_path: Path) -> No
 
     health = log_health(log)
 
-    assert sorted(health["bins"]) == [1425, 1440]
+    bins = health["bins"]
+    assert isinstance(bins, Counter)
+    assert sorted(bins) == [1425, 1440]

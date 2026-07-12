@@ -1,6 +1,8 @@
 """Tests for the EvaluatorPool ABC + subclass conformance."""
 
 
+from typing import Any, cast
+
 import pytest
 
 from starsector_optimizer.evaluator_pool import EvaluatorPool
@@ -25,7 +27,8 @@ class TestEvaluatorPoolABC:
     def test_evaluator_pool_is_abc(self):
         """Direct instantiation of the ABC raises TypeError."""
         with pytest.raises(TypeError):
-            EvaluatorPool()
+            # deliberately instantiates the ABC: exercises the TypeError path
+            cast(Any, EvaluatorPool)()
 
     def test_subclass_missing_run_matchup_fails(self):
         """Subclass that omits run_matchup cannot be instantiated."""
@@ -41,7 +44,8 @@ class TestEvaluatorPoolABC:
                 return 0
 
         with pytest.raises(TypeError):
-            Incomplete()
+            # deliberately abstract: exercises the TypeError path
+            cast(Any, Incomplete)()
 
     def test_subclass_missing_num_workers_fails(self):
         """Subclass that omits num_workers cannot be instantiated."""
@@ -56,7 +60,8 @@ class TestEvaluatorPoolABC:
                 return None
 
         with pytest.raises(TypeError):
-            Incomplete()
+            # deliberately abstract: exercises the TypeError path
+            cast(Any, Incomplete)()
 
     def test_complete_subclass_instantiates(self):
         """A subclass with every abstract method implemented works."""

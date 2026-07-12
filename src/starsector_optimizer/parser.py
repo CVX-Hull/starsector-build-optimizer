@@ -368,15 +368,11 @@ def parse_hullmod_csv(csv_path: Path) -> list[HullMod]:
     return mods
 
 
-def load_game_data(
-    game_dir: Path,
-    mod_dirs: list[Path] | None = None,
-) -> GameData:
+def load_game_data(game_dir: Path) -> GameData:
     """Load and parse all game data from a Starsector installation.
 
     Args:
         game_dir: Path to game root (containing data/ directory)
-        mod_dirs: Optional list of mod directories to merge
     """
     data_dir = game_dir / "data"
 

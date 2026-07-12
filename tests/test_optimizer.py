@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 import optuna
 import pytest
@@ -103,14 +104,18 @@ class TestBuildConversion:
     def test_trial_params_to_build_with_fixed_params(self, wolf_space):
         """Fixed params are merged into the build."""
         # Create params with all empty weapons and no hullmods
-        params = {f"weapon_{sid}": "empty" for sid in wolf_space.weapon_options}
+        params: dict[str, bool | int | str] = {
+            f"weapon_{sid}": "empty" for sid in wolf_space.weapon_options
+        }
         for mod_id in wolf_space.eligible_hullmods:
             params[f"hullmod_{mod_id}"] = False
         params["flux_vents"] = 5
         params["flux_capacitors"] = 3
 
         # Fix a hullmod to True
-        fixed = {f"hullmod_{wolf_space.eligible_hullmods[0]}": True, "flux_vents": 10}
+        fixed: dict[str, bool | int | str] = {
+            f"hullmod_{wolf_space.eligible_hullmods[0]}": True, "flux_vents": 10,
+        }
         build = trial_params_to_build(params, "wolf", fixed_params=fixed)
         assert wolf_space.eligible_hullmods[0] in build.hullmods
         assert build.flux_vents == 10  # fixed overrides the 5
@@ -340,6 +345,7 @@ class TestDefineDistributions:
             key = f"hullmod_{mod_id}"
             assert key in dists
             dist = dists[key]
+            assert isinstance(dist, optuna.distributions.CategoricalDistribution)
             assert set(dist.choices) == {True, False}
 
     def test_vents_integer(self, wolf_space):
@@ -363,7 +369,7 @@ class TestDefineDistributions:
     def test_fixed_params_excluded_from_distributions(self, wolf_space):
         """Fixed hullmod param is excluded from distributions."""
         mod_id = wolf_space.eligible_hullmods[0]
-        fixed = {f"hullmod_{mod_id}": True}
+        fixed: dict[str, bool | int | str] = {f"hullmod_{mod_id}": True}
         dists = define_distributions(wolf_space, fixed_params=fixed)
         assert f"hullmod_{mod_id}" not in dists
         # Total count reduced by 1
@@ -380,7 +386,7 @@ class TestDefineDistributions:
 
     def test_fixed_flux_excluded(self, wolf_space):
         """Fixed flux_vents is excluded from distributions."""
-        fixed = {"flux_vents": 15}
+        fixed: dict[str, bool | int | str] = {"flux_vents": 15}
         dists = define_distributions(wolf_space, fixed_params=fixed)
         assert "flux_vents" not in dists
 
@@ -451,6 +457,7 @@ class TestWarmStart:
         # Heuristic composite scores are typically 0.2-0.8
         # Scaled by 0.1, should be 0.02-0.08
         for trial in study.trials:
+            assert trial.value is not None
             assert trial.value < 0.5  # Way below unscaled heuristic range
 
     def test_stock_builds_loaded_when_game_dir_provided(
@@ -1206,6 +1213,7 @@ class TestStagedEvaluator:
         # to exactly 0 via min-max rescale; the pre-5E rank shape never hit
         # 0 because rank/n >= 1/n).
         for trial in sim_trials:
+            assert trial.value is not None
             assert 0.0 <= trial.value <= 1.0
 
     def test_incumbent_tracking(self, wolf_hull, game_data, manifest):
@@ -2280,7 +2288,8 @@ class TestShapeFitness:
                       and t.value is not None
                       and 0.0 < t.value <= 1.0]
         assert len(sim_trials) >= 3
-        values = [t.value for t in sim_trials]
+        values = [t.value for t in sim_trials if t.value is not None]
+        assert len(values) == len(sim_trials)  # narrowing only; filter above guarantees this
         assert max(values) > min(values)
         for v in values:
             assert 0.0 < v <= 1.0
@@ -2591,13 +2600,13 @@ class TestPhase7PrepInvariants:
         assert es.eff_hull_hp_pct == 4.0
         assert es.ballistic_range_bonus == 5.0
         assert es.shield_damage_taken_mult == 6.0
-        # Missing field → TypeError
+        # Missing field → TypeError (deliberately invalid: only 3 args)
         with pytest.raises(TypeError):
-            EngineStats(1.0, 2.0, 3.0)  # only 3 args
-        # Frozen → cannot mutate
+            cast(Any, EngineStats)(1.0, 2.0, 3.0)
+        # Frozen → cannot mutate (deliberate: exercises FrozenInstanceError)
         import dataclasses as _dc
         with pytest.raises(_dc.FrozenInstanceError):
-            es.eff_max_flux = 99.0  # type: ignore[misc]
+            es.eff_max_flux = 99.0  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_op_used_fraction_formula(self, game_data, manifest):
         """_op_used_fraction reads OP costs authoritatively from the manifest.

@@ -5,6 +5,7 @@ import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,6 +15,7 @@ from starsector_optimizer.phase7_learned_batch import (
     BatchLaunchFailed,
     BatchState,
     BudgetExceeded,
+    JobLease,
     LearnedBatchConfig,
     build_job_command,
     create_control_plane_app,
@@ -116,7 +118,7 @@ class FakeProvider:
         self.instance_count = instance_count
         self.active = active
         self.price = price
-        self.provision_calls = []
+        self.provision_calls: list[dict[str, Any]] = []
         self.terminate_fleet_calls = 0
         self.terminate_all_calls = 0
 
@@ -1399,11 +1401,15 @@ def test_run_live_batch_merges_and_tears_down_on_completion(tmp_path):
     assert final_audits == [cfg.name]
 
 
-def test_run_live_batch_teardown_continues_after_terminate_fleet_error(tmp_path):
+def test_run_live_batch_teardown_continues_after_terminate_fleet_error(tmp_path, monkeypatch):
     cfg = make_config(tmp_path)
     provider = FakeProvider()
     server = FakeServer()
-    provider.terminate_fleet = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("fleet boom"))
+    monkeypatch.setattr(
+        provider,
+        "terminate_fleet",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("fleet boom")),
+    )
 
     with pytest.raises(BatchLaunchFailed, match="fleet boom"):
         run_live_batch(
@@ -1452,13 +1458,17 @@ def test_run_live_batch_budget_exceeded_tears_down(tmp_path):
     assert json.loads((cfg.output_dir / "status.json").read_text())["phase"] == "teardown_complete"
 
 
-def test_run_live_batch_preserves_primary_failure_when_teardown_also_fails(tmp_path):
+def test_run_live_batch_preserves_primary_failure_when_teardown_also_fails(tmp_path, monkeypatch):
     cfg = make_config(tmp_path)
     provider = FakeProvider(
         active=[{"id": "i-1", "region": "us-east-2", "instance_type": "c7i.4xlarge"}],
         price=100.0,
     )
-    provider.terminate_fleet = lambda **kwargs: (_ for _ in ()).throw(RuntimeError("fleet boom"))
+    monkeypatch.setattr(
+        provider,
+        "terminate_fleet",
+        lambda **kwargs: (_ for _ in ()).throw(RuntimeError("fleet boom")),
+    )
     server = FakeServer()
 
     with pytest.raises(BudgetExceeded):
@@ -1554,7 +1564,7 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
         lease_grace_seconds=5.0,
     )
     server = FakeServer()
-    leases = {}
+    leases: dict[str, JobLease] = {}
     clock = FakeClock(start=100.0)
 
     class ReplacementProvider(FakeProvider):
@@ -1700,7 +1710,7 @@ def test_run_live_batch_rejects_too_small_partial_fleet(tmp_path):
 def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatch):
     cfg = make_config(tmp_path)
     cli = load_batch_cli_module()
-    calls = []
+    calls: list[Any] = []
 
     monkeypatch.setattr(cli, "load_batch_config", lambda path: cfg)
     monkeypatch.setattr(cli, "check_aws_credentials", lambda: calls.append("aws"))

@@ -1,5 +1,7 @@
 """Tests for data models: enums, dataclasses, computed properties."""
 
+from typing import Any
+
 import pytest
 
 from starsector_optimizer.models import (
@@ -117,7 +119,8 @@ class TestWeaponSlot:
         slot = WeaponSlot("WS 001", SlotType.BALLISTIC, SlotSize.MEDIUM,
                           MountType.HARDPOINT, 0.0, 5.0, (80.0, 20.0))
         with pytest.raises(AttributeError):
-            slot.id = "WS 002"
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            slot.id = "WS 002"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 # --- ShipHull tests ---
@@ -161,7 +164,7 @@ class TestShipHull:
 
 
 def _make_weapon(**kwargs):
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": "heavymauler", "name": "Heavy Mauler", "size": SlotSize.MEDIUM,
         "weapon_type": WeaponType.BALLISTIC, "damage_per_shot": 200.0,
         "damage_per_second": 0.0, "damage_type": DamageType.KINETIC, "emp": 0.0,
@@ -265,7 +268,7 @@ class TestWeaponDerivedMetrics:
 
 
 def _make_hullmod(**kwargs):
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": "heavyarmor", "name": "Heavy Armor", "tier": 1,
         "tags": ["defensive", "armor"], "ui_tags": ["Armor"],
         "cost_frigate": 8, "cost_destroyer": 12, "cost_cruiser": 16, "cost_capital": 24,
@@ -316,7 +319,8 @@ class TestBuild:
     def test_frozen(self):
         build = Build("eagle", {}, frozenset(), 0, 0)
         with pytest.raises(AttributeError):
-            build.hull_id = "wolf"
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            build.hull_id = "wolf"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_hullmods_is_frozenset(self):
         build = Build("eagle", {}, frozenset(["a", "b"]), 0, 0)
@@ -367,7 +371,8 @@ class TestDamageBreakdown:
     def test_frozen(self):
         db = DamageBreakdown()
         with pytest.raises(AttributeError):
-            db.shield = 1.0
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            db.shield = 1.0  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 class TestShipCombatResult:
@@ -403,7 +408,8 @@ class TestShipCombatResult:
             overload_count=0,
         )
         with pytest.raises(AttributeError):
-            scr.destroyed = True
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            scr.destroyed = True  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 class TestCombatResult:
@@ -444,7 +450,8 @@ class TestCombatResult:
             player_loadout_diagnostics=(),
         )
         with pytest.raises(AttributeError):
-            cr.winner = "ENEMY"
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            cr.winner = "ENEMY"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 def _build_spec(variant_id="eagle_test", hull_id="eagle"):
@@ -485,7 +492,8 @@ class TestMatchupConfig:
             enemy_variants=("b",),
         )
         with pytest.raises(AttributeError):
-            mc.time_mult = 5.0
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            mc.time_mult = 5.0  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
 
 # --- Phase 5F: RegimeConfig tests ---
@@ -502,7 +510,8 @@ class TestRegimeConfig:
             exclude_weapon_tags=frozenset(),
         )
         with pytest.raises(AttributeError):
-            cfg.name = "y"
+            # deliberately mutates a frozen dataclass: exercises the AttributeError path
+            cfg.name = "y"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
     def test_regime_presets_exist(self):
         from starsector_optimizer.models import (

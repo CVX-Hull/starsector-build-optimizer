@@ -15,6 +15,12 @@ from starsector_optimizer.matchup_features import (
 )
 
 
+def _as_number(value: "float | int | str") -> float:
+    """Narrow a feature-row value to a number for comparisons."""
+    assert isinstance(value, (int, float))
+    return value
+
+
 def _hammerhead_build() -> Build:
     return Build(
         hull_id="hammerhead",
@@ -49,8 +55,8 @@ class TestBuildFeatureRow:
         assert row["build_hullmod_count"] == 2
         assert row["build_flux_vents"] == 5
         assert row["build_flux_capacitors"] == 3
-        assert row["build_total_dps"] > 0
-        assert row["build_scorer_total_dps"] > 0
+        assert _as_number(row["build_total_dps"]) > 0
+        assert _as_number(row["build_scorer_total_dps"]) > 0
         assert "build_damage_kinetic_dps" in row
         assert "build_slot_small_count" in row
         assert row["build_slot_00_slot_id"]
@@ -120,7 +126,7 @@ class TestOpponentFeatureRow:
         # never appear as a feature column.
         assert "feature_schema_version" not in row
         assert row["opponent_hull_id"] == "enforcer"
-        assert row["opponent_weapon_count"] > 0
+        assert _as_number(row["opponent_weapon_count"]) > 0
         assert row["opponent_hull_size"] == game_data.hulls["enforcer"].hull_size.value
         assert "opponent_flux_vents" in row
         assert "opponent_hullmod_op" in row
@@ -131,8 +137,8 @@ class TestOpponentFeatureRow:
     def test_stock_variant_wings_are_opponent_only_features(self, game_dir, game_data):
         row = opponent_feature_row("mora_Support", game_dir, game_data)
 
-        assert row["opponent_wing_count"] > 0
-        assert row["opponent_wing_size"] > 0
+        assert _as_number(row["opponent_wing_count"]) > 0
+        assert _as_number(row["opponent_wing_size"]) > 0
         assert "opponent_wing_role__fighter_count" in row
 
     def test_missing_variant_raises(self, game_dir, game_data):
@@ -187,7 +193,7 @@ class TestMatchupFeatureRow:
         assert row["opponent_variant_id"] == "enforcer_Balanced"
         assert "interaction_range_delta" in row
         assert "interaction_speed_delta" in row
-        assert row["interaction_kinetic_vs_shield"] >= 0
+        assert _as_number(row["interaction_kinetic_vs_shield"]) >= 0
         assert "interaction_he_vs_armor" in row
         assert "interaction_small_pd_vs_missile" in row
         assert "interaction_front_dps_delta" in row

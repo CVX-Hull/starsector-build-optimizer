@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 import dataclasses
 from dataclasses import dataclass, field
+from typing import Self
 from enum import StrEnum
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ class _ParseableEnum(StrEnum):
     """Base enum with forward-compatible from_str parsing."""
 
     @classmethod
-    def from_str(cls, value: str) -> _ParseableEnum | None:
+    def from_str(cls, value: str) -> Self | None:
         """Parse string to enum member. Returns None for unknown values."""
         # Try direct match first
         for member in cls:

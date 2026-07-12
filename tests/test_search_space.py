@@ -1,5 +1,7 @@
 """Tests for search space builder."""
 
+from typing import Any
+
 import pytest
 
 from starsector_optimizer.models import (
@@ -31,7 +33,7 @@ def _hullmod(mid="mod1", is_hidden=False):
 
 
 def _hull(**kw):
-    defaults = {
+    defaults: dict[str, Any] = {
         "id": "test", "name": "Test", "hull_size": HullSize.CRUISER, "designation": "Cruiser",
         "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
         "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": 100,

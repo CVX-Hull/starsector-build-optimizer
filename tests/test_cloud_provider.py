@@ -15,6 +15,7 @@ filters on `Project` only.
 """
 
 import base64
+from typing import Any, cast
 
 import pytest
 
@@ -52,7 +53,8 @@ class TestCloudProviderABC:
     def test_cloud_provider_is_abc(self):
         from starsector_optimizer.cloud_provider import CloudProvider
         with pytest.raises(TypeError):
-            CloudProvider()
+            # deliberately instantiates the ABC: exercises the TypeError path
+            cast(Any, CloudProvider)()
 
     def test_subclass_missing_methods_fails(self):
         from starsector_optimizer.cloud_provider import CloudProvider
@@ -70,9 +72,9 @@ class TestCloudProviderABC:
             def list_active(self, project_tag):
                 return []
 
-        # missing get_spot_price
+        # missing get_spot_price — deliberately abstract: exercises the TypeError path
         with pytest.raises(TypeError):
-            Partial()
+            cast(Any, Partial)()
 
     def test_old_create_fleet_method_gone(self):
         """Clean rewrite — create_fleet must not exist on the ABC or AWSProvider."""
@@ -260,8 +262,9 @@ class TestProvisionFleetNoCampaignConfigDependency:
         from starsector_optimizer.cloud_provider import AWSProvider
         provider = AWSProvider(regions=("us-east-1",))
         # Old create_fleet(config, *, user_data) signature MUST NOT work.
+        # deliberately invalid call shape: exercises the TypeError path
         with pytest.raises(TypeError):
-            provider.provision_fleet(object(), user_data=PROBE_USER_DATA)
+            cast(Any, provider.provision_fleet)(object(), user_data=PROBE_USER_DATA)
 
 
 class TestTerminateFleetTargeted:

@@ -358,6 +358,12 @@ def _split_rows() -> list[TrainingMatchupRow]:
     ]
 
 
+def _as_training_row(row: TrainingMatchupRow | HonestEvalMatchupRow) -> TrainingMatchupRow:
+    """Narrow a split row to TrainingMatchupRow (these tests only feed training rows)."""
+    assert isinstance(row, TrainingMatchupRow)
+    return row
+
+
 class TestSplitBuilders:
     def test_held_out_build_split_keeps_builds_disjoint(self):
         split = held_out_build_split(_split_rows(), holdout_fraction=0.25, seed=1)
@@ -457,9 +463,13 @@ class TestSplitBuilders:
         assert held_out
         assert result.realized_test_fraction >= 0.25
         for row in result.split.train:
-            assert held_out.isdisjoint(component_vocabulary(build_lookup[row.build_key]))
+            assert held_out.isdisjoint(
+                component_vocabulary(build_lookup[_as_training_row(row).build_key])
+            )
         for row in result.split.test:
-            assert held_out & set(component_vocabulary(build_lookup[row.build_key]))
+            assert held_out & set(
+                component_vocabulary(build_lookup[_as_training_row(row).build_key])
+            )
 
     def test_component_vocabulary_split_is_deterministic(self):
         rows = _split_rows()
@@ -529,15 +539,15 @@ class TestSplitBuilders:
             for i in range(12)
         ]
         split = held_out_seed_cell_split(rows, holdout_fraction=0.25, seed=1)
-        train_groups = {(row.campaign, row.seed) for row in split.train}
-        test_groups = {(row.campaign, row.seed) for row in split.test}
+        train_groups = {(r.campaign, r.seed) for r in map(_as_training_row, split.train)}
+        test_groups = {(r.campaign, r.seed) for r in map(_as_training_row, split.test)}
         assert train_groups.isdisjoint(test_groups)
 
     def test_forward_time_split_orders_by_trial_number(self):
         rows = list(reversed(_split_rows()))
         split = forward_time_split(rows, train_fraction=0.5)
-        assert max(row.trial_number for row in split.train) < min(
-            row.trial_number for row in split.test
+        assert max(r.trial_number for r in map(_as_training_row, split.train)) < min(
+            r.trial_number for r in map(_as_training_row, split.test)
         )
 
     def test_invalid_fraction_raises(self):

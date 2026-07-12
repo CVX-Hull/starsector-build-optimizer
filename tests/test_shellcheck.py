@@ -28,6 +28,7 @@ SHELLCHECK = shutil.which("shellcheck")
 
 
 def _shellcheck(name: str, script: str, tmp_path: Path) -> None:
+    assert SHELLCHECK is not None  # guarded by skipif on every caller
     path = tmp_path / f"{name}.sh"
     path.write_text(script)
     proc = subprocess.run(
@@ -96,6 +97,7 @@ def _repo_shell_scripts() -> list[Path]:
 
 @pytest.mark.skipif(SHELLCHECK is None, reason="shellcheck not installed")
 def test_repo_shell_scripts_pass_shellcheck():
+    assert SHELLCHECK is not None  # guarded by skipif
     scripts = _repo_shell_scripts()
     assert scripts, "shell-script glob found nothing — check REPO_ROOT"
     proc = subprocess.run(

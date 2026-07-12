@@ -241,14 +241,14 @@ class GameManifest:
         constants = _parse_constants(data["constants"])
         weapons: dict[str, WeaponSpec] = {}
         for wid, raw in data["weapons"].items():
-            spec = _parse_weapon(raw)
-            if spec is not None:
-                weapons[wid] = spec
+            weapon_spec = _parse_weapon(raw)
+            if weapon_spec is not None:
+                weapons[wid] = weapon_spec
         hullmods: dict[str, HullmodSpec] = {}
         for hid, raw in data["hullmods"].items():
-            spec = _parse_hullmod(raw)
-            if spec is not None:
-                hullmods[hid] = spec
+            hullmod_spec = _parse_hullmod(raw)
+            if hullmod_spec is not None:
+                hullmods[hid] = hullmod_spec
         # Parse hulls with cross-ref filtering against `hullmods` — any mod
         # ID in a hull's applicable_hullmods or conditional_exclusions that
         # doesn't resolve to a hullmods key gets dropped with a WARN (per
@@ -256,9 +256,9 @@ class GameManifest:
         hulls: dict[str, HullManifestEntry] = {}
         known_hullmod_ids = set(hullmods.keys())
         for hid, raw in data["hulls"].items():
-            spec = _parse_hull(raw, known_hullmod_ids=known_hullmod_ids)
-            if spec is not None:
-                hulls[hid] = spec
+            hull_spec = _parse_hull(raw, known_hullmod_ids=known_hullmod_ids)
+            if hull_spec is not None:
+                hulls[hid] = hull_spec
         # Load-time floor invariant (audit R8): every non-skipped hull must
         # have ≥ MIN_APPLICABLE_HULLMODS_PER_HULL applicable mods. An empty
         # set means the probe crashed mid-iteration or the ship wasn't
@@ -319,7 +319,9 @@ def _parse_weapon(raw: dict[str, Any]) -> WeaponSpec | None:
     wdamage = _parse_enum(
         DamageType, raw.get("damage_type"), field_name="damage_type", spec_id=wid
     )
-    if None in (wtype, wsize, wmount, wdamage):
+    # Explicit per-variable checks (not `None in tuple`) so the type
+    # checker narrows each; skip semantics identical (Principle #5).
+    if wtype is None or wsize is None or wmount is None or wdamage is None:
         return None
     return WeaponSpec(
         id=wid,
@@ -368,7 +370,7 @@ def _parse_slot(raw: dict[str, Any], *, hull_id: str) -> HullSlot | None:
         field_name="slot.mount_type",
         spec_id=f"{hull_id}.{sid}",
     )
-    if None in (stype, ssize, smount):
+    if stype is None or ssize is None or smount is None:
         return None
     return HullSlot(
         id=sid,

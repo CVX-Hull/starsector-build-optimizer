@@ -7,6 +7,7 @@ simulation parameters, and cloud provider pricing.
 from __future__ import annotations
 
 import math
+from typing import Any
 from dataclasses import dataclass, field
 
 from .game_manifest import GameManifest
@@ -217,7 +218,7 @@ def print_scenario_comparison(num_hulls: int = 50) -> str:
     )
     lines.append("-" * 90)
 
-    scenarios = [
+    scenarios: list[tuple[str, dict[str, Any]]] = [
         ("3x speed, 180s limit, 1 inst", {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 1}),
         ("3x speed, 180s limit, 8 inst", {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 8}),
         ("5x speed, 180s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 8}),

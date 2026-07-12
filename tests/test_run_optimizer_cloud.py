@@ -16,6 +16,7 @@ Tests mock AWSProvider, CloudWorkerPool, and optimize_hull — no network I/O.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -187,7 +188,7 @@ class TestRunCloudStudyOrdering:
             monkeypatch, tmp_path, smoke_env,
         )
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
         class Recorder:
             def __init__(self, *, regions):
@@ -437,7 +438,7 @@ class TestSeedIndexResolvesCorrectSeed:
             }],
         )
 
-        captured = {}
+        captured: dict[str, Any] = {}
 
         class Recorder:
             def __init__(self, *, regions):

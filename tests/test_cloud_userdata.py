@@ -9,6 +9,8 @@ produced shell script:
 """
 
 
+from typing import Any
+
 import pytest
 
 
@@ -18,7 +20,7 @@ TAILSCALE_SECRET_SENTINEL = "SENTINEL_TAILSCALE_e1a2f800"
 
 def _make_worker_config(**overrides):
     from starsector_optimizer.models import WorkerConfig
-    defaults = {
+    defaults: dict[str, Any] = {
         "campaign_id": "unit-test-campaign",
         "study_id": "hammerhead__early__seed0",
         "project_tag": "starsector-unit-test-campaign",

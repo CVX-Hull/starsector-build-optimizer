@@ -1218,9 +1218,12 @@ class TestMainCLIWiring:
         """`kill <pid>` must unwind Python context managers instead of using
         the process-default SIGTERM action."""
         import signal
+        from collections.abc import Callable
+        from typing import Any
+
         from starsector_optimizer import honest_evaluator
 
-        installed = {}
+        installed: dict[int, Callable[[int, Any], Any]] = {}
         monkeypatch.setattr(
             signal, "signal",
             installed.setdefault,

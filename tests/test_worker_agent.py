@@ -40,6 +40,7 @@ class TestWorkerAgentQueue:
         processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
         fake_redis.lpush(source, json.dumps({"matchup_id": "m1"}))
         item = claim_matchup(fake_redis, source, processing, timeout=1)
+        assert item is not None
         assert item["matchup_id"] == "m1"
         assert fake_redis.llen(processing) == 1
 

@@ -154,7 +154,7 @@ class TestDiscoverOpponentPool:
 
         pool = discover_opponent_pool(tmp_path, game_data)
         # alien_ship is not in game_data, so it should not appear in any pool
-        all_opponents = []
+        all_opponents: list[str] = []
         for size in HullSize:
             try:
                 all_opponents.extend(get_opponents(pool, size))
@@ -174,7 +174,7 @@ class TestDiscoverOpponentPool:
             fighter_bays=0, max_speed=150, shield_type=ShieldType.OMNI, shield_arc=360,
             shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0, phase_upkeep=0,
             peak_cr_sec=300, cr_loss_per_sec=0.25,
-            weapon_slots=[], built_in_mods=frozenset(), built_in_weapons={},
+            weapon_slots=[], built_in_mods=[], built_in_weapons={},
         )
         game_data = GameData(
             hulls={"wolf": hull}, weapons={}, hullmods={},

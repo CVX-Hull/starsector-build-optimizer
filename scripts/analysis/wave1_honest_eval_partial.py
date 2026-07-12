@@ -12,6 +12,7 @@ import argparse
 import json
 import math
 import re
+from typing import cast
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -301,7 +302,7 @@ def render(
 
     if health:
         counts: Counter[str] = health["counts"]  # type: ignore[assignment]
-        bins: Counter[str] = health["bins"]  # type: ignore[assignment]
+        bins = cast(Counter[int], health["bins"])
         out.append("## Current Orchestrator Health")
         out.append("")
         out.append("| metric | value |")

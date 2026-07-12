@@ -390,7 +390,7 @@ class AWSProvider(CloudProvider):
                 "create_fleet in %s transient visibility errors "
                 "(attempt %d/%d): %s; retrying after %.1fs",
                 region, attempt + 1, _FLEET_PROVISION_MAX_RETRIES,
-                sorted({e.get("ErrorCode") for e in last_errors}
+                sorted({str(e.get("ErrorCode")) for e in last_errors}
                        & _FLEET_TRANSIENT_ERROR_CODES),
                 _FLEET_PROVISION_RETRY_DELAY_SECONDS,
             )
