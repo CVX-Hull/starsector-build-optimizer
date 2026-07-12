@@ -459,10 +459,10 @@ each held-out item can swing the realized test fraction by a large,
 quantized step — so the cap must admit the discrete fractions actually
 achievable; at 0.15 most canonical bank seeds were structurally infeasible
 (outer or inner draws overshoot) and the batch surfaced this as designed
-via structured insufficiency artifacts. Feasibility evidence: the
-2026-07-12 eval-harness re-run report. Consumers of component-vocab
-metrics must read `realized_test_fraction` per cell rather than assuming
-the nominal `holdout_fraction`.
+via structured insufficiency artifacts. Feasibility evidence:
+[2026-07-12-phase7-batch-v2-incidents.md](../reports/2026-07-12-phase7-batch-v2-incidents.md).
+Consumers of component-vocab metrics must read `realized_test_fraction`
+per cell rather than assuming the nominal `holdout_fraction`.
 
 ### Inner validation
 
@@ -979,7 +979,10 @@ folds, via the same `construct_splits` path the workers execute) for every
 unique `(split, split_seed)` cell in the job matrix against the local source
 DB, and refuse to provision when any cell is structurally infeasible —
 insufficiency is a preflight failure, not a discovery to make with a running
-fleet (added 2026-07-12 after the overshoot-cap incident).
+fleet (added 2026-07-12 after the overshoot-cap incident). The preflight
+must derive each probe config by parsing the rendered job command through
+the experiment script's own parser and config builder — not by mirroring a
+hand-written field list that can drift from what the workers run.
 
 The canonical full-run batch job matrix is exactly:
 
@@ -1036,7 +1039,12 @@ The batch bundle must include every runtime script imported by the worker
 command, including both `phase7_learned_surrogate_experiment.py` and its
 baseline helper `phase7_baseline_surrogate.py`. Worker failures during the
 experiment command must post a control-plane event with the command exit code
-and a bounded stdout/stderr tail before the shell exits.
+and a bounded stdout/stderr tail before the shell exits. The result upload
+must retry transient failures (`result_upload_attempts` ×
+`result_upload_retry_seconds`, designed defaults 5 × 10 s; config validation
+requires the retry window to fit inside `lease_grace_seconds`) and post a
+failure event with the final exit code before giving the job back — a
+completed experiment must never be discarded by a single failed upload.
 
 Per-job artifacts are normal learned-experiment JSON payloads with one
 completed result. Each per-job artifact must include a top-level `batch_job`

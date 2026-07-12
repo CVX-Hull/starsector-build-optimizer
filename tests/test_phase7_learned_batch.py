@@ -1,6 +1,7 @@
 import json
 import hashlib
 import importlib.util
+import re
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -306,26 +307,50 @@ def test_user_data_propagates_claim_boundary_flags(tmp_path):
     assert "--deployment-artifact none" in out
 
 
-class _StubExperimentModule:
-    def __init__(self, infeasible):
-        self._infeasible = infeasible
-        self.received_configs = None
+def _experiment_flags_in_user_data(out: str) -> set[str]:
+    start = out.index("phase7_learned_surrogate_experiment.py")
+    end = out.index("RUN_PID=$!", start)
+    return set(re.findall(r"--[a-z][a-z-]*", out[start:end]))
 
-    def LearnedExperimentConfig(self, **kwargs):
-        return dict(kwargs)
 
-    def split_feasibility_report(self, configs):
-        self.received_configs = list(configs)
-        return self._infeasible
+@pytest.mark.parametrize("with_optional_flags", (False, True))
+def test_user_data_experiment_flags_match_build_job_command(tmp_path, with_optional_flags):
+    """The worker userdata renders the experiment command independently of
+    build_job_command; the preflight probes the latter, so the two flag sets
+    must never drift."""
+    cfg = make_config(tmp_path)
+    if with_optional_flags:
+        cfg = replace(
+            cfg, noise_floor_override=0.5, fresh_honest_eval_ledger_id="ledger-1"
+        )
+    job = generate_jobs(cfg)[0]
+    command_flags = {token for token in build_job_command(cfg, job) if token.startswith("--")}
+
+    out = render_phase7_learned_batch_user_data(
+        cfg,
+        control_plane_url="http://100.64.0.1:9131",
+        bearer_token="secret-token",
+        bundle_sha256="a" * 64,
+    )
+
+    assert _experiment_flags_in_user_data(out) == command_flags
 
 
 def test_check_split_feasibility_refuses_infeasible_cells(tmp_path, monkeypatch):
     cfg = make_config(tmp_path)
     cli = load_batch_cli_module()
-    stub = _StubExperimentModule(
-        [{"split": "component-vocab", "split_seed": 109, "status": "degenerate_component_vocab_split"}]
+    experiment = cli._load_experiment_module()
+    monkeypatch.setattr(
+        experiment,
+        "split_feasibility_report",
+        lambda configs: [
+            {
+                "split": "component-vocab",
+                "split_seed": 109,
+                "status": "degenerate_component_vocab_split",
+            }
+        ],
     )
-    monkeypatch.setattr(cli, "_load_experiment_module", lambda: stub)
 
     with pytest.raises(RuntimeError, match=r"component-vocab\(seed 109\): degenerate_component_vocab_split"):
         cli.check_split_feasibility(cfg)
@@ -334,21 +359,57 @@ def test_check_split_feasibility_refuses_infeasible_cells(tmp_path, monkeypatch)
 def test_check_split_feasibility_dry_runs_each_unique_cell_once(tmp_path, monkeypatch, capsys):
     cfg = make_config(tmp_path)
     cli = load_batch_cli_module()
-    stub = _StubExperimentModule([])
-    monkeypatch.setattr(cli, "_load_experiment_module", lambda: stub)
+    experiment = cli._load_experiment_module()
+    received = []
+
+    def record(configs):
+        received.extend(configs)
+        return []
+
+    monkeypatch.setattr(experiment, "split_feasibility_report", record)
 
     cli.check_split_feasibility(cfg)
 
     jobs = generate_jobs(cfg)
     unique_cells = {(job.split, job.split_seed) for job in jobs}
-    assert len(stub.received_configs) == len(unique_cells)
-    probed = {(c["split"], c["split_seed"]) for c in stub.received_configs}
+    assert len(received) == len(unique_cells)
+    probed = {(c.split, c.split_seed) for c in received}
     assert probed == unique_cells
-    for c in stub.received_configs:
-        assert c["component_vocab_max_overshoot"] == cfg.component_vocab_max_overshoot
-        assert c["inner_cv_folds"] == cfg.inner_cv_folds
-        assert c["holdout_fraction"] == cfg.holdout_fraction
+    for c in received:
+        # The preflight parses the rendered job command through the
+        # experiment script's own parser, so every worker knob — including
+        # ones no hand-written mirror ever listed — must round-trip.
+        assert c.component_vocab_max_overshoot == cfg.component_vocab_max_overshoot
+        assert c.inner_cv_folds == cfg.inner_cv_folds
+        assert c.holdout_fraction == cfg.holdout_fraction
+        assert c.train_fraction == cfg.train_fraction
+        assert c.bootstrap_resamples == cfg.bootstrap_resamples
+        assert c.hpo_seed == cfg.hpo_seed
+        assert c.db_path == cfg.source_db_path
+        assert c.max_rows is None
+        assert c.progress is False
+        assert c.allow_missing_optional_models is True
     assert "Split feasibility preflight passed" in capsys.readouterr().out
+
+
+def test_check_split_feasibility_probes_the_rendered_job_command(tmp_path, monkeypatch):
+    """A worker knob changed only in the batch config must reach the probe
+    through build_job_command parsing, with no preflight-side mirror edit."""
+    cfg = replace(make_config(tmp_path), component_vocab_max_overshoot=0.42)
+    cli = load_batch_cli_module()
+    experiment = cli._load_experiment_module()
+    received = []
+
+    def record(configs):
+        received.extend(configs)
+        return []
+
+    monkeypatch.setattr(experiment, "split_feasibility_report", record)
+
+    cli.check_split_feasibility(cfg)
+
+    assert received
+    assert all(c.component_vocab_max_overshoot == 0.42 for c in received)
 
 
 def test_bundle_paths_include_runtime_inputs(tmp_path):
@@ -695,6 +756,40 @@ def test_user_data_wait_reaps_do_not_fire_err_trap(tmp_path):
         stripped = line.strip()
         if stripped.startswith("wait "):
             assert "||" in stripped, f"unprotected wait fires the ERR trap: {line!r}"
+
+
+def test_user_data_retries_result_upload_before_declaring_failure(tmp_path):
+    """A completed experiment is the most expensive artifact on the worker;
+    the upload curl must not be a bare simple command that fires the ERR trap
+    (and discards the result) on one transient failure."""
+    cfg = make_config(tmp_path)
+    out = render_phase7_learned_batch_user_data(
+        cfg,
+        control_plane_url="http://100.64.0.1:9131",
+        bearer_token="secret-token",
+        bundle_sha256="a" * 64,
+    )
+
+    assert f"seq 1 {cfg.result_upload_attempts}" in out
+    assert '&& { UPLOAD_CODE=0; break; } || UPLOAD_CODE=$?' in out
+    assert f"sleep {cfg.result_upload_retry_seconds}" in out
+    assert 'post_event_with_log "result_upload_failed" "$LOG" "$UPLOAD_CODE"' in out
+    # The retry loop owns the upload failure path; the success event must be
+    # gated on UPLOAD_CODE, not sequenced after a bare curl.
+    assert out.index('[[ "$UPLOAD_CODE" != "0" ]]') < out.index('post_event "result_uploaded"')
+
+
+def test_config_validation_bounds_result_upload_retries(tmp_path):
+    cfg = make_config(tmp_path)
+
+    with pytest.raises(ValueError, match="result_upload_attempts"):
+        validate_batch_config(replace(cfg, result_upload_attempts=0))
+    with pytest.raises(ValueError, match="result_upload_retry_seconds"):
+        validate_batch_config(replace(cfg, result_upload_retry_seconds=0.0))
+    with pytest.raises(ValueError, match="shorter than lease grace"):
+        validate_batch_config(
+            replace(cfg, result_upload_attempts=100, result_upload_retry_seconds=10.0)
+        )
 
 
 def test_bash_err_trap_fires_under_set_plus_e_unless_wait_is_protected():

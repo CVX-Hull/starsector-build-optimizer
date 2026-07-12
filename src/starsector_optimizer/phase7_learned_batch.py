@@ -64,6 +64,15 @@ CANONICAL_MODELS: tuple[str, ...] = (
 # drift.
 
 
+# A completed experiment is the most expensive artifact on a worker, so the
+# result upload retries transient control-plane/network failures instead of
+# letting a single failed curl fire the ERR trap and discard hours of compute.
+# The full retry window (attempts x sleep) must stay well inside
+# lease_grace_seconds so the job is not concurrently requeued mid-retry.
+DEFAULT_RESULT_UPLOAD_ATTEMPTS = 5
+DEFAULT_RESULT_UPLOAD_RETRY_SECONDS = 10.0
+
+
 class BudgetExceeded(RuntimeError):
     """Raised when the configured hard budget would be exceeded."""
 
@@ -125,6 +134,8 @@ class LearnedBatchConfig:
     feature_profile: str = DEFAULT_FEATURE_PROFILE
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
     root_volume_size_gb: int | None = None
+    result_upload_attempts: int = DEFAULT_RESULT_UPLOAD_ATTEMPTS
+    result_upload_retry_seconds: float = DEFAULT_RESULT_UPLOAD_RETRY_SECONDS
     splits: tuple[str, ...] = CANONICAL_SPLITS
     models: tuple[str, ...] = CANONICAL_MODELS
 
@@ -466,6 +477,14 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
             if expanded.get("root_volume_size_gb") is None
             else int(expanded["root_volume_size_gb"])
         ),
+        result_upload_attempts=int(
+            expanded.get("result_upload_attempts", DEFAULT_RESULT_UPLOAD_ATTEMPTS)
+        ),
+        result_upload_retry_seconds=float(
+            expanded.get(
+                "result_upload_retry_seconds", DEFAULT_RESULT_UPLOAD_RETRY_SECONDS
+            )
+        ),
         splits=tuple(str(v) for v in expanded.get("splits", CANONICAL_SPLITS)),
         models=tuple(str(v) for v in expanded.get("models", CANONICAL_MODELS)),
     )
@@ -571,6 +590,17 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         raise ValueError("dependency_extra must use the existing surrogate extra")
     if config.root_volume_size_gb is not None and config.root_volume_size_gb < 8:
         raise ValueError("root_volume_size_gb must be at least 8 when set")
+    if config.result_upload_attempts <= 0:
+        raise ValueError("result_upload_attempts must be positive")
+    if config.result_upload_retry_seconds <= 0:
+        raise ValueError("result_upload_retry_seconds must be positive")
+    if (
+        config.result_upload_attempts * config.result_upload_retry_seconds
+        >= config.lease_grace_seconds
+    ):
+        raise ValueError(
+            "result upload retry window must be shorter than lease grace"
+        )
     if config.hpo_jobs <= 0 or config.model_thread_count <= 0:
         raise ValueError("hpo_jobs and model_thread_count must be positive")
     if any("2xlarge" in item for item in config.instance_types):
@@ -841,6 +871,8 @@ def render_phase7_learned_batch_user_data(
         1,
         int(config.lease_grace_seconds // config.lease_renewal_interval_seconds),
     )
+    upload_attempts = int(config.result_upload_attempts)
+    upload_retry_seconds = config.result_upload_retry_seconds
     top_k = shlex.quote(",".join(str(value) for value in config.top_k_values))
     source_db = shlex.quote(str(config.source_db_path))
     game_dir = shlex.quote(str(config.game_dir))
@@ -1086,13 +1118,26 @@ while (( SECONDS < DEADLINE )); do
   fi
   post_event "experiment_completed"
 
-  curl --silent --fail -X POST \\
-    -H "Authorization: Bearer {bearer_token}" \\
-    -H "X-Worker-Id: $INSTANCE_ID" \\
-    -H "X-Lease-Attempt: $ATTEMPT" \\
-    -H "Content-Type: application/json" \\
-    --data-binary "@$OUTPUT" \\
-    {control_url}/result/"$JOB_ID"
+  # The completed result is the most expensive artifact on this instance;
+  # retry transient upload failures instead of letting one failed curl fire
+  # the ERR trap and discard it. The && / || list keeps a failing attempt
+  # from tripping on_failure; the retry window stays inside the lease grace.
+  UPLOAD_CODE=1
+  for _ in $(seq 1 {upload_attempts}); do
+    curl --silent --fail -X POST \\
+      -H "Authorization: Bearer {bearer_token}" \\
+      -H "X-Worker-Id: $INSTANCE_ID" \\
+      -H "X-Lease-Attempt: $ATTEMPT" \\
+      -H "Content-Type: application/json" \\
+      --data-binary "@$OUTPUT" \\
+      {control_url}/result/"$JOB_ID" && {{ UPLOAD_CODE=0; break; }} || UPLOAD_CODE=$?
+    sleep {upload_retry_seconds}
+  done
+  if [[ "$UPLOAD_CODE" != "0" ]]; then
+    post_event_with_log "result_upload_failed" "$LOG" "$UPLOAD_CODE"
+    shutdown -h now >/dev/null 2>&1 || true
+    exit "$UPLOAD_CODE"
+  fi
   post_event "result_uploaded"
   JOB_ID=""
 done

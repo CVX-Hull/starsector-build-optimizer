@@ -1547,9 +1547,14 @@ def _progress(message: str, enabled: bool) -> None:
         print(f"[phase7-learned] {message}", file=sys.stderr, flush=True)
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    config = LearnedExperimentConfig(
+def config_from_args(args: argparse.Namespace) -> LearnedExperimentConfig:
+    """Build the experiment config exactly as a worker invocation does.
+
+    Single owner of the argv -> config mapping: `main()` uses it on workers
+    and the launch preflight parses the rendered job command through it, so
+    the two paths cannot construct different configs from the same argv.
+    """
+    return LearnedExperimentConfig(
         db_path=args.db_path,
         game_dir=args.game_dir,
         split=args.split,
@@ -1583,6 +1588,11 @@ def main() -> None:
         batch_name=args.batch_name,
         batch_fleet_name=args.batch_fleet_name,
     )
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+    config = config_from_args(args)
     result = run_experiment(config, checkpoint_path=args.output)
     payload = json.dumps(result, indent=2, sort_keys=True)
     if args.output is not None:

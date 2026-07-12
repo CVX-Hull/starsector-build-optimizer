@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import atexit
+import dataclasses
 import hashlib
 import importlib.util
 import io
@@ -113,11 +114,17 @@ def _load_experiment_module():
         return sys.modules[name]
     script_path = Path(__file__).resolve().parents[1] / "analysis" / f"{name}.py"
     spec = importlib.util.spec_from_file_location(name, script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load experiment module from {script_path}")
     module = importlib.util.module_from_spec(spec)
     # Dataclass field-type resolution requires the module to be importable
     # by name (PEP 563 annotations look it up in sys.modules).
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        del sys.modules[name]
+        raise
     return module
 
 
@@ -130,6 +137,7 @@ def check_split_feasibility(cfg) -> None:
     failure, not a discovery to make with a running fleet.
     """
     experiment = _load_experiment_module()
+    parser = experiment.build_parser()
     seen: set[tuple[str, int]] = set()
     configs = []
     for job in generate_jobs(cfg):
@@ -137,27 +145,21 @@ def check_split_feasibility(cfg) -> None:
         if cell in seen:
             continue
         seen.add(cell)
-        # Split-relevant fields mirror build_job_command; model/HPO fields do
-        # not influence split construction.
+        # Parse the actual rendered job command through the experiment
+        # script's own parser + config builder, so the preflight probes the
+        # exact config a worker constructs — no hand-mirrored field list that
+        # could drift. Split construction ignores the model, so one job per
+        # (split, seed) cell covers all models. progress/allow-missing are
+        # display / model-availability knobs with no effect on splits.
+        command = build_job_command(cfg, job)
+        script_index = next(
+            index for index, token in enumerate(command) if token.endswith(".py")
+        )
+        args = parser.parse_args(command[script_index + 1 :])
+        config = experiment.config_from_args(args)
         configs.append(
-            experiment.LearnedExperimentConfig(
-                db_path=cfg.source_db_path,
-                game_dir=cfg.game_dir,
-                split=job.split,
-                model=job.model,
-                holdout_fraction=cfg.holdout_fraction,
-                train_fraction=cfg.train_fraction,
-                split_seed=job.split_seed,
-                hpo_seed=cfg.hpo_seed,
-                hpo_trials=cfg.hpo_trials,
-                hpo_jobs=cfg.hpo_jobs,
-                model_thread_count=cfg.model_thread_count,
-                max_rows=None,
-                top_k_values=tuple(cfg.top_k_values),
-                progress=False,
-                allow_missing_optional_models=True,
-                inner_cv_folds=cfg.inner_cv_folds,
-                component_vocab_max_overshoot=cfg.component_vocab_max_overshoot,
+            dataclasses.replace(
+                config, progress=False, allow_missing_optional_models=True
             )
         )
     infeasible = experiment.split_feasibility_report(configs)
