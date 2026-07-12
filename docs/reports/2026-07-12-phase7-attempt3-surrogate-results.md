@@ -254,7 +254,10 @@ temporal robustness at n = 1; consistent with it.
   events, budget ledger; final spend $75.50 of $150).
 - **Producer:** `scripts/analysis/phase7_learned_surrogate_experiment.py`
   via `scripts/cloud/phase7_learned_batch.py` (attempt 3, launched
-  2026-07-12 12:31 UTC, completed ≈ 16:30 UTC).
+  2026-07-12 12:31 UTC, completed 20:10 UTC — corrected 2026-07-12 by the
+  [tail-walltime analysis](2026-07-12-phase7-tail-walltime.md), which
+  reconstructed the full 7.65 h fleet window from the cost ledger; this
+  line originally misstated completion as ≈ 16:30 UTC).
 - **Charts:** none (tables only; the artifact carries full per-cell
   detail).
 - **Dependent docs:**

@@ -4,6 +4,7 @@ import importlib.util
 import re
 import subprocess
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -605,6 +606,19 @@ def test_control_plane_persists_events_and_status_counts_events(tmp_path):
     )
     assert worker_response.status_code == 200
     assert (cfg.output_dir / "events" / "worker-events.jsonl").exists()
+
+    # Persisted events must carry a server-side receipt timestamp so batch
+    # walltime analyses can reconstruct job timelines (the 2026-07-12
+    # attempt-3 tail analysis had to estimate them from elapsed_seconds).
+    job_row = json.loads(
+        (cfg.output_dir / "events" / f"{job.job_id}.jsonl").read_text().splitlines()[0]
+    )
+    worker_row = json.loads(
+        (cfg.output_dir / "events" / "worker-events.jsonl").read_text().splitlines()[0]
+    )
+    for row in (job_row, worker_row):
+        received = datetime.fromisoformat(row["received_at_utc"])
+        assert received.tzinfo is not None
 
 
 def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):

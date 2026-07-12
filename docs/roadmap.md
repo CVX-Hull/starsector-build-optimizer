@@ -13,7 +13,8 @@ must not accumulate their own live next-step lists — when a report's "next
 steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
-Groomed: 2026-07-12 (seed-151 confirmatory check closed item 1). Re-groom whenever a wave completes or a decision changes
+Groomed: 2026-07-12 (tail-walltime measurement closed; scale-down-on-drain
+follow-up added). Re-groom whenever a wave completes or a decision changes
 scope; update `last-validated`.
 
 ## Active workstream — Phase 7 surrogate evidence program
@@ -62,10 +63,15 @@ From [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md)
 - One instrumented run to resolve the matchups-per-trial accounting spread
   (blocks phase7-prep budgeting); includes the never-landed wolf (non-meta
   hull) measurement.
-- Measure learned-batch tail-job walltime at scale (gates fleet
-  teardown / scale-down-on-drain). The attempt-3 ledger + event logs
-  (36 workers, 183 jobs, 2026-07-12) now carry the data — closable by
-  analysis alone, no new spend.
+- Tail-job walltime at scale: **measured 2026-07-12** from the attempt-3
+  ledger ([tail-walltime analysis](reports/2026-07-12-phase7-tail-walltime.md))
+  — idle drain tail is a material spend share and tuned RF supplies the
+  entire scheduling tail. Follow-up (do before the item-2 ablation wave):
+  **implement scale-down-on-drain** in the learned-batch control plane
+  (terminate each worker at queue-empty + last upload), plus
+  longest-expected-first dispatch ordering (static family × split duration
+  ranking). Event timestamps (`received_at_utc`) already landed with the
+  analysis.
 - Stale-AMI hygiene: run `audit_amis.sh` + `cleanup_amis.sh` after every
   re-bake (done 2026-07-11; keep as post-bake SOP step).
 - Seed-bank split-uniqueness check (spec 31, small): component-vocab seeds

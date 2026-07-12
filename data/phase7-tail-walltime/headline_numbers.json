@@ -1,0 +1,209 @@
+{
+  "batch_dir": "data/phase7/learned_surrogate_batch_v2_2026-07",
+  "n_jobs": 183,
+  "n_workers": 36,
+  "fleet_start_utc": "2026-07-12T12:31:09+00:00",
+  "fleet_end_utc": "2026-07-12T20:10:16+00:00",
+  "fleet_window_hours": 7.651944444444444,
+  "capacity_worker_hours": 275.46999999999997,
+  "busy_worker_hours": 235.04127308091054,
+  "utilization": 0.8532372784002271,
+  "setup_overhead_hours_bound": 0.05782281418389168,
+  "effective_usd_per_worker_hour": 0.2740613928164196,
+  "cumulative_usd": 75.4956918791391,
+  "idle_tail_worker_hours": 38.34710560846933,
+  "idle_tail_usd": 10.50946117353544,
+  "idle_upper_worker_hours": 40.42872691908943,
+  "idle_upper_usd": 11.079953209240326,
+  "per_worker_busy_hours": {
+    "min": 5.875803960268332,
+    "p25": 6.039714000261666,
+    "median": 6.417590847715279,
+    "p75": 7.096276033016945,
+    "max": 7.5941216302605525
+  },
+  "job_walltime_minutes": {
+    "min": 15.764579158866672,
+    "p50": 50.72773290096666,
+    "p90": 149.40799614298334,
+    "p99": 200.3963449710333,
+    "max": 205.62700957939998
+  },
+  "longest_jobs": [
+    {
+      "job_id": "opponent-family__random_forest_tuned__s127",
+      "minutes": 205.62700957939998
+    },
+    {
+      "job_id": "opponent-family__random_forest_tuned__s131",
+      "minutes": 202.10890941749997
+    },
+    {
+      "job_id": "opponent-hull__random_forest_tuned__s107",
+      "minutes": 200.3963449710333
+    },
+    {
+      "job_id": "opponent-hull__random_forest_tuned__s131",
+      "minutes": 191.91310698491668
+    },
+    {
+      "job_id": "opponent__random_forest_tuned__s137",
+      "minutes": 190.33829590933334
+    },
+    {
+      "job_id": "opponent-family__random_forest_tuned__s101",
+      "minutes": 184.49825604226666
+    },
+    {
+      "job_id": "opponent__random_forest_tuned__s113",
+      "minutes": 169.05244049114998
+    },
+    {
+      "job_id": "opponent-family__random_forest_tuned__s139",
+      "minutes": 161.97519112510003
+    },
+    {
+      "job_id": "opponent__random_forest_tuned__s103",
+      "minutes": 161.24219826568333
+    },
+    {
+      "job_id": "opponent__random_forest_tuned__s127",
+      "minutes": 160.852242223
+    }
+  ],
+  "lpt_makespan_hours_by_fleet_size": {
+    "18": 13.319354282742783,
+    "24": 9.985683776120835,
+    "36": 6.774981169470282,
+    "48": 5.169172367459727
+  },
+  "makespan_lower_bound_hours_36": 6.586747066431407,
+  "per_cell_walltime_minutes": {
+    "build__catboost_regressor": {
+      "n": 10,
+      "min_minutes": 50.74207605061667,
+      "median_minutes": 51.34506726325,
+      "max_minutes": 53.68920060645
+    },
+    "build__random_forest_tuned": {
+      "n": 10,
+      "min_minutes": 144.76298192355,
+      "median_minutes": 146.30725289621665,
+      "max_minutes": 151.62455884771668
+    },
+    "build__sparse_pairwise_ridge": {
+      "n": 10,
+      "min_minutes": 40.91571301031666,
+      "median_minutes": 41.91754798508334,
+      "max_minutes": 44.192962328149996
+    },
+    "component-vocab__catboost_regressor": {
+      "n": 10,
+      "min_minutes": 40.972180220766674,
+      "median_minutes": 50.08158547694999,
+      "max_minutes": 53.42173910710002
+    },
+    "component-vocab__random_forest_tuned": {
+      "n": 10,
+      "min_minutes": 81.40604452854998,
+      "median_minutes": 142.32282397363332,
+      "max_minutes": 159.33094598595
+    },
+    "component-vocab__sparse_pairwise_ridge": {
+      "n": 10,
+      "min_minutes": 21.936812754933364,
+      "median_minutes": 37.328798352499994,
+      "max_minutes": 42.11176929229999
+    },
+    "forward-time__catboost_regressor": {
+      "n": 1,
+      "min_minutes": 47.501197895066674,
+      "median_minutes": 47.501197895066674,
+      "max_minutes": 47.501197895066674
+    },
+    "forward-time__random_forest_tuned": {
+      "n": 1,
+      "min_minutes": 105.41183915339995,
+      "median_minutes": 105.41183915339995,
+      "max_minutes": 105.41183915339995
+    },
+    "forward-time__sparse_pairwise_ridge": {
+      "n": 1,
+      "min_minutes": 84.54596620045001,
+      "median_minutes": 84.54596620045001,
+      "max_minutes": 84.54596620045001
+    },
+    "opponent__catboost_regressor": {
+      "n": 10,
+      "min_minutes": 38.86070905,
+      "median_minutes": 45.991918670416666,
+      "max_minutes": 50.95379981456666
+    },
+    "opponent__random_forest_tuned": {
+      "n": 10,
+      "min_minutes": 84.29398031548334,
+      "median_minutes": 134.60855080966667,
+      "max_minutes": 190.33829590933334
+    },
+    "opponent__sparse_pairwise_ridge": {
+      "n": 10,
+      "min_minutes": 24.380926269049997,
+      "median_minutes": 36.09008824413334,
+      "max_minutes": 83.96776706033333
+    },
+    "opponent-family__catboost_regressor": {
+      "n": 10,
+      "min_minutes": 29.670796537166673,
+      "median_minutes": 42.5508734931,
+      "max_minutes": 51.04378330843331
+    },
+    "opponent-family__random_forest_tuned": {
+      "n": 10,
+      "min_minutes": 50.09508701583333,
+      "median_minutes": 113.36684847465,
+      "max_minutes": 205.62700957939998
+    },
+    "opponent-family__sparse_pairwise_ridge": {
+      "n": 10,
+      "min_minutes": 15.764579158866672,
+      "median_minutes": 42.54570867291665,
+      "max_minutes": 89.77057666328331
+    },
+    "opponent-hull__catboost_regressor": {
+      "n": 10,
+      "min_minutes": 41.737622670666646,
+      "median_minutes": 45.751508462599986,
+      "max_minutes": 50.965707234416655
+    },
+    "opponent-hull__random_forest_tuned": {
+      "n": 10,
+      "min_minutes": 109.18770954945002,
+      "median_minutes": 146.8093889562,
+      "max_minutes": 200.3963449710333
+    },
+    "opponent-hull__sparse_pairwise_ridge": {
+      "n": 10,
+      "min_minutes": 24.151864910866667,
+      "median_minutes": 35.024067798183324,
+      "max_minutes": 46.109740891783346
+    },
+    "seed-cell__catboost_regressor": {
+      "n": 10,
+      "min_minutes": 48.448202422483334,
+      "median_minutes": 50.8678515334,
+      "max_minutes": 53.87302087598327
+    },
+    "seed-cell__random_forest_tuned": {
+      "n": 10,
+      "min_minutes": 145.3895046428333,
+      "median_minutes": 147.92757438184998,
+      "max_minutes": 156.8862898337
+    },
+    "seed-cell__sparse_pairwise_ridge": {
+      "n": 10,
+      "min_minutes": 41.20581804760004,
+      "median_minutes": 42.271159086450034,
+      "max_minutes": 44.25584445458329
+    }
+  }
+}

@@ -14,6 +14,7 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any
@@ -802,7 +803,7 @@ def create_control_plane_app(
 
     @app.post("/event/<job_id>")
     def event(job_id: str) -> tuple[Any, int]:
-        payload = request.get_json(silent=True) or {}
+        payload = _stamp_received(request.get_json(silent=True) or {})
         try:
             state.record_event(job_id, payload)
             if config is not None:
@@ -817,7 +818,7 @@ def create_control_plane_app(
 
     @app.post("/worker-event")
     def worker_event() -> tuple[Any, int]:
-        payload = request.get_json(silent=True) or {}
+        payload = _stamp_received(request.get_json(silent=True) or {})
         if config is not None:
             _append_jsonl(config.output_dir / "events" / "worker-events.jsonl", payload)
         return jsonify({"status": "accepted"}), 200
@@ -2073,3 +2074,11 @@ def _append_jsonl(path: Path, payload: Mapping[str, Any]) -> None:
         fh.write(json.dumps(dict(payload), sort_keys=True) + "\n")
         fh.flush()
         os.fsync(fh.fileno())
+
+
+def _stamp_received(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Stamp control-plane receipt time (one clock for all workers) so batch
+    walltime analyses can reconstruct job timelines from the event logs."""
+    stamped = dict(payload)
+    stamped["received_at_utc"] = datetime.now(UTC).isoformat()
+    return stamped
