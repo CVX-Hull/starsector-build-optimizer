@@ -9,6 +9,8 @@ import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
+import org.jspecify.annotations.Nullable;
+
 import java.io.IOException;
 import java.util.List;
 
@@ -33,8 +35,8 @@ public class ResultWriter {
                                                  float effHullHpPct,
                                                  float ballisticRangeBonus,
                                                  float shieldDamageTakenMult,
-                                                 JSONArray loadoutDiagnosticPlayer,
-                                                 JSONArray debugDumps)
+                                                 @Nullable JSONArray loadoutDiagnosticPlayer,
+                                                 @Nullable JSONArray debugDumps)
             throws JSONException {
         return buildMatchupResult(
                 config, playerShips, enemyShips, tracker, winner, duration,
@@ -55,35 +57,28 @@ public class ResultWriter {
                                                  float effHullHpPct,
                                                  float ballisticRangeBonus,
                                                  float shieldDamageTakenMult,
-                                                 JSONArray loadoutDiagnosticPlayer,
-                                                 JSONArray debugDumps,
-                                                 JSONObject traceContext)
+                                                 @Nullable JSONArray loadoutDiagnosticPlayer,
+                                                 @Nullable JSONArray debugDumps,
+                                                 @Nullable JSONObject traceContext)
             throws JSONException {
         JSONArray playerArr = new JSONArray();
         JSONArray enemyArr = new JSONArray();
 
-        float playerTotalDealt = 0f;
-        float enemyTotalDealt = 0f;
         int playerDestroyed = 0;
         int enemyDestroyed = 0;
 
         for (ShipAPI ship : playerShips) {
-            JSONObject shipJson = shipToJSON(ship, tracker);
-            playerArr.put(shipJson);
-            JSONObject dealt = shipJson.getJSONObject("damage_dealt");
-            playerTotalDealt += dealt.getDouble("shield") + dealt.getDouble("armor")
-                    + dealt.getDouble("hull") + dealt.getDouble("emp");
+            playerArr.put(shipToJSON(ship, tracker));
             if (!ship.isAlive()) playerDestroyed++;
         }
 
         for (ShipAPI ship : enemyShips) {
-            JSONObject shipJson = shipToJSON(ship, tracker);
-            enemyArr.put(shipJson);
-            JSONObject dealt = shipJson.getJSONObject("damage_dealt");
-            enemyTotalDealt += dealt.getDouble("shield") + dealt.getDouble("armor")
-                    + dealt.getDouble("hull") + dealt.getDouble("emp");
+            enemyArr.put(shipToJSON(ship, tracker));
             if (!ship.isAlive()) enemyDestroyed++;
         }
+
+        double playerTotalDealt = totalDamageDealt(playerArr);
+        double enemyTotalDealt = totalDamageDealt(enemyArr);
 
         JSONObject result = new JSONObject();
         result.put("matchup_id", config.matchupId);
@@ -128,6 +123,22 @@ public class ResultWriter {
             result.put("debug_dumps", debugDumps);
         }
         return result;
+    }
+
+    /**
+     * Sum shield+armor+hull+emp {@code damage_dealt} across an array of ship
+     * result JSONs in double precision. Package-visible for testing: the
+     * previous float accumulator silently dropped increments smaller than the
+     * running total's ULP (a real precision bug once totals exceed ~2^24).
+     */
+    static double totalDamageDealt(JSONArray ships) throws JSONException {
+        double total = 0.0;
+        for (int i = 0; i < ships.length(); i++) {
+            JSONObject dealt = ships.getJSONObject(i).getJSONObject("damage_dealt");
+            total += dealt.getDouble("shield") + dealt.getDouble("armor")
+                    + dealt.getDouble("hull") + dealt.getDouble("emp");
+        }
+        return total;
     }
 
     /**
@@ -273,7 +284,7 @@ public class ResultWriter {
         return json;
     }
 
-    public static JSONObject aggregateToJSON(float playerTotalDealt, float enemyTotalDealt,
+    public static JSONObject aggregateToJSON(double playerTotalDealt, double enemyTotalDealt,
                                              int playerDestroyed, int enemyDestroyed,
                                              int playerRetreated, int enemyRetreated)
             throws JSONException {

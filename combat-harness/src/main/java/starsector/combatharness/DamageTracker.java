@@ -7,6 +7,8 @@ import com.fs.starfarer.api.combat.ShipAPI;
 import com.fs.starfarer.api.combat.listeners.ApplyDamageResultAPI;
 import com.fs.starfarer.api.combat.listeners.DamageListener;
 
+import org.jspecify.annotations.Nullable;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -65,9 +67,7 @@ public class DamageTracker implements DamageListener {
                                     ApplyDamageResultAPI result) {
         ShipAPI sourceShip = resolveSourceShip(source);
         if (sourceShip == null) return;
-        if (!(target instanceof ShipAPI)) return;
-
-        ShipAPI targetShip = (ShipAPI) target;
+        if (!(target instanceof ShipAPI targetShip)) return;
 
         // Skip friendly fire
         if (sourceShip.getOwner() == targetShip.getOwner()) return;
@@ -82,15 +82,15 @@ public class DamageTracker implements DamageListener {
         );
     }
 
-    private ShipAPI resolveSourceShip(Object source) {
-        if (source instanceof ShipAPI) {
-            return (ShipAPI) source;
+    private @Nullable ShipAPI resolveSourceShip(Object source) {
+        if (source instanceof ShipAPI ship) {
+            return ship;
         }
-        if (source instanceof DamagingProjectileAPI) {
-            return ((DamagingProjectileAPI) source).getSource();
+        if (source instanceof DamagingProjectileAPI projectile) {
+            return projectile.getSource();
         }
-        if (source instanceof BeamAPI) {
-            return ((BeamAPI) source).getSource();
+        if (source instanceof BeamAPI beam) {
+            return beam.getSource();
         }
         return null;
     }

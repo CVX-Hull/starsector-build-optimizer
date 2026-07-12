@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: unvalidated
+last-validated: 2026-07-12
 ---
 
 # Result Writer Specification
@@ -10,9 +10,9 @@ Constructs result JSON from tracked ship data and writes batch results via Setti
 
 ## Functions
 
-### `static JSONObject buildMatchupResult(MatchupConfig config, List<ShipAPI> playerShips, List<ShipAPI> enemyShips, DamageTracker tracker, String winner, float duration, float effMaxFlux, float effFluxDissipation, float effArmorRating, float effHullHpPct, float ballisticRangeBonus, float shieldDamageTakenMult, JSONArray loadoutDiagnosticPlayer, JSONArray debugDumps)`
+### `static JSONObject buildMatchupResult(MatchupConfig config, List<ShipAPI> playerShips, List<ShipAPI> enemyShips, DamageTracker tracker, String winner, float duration, float effMaxFlux, float effFluxDissipation, float effArmorRating, float effHullHpPct, float ballisticRangeBonus, float shieldDamageTakenMult, @Nullable JSONArray loadoutDiagnosticPlayer, @Nullable JSONArray debugDumps, @Nullable JSONObject traceContext)`
 
-Build a single matchup result JSONObject from directly-tracked ShipAPI references. Does NOT use fleet manager (which accumulates across matchups in batched sessions).
+Build a single matchup result JSONObject from directly-tracked ShipAPI references. Does NOT use fleet manager (which accumulates across matchups in batched sessions). A 14-parameter convenience overload (identical, minus `traceContext`) delegates here with `traceContext = null`.
 
 - `winner`: `"PLAYER"`, `"ENEMY"`, or `"TIMEOUT"`
 - `duration`: combat time for this matchup (relative, not cumulative engine time)
@@ -38,8 +38,14 @@ Build a single matchup result JSONObject from directly-tracked ShipAPI reference
   builds that emit no key). Only `[FIGHT_TICK]` is gated on
   `MatchupConfig.debugDumpsEnabled`; SETUP `[SHIP_DUMP]` and one-shot
   `[WIN_DUMP]` are always-on (bounded ~4-8 lines per matchup).
+- `traceContext`: mission/plugin queue-hash provenance `JSONObject`.
+  **Optional emission** — written under top-level `trace_context` only when
+  non-null.
 - Ship data extracted via `shipToJSON()` for each tracked ship
-- Aggregate stats computed from the ship lists (destroyed = `!ship.isAlive()` count)
+- Aggregate stats computed from the ship lists (destroyed = `!ship.isAlive()`
+  count); total-damage sums accumulate in `double` via `totalDamageDealt()` —
+  a `float` running total silently drops per-ship increments once the total
+  crosses the float mantissa width
 
 ### `static JSONObject buildSetupStatsJSON(float effMaxFlux, float effFluxDissipation, float effArmorRating, float effHullHpPct, float ballisticRangeBonus, float shieldDamageTakenMult)`
 
@@ -70,12 +76,15 @@ Write the batch results array to `combat_harness_results.json` via SettingsAPI.
 ### `static void writeDoneSignal()`
 Write `combat_harness_done` signal file (contains timestamp) via SettingsAPI.
 
-### `static void writeHeartbeat(float elapsedTime)`
-Write heartbeat to `combat_harness_heartbeat.txt` via SettingsAPI. Non-fatal on failure.
+### `static void writeHeartbeat(float elapsedTime, float playerHpFraction, float enemyHpFraction, int playerAlive, int enemyAlive)`
+Write enriched heartbeat to `combat_harness_heartbeat.txt` via SettingsAPI.
+Non-fatal on failure. Six space-separated fields (leading `timestamp_ms` is
+generated internally), formatted by package-visible `formatHeartbeat(...)`.
 
 ### Static JSON Helpers (JUnit-testable)
 
 - `damageToJSON(shield, armor, hull, emp)` → `{"shield": N, "armor": N, ...}`
 - `fluxStatsToJSON(currFlux, hardFlux, maxFlux, overloadCount)` → `{...}`
-- `aggregateToJSON(playerDealt, enemyDealt, playerDestroyed, enemyDestroyed, playerRetreated, enemyRetreated)` → `{...}`
+- `aggregateToJSON(playerDealt, enemyDealt, playerDestroyed, enemyDestroyed, playerRetreated, enemyRetreated)` → `{...}` (damage totals are `double`)
+- `totalDamageDealt(JSONArray ships)` → `double` sum of `damage_dealt` shield+armor+hull+emp across ship JSONs (double-precision accumulation seam)
 - `computeArmorFraction(ShipAPI)` → average armor grid cells / max

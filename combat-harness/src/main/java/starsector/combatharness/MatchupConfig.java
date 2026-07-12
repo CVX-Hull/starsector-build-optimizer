@@ -167,9 +167,9 @@ public class MatchupConfig {
             JSONObject weaponsObj = json.optJSONObject("weapon_assignments");
             Map<String, String> weaponAssignments = new HashMap<String, String>();
             if (weaponsObj != null) {
-                Iterator<String> keys = weaponsObj.keys();
+                Iterator<?> keys = weaponsObj.keys();
                 while (keys.hasNext()) {
-                    String slotId = keys.next();
+                    String slotId = (String) keys.next();
                     weaponAssignments.put(slotId, weaponsObj.getString(slotId));
                 }
             }

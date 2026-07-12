@@ -19,6 +19,7 @@ import com.fs.starfarer.api.mission.FleetSide;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.jspecify.annotations.Nullable;
 import org.lwjgl.util.vector.Vector2f;
 
 import org.apache.log4j.Logger;
@@ -70,8 +71,14 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private CombatEngineAPI engine;
     private State state = State.INIT;
+    // State-machine field: assigned in doInit() (first advance() frame), not in init().
+    @SuppressWarnings("NullAway.Init")
     private MatchupQueue queue;
+    // State-machine field: assigned in doInit() (first advance() frame), not in init().
+    @SuppressWarnings("NullAway.Init")
     private MatchupConfig currentConfig;
+    // State-machine field: assigned in doSetup(); null-checked in the SETUP_TIMEOUT abort path.
+    @SuppressWarnings("NullAway.Init")
     private DamageTracker currentTracker;
     private List<ShipAPI> playerShips = new ArrayList<ShipAPI>();
     private List<ShipAPI> enemyShips = new ArrayList<ShipAPI>();
@@ -128,11 +135,11 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         frameCount++;
 
         switch (state) {
-            case SETUP:      doSetup(); break;
-            case FIGHTING:   doFighting(); break;
-            case DONE:       doDone(); break;
-            case WAITING:    doWaiting(); break;
-            default: break;   // INIT/PROBE_* handled above
+            case SETUP -> doSetup();
+            case FIGHTING -> doFighting();
+            case DONE -> doDone();
+            case WAITING -> doWaiting();
+            default -> { }   // INIT/PROBE_* handled above
         }
     }
 
@@ -206,6 +213,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     private ProbePhase probePhase = ProbePhase.BASE;
 
     // Base-phase ordered iterator (deterministic — sorted by hullId).
+    // State-machine field: assigned in beginProbeIterate(), not in init().
+    @SuppressWarnings("NullAway.Init")
     private Iterator<ShipHullSpecAPI> probeHullIter;
     // Phase 1 output: hullId → applicable mod IDs.
     private final Map<String, Set<String>> applicableByHull =
@@ -216,6 +225,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
     // Determinism canary: mod IDs whose two probes disagreed.
     private final Set<String> statefulMods = new TreeSet<String>();
     // Phase 2 work queue (filled after Phase 1 completes).
+    // State-machine field: assigned at BASE→CONDITIONAL phase transition, not in init().
+    @SuppressWarnings("NullAway.Init")
     private Iterator<String> condHullQueueIter;
 
     /** Wait for the MissionDefinition stub (wolf + lasher) to deploy,
@@ -259,6 +270,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         List<ShipHullSpecAPI> hulls = new ArrayList<ShipHullSpecAPI>(
                 Global.getSettings().getAllShipHullSpecs());
         java.util.Collections.sort(hulls, new java.util.Comparator<ShipHullSpecAPI>() {
+            @Override
             public int compare(ShipHullSpecAPI a, ShipHullSpecAPI b) {
                 return a.getHullId().compareTo(b.getHullId());
             }
@@ -411,8 +423,8 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     /** Create an empty-variant FleetMember + spawn off-map. Built-ins
      *  inherit automatically via the hullSpec link (ShipVariantAPI.java:30–33). */
-    private ShipAPI spawnProbeShip(CombatFleetManagerAPI fm,
-                                   ShipHullSpecAPI hullSpec, int batchSlot) {
+    private @Nullable ShipAPI spawnProbeShip(CombatFleetManagerAPI fm,
+                                             ShipHullSpecAPI hullSpec, int batchSlot) {
         try {
             ShipVariantAPI v = Global.getSettings()
                     .createEmptyVariant(hullSpec.getHullId() + "_probe", hullSpec);
@@ -867,6 +879,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
         // Launch Robot dismiss thread BEFORE endCombat — the engine may stop
         // calling advance() after endCombat, so doDone() might never execute.
         new Thread(new Runnable() {
+            @Override
             public void run() {
                 MenuNavigator.dismissResults();
             }
@@ -1070,9 +1083,9 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
 
     private static boolean weaponMapsEqual(JSONObject a, JSONObject b) {
         if (a.length() != b.length()) return false;
-        Iterator<String> keys = a.keys();
+        Iterator<?> keys = a.keys();
         while (keys.hasNext()) {
-            String k = keys.next();
+            String k = (String) keys.next();
             if (!b.has(k)) return false;
             String av = a.optString(k, "__NULL_A__");
             String bv = b.optString(k, "__NULL_B__");
@@ -1135,7 +1148,7 @@ public class CombatHarnessPlugin extends BaseEveryFrameCombatPlugin {
      * the symptom is 100% SETUP_TIMEOUT, fitness=-2.0, stale_owner0=1.
      */
     static boolean matchesAnyExpectedVariantId(
-            String vid, java.util.Set<String> expectedBaseIds) {
+            @Nullable String vid, java.util.Set<String> expectedBaseIds) {
         if (vid == null) return false;
         if (expectedBaseIds.contains(vid)) return true;
         int suffixLen = VariantBuilder.UNIQUE_VARIANT_SUFFIX_HEX_CHARS;

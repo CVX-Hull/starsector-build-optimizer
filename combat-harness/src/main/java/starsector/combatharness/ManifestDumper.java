@@ -14,6 +14,7 @@ import org.apache.log4j.Logger;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+import org.jspecify.annotations.Nullable;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -122,8 +123,8 @@ public final class ManifestDumper {
      *  @return part count written. */
     static int writeHullsSplit(JSONObject hulls) throws JSONException, IOException {
         java.util.List<String> sortedKeys = new java.util.ArrayList<String>();
-        java.util.Iterator<String> it = hulls.keys();
-        while (it.hasNext()) sortedKeys.add(it.next());
+        java.util.Iterator<?> it = hulls.keys();
+        while (it.hasNext()) sortedKeys.add((String) it.next());
         java.util.Collections.sort(sortedKeys);
 
         java.util.List<JSONObject> chunks = new java.util.ArrayList<JSONObject>();
@@ -154,8 +155,8 @@ public final class ManifestDumper {
      * -------------------------------------------------------------------- */
 
     static JSONObject buildConstantsJson(
-            String gameVersion, String modCommitSha,
-            Set<String> statefulMods) throws JSONException {
+            @Nullable String gameVersion, @Nullable String modCommitSha,
+            @Nullable Set<String> statefulMods) throws JSONException {
         JSONObject c = new JSONObject();
         c.put("game_version", gameVersion == null ? "" : gameVersion);
         c.put("manifest_schema_version", SCHEMA_VERSION);
@@ -320,7 +321,7 @@ public final class ManifestDumper {
     static JSONObject hullSpecToJson(
             ShipHullSpecAPI spec,
             Set<String> applicableHullmods,
-            Map<String, Set<String>> conditionalExclusions) throws JSONException {
+            @Nullable Map<String, Set<String>> conditionalExclusions) throws JSONException {
         JSONObject j = new JSONObject();
         j.put("id", spec.getHullId());
         j.put("size", String.valueOf(spec.getHullSize()));
@@ -395,26 +396,26 @@ public final class ManifestDumper {
      * Helpers
      * -------------------------------------------------------------------- */
 
-    static String damageTypeToString(DamageType d) {
+    static String damageTypeToString(@Nullable DamageType d) {
         return d == null ? "UNKNOWN" : d.name();
     }
 
-    static String shieldTypeToString(ShieldAPI.ShieldType t) {
+    static String shieldTypeToString(ShieldAPI.@Nullable ShieldType t) {
         return t == null ? "UNKNOWN" : t.name();
     }
 
-    static String safeString(String s) {
+    static String safeString(@Nullable String s) {
         return s == null ? "" : s;
     }
 
-    static <T> JSONArray listToJsonArray(List<T> items) {
+    static <T> JSONArray listToJsonArray(@Nullable List<T> items) {
         JSONArray arr = new JSONArray();
         if (items == null) return arr;
         for (T it : items) arr.put(String.valueOf(it));
         return arr;
     }
 
-    static JSONArray toSortedJsonArray(Set<String> set) {
+    static JSONArray toSortedJsonArray(@Nullable Set<String> set) {
         JSONArray arr = new JSONArray();
         if (set == null) return arr;
         TreeSet<String> sorted = new TreeSet<String>(set);

@@ -3,7 +3,6 @@ package starsector.combatharness;
 import com.fs.starfarer.api.GameState;
 import com.fs.starfarer.api.Global;
 import com.fs.starfarer.api.combat.BaseEveryFrameCombatPlugin;
-import com.fs.starfarer.api.combat.CombatEngineAPI;
 import com.fs.starfarer.api.input.InputEventAPI;
 
 import org.apache.log4j.Logger;
@@ -62,6 +61,7 @@ public class TitleScreenPlugin extends BaseEveryFrameCombatPlugin {
 
         // Navigate in a separate thread (Robot delays would block the rendering thread)
         new Thread(new Runnable() {
+            @Override
             public void run() {
                 MenuNavigator.navigateToMission();
             }

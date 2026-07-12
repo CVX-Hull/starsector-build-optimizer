@@ -25,10 +25,6 @@ public class MenuNavigator {
     // Robot uses absolute screen coordinates.
     // Recorded by tracking mouse position during manual navigation.
 
-    // "Play Starsector" button on launcher (597x373 Swing window at 0,0)
-    private static final int LAUNCHER_X = 297;
-    private static final int LAUNCHER_Y = 255;
-
     // "Missions" button on main menu (calibrated for 1920x1080 Xvfb fullscreen)
     private static final int MISSIONS_X = 1401;
     private static final int MISSIONS_Y = 453;

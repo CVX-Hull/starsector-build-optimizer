@@ -39,7 +39,7 @@ class ResultWriterTest {
     @Test
     void formatHeartbeatHas6Fields() {
         String heartbeat = ResultWriter.formatHeartbeat(10.5f, 0.85f, 0.42f, 2, 1);
-        String[] parts = heartbeat.split(" ");
+        String[] parts = heartbeat.split(" ", -1);
         assertEquals(6, parts.length, "Heartbeat should have 6 space-separated fields");
         // Field 0: timestamp (long)
         assertTrue(Long.parseLong(parts[0]) > 0);
@@ -65,6 +65,28 @@ class ResultWriterTest {
         assertEquals(2, json.getInt("enemy_ships_destroyed"));
         assertEquals(0, json.getInt("player_ships_retreated"));
         assertEquals(1, json.getInt("enemy_ships_retreated"));
+    }
+
+    @Test
+    void totalDamageDealtAccumulatesInDoublePrecision() throws Exception {
+        // Regression for the float-accumulator bug (2026-07-12): 2^24 is the
+        // float precision cliff — 16777216f + 1f == 16777216f, so a float
+        // running total silently dropped every later small hit. The double
+        // accumulator must count all of them exactly.
+        JSONArray ships = new JSONArray();
+        ships.put(new JSONObject().put("damage_dealt",
+                ResultWriter.damageToJSON(16_777_216f, 0f, 0f, 0f)));
+        ships.put(new JSONObject().put("damage_dealt",
+                ResultWriter.damageToJSON(0f, 1f, 0f, 0f)));
+        ships.put(new JSONObject().put("damage_dealt",
+                ResultWriter.damageToJSON(0f, 0f, 1f, 0f)));
+        ships.put(new JSONObject().put("damage_dealt",
+                ResultWriter.damageToJSON(0f, 0f, 0f, 1f)));
+
+        double total = ResultWriter.totalDamageDealt(ships);
+
+        assertEquals(16_777_219.0, total, 0.0,
+                "sum must be exact in double; a float accumulator yields 16777216");
     }
 
     @Test

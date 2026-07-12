@@ -31,6 +31,7 @@ public class MissionDefinition implements MissionDefinitionPlugin {
 
     private static final Logger log = Logger.getLogger(MissionDefinition.class);
 
+    @Override
     public void defineMission(MissionDefinitionAPI api) {
         log.info("optimizer_arena.MissionDefinition: defineMission entered");
         // Manifest-probe branch: triggered by the Python update_manifest.py
