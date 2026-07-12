@@ -27,7 +27,7 @@ from starsector_optimizer.opponent_pool import (
 from starsector_optimizer.optimizer import (
     OptimizerConfig,
     BuildCache,
-    _CachedTrialResult,
+    CachedTrialResult,
     define_distributions,
     trial_params_to_build,
     warm_start,
@@ -156,7 +156,7 @@ try:
             # fitness stands in for all three cached fitness fields.
             cache.put(
                 build,
-                _CachedTrialResult(
+                CachedTrialResult(
                     shaped_fitness=fitness,
                     eb_fitness=fitness,
                     twfe_fitness=fitness,

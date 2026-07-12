@@ -137,9 +137,9 @@ class TestBuildCache:
         assert cache.get(build) is None
 
     def test_cache_hit_returns_full_triple(self):
-        """Cache stores _CachedTrialResult so cache-hit JSONL rows can
+        """Cache stores CachedTrialResult so cache-hit JSONL rows can
         carry the origin's eb/twfe values + origin trial pointer."""
-        from starsector_optimizer.optimizer import _CachedTrialResult
+        from starsector_optimizer.optimizer import CachedTrialResult
 
         cache = BuildCache()
         build = Build(
@@ -149,7 +149,7 @@ class TestBuildCache:
             flux_vents=5,
             flux_capacitors=3,
         )
-        result = _CachedTrialResult(
+        result = CachedTrialResult(
             shaped_fitness=0.42,
             eb_fitness=0.55,
             twfe_fitness=0.60,

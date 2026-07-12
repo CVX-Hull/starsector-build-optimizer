@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: active
+status: implemented
 created: 2026-07-12
 approved: 2026-07-12
-implemented: null
+implemented: 2026-07-12
 owner: agent
 related_docs:
   - docs/reports/2026-07-12-quality-tooling-research.md
@@ -11,8 +11,8 @@ related_docs:
   - CLAUDE.md
   - .claude/skills/design-invariants.md
   - .claude/skills/post-impl-audit.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: 6452ddd, 0e42359, 8e6fdcf (+ audit closure in the retirement commit)
+post_impl_audit: passed (3 lanes, 0 medium/high; nuances recorded in findings; CachedTrialResult made public in the retirement commit)
 superseded_by: null
 ---
 
@@ -184,7 +184,7 @@ every workstream here.
 
 ## Critical files
 
-`pyproject.toml`; ~20 zip sites across `src/` + `scripts/` + `tests/`
+`pyproject.toml`; 18 zip sites across `src/` + `scripts/` + `tests/`
 (enumerate via `ruff check --select B905`); `scripts/**/*.py` (mypy);
 `.githooks/pre-commit`; `.git-blame-ignore-revs` (new); repo-wide
 `*.py` (format); `docs/roadmap.md`; CLAUDE.md; the two mechanical-list
@@ -286,6 +286,14 @@ Engineering & Design Invariants). Consolidated (T-labels):
 - **Format one-shot:** commit `0e42359` (93/96 files), listed in
   `.git-blame-ignore-revs`; `blame.ignoreRevsFile` configured in this
   clone.
+- **Post-impl audit nuances (all lanes clean of medium/high):** the
+  8e6fdcf "byte-identical" claim holds for rendered/asserted text but
+  not literally for two SQLite statement constants (whitespace inside
+  the string; SQL is whitespace-insensitive, nothing asserts on them)
+  and two ternary→if/else hoists (rendered output AST-verified
+  identical). `_CachedTrialResult` → `CachedTrialResult` at retirement:
+  it is `BuildCache.put`'s contract type, so the private name was wrong
+  once a script legitimately constructs it (invariants-lane finding).
 
 ## Plan Review Gate
 
@@ -320,7 +328,12 @@ per post-impl-audit skill.
 
 ## Retirement checklist
 
-- [ ] All scope items DONE or DEFERRED (with user approval).
-- [ ] Frontmatter lifecycle fields set; archive to `.claude/plans/archive/2026/`.
-- [ ] Roadmap carries zero deferred-tooling items (the user directive).
-- [ ] AMI re-bake note still visible for the next launch.
+- [x] All scope items DONE (W-1..W-6; no deferrals beyond the
+      report-owned premise watches).
+- [x] Frontmatter lifecycle fields set; archived to
+      `.claude/plans/archive/2026/`.
+- [x] Roadmap carries zero deferred-tooling items (user directive met;
+      surviving premise watches owned by the research report, vulture
+      procedure owned by the post-impl-audit skill).
+- [x] AMI re-bake owed before the next cloud launch (src/ changed again;
+      running attempt 3 unaffected).

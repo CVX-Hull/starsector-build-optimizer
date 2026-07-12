@@ -113,7 +113,7 @@ class OptimizerConfig:
 
 
 @dataclass(frozen=True)
-class _CachedTrialResult:
+class CachedTrialResult:
     """Full fitness triple + origin pointer cached on first
     trial-completion of a Build, so cache-hit trials can emit a JSONL
     row that's *complete but not misleading*.
@@ -138,7 +138,7 @@ class _CachedTrialResult:
 class BuildCache:
     """Hash-based deduplication cache for repaired builds.
 
-    Stores `_CachedTrialResult` so cache-hit trials can both:
+    Stores `CachedTrialResult` so cache-hit trials can both:
       - report the original's `shaped_fitness` to Optuna (primary use), AND
       - emit a JSONL row carrying the original's `eb_fitness` /
         `twfe_fitness` / opponent_results, marked `cache_hit=True`,
@@ -147,7 +147,7 @@ class BuildCache:
     """
 
     def __init__(self) -> None:
-        self._cache: dict[str, _CachedTrialResult] = {}
+        self._cache: dict[str, CachedTrialResult] = {}
 
     def hash_build(self, build: Build) -> str:
         """Stable hash from hull_id + weapon assignments + hullmods + vents + caps."""
@@ -160,10 +160,10 @@ class BuildCache:
         )
         return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
-    def get(self, build: Build) -> _CachedTrialResult | None:
+    def get(self, build: Build) -> CachedTrialResult | None:
         return self._cache.get(self.hash_build(build))
 
-    def put(self, build: Build, result: _CachedTrialResult) -> None:
+    def put(self, build: Build, result: CachedTrialResult) -> None:
         self._cache[self.hash_build(build)] = result
 
 
@@ -1016,7 +1016,7 @@ class StagedEvaluator:
 
         self._cache.put(
             ifb.build,
-            _CachedTrialResult(
+            CachedTrialResult(
                 shaped_fitness=shaped_fitness,
                 eb_fitness=eb_fitness,
                 twfe_fitness=twfe_fitness,
