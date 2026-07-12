@@ -65,6 +65,31 @@ CANONICAL_MODELS: tuple[str, ...] = (
 # phase7_matchup_data so the experiment script and this validator cannot
 # drift.
 
+# Longest-expected-first (LPT) dispatch ranking — designed policy constants,
+# lower rank dispatches earlier. Provenance: the 2026-07-12 tail-walltime
+# analysis (docs/reports/2026-07-12-phase7-tail-walltime.md). Model family
+# dominates measured job duration across the whole matrix; the within-family
+# split ranking (opponent-hierarchy splits first) is evidence-backed within
+# random_forest_tuned only and acts as a harmless tie-break for the other
+# families. Values absent from a table rank first (forward-compat defense:
+# unreachable through a validated config, but a future family without a
+# measured ranking should be scheduled pessimistically early).
+_DISPATCH_UNKNOWN_RANK = -1
+DISPATCH_MODEL_RANK: dict[str, int] = {
+    "random_forest_tuned": 0,
+    "catboost_regressor": 1,
+    "sparse_pairwise_ridge": 2,
+}
+DISPATCH_SPLIT_RANK: dict[str, int] = {
+    "opponent-family": 0,
+    "opponent-hull": 1,
+    "opponent": 2,
+    "component-vocab": 3,
+    "seed-cell": 4,
+    "build": 5,
+    "forward-time": 6,
+}
+
 
 # A completed experiment is the most expensive artifact on a worker, so the
 # result upload retries transient control-plane/network failures instead of
@@ -192,7 +217,19 @@ class BatchState:
         self._lease_grace_seconds = lease_grace_seconds
         self._max_attempts = max_attempts
         self._states = {job.job_id: _JobState(job=job, events=[]) for job in jobs}
+        self._drained_worker_ids: set[str] = set()
         self._lock = Lock()
+
+    def record_worker_drained(self, worker_id: str) -> None:
+        """Record a worker that self-terminated on the drained lease verdict,
+        so the monitor can reconcile it out of pending-instance accounting
+        even if it never appeared in the provider's active listing."""
+        with self._lock:
+            self._drained_worker_ids.add(worker_id)
+
+    def drained_worker_ids(self) -> frozenset[str]:
+        with self._lock:
+            return frozenset(self._drained_worker_ids)
 
     def lease(self, *, now: float | None = None, worker_id: str) -> JobLease | None:
         now = time.time() if now is None else now
@@ -542,7 +579,8 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
     job_count = len(generate_jobs(config))
     if not (1 <= config.target_workers <= job_count):
         # Workers drain a lease queue; a fleet larger than the job count
-        # would idle instantly, and zero workers cannot start.
+        # would self-terminate on the drained verdict at boot, wasting the
+        # provisioning, and zero workers cannot start.
         raise ValueError("target_workers must be between 1 and the job count")
     if config.target_workers % len(config.regions) != 0:
         raise ValueError(
@@ -642,6 +680,26 @@ def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
                     )
                 )
     return tuple(jobs)
+
+
+def order_jobs_for_dispatch(
+    jobs: Sequence[LearnedBatchJob],
+) -> tuple[LearnedBatchJob, ...]:
+    """Permute jobs into longest-expected-first (LPT) dispatch order.
+
+    Stable sort by (model rank, split rank); ties keep the caller's
+    (canonical) order. Job identity, output paths, and the merge step are
+    unaffected — this orders the lease queue only.
+    """
+    return tuple(
+        sorted(
+            jobs,
+            key=lambda job: (
+                DISPATCH_MODEL_RANK.get(job.model, _DISPATCH_UNKNOWN_RANK),
+                DISPATCH_SPLIT_RANK.get(job.split, _DISPATCH_UNKNOWN_RANK),
+            ),
+        )
+    )
 
 
 def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[str]:
@@ -744,7 +802,10 @@ def create_control_plane_app(
         worker_id = str(payload.get("worker_id") or request.headers.get("X-Worker-Id") or "unknown")
         leased = state.lease(worker_id=worker_id)
         if leased is None:
-            return jsonify({"status": "empty"}), 204
+            # Scale-down-on-drain (spec 22): an empty queue is an explicit
+            # verdict the worker terminates on, never a 204 — workers treat
+            # 204/empty bodies as transport hiccups and retry.
+            return jsonify({"status": "drained"}), 200
         return jsonify(leased.__dict__), 200
 
     @app.post("/lease/<job_id>/renew")
@@ -819,6 +880,8 @@ def create_control_plane_app(
     @app.post("/worker-event")
     def worker_event() -> tuple[Any, int]:
         payload = _stamp_received(request.get_json(silent=True) or {})
+        if payload.get("event") == "worker_drained" and payload.get("instance_id"):
+            state.record_worker_drained(str(payload["instance_id"]))
         if config is not None:
             _append_jsonl(config.output_dir / "events" / "worker-events.jsonl", payload)
         return jsonify({"status": "accepted"}), 200
@@ -948,6 +1011,22 @@ post_worker_event() {{
     -d "{{\\"event\\":\\"$1\\",\\"instance_id\\":\\"${{INSTANCE_ID:-unknown}}\\",\\"region\\":\\"${{REGION:-unknown}}\\",\\"instance_type\\":\\"${{INSTANCE_TYPE:-unknown}}\\"}}" \\
     {control_url}/worker-event >/dev/null || true
 }}
+post_worker_event_reliably() {{
+  # Load-bearing worker events (worker_drained) feed the monitor's
+  # pending-instance reconciliation; retry transient failures with the same
+  # budget as the result upload instead of a single fire-and-forget curl.
+  for _ in $(seq 1 {upload_attempts}); do
+    if curl --silent --fail -X POST \\
+      -H "Authorization: Bearer {bearer_token}" \\
+      -H "Content-Type: application/json" \\
+      -d "{{\\"event\\":\\"$1\\",\\"instance_id\\":\\"${{INSTANCE_ID:-unknown}}\\",\\"region\\":\\"${{REGION:-unknown}}\\",\\"instance_type\\":\\"${{INSTANCE_TYPE:-unknown}}\\"}}" \\
+      {control_url}/worker-event >/dev/null; then
+      return 0
+    fi
+    sleep {upload_retry_seconds}
+  done
+  return 0
+}}
 renew_lease_loop() {{
   local renewal_failures=0
   while true; do
@@ -1025,6 +1104,12 @@ post_worker_event "uv_synced"
 BOOTSTRAP_STEP="lease_loop"
 DEADLINE=$((SECONDS + {max_seconds}))
 while (( SECONDS < DEADLINE )); do
+  REMAINING=$((DEADLINE - SECONDS - {renewal_interval}))
+  if (( REMAINING < {renewal_interval} )); then
+    post_worker_event "worker_deadline_too_close_for_new_job"
+    shutdown -h now >/dev/null 2>&1 || true
+    break
+  fi
   LEASE=$(curl --silent -w '\\n%{{http_code}}' --fail -X POST \\
     -H "Authorization: Bearer {bearer_token}" \\
     -H "Content-Type: application/json" \\
@@ -1040,6 +1125,12 @@ while (( SECONDS < DEADLINE )); do
     sleep 30
     continue
   fi
+  DRAINED=$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("status",""))' <<< "$LEASE_BODY")
+  if [[ "$DRAINED" == "drained" ]]; then
+    post_worker_event_reliably "worker_drained"
+    shutdown -h now >/dev/null 2>&1 || true
+    exit 0
+  fi
   JOB_ID=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["job_id"])' <<< "$LEASE_BODY")
   SPLIT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE_BODY")
   MODEL=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
@@ -1048,12 +1139,7 @@ while (( SECONDS < DEADLINE )); do
   OUTPUT="data/phase7/aws-job-$JOB_ID.json"
   LOG="data/phase7/aws-job-$JOB_ID.log"
   mkdir -p data/phase7
-  REMAINING=$((DEADLINE - SECONDS - {renewal_interval}))
-  if (( REMAINING < {renewal_interval} )); then
-    post_worker_event "worker_deadline_too_close_for_new_job"
-    break
-  fi
-  JOB_TIMEOUT=$REMAINING
+  JOB_TIMEOUT=$((DEADLINE - SECONDS - {renewal_interval}))
   post_event "lease_acquired"
   post_event "experiment_start"
   renew_lease_loop &
@@ -1268,7 +1354,7 @@ def run_live_batch(
     """
     jobs = generate_jobs(config)
     state = BatchState(
-        jobs,
+        order_jobs_for_dispatch(jobs),
         lease_grace_seconds=config.lease_grace_seconds,
         max_attempts=config.max_job_attempts,
     )
@@ -1327,6 +1413,11 @@ def run_live_batch(
             }
             for worker_id in active_worker_ids:
                 pending_instance_ids.pop(worker_id, None)
+            # Workers that self-terminated on the drained verdict may never
+            # have appeared in list_active (boot + drain inside one poll);
+            # reconcile them so they cannot trip the pending-grace abort.
+            for worker_id in state.drained_worker_ids():
+                pending_instance_ids.pop(worker_id, None)
             pre_requeue_status = state.status()
             missing_leased_worker_ids = {
                 str(row["worker_id"])
@@ -1353,18 +1444,21 @@ def run_live_batch(
                 )
                 for worker_id in missing_leased_worker_ids:
                     pending_instance_ids.pop(worker_id, None)
+            status = state.status()
+            counts = status["counts"]
             expired_pending = [
                 worker_id
                 for worker_id, launched_at in pending_instance_ids.items()
                 if now - launched_at > config.pending_instance_grace_seconds
             ]
-            if expired_pending:
+            # A finished batch merges even with a stale pending entry: once
+            # every job is completed, a never-active instance is a teardown
+            # concern, not a launch failure.
+            if expired_pending and counts["completed"] < len(jobs):
                 raise BatchLaunchFailed(
                     "pending workers did not become active before grace: "
                     + ", ".join(sorted(expired_pending)[:5])
                 )
-            status = state.status()
-            counts = status["counts"]
             spot_prices = {
                 (
                     item.get("region", "unknown"),
@@ -1445,8 +1539,21 @@ def run_live_batch(
                 )
                 terminal_message = "merged"
                 return merged
-            if not active and not pending_instance_ids and counts["completed"] < len(jobs):
-                raise BatchLaunchFailed("no active workers remain before all jobs completed")
+            # Leased jobs waiting out their grace are a recoverable state
+            # (requeue then replacement) — with scale-down-on-drain, zero
+            # active workers during that window is a normal spot-reclaim
+            # transient, not a failure. The counts distinguish zero-capacity
+            # provisioning (pending > 0) from silent worker loss.
+            if (
+                not active
+                and not pending_instance_ids
+                and not counts["leased"]
+                and counts["completed"] < len(jobs)
+            ):
+                raise BatchLaunchFailed(
+                    "no active workers remain before all jobs completed "
+                    f"(pending={counts['pending']}, leased={counts['leased']})"
+                )
             sleep_fn(poll_interval)
     except BaseException as exc:
         primary_exception = exc

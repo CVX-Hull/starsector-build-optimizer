@@ -469,6 +469,46 @@ combat-worker Redis queue still inherit the cloud safety contract:
    `--ssh`, no secret logging, IMDSv2 instance ID capture, baked worker
    service disabled before custom work, bounded lifetime, and explicit result
    upload failure handling.
+9. **Scale-down-on-drain.** Idle batch workers are cost with no throughput
+   (evidence: [2026-07-12 tail-walltime analysis](../reports/2026-07-12-phase7-tail-walltime.md)),
+   so the batch drains its fleet instead of idling it:
+   - The control plane's `/lease` route answers an empty queue with a
+     drained verdict — `200 {"status": "drained"}`. It never emits `204`
+     for an empty queue; workers keep a defensive sleep-retry for
+     `204`/empty-body responses because transport failures still produce
+     them client-side.
+   - On the drained verdict a worker posts a `worker_drained` worker-event
+     and immediately runs `shutdown -h now` — the same trusted terminator
+     every worker failure path uses. The `worker_drained` post is
+     load-bearing (pending-instance reconciliation depends on it), so it
+     retries transient failures (`result_upload_attempts` ×
+     `result_upload_retry_seconds`, the same budget as the result upload)
+     instead of being a single fire-and-forget curl. In the worker's lease
+     loop, the drained-verdict check precedes any job-field parse of the
+     response body. The deadline-too-close check is evaluated BEFORE
+     requesting a lease — a doomed worker must not burn a lease attempt and
+     strand a job for `lease_grace_seconds` — and its branch likewise shuts
+     down immediately after posting its event rather than idling to the
+     bootstrap-scheduled shutdown.
+   - Precondition: fleets are provisioned `Type="instant"`, so AWS does not
+     respawn self-terminated instances. This invariant must be revisited if
+     a maintain-type fleet is ever introduced.
+   - Monitor accounting: the control plane records `worker_drained` instance
+     IDs, and the monitor reconciles them out of pending-instance
+     accounting, so a replacement that boots, drains, and self-terminates
+     between polls cannot trip the pending-grace abort. The
+     all-jobs-completed merge is evaluated before the pending-grace abort.
+     The no-active-workers abort requires zero leased jobs in addition to
+     zero active and zero pending instances — leased jobs waiting out
+     `lease_grace_seconds` are a recoverable state (the monitor-side
+     counterpart of the spec 31 rule that a stale active-instance snapshot
+     cannot steal a lease), and its failure message carries the pending and
+     leased counts so zero-capacity provisioning is diagnosable as such.
+   - Named trade-off (accepted): a spot reclaim that lands after the fleet
+     has drained is no longer absorbed by a warm idle worker; recovery costs
+     `lease_grace_seconds` plus a full replacement bootstrap. Accepted
+     because the idle-tail spend is per-run-certain while late reclaims are
+     rare, and correctness is unaffected.
 
 ## `CloudProvider` ABC
 

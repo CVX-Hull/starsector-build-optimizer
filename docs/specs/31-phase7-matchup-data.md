@@ -1005,6 +1005,24 @@ The canonical full-run batch job matrix is exactly:
 
 That produces 6 × 3 × 10 + 1 × 3 = 183 jobs. Seeded job IDs are
 `{split}__{model}__s{seed}`; forward-time job IDs are `{split}__{model}`.
+
+Jobs are dispatched longest-expected-first (LPT scheduling):
+`order_jobs_for_dispatch` stably sorts the generated matrix by the designed
+`DISPATCH_MODEL_RANK` × `DISPATCH_SPLIT_RANK` tables before it seeds the
+lease queue, and requeued jobs keep their queue position, so LPT priority
+survives retries. The family rank is evidence-backed across the whole matrix
+(model family dominates job duration); the within-family split rank
+(opponent-hierarchy splits first) is evidence-backed within
+`random_forest_tuned` only and acts as a harmless tie-break for the other
+families. Unknown model or split values rank first as forward-compat defense
+— they are unreachable through a validated config today (config validation
+rejects them) but protect future families before a measured ranking exists.
+Ranking provenance and magnitudes live in the dated
+[tail-walltime report](../reports/2026-07-12-phase7-tail-walltime.md).
+Dispatch order is a pure permutation: job IDs, per-job output paths, and the
+merge step (which re-derives its job set from `generate_jobs`) are
+unaffected; `status.json` job rows and the launch CLI's dry-run listing both
+present dispatch order.
 Each job runs `scripts/analysis/phase7_learned_surrogate_experiment.py` with
 exactly one split, one model family, and one split seed (carried in the
 lease payload), plus the configured source DB, game dir, HPO settings,
@@ -1042,7 +1060,12 @@ interruption cycle.
 Provisioned instance IDs are counted as pending only for
 `pending_instance_grace_seconds`. They must become visible in the provider's
 active-instance listing before that grace expires; otherwise the batch fails
-rather than suppressing recovery indefinitely behind never-active instance IDs.
+rather than suppressing recovery indefinitely behind never-active instance
+IDs — with the two scale-down-on-drain carve-outs owned by spec 22
+§"One-shot AWS batch runners" item 9: instance IDs that reported
+`worker_drained` are reconciled out of pending accounting without ever
+appearing active, and an expired pending entry does not fail a batch whose
+jobs are all completed.
 
 The batch bundle must include every runtime script imported by the worker
 command, including both `phase7_learned_surrogate_experiment.py` and its

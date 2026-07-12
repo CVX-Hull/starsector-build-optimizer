@@ -13,6 +13,8 @@ import pytest
 from starsector_optimizer.phase7_learned_batch import (
     CANONICAL_MODELS,
     CANONICAL_SPLITS,
+    DISPATCH_MODEL_RANK,
+    DISPATCH_SPLIT_RANK,
     BatchLaunchFailed,
     BatchState,
     BudgetExceeded,
@@ -23,6 +25,7 @@ from starsector_optimizer.phase7_learned_batch import (
     generate_jobs,
     load_batch_config,
     merge_job_artifacts,
+    order_jobs_for_dispatch,
     record_budget_heartbeat,
     render_phase7_learned_batch_user_data,
     run_live_batch,
@@ -266,6 +269,47 @@ def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
         "build__catboost_regressor__s101",
     ]
     validate_batch_config(cfg)
+
+
+def test_order_jobs_for_dispatch_longest_expected_first(tmp_path):
+    cfg = make_config(tmp_path)
+    jobs = generate_jobs(cfg)
+
+    ordered = order_jobs_for_dispatch(jobs)
+
+    # Pure permutation of the canonical matrix.
+    assert sorted(job.job_id for job in ordered) == sorted(job.job_id for job in jobs)
+    # Model family dominates measured duration: dispatch rank is
+    # non-decreasing, with tuned RF first and CatBoost before ridge.
+    model_ranks = [DISPATCH_MODEL_RANK[job.model] for job in ordered]
+    assert model_ranks == sorted(model_ranks)
+    assert ordered[0].model == "random_forest_tuned"
+    first_catboost = next(i for i, job in enumerate(ordered) if job.model == "catboost_regressor")
+    first_ridge = next(i for i, job in enumerate(ordered) if job.model == "sparse_pairwise_ridge")
+    assert first_catboost < first_ridge
+    # Within a family, opponent-hierarchy splits (the heaviest measured
+    # tails) dispatch first.
+    rf_split_ranks = [
+        DISPATCH_SPLIT_RANK[job.split] for job in ordered if job.model == "random_forest_tuned"
+    ]
+    assert rf_split_ranks == sorted(rf_split_ranks)
+    assert ordered[0].split == "opponent-family"
+    # Ties keep canonical generate_jobs order (stable sort).
+    rf_build_seeds = [
+        job.split_seed
+        for job in ordered
+        if job.model == "random_forest_tuned" and job.split == "build"
+    ]
+    assert rf_build_seeds == list(cfg.split_seeds)
+    # Unknown families/splits rank first: forward-compat defense only —
+    # validate_batch_config rejects them, so this is unreachable from a
+    # validated config and exists for future families without a measured
+    # ranking.
+    known = ordered[0]
+    unknown_model = replace(known, job_id="future-model-job", model="future_model")
+    unknown_split = replace(known, job_id="future-split-job", split="future-split")
+    assert order_jobs_for_dispatch((known, unknown_model))[0] is unknown_model
+    assert order_jobs_for_dispatch((known, unknown_split))[0] is unknown_split
 
 
 def test_build_job_command_is_single_split_single_model_and_no_unsafe_flags(tmp_path):
@@ -621,6 +665,38 @@ def test_control_plane_persists_events_and_status_counts_events(tmp_path):
         assert received.tzinfo is not None
 
 
+def test_lease_returns_drained_verdict_when_queue_empty(tmp_path):
+    """Scale-down-on-drain (spec 22): an empty queue is an explicit 200
+    drained verdict, never a 204, so workers can distinguish "no work left"
+    (terminate) from a transport hiccup (retry)."""
+    cfg = make_config(tmp_path)
+    bundle = tmp_path / "bundle.tgz"
+    bundle.write_bytes(b"bundle")
+    jobs = generate_jobs(cfg)[:2]
+    state = BatchState(jobs, lease_grace_seconds=60.0, max_attempts=2)
+    app = create_control_plane_app(state, bundle_path=bundle, bearer_token="secret")
+    client = app.test_client()
+    auth = {"Authorization": "Bearer secret"}
+
+    for _ in jobs:
+        assert client.post("/lease", headers=auth, json={"worker_id": "i-1"}).status_code == 200
+
+    drained = client.post("/lease", headers=auth, json={"worker_id": "i-2"})
+    assert drained.status_code == 200
+    assert drained.get_json() == {"status": "drained"}
+    assert client.post("/lease", json={"worker_id": "i-2"}).status_code == 401
+
+    # The worker's parting worker_drained event is recorded so the monitor
+    # can reconcile self-terminated instances out of pending accounting.
+    response = client.post(
+        "/worker-event",
+        headers=auth,
+        json={"event": "worker_drained", "instance_id": "i-2"},
+    )
+    assert response.status_code == 200
+    assert state.drained_worker_ids() == frozenset({"i-2"})
+
+
 def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
     cfg = make_config(tmp_path)
     state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
@@ -809,6 +885,43 @@ def test_user_data_retries_result_upload_before_declaring_failure(tmp_path):
     # The retry loop owns the upload failure path; the success event must be
     # gated on UPLOAD_CODE, not sequenced after a bare curl.
     assert out.index('[[ "$UPLOAD_CODE" != "0" ]]') < out.index('post_event "result_uploaded"')
+
+
+def test_user_data_shuts_down_on_drained_lease(tmp_path):
+    """Scale-down-on-drain (spec 22): on the drained verdict the worker posts
+    worker_drained and terminates immediately. The drained check must precede
+    the job-field parse — a drained body reaching the job_id parse would
+    KeyError into the ERR trap and mislabel the exit as worker_failed."""
+    cfg = make_config(tmp_path)
+    out = render_phase7_learned_batch_user_data(
+        cfg,
+        control_plane_url="http://100.64.0.1:9131",
+        bearer_token="secret-token",
+        bundle_sha256="a" * 64,
+    )
+
+    assert 'if [[ "$DRAINED" == "drained" ]]; then' in out
+    # worker_drained is load-bearing (pending-instance reconciliation), so
+    # it goes through the retried poster, not a fire-and-forget curl.
+    assert "post_worker_event_reliably() {" in out
+    assert (
+        'post_worker_event_reliably "worker_drained"\n'
+        "    shutdown -h now >/dev/null 2>&1 || true\n"
+        "    exit 0" in out
+    )
+    assert out.index('"drained"') < out.index('["job_id"]')
+    # The deadline-too-close branch is the same idle-waste class: it must
+    # terminate immediately instead of idling to the bootstrap-scheduled
+    # shutdown — and it must run BEFORE the lease request, so a doomed
+    # worker never burns a lease attempt on a job it will abandon.
+    assert (
+        'post_worker_event "worker_deadline_too_close_for_new_job"\n'
+        "    shutdown -h now >/dev/null 2>&1 || true\n"
+        "    break" in out
+    )
+    assert out.index("worker_deadline_too_close_for_new_job") < out.index("/lease || true")
+    # The generic empty-body/204 retry stays as transport-failure defense.
+    assert 'if [[ "$LEASE_CODE" == "204" || -z "$LEASE_BODY" ]]; then' in out
 
 
 def test_config_validation_bounds_result_upload_retries(tmp_path):
@@ -1695,6 +1808,312 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
     assert merged["result_count"] == 2
     assert [call["target_workers"] for call in provider.provision_calls] == [2, 1]
     assert server.shutdown_called
+
+
+def test_run_live_batch_dispatches_longest_expected_first(tmp_path):
+    """The lease queue is seeded in dispatch order (LPT), not config order:
+    the tuned-RF job goes out first even when the config lists ridge first."""
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("sparse_pairwise_ridge", "random_forest_tuned"),
+        split_seeds=(101,),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    server = FakeServer()
+    provider = FakeProvider(instance_count=2)
+    leased_models: list[str] = []
+
+    def on_poll(state: BatchState) -> None:
+        result_dir = cfg.output_dir / "results"
+        result_dir.mkdir(parents=True, exist_ok=True)
+        while True:
+            lease = state.lease(now=100.0, worker_id="i-worker")
+            if lease is None:
+                break
+            leased_models.append(lease.model)
+            payload = one_job_payload(cfg, lease.split, lease.model, lease.split_seed)
+            (result_dir / f"{lease.job_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+            state.record_result(
+                lease.job_id,
+                payload,
+                worker_id="i-worker",
+                attempt=lease.attempt,
+                now=101.0,
+            )
+
+    merged = run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=tmp_path / "bundle.tgz",
+        bundle_sha256="b" * 64,
+        bearer_token="secret",
+        poll_interval_seconds=1.0,
+        server_factory=lambda *args, **kwargs: server,
+        sleep_fn=lambda seconds: None,
+        on_poll=on_poll,
+    )
+
+    assert merged["result_count"] == 2
+    assert leased_models == ["random_forest_tuned", "sparse_pairwise_ridge"]
+
+
+def test_run_live_batch_waits_for_leased_grace_when_no_active_workers(tmp_path):
+    """Drain-compatibility: once idle workers self-terminate, a spot reclaim
+    of the last busy worker can leave zero active instances while its job is
+    still leased inside the grace window. That state must self-heal (requeue
+    then replacement), not abort."""
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("catboost_regressor",),
+        split_seeds=(101,),
+        target_workers=1,
+        min_workers_to_start=1,
+        publish_canonical=False,
+        lease_grace_seconds=5.0,
+    )
+    server = FakeServer()
+    clock = FakeClock(start=100.0)
+
+    class ReclaimProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(instance_count=1)
+            self.replacement_launched = False
+            self.polls = 0
+
+        def provision_fleet(self, **kwargs):
+            self.provision_calls.append(kwargs)
+            if len(self.provision_calls) == 1:
+                return ["i-original"]
+            self.replacement_launched = True
+            return ["i-replacement"]
+
+        def list_active(self, project_tag):
+            self.polls += 1
+            row = {"region": "us-east-2", "instance_type": "c7i.4xlarge"}
+            if self.polls == 1:
+                return [{"id": "i-original", **row}]
+            if self.replacement_launched:
+                return [{"id": "i-replacement", **row}]
+            return []
+
+    provider = ReclaimProvider()
+    leases: dict[str, JobLease] = {}
+
+    def on_poll(state: BatchState) -> None:
+        if not leases:
+            lease = state.lease(now=clock.time(), worker_id="i-original")
+            assert lease is not None
+            leases[lease.job_id] = lease
+            return
+        if not provider.replacement_launched:
+            return
+        for row in state.status()["jobs"]:
+            if row["status"] != "pending":
+                continue
+            lease = state.lease(now=clock.time(), worker_id="i-replacement")
+            assert lease is not None
+            result_dir = cfg.output_dir / "results"
+            result_dir.mkdir(parents=True, exist_ok=True)
+            payload = one_job_payload(cfg, lease.split, lease.model, lease.split_seed)
+            (result_dir / f"{lease.job_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+            state.record_result(
+                lease.job_id,
+                payload,
+                worker_id="i-replacement",
+                attempt=lease.attempt,
+                now=clock.time(),
+            )
+
+    merged = run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=tmp_path / "bundle.tgz",
+        bundle_sha256="b" * 64,
+        bearer_token="secret",
+        poll_interval_seconds=1.0,
+        server_factory=lambda *args, **kwargs: server,
+        sleep_fn=clock.sleep,
+        now_fn=clock.time,
+        on_poll=on_poll,
+    )
+
+    assert merged["result_count"] == 1
+    assert [call["target_workers"] for call in provider.provision_calls] == [1, 1]
+
+
+def test_run_live_batch_raises_when_replacement_provisioning_yields_nothing(tmp_path):
+    """Positive guard fire: with nothing active, nothing pending-boot, and no
+    lease waiting out its grace, unfinished jobs are unrecoverable. The
+    message names the pending/leased counts so zero-capacity provisioning is
+    diagnosable as capacity failure rather than worker loss."""
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("catboost_regressor",),
+        split_seeds=(101,),
+        target_workers=1,
+        min_workers_to_start=1,
+        publish_canonical=False,
+        lease_grace_seconds=2.0,
+    )
+    server = FakeServer()
+    clock = FakeClock(start=100.0)
+
+    class NoCapacityProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(instance_count=1)
+            self.polls = 0
+
+        def provision_fleet(self, **kwargs):
+            self.provision_calls.append(kwargs)
+            if len(self.provision_calls) == 1:
+                return ["i-original"]
+            return []
+
+        def list_active(self, project_tag):
+            self.polls += 1
+            if self.polls == 1:
+                return [{"id": "i-original", "region": "us-east-2", "instance_type": "c7i.4xlarge"}]
+            return []
+
+    provider = NoCapacityProvider()
+    leased: list[JobLease | None] = []
+
+    def on_poll(state: BatchState) -> None:
+        if not leased:
+            leased.append(state.lease(now=clock.time(), worker_id="i-original"))
+
+    with pytest.raises(BatchLaunchFailed, match=r"pending=1, leased=0"):
+        run_live_batch(
+            cfg,
+            provider=provider,
+            bundle_path=tmp_path / "bundle.tgz",
+            bundle_sha256="b" * 64,
+            bearer_token="secret",
+            poll_interval_seconds=1.0,
+            server_factory=lambda *args, **kwargs: server,
+            sleep_fn=clock.sleep,
+            now_fn=clock.time,
+            on_poll=on_poll,
+        )
+
+    assert provider.terminate_fleet_calls == 1
+    assert provider.terminate_all_calls == 1
+
+
+def test_worker_drained_event_reconciles_pending_instances(tmp_path):
+    """A replacement that boots, drains, and self-terminates between polls
+    never appears in list_active; its worker_drained event must clear it from
+    pending accounting so it cannot trip the pending-grace abort. And a batch
+    whose jobs all complete merges even with a stale pending entry."""
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("catboost_regressor",),
+        split_seeds=(101,),
+        target_workers=1,
+        min_workers_to_start=1,
+        publish_canonical=False,
+        pending_instance_grace_seconds=3.0,
+    )
+    server = FakeServer()
+    clock = FakeClock(start=100.0)
+
+    class GhostProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(instance_count=1)
+
+        def provision_fleet(self, **kwargs):
+            self.provision_calls.append(kwargs)
+            # One instance that becomes active plus one that never will
+            # (drains and self-terminates before the next poll).
+            return ["i-worker", "i-ghost"]
+
+        def list_active(self, project_tag):
+            return [{"id": "i-worker", "region": "us-east-2", "instance_type": "c7i.4xlarge"}]
+
+    provider = GhostProvider()
+    drain_reported: list[bool] = []
+
+    def on_poll(state: BatchState) -> None:
+        if not drain_reported:
+            state.record_worker_drained("i-ghost")
+            drain_reported.append(True)
+        # Complete the job only after the ghost's pending grace has long
+        # expired: without reconciliation this run would abort at ~103.
+        if clock.time() >= 106.0:
+            complete_all_jobs(cfg, state)
+
+    merged = run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=tmp_path / "bundle.tgz",
+        bundle_sha256="b" * 64,
+        bearer_token="secret",
+        poll_interval_seconds=1.0,
+        server_factory=lambda *args, **kwargs: server,
+        sleep_fn=clock.sleep,
+        now_fn=clock.time,
+        on_poll=on_poll,
+    )
+
+    assert merged["result_count"] == 1
+
+
+def test_run_live_batch_completes_despite_stale_pending_entry(tmp_path):
+    """Finish-line ordering: the all-jobs-completed merge is evaluated before
+    the expired-pending abort, so a stale never-active instance cannot fail a
+    batch whose work is already done."""
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("catboost_regressor",),
+        split_seeds=(101,),
+        target_workers=1,
+        min_workers_to_start=1,
+        publish_canonical=False,
+        pending_instance_grace_seconds=3.0,
+    )
+    server = FakeServer()
+    clock = FakeClock(start=100.0)
+
+    class GhostProvider(FakeProvider):
+        def __init__(self) -> None:
+            super().__init__(instance_count=1)
+
+        def provision_fleet(self, **kwargs):
+            self.provision_calls.append(kwargs)
+            return ["i-worker", "i-ghost"]
+
+        def list_active(self, project_tag):
+            return [{"id": "i-worker", "region": "us-east-2", "instance_type": "c7i.4xlarge"}]
+
+    provider = GhostProvider()
+
+    def on_poll(state: BatchState) -> None:
+        # No drained event for i-ghost: its pending entry goes stale. The
+        # jobs complete on the same iteration the grace expires.
+        if clock.time() >= 104.0:
+            complete_all_jobs(cfg, state)
+
+    merged = run_live_batch(
+        cfg,
+        provider=provider,
+        bundle_path=tmp_path / "bundle.tgz",
+        bundle_sha256="b" * 64,
+        bearer_token="secret",
+        poll_interval_seconds=1.0,
+        server_factory=lambda *args, **kwargs: server,
+        sleep_fn=clock.sleep,
+        now_fn=clock.time,
+        on_poll=on_poll,
+    )
+
+    assert merged["result_count"] == 1
 
 
 def test_run_live_batch_logs_budget_warn_threshold_once(tmp_path, caplog):

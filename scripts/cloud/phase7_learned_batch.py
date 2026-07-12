@@ -29,6 +29,7 @@ from starsector_optimizer.phase7_learned_batch import (
     generate_jobs,
     load_batch_config,
     merge_job_artifacts,
+    order_jobs_for_dispatch,
     run_live_batch,
     validate_batch_config,
 )
@@ -196,7 +197,9 @@ def check_key_pairs_available(provider, cfg) -> None:
 def dry_run(config_path: Path) -> int:
     cfg = load_batch_config(config_path)
     validate_batch_config(cfg)
-    jobs = generate_jobs(cfg)
+    # Dispatch order (longest-expected-first), so the operator preview
+    # matches the actual lease queue.
+    jobs = order_jobs_for_dispatch(generate_jobs(cfg))
     summary = {
         "name": cfg.name,
         "project_tag": cfg.project_tag,
