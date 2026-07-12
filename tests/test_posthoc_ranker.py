@@ -71,12 +71,15 @@ def _make_records(
             else:
                 winner = "TIMEOUT"
             matches.append((f"opp{j}", score, winner))
-        records.append(TrialRecord(
-            study="synth/seed0", trial_number=i,
-            build_id=_bid(f"b{i}"),
-            raw_build={"id": f"b{i}"},
-            matches=tuple(matches),
-        ))
+        records.append(
+            TrialRecord(
+                study="synth/seed0",
+                trial_number=i,
+                build_id=_bid(f"b{i}"),
+                raw_build={"id": f"b{i}"},
+                matches=tuple(matches),
+            )
+        )
     return records, alpha_true, beta_true
 
 
@@ -95,8 +98,10 @@ class TestRawMean:
         # Duplicate the records under a second study label; ranking should pool.
         rec_a = records[0]
         rec_b = TrialRecord(
-            study="synth/seed1", trial_number=99,
-            build_id=rec_a.build_id, raw_build=rec_a.raw_build,
+            study="synth/seed1",
+            trial_number=99,
+            build_id=rec_a.build_id,
+            raw_build=rec_a.raw_build,
             matches=rec_a.matches,
         )
         out = rank_raw_mean([rec_a, rec_b], k=1)
@@ -173,7 +178,10 @@ class TestBradleyTerry:
         # All-timeout records should produce α ≈ 0 (no wins or losses).
         bid = _bid("t1")
         rec = TrialRecord(
-            study="synth/x", trial_number=0, build_id=bid, raw_build={},
+            study="synth/x",
+            trial_number=0,
+            build_id=bid,
+            raw_build={},
             matches=tuple(("opp0", 0.0, "TIMEOUT") for _ in range(6)),
         )
         out = rank_bradley_terry([rec], k=1, config=BradleyTerryConfig(ridge=0.5))
@@ -214,8 +222,12 @@ class TestLoadRecords:
                     "flux_capacitors": 0,
                 },
                 "opponent_results": [
-                    {"opponent": "berserker_Assault", "winner": "PLAYER",
-                     "duration_seconds": 30.0, "hp_differential": 0.5},
+                    {
+                        "opponent": "berserker_Assault",
+                        "winner": "PLAYER",
+                        "duration_seconds": 30.0,
+                        "hp_differential": 0.5,
+                    },
                 ],
                 "pruned": False,
                 "cache_hit": False,

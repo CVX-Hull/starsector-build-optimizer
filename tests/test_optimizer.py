@@ -51,7 +51,6 @@ def wolf_space(wolf_hull, game_data, manifest):
 
 
 class TestBuildConversion:
-
     def test_build_to_params_round_trip(self, wolf_hull, wolf_space, game_data, manifest):
         """Build -> params -> Build preserves all fields."""
         build = generate_random_build(wolf_hull, game_data, manifest)
@@ -114,7 +113,8 @@ class TestBuildConversion:
 
         # Fix a hullmod to True
         fixed: dict[str, bool | int | str] = {
-            f"hullmod_{wolf_space.eligible_hullmods[0]}": True, "flux_vents": 10,
+            f"hullmod_{wolf_space.eligible_hullmods[0]}": True,
+            "flux_vents": 10,
         }
         build = trial_params_to_build(params, "wolf", fixed_params=fixed)
         assert wolf_space.eligible_hullmods[0] in build.hullmods
@@ -125,7 +125,6 @@ class TestBuildConversion:
 
 
 class TestBuildCache:
-
     def test_cache_miss_returns_none(self):
         cache = BuildCache()
         build = Build(
@@ -141,6 +140,7 @@ class TestBuildCache:
         """Cache stores _CachedTrialResult so cache-hit JSONL rows can
         carry the origin's eb/twfe values + origin trial pointer."""
         from starsector_optimizer.optimizer import _CachedTrialResult
+
         cache = BuildCache()
         build = Build(
             hull_id="wolf",
@@ -225,17 +225,29 @@ class TestEvalLogTrialKindTaxonomy:
 
     def _build(self):
         return Build(
-            hull_id="wolf", weapon_assignments={},
-            hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
+            hull_id="wolf",
+            weapon_assignments={},
+            hullmods=frozenset(),
+            flux_vents=0,
+            flux_capacitors=0,
         )
 
     def test_real_completed_row_has_all_three_flags_false(self, tmp_path):
         from starsector_optimizer.optimizer import _append_eval_log
+
         path = tmp_path / "eval.jsonl"
         _append_eval_log(
-            path, "wolf", trial_number=0, build=self._build(), results=[],
-            fitness=0.5, raw_fitness=0.5, eb_fitness=0.5, twfe_fitness=0.5,
-            opponents_total=10, opponent_order=["a", "b"],
+            path,
+            "wolf",
+            trial_number=0,
+            build=self._build(),
+            results=[],
+            fitness=0.5,
+            raw_fitness=0.5,
+            eb_fitness=0.5,
+            twfe_fitness=0.5,
+            opponents_total=10,
+            opponent_order=["a", "b"],
         )
         rec = json.loads(path.read_text().strip())
         assert rec["pruned"] is False
@@ -246,13 +258,22 @@ class TestEvalLogTrialKindTaxonomy:
 
     def test_cache_hit_row_carries_origin_pointer_and_empty_results(self, tmp_path):
         from starsector_optimizer.optimizer import _append_eval_log
+
         path = tmp_path / "eval.jsonl"
         _append_eval_log(
-            path, "wolf", trial_number=42, build=self._build(),
+            path,
+            "wolf",
+            trial_number=42,
+            build=self._build(),
             results=[],  # MUST be empty; matchups didn't run for THIS trial
-            fitness=0.5, raw_fitness=0.5, eb_fitness=0.5, twfe_fitness=0.5,
-            opponents_total=0, opponent_order=[],
-            cache_hit=True, cache_hit_origin_trial=17,
+            fitness=0.5,
+            raw_fitness=0.5,
+            eb_fitness=0.5,
+            twfe_fitness=0.5,
+            opponents_total=0,
+            opponent_order=[],
+            cache_hit=True,
+            cache_hit_origin_trial=17,
         )
         rec = json.loads(path.read_text().strip())
         assert rec["cache_hit"] is True
@@ -268,15 +289,23 @@ class TestEvalLogTrialKindTaxonomy:
 
     def test_invalid_spec_row_omits_eb_twfe_and_lists_errors(self, tmp_path):
         from starsector_optimizer.optimizer import _append_eval_log
+
         path = tmp_path / "eval.jsonl"
         _append_eval_log(
-            path, "wolf", trial_number=99, build=self._build(),
+            path,
+            "wolf",
+            trial_number=99,
+            build=self._build(),
             results=[],
             # Invalid spec gets the failure_score sentinel — explicitly
             # NOT a measured value. eb/twfe should be omitted (never
             # computed) so analyzers can't accidentally pool them.
-            fitness=-1000.0, raw_fitness=None, eb_fitness=None,
-            twfe_fitness=None, opponents_total=0, opponent_order=[],
+            fitness=-1000.0,
+            raw_fitness=None,
+            eb_fitness=None,
+            twfe_fitness=None,
+            opponents_total=0,
+            opponent_order=[],
             invalid_spec=True,
             invalid_spec_errors=["unknown weapon: phantom_gun"],
         )
@@ -297,23 +326,49 @@ class TestEvalLogTrialKindTaxonomy:
         `not pruned and not cache_hit and not invalid_spec` to get
         only rows whose opponent_results are this trial's own."""
         from starsector_optimizer.optimizer import _append_eval_log
+
         path = tmp_path / "eval.jsonl"
         # One of each kind.
         _append_eval_log(  # real
-            path, "wolf", 0, self._build(), [], 0.5,
-            eb_fitness=0.5, twfe_fitness=0.5,
+            path,
+            "wolf",
+            0,
+            self._build(),
+            [],
+            0.5,
+            eb_fitness=0.5,
+            twfe_fitness=0.5,
         )
         _append_eval_log(  # pruned
-            path, "wolf", 1, self._build(), [], 0.0, pruned=True,
+            path,
+            "wolf",
+            1,
+            self._build(),
+            [],
+            0.0,
+            pruned=True,
         )
         _append_eval_log(  # cache hit
-            path, "wolf", 2, self._build(), [], 0.5,
-            eb_fitness=0.5, twfe_fitness=0.5,
-            cache_hit=True, cache_hit_origin_trial=0,
+            path,
+            "wolf",
+            2,
+            self._build(),
+            [],
+            0.5,
+            eb_fitness=0.5,
+            twfe_fitness=0.5,
+            cache_hit=True,
+            cache_hit_origin_trial=0,
         )
         _append_eval_log(  # invalid spec
-            path, "wolf", 3, self._build(), [], -1000.0,
-            invalid_spec=True, invalid_spec_errors=["bad slot"],
+            path,
+            "wolf",
+            3,
+            self._build(),
+            [],
+            -1000.0,
+            invalid_spec=True,
+            invalid_spec_errors=["bad slot"],
         )
         recs = [json.loads(l) for l in path.read_text().splitlines() if l]
         assert len(recs) == 4
@@ -321,8 +376,7 @@ class TestEvalLogTrialKindTaxonomy:
             kinds = sum([rec["pruned"], rec["cache_hit"], rec["invalid_spec"]])
             # 0 = real-completed; 1 = exactly one of pruned/cache/invalid
             assert kinds in (0, 1), f"row kinds-flag sum = {kinds}: {rec}"
-        real = [r for r in recs
-                if not r["pruned"] and not r["cache_hit"] and not r["invalid_spec"]]
+        real = [r for r in recs if not r["pruned"] and not r["cache_hit"] and not r["invalid_spec"]]
         assert len(real) == 1
         assert real[0]["trial_number"] == 0
 
@@ -331,7 +385,6 @@ class TestEvalLogTrialKindTaxonomy:
 
 
 class TestDefineDistributions:
-
     def test_weapon_slots_categorical(self, wolf_space):
         dists = define_distributions(wolf_space)
         for slot_id in wolf_space.weapon_options:
@@ -401,7 +454,6 @@ class TestDefineDistributions:
 
 
 class TestSamplerFactory:
-
     def test_tpe_sampler_creation(self):
         """sampler='tpe' creates a TPESampler."""
         config = OptimizerConfig(sampler="tpe")
@@ -424,7 +476,6 @@ class TestSamplerFactory:
 
 
 class TestWarmStart:
-
     def test_adds_trials_to_study(self, wolf_hull, game_data, manifest):
         """Study gains warm_start_n completed trials."""
         study = optuna.create_study(direction="maximize")
@@ -461,7 +512,10 @@ class TestWarmStart:
             assert trial.value < 0.5  # Way below unscaled heuristic range
 
     def test_stock_builds_loaded_when_game_dir_provided(
-        self, wolf_hull, game_data, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        manifest,
     ):
         """Mechanism 3 (validation plan): stock-build seeding must fire when
         the caller provides game_dir, even when warm_start_n=0 (so no
@@ -472,18 +526,23 @@ class TestWarmStart:
         # warm_start_n=0 ensures any added trials must come from stock seeding
         config = OptimizerConfig(warm_start_n=0, warm_start_sample_n=10)
         warm_start(
-            study, wolf_hull, game_data, config, manifest,
+            study,
+            wolf_hull,
+            game_data,
+            config,
+            manifest,
             game_dir=Path("game/starsector"),
         )
         # game/starsector has 11 wolf stock variants per
         # load_stock_builds; some may not fit distributions exactly and
         # are silently skipped, but at least 1 should land.
-        assert len(study.trials) >= 1, (
-            f"expected ≥ 1 stock-seeded trial, got {len(study.trials)}"
-        )
+        assert len(study.trials) >= 1, f"expected ≥ 1 stock-seeded trial, got {len(study.trials)}"
 
     def test_stock_builds_skipped_when_game_dir_none(
-        self, wolf_hull, game_data, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        manifest,
     ):
         """Without game_dir, no stock seeding happens — only heuristic.
         This is the documented degradation path; pre-fix this WAS the
@@ -503,7 +562,12 @@ class TestOptimizeHullIntegration:
     def _make_mock_pool(self, *, num_instances=1):
         """Create a mock LocalInstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.models import CombatResult, EngineStats, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.models import (
+            CombatResult,
+            EngineStats,
+            ShipCombatResult,
+            DamageBreakdown,
+        )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
         mock_pool = MagicMock(spec=LocalInstancePool)
@@ -513,32 +577,53 @@ class TestOptimizeHullIntegration:
         def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=False, hull_fraction=0.7,
-                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
-                disabled_weapons=0, flameouts=0,
-                damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=False,
+                hull_fraction=0.7,
+                armor_fraction=0.8,
+                cr_remaining=0.5,
+                peak_time_remaining=100.0,
+                disabled_weapons=0,
+                flameouts=0,
+                damage_dealt=DamageBreakdown(),
+                damage_taken=DamageBreakdown(),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=True, hull_fraction=0.0,
-                armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
-                disabled_weapons=0, flameouts=0,
-                damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=True,
+                hull_fraction=0.0,
+                armor_fraction=0.0,
+                cr_remaining=0.0,
+                peak_time_remaining=0.0,
+                disabled_weapons=0,
+                flameouts=0,
+                damage_dealt=DamageBreakdown(),
+                damage_taken=DamageBreakdown(),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner="PLAYER",
+                matchup_id=m.matchup_id,
+                winner="PLAYER",
                 duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                player_ships_destroyed=0, enemy_ships_destroyed=1,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0,
+                enemy_ships_destroyed=1,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
-                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
-                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
-                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                    eff_max_flux=12000.0,
+                    eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0,
+                    eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0,
+                    shield_damage_taken_mult=1.0,
                 ),
             )
 
@@ -603,12 +688,13 @@ class TestOptimizeHullIntegration:
         allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
         sim_trials = [t for t in study.trials if t.number >= config.warm_start_n]
         for trial in sim_trials:
-            assert trial.state in allowed, (
-                f"Trial {trial.number} is {trial.state.name}"
-            )
+            assert trial.state in allowed, f"Trial {trial.number} is {trial.state.name}"
 
     def test_retryable_matchup_failure_requeues_trial(
-        self, wolf_hull, game_data, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        manifest,
     ):
         """RetryableMatchupError retries the same in-flight build."""
         from starsector_optimizer.optimizer import optimize_hull
@@ -639,11 +725,11 @@ class TestOptimizeHullIntegration:
 
 
 class TestPreflightCheck:
-
     def test_invalid_hull_id_raises(self, game_data):
         """Unknown hull_id raises ValueError."""
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import LocalInstancePool
+
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -654,6 +740,7 @@ class TestPreflightCheck:
         """Missing combat harness mod raises ValueError."""
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import LocalInstancePool
+
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("/tmp/fake_game_dir")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -664,6 +751,7 @@ class TestPreflightCheck:
         """enabled_mods.json without combat_harness raises ValueError."""
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import LocalInstancePool
+
         # Set up fake game dir with mod jar but wrong enabled_mods
         mods_dir = tmp_path / "mods" / "combat-harness" / "jars"
         mods_dir.mkdir(parents=True)
@@ -680,6 +768,7 @@ class TestPreflightCheck:
         """Valid config passes without raising."""
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import LocalInstancePool
+
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -689,6 +778,7 @@ class TestPreflightCheck:
         """Opponent variant not found raises ValueError."""
         from unittest.mock import MagicMock
         from starsector_optimizer.instance_manager import LocalInstancePool
+
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("nonexistent_variant",)})
@@ -700,7 +790,6 @@ class TestPreflightCheck:
 
 
 class TestValidateBuildSpec:
-
     def test_valid_build_spec_no_errors(self, game_data):
         """Valid BuildSpec returns empty error list."""
         spec = BuildSpec(
@@ -763,7 +852,12 @@ class TestStagedEvaluator:
     def _make_mock_pool(self, *, winner="PLAYER", num_instances=1):
         """Create a mock LocalInstancePool with run_matchup returning synthetic CombatResults."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.models import CombatResult, EngineStats, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.models import (
+            CombatResult,
+            EngineStats,
+            ShipCombatResult,
+            DamageBreakdown,
+        )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
         mock_pool = MagicMock(spec=LocalInstancePool)
@@ -775,41 +869,53 @@ class TestStagedEvaluator:
             player_destroyed = winner == "ENEMY"
             enemy_destroyed = winner == "PLAYER"
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=player_destroyed,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=player_destroyed,
                 hull_fraction=0.0 if player_destroyed else 0.7,
                 armor_fraction=0.0 if player_destroyed else 0.8,
                 cr_remaining=0.0 if player_destroyed else 0.5,
                 peak_time_remaining=0.0 if player_destroyed else 100.0,
-                disabled_weapons=0, flameouts=0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
                 damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=enemy_destroyed,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=enemy_destroyed,
                 hull_fraction=0.0 if enemy_destroyed else 0.7,
                 armor_fraction=0.0 if enemy_destroyed else 0.8,
                 cr_remaining=0.0 if enemy_destroyed else 0.5,
                 peak_time_remaining=0.0 if enemy_destroyed else 100.0,
-                disabled_weapons=0, flameouts=0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
                 damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner=winner,
+                matchup_id=m.matchup_id,
+                winner=winner,
                 duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
-                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
-                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
-                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                    eff_max_flux=12000.0,
+                    eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0,
+                    eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0,
+                    shield_damage_taken_mult=1.0,
                 ),
             )
 
@@ -843,7 +949,11 @@ class TestStagedEvaluator:
         assert call_count[0] <= config.sim_budget
 
     def test_progress_log_survives_zero_completed_trials(
-        self, wolf_hull, game_data, manifest, caplog,
+        self,
+        wolf_hull,
+        game_data,
+        manifest,
+        caplog,
     ):
         """Regression (2026-04-19 Tier-2 smoke): the progress-log block at
         `optimizer.py:run()` called `self._study.best_trial` inside a ternary
@@ -858,21 +968,29 @@ class TestStagedEvaluator:
         from starsector_optimizer.models import HullSize
 
         pool = self._make_mock_pool(winner="ENEMY")
-        opp_pool = OpponentPool(pools={
-            HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
-        })
+        opp_pool = OpponentPool(
+            pools={
+                HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
+            }
+        )
         # Aggressive pruning + log_interval=1 so the progress log fires as
         # soon as the first PRUNED trial lands — exercises the empty-COMPLETE
         # branch exactly as the smoke did.
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=0, warm_start_sample_n=20,
-            wilcoxon_n_startup_steps=0, log_interval=1,
+            sim_budget=3,
+            warm_start_n=0,
+            warm_start_sample_n=20,
+            wilcoxon_n_startup_steps=0,
+            log_interval=1,
         )
         # Must not raise.
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
     def test_pruning_leaves_only_complete_or_pruned_trials(
-        self, wolf_hull, game_data, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        manifest,
     ):
         """Aggressive pruning runs cleanly; every trial lands COMPLETE or
         PRUNED (never FAIL). The build cache itself is internal to the
@@ -886,12 +1004,16 @@ class TestStagedEvaluator:
         from starsector_optimizer.models import HullSize
 
         pool = self._make_mock_pool(winner="ENEMY")
-        opp_pool = OpponentPool(pools={
-            HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
-        })
+        opp_pool = OpponentPool(
+            pools={
+                HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault", "hyperion_Attack"),
+            }
+        )
         # wilcoxon_n_startup_steps=0 so pruning kicks in immediately
         config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            sim_budget=5,
+            warm_start_n=3,
+            warm_start_sample_n=20,
             wilcoxon_n_startup_steps=0,
         )
 
@@ -914,9 +1036,11 @@ class TestStagedEvaluator:
         config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE
-                     and t.value is not None and t.value > 0]
+        completed = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None and t.value > 0
+        ]
         # At least some completed trials should exist with positive fitness
         assert len(completed) > 0
 
@@ -952,11 +1076,9 @@ class TestStagedEvaluator:
             sim_trial_numbers.add(parts)
 
         for prefix in sim_trial_numbers:
-            trial_matchups = [mid for mid in all_matchup_ids
-                              if mid.startswith(prefix)]
+            trial_matchups = [mid for mid in all_matchup_ids if mid.startswith(prefix)]
             assert len(trial_matchups) == len(opponents), (
-                f"Build {prefix} has {len(trial_matchups)} matchups, "
-                f"expected {len(opponents)}"
+                f"Build {prefix} has {len(trial_matchups)} matchups, expected {len(opponents)}"
             )
 
     def test_intermediate_values_per_opponent(self, wolf_hull, game_data, manifest):
@@ -972,9 +1094,7 @@ class TestStagedEvaluator:
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Find trials with intermediate values (sim trials that weren't cache hits)
-        trials_with_intermediates = [
-            t for t in study.trials if len(t.intermediate_values) > 0
-        ]
+        trials_with_intermediates = [t for t in study.trials if len(t.intermediate_values) > 0]
         # At least one trial should have intermediate reports for each opponent
         assert len(trials_with_intermediates) > 0, "No trials have intermediate values"
         for trial in trials_with_intermediates:
@@ -1032,10 +1152,14 @@ class TestStagedEvaluator:
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Some trials should have -1.0 value (from the failed matchup)
-        negative_trials = [t for t in study.trials
-                           if t.state == optuna.trial.TrialState.COMPLETE
-                           and t.value is not None and t.value < 0]
-        assert len(negative_trials) > 0, "Expected some trials with negative scores from InstanceError"
+        negative_trials = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None and t.value < 0
+        ]
+        assert len(negative_trials) > 0, (
+            "Expected some trials with negative scores from InstanceError"
+        )
 
     def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data, manifest):
         """Intermediate trial.report() values are raw combat_fitness at rung positions."""
@@ -1057,7 +1181,7 @@ class TestStagedEvaluator:
             steps = sorted(trial.intermediate_values.keys())
             n_opps = len(steps)
             assert steps == list(range(n_opps)), (
-                f"Trial {trial.number} steps {steps} should be 0..{n_opps-1}"
+                f"Trial {trial.number} steps {steps} should be 0..{n_opps - 1}"
             )
             # With all PLAYER wins from mock, raw scores in [1.0, 1.5]
             for step, val in trial.intermediate_values.items():
@@ -1073,9 +1197,11 @@ class TestStagedEvaluator:
         from starsector_optimizer.models import HullSize
 
         pool = self._make_mock_pool()
-        opp_pool = OpponentPool(pools={
-            HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault"),
-        })
+        opp_pool = OpponentPool(
+            pools={
+                HullSize.FRIGATE: ("wolf_Assault", "lasher_Assault"),
+            }
+        )
         config = OptimizerConfig(sim_budget=8, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1083,16 +1209,11 @@ class TestStagedEvaluator:
         assert len(trials_with_iv) > 0
         # Raw combat_fitness scores: PLAYER wins are in [1.0, 1.5],
         # ENEMY losses in [-1.0, -0.5], timeouts in [-0.49, 0.49]
-        all_intermediates = [
-            val for t in trials_with_iv
-            for val in t.intermediate_values.values()
-        ]
+        all_intermediates = [val for t in trials_with_iv for val in t.intermediate_values.values()]
         assert len(all_intermediates) > 0, "Should have intermediate values"
         # With all PLAYER wins from mock, raw scores should be in [1.0, 1.5]
         for v in all_intermediates:
-            assert 1.0 <= v <= 1.5, (
-                f"Raw score {v} outside PLAYER win range [1.0, 1.5]"
-            )
+            assert 1.0 <= v <= 1.5, f"Raw score {v} outside PLAYER win range [1.0, 1.5]"
 
     def test_failure_score_bypasses_transformations(self, wolf_hull, game_data, manifest):
         """Invalid builds get raw config.failure_score, not transformed."""
@@ -1116,9 +1237,13 @@ class TestStagedEvaluator:
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        failure_trials = [t for t in study.trials
-                          if t.state == optuna.trial.TrialState.COMPLETE
-                          and t.value is not None and t.value == config.failure_score]
+        failure_trials = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+            and t.value is not None
+            and t.value == config.failure_score
+        ]
         assert len(failure_trials) > 0, "Expected some trials with raw failure_score"
 
     def test_cached_builds_return_transformed_score(self, wolf_hull, game_data, manifest):
@@ -1134,8 +1259,7 @@ class TestStagedEvaluator:
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Pipeline should complete; cache hits return same value as original
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
     def test_all_trials_complete_without_error(self, wolf_hull, game_data, manifest):
@@ -1148,9 +1272,11 @@ class TestStagedEvaluator:
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE
-                     and len(t.intermediate_values) > 0]
+        completed = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and len(t.intermediate_values) > 0
+        ]
         assert len(completed) > 0
 
     def test_active_opponents_limits_rungs(self, wolf_hull, game_data, tmp_path, manifest):
@@ -1161,13 +1287,18 @@ class TestStagedEvaluator:
 
         pool = self._make_mock_pool()
         opponents = (
-            "brawler_Assault", "hound_Standard", "lasher_Assault",
-            "vigilance_Standard", "wolf_Assault",
+            "brawler_Assault",
+            "hound_Standard",
+            "lasher_Assault",
+            "vigilance_Standard",
+            "wolf_Assault",
         )
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            sim_budget=5,
+            warm_start_n=3,
+            warm_start_sample_n=20,
             active_opponents=3,
             eval_log_path=log_path,
         )
@@ -1190,7 +1321,9 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=5, warm_start_n=3, warm_start_sample_n=20,
+            sim_budget=5,
+            warm_start_n=3,
+            warm_start_sample_n=20,
             active_opponents=20,
             eval_log_path=log_path,
         )
@@ -1200,7 +1333,6 @@ class TestStagedEvaluator:
         records = [json.loads(line) for line in log_path.read_text().splitlines()]
         for rec in records:
             assert rec["opponents_total"] == 3
-
 
     def test_twfe_fitness_in_finalize(self, wolf_hull, game_data, manifest):
         """study.tell() receives Box-Cox-shaped value derived from TWFE alpha."""
@@ -1212,10 +1344,13 @@ class TestStagedEvaluator:
         config = OptimizerConfig(sim_budget=5, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        sim_trials = [t for t in study.trials
-                      if t.state == optuna.trial.TrialState.COMPLETE
-                      and t.value is not None
-                      and len(t.intermediate_values) > 0]
+        sim_trials = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+            and t.value is not None
+            and len(t.intermediate_values) > 0
+        ]
         assert len(sim_trials) > 0
         # Post-A3 Box-Cox output is in [0, 1] (the population minimum maps
         # to exactly 0 via min-max rescale; the pre-5E rank shape never hit
@@ -1236,8 +1371,7 @@ class TestStagedEvaluator:
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Pipeline should complete — incumbent tracking does not crash
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
     def test_score_matrix_populated_on_result(self, wolf_hull, game_data, tmp_path, manifest):
@@ -1251,7 +1385,9 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=3, warm_start_sample_n=20,
+            sim_budget=3,
+            warm_start_n=3,
+            warm_start_sample_n=20,
             eval_log_path=log_path,
         )
 
@@ -1273,16 +1409,23 @@ class TestStagedEvaluator:
         pool = self._make_mock_pool()
         # Need enough opponents that overlap isn't trivial
         opponents = (
-            "brawler_Assault", "hound_Standard", "lasher_Assault",
-            "vigilance_Standard", "wolf_Assault",
+            "brawler_Assault",
+            "hound_Standard",
+            "lasher_Assault",
+            "vigilance_Standard",
+            "wolf_Assault",
         )
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         log_path = tmp_path / "eval.jsonl"
         # Small burn-in so we exercise post-burn-in path
         twfe_cfg = TWFEConfig(anchor_burn_in=3, n_incumbent_overlap=2)
         config = OptimizerConfig(
-            sim_budget=10, warm_start_n=3, warm_start_sample_n=20,
-            active_opponents=3, twfe=twfe_cfg, eval_log_path=log_path,
+            sim_budget=10,
+            warm_start_n=3,
+            warm_start_sample_n=20,
+            active_opponents=3,
+            twfe=twfe_cfg,
+            eval_log_path=log_path,
         )
 
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1302,15 +1445,22 @@ class TestStagedEvaluator:
 
         pool = self._make_mock_pool()
         opponents = (
-            "brawler_Assault", "hound_Standard", "lasher_Assault",
-            "vigilance_Standard", "wolf_Assault",
+            "brawler_Assault",
+            "hound_Standard",
+            "lasher_Assault",
+            "vigilance_Standard",
+            "wolf_Assault",
         )
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         log_path = tmp_path / "eval.jsonl"
         twfe_cfg = TWFEConfig(anchor_burn_in=3, n_anchors=2)
         config = OptimizerConfig(
-            sim_budget=8, warm_start_n=3, warm_start_sample_n=20,
-            active_opponents=4, twfe=twfe_cfg, eval_log_path=log_path,
+            sim_budget=8,
+            warm_start_n=3,
+            warm_start_sample_n=20,
+            active_opponents=4,
+            twfe=twfe_cfg,
+            eval_log_path=log_path,
         )
 
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1320,8 +1470,9 @@ class TestStagedEvaluator:
         post_burn_in = records[3:]  # after 3 burn-in builds
         if len(post_burn_in) >= 2:
             # Anchor opponents should appear in the same positions across trials
-            first_opps = [rec["opponent_order"][:2] for rec in post_burn_in
-                          if len(rec["opponent_order"]) >= 2]
+            first_opps = [
+                rec["opponent_order"][:2] for rec in post_burn_in if len(rec["opponent_order"]) >= 2
+            ]
             if len(first_opps) >= 2:
                 # Anchors are locked — first 2 opponents should be the same set
                 anchor_set = set(first_opps[0])
@@ -1341,14 +1492,15 @@ class TestStagedEvaluator:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: opponents})
         twfe_cfg = TWFEConfig(anchor_burn_in=3, n_anchors=2)
         config = OptimizerConfig(
-            sim_budget=8, warm_start_n=3, warm_start_sample_n=20,
+            sim_budget=8,
+            warm_start_n=3,
+            warm_start_sample_n=20,
             twfe=twfe_cfg,
         )
 
         # Pipeline should complete without errors — anchors computed after burn-in
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 3  # More than burn-in count
 
     def test_config_no_fitness_mode(self):
@@ -1367,7 +1519,12 @@ class TestParallelDispatch:
         """
         import threading
         from unittest.mock import MagicMock
-        from starsector_optimizer.models import CombatResult, EngineStats, ShipCombatResult, DamageBreakdown
+        from starsector_optimizer.models import (
+            CombatResult,
+            EngineStats,
+            ShipCombatResult,
+            DamageBreakdown,
+        )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
         mock_pool = MagicMock(spec=LocalInstancePool)
@@ -1381,41 +1538,53 @@ class TestParallelDispatch:
             player_destroyed = winner == "ENEMY"
             enemy_destroyed = winner == "PLAYER"
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=player_destroyed,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=player_destroyed,
                 hull_fraction=0.0 if player_destroyed else 0.7,
                 armor_fraction=0.0 if player_destroyed else 0.8,
                 cr_remaining=0.0 if player_destroyed else 0.5,
                 peak_time_remaining=0.0 if player_destroyed else 100.0,
-                disabled_weapons=0, flameouts=0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
                 damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=enemy_destroyed,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=enemy_destroyed,
                 hull_fraction=0.0 if enemy_destroyed else 0.7,
                 armor_fraction=0.0 if enemy_destroyed else 0.8,
                 cr_remaining=0.0 if enemy_destroyed else 0.5,
                 peak_time_remaining=0.0 if enemy_destroyed else 100.0,
-                disabled_weapons=0, flameouts=0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
                 damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner=winner,
+                matchup_id=m.matchup_id,
+                winner=winner,
                 duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
-                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
-                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
-                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                    eff_max_flux=12000.0,
+                    eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0,
+                    eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0,
+                    shield_damage_taken_mult=1.0,
                 ),
             )
 
@@ -1438,9 +1607,7 @@ class TestParallelDispatch:
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         used_threads = {tid for tid, _ in pool._call_log}
-        assert len(used_threads) >= 3, (
-            f"Expected at least 3 distinct threads, got: {used_threads}"
-        )
+        assert len(used_threads) >= 3, f"Expected at least 3 distinct threads, got: {used_threads}"
 
     def test_single_instance_works(self, game_data, manifest):
         """With num_instances=1, optimization completes normally."""
@@ -1452,8 +1619,7 @@ class TestParallelDispatch:
         config = OptimizerConfig(sim_budget=3, warm_start_n=3, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
     def test_build_not_dispatched_twice(self, game_data, manifest):
@@ -1473,7 +1639,8 @@ class TestParallelDispatch:
             with lock:
                 active_trials[prefix] = active_trials.get(prefix, 0) + 1
                 max_concurrent[prefix] = max(
-                    max_concurrent.get(prefix, 0), active_trials[prefix],
+                    max_concurrent.get(prefix, 0),
+                    active_trials[prefix],
                 )
             try:
                 return original_run(matchup)
@@ -1489,9 +1656,7 @@ class TestParallelDispatch:
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         for prefix, count in max_concurrent.items():
-            assert count == 1, (
-                f"Build {prefix} had {count} concurrent dispatches, expected 1"
-            )
+            assert count == 1, f"Build {prefix} had {count} concurrent dispatches, expected 1"
 
     def test_queue_drains_after_budget(self, game_data, manifest):
         """After sim_budget reached, builds in queue still complete."""
@@ -1508,9 +1673,7 @@ class TestParallelDispatch:
         # All sim trials should be COMPLETE or PRUNED (not abandoned mid-evaluation)
         allowed = {optuna.trial.TrialState.COMPLETE, optuna.trial.TrialState.PRUNED}
         for trial in study.trials:
-            assert trial.state in allowed, (
-                f"Trial {trial.number} is {trial.state.name}"
-            )
+            assert trial.state in allowed, f"Trial {trial.number} is {trial.state.name}"
 
 
 class TestWilcoxonPruner:
@@ -1541,6 +1704,7 @@ class TestWilcoxonPruner:
     def test_per_trial_opponent_shuffle(self):
         """Different trial numbers produce different opponent orderings."""
         import random as _random
+
         opponents = list(range(10))
         orders = set()
         for trial_num in range(20):
@@ -1579,15 +1743,23 @@ class TestEBShrinkage:
         # Create a real ScorerResult by running the scorer on a minimal build
         build = repair_build(
             Build(
-                hull_id="wolf", weapon_assignments={},
-                hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
+                hull_id="wolf",
+                weapon_assignments={},
+                hullmods=frozenset(),
+                flux_vents=0,
+                flux_capacitors=0,
             ),
-            wolf_hull, game_data, manifest,
+            wolf_hull,
+            game_data,
+            manifest,
         )
         sr = heuristic_score(build, wolf_hull, game_data)
         es = EngineStats(
-            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
-            eff_hull_hp_pct=1.4, ballistic_range_bonus=300.0,
+            eff_max_flux=12000.0,
+            eff_flux_dissipation=800.0,
+            eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.4,
+            ballistic_range_bonus=300.0,
             shield_damage_taken_mult=0.75,
         )
         record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=es, build=build)
@@ -1596,12 +1768,12 @@ class TestEBShrinkage:
         # Post-Phase-7-prep: 10-dim vector in pinned order (see plan §arch decision 6).
         # eff trio + 3 new engine reads + 3 python scorer + op_used_fraction.
         assert X.shape == (10,)
-        assert X[0] == pytest.approx(12000.0)      # eff_max_flux
-        assert X[1] == pytest.approx(800.0)        # eff_flux_dissipation
-        assert X[2] == pytest.approx(1050.0)       # eff_armor_rating
-        assert X[3] == pytest.approx(1.4)          # eff_hull_hp_pct
-        assert X[4] == pytest.approx(300.0)        # ballistic_range_bonus
-        assert X[5] == pytest.approx(0.75)         # shield_damage_taken_mult
+        assert X[0] == pytest.approx(12000.0)  # eff_max_flux
+        assert X[1] == pytest.approx(800.0)  # eff_flux_dissipation
+        assert X[2] == pytest.approx(1050.0)  # eff_armor_rating
+        assert X[3] == pytest.approx(1.4)  # eff_hull_hp_pct
+        assert X[4] == pytest.approx(300.0)  # ballistic_range_bonus
+        assert X[5] == pytest.approx(0.75)  # shield_damage_taken_mult
         assert X[6] == pytest.approx(sr.total_dps)
         assert X[7] == pytest.approx(sr.engagement_range)
         expected_kin_frac = sr.kinetic_dps / max(sr.total_dps, 1e-12)
@@ -1610,7 +1782,10 @@ class TestEBShrinkage:
         assert 0.0 <= X[9] <= 1.0
 
     def test_build_covariate_vector_hard_errors_on_missing_engine_stats(
-        self, wolf_hull, game_data, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        manifest,
     ):
         """Post-Phase-7-prep: engine_stats=None is a HARD invariant violation
         (the Java SETUP hook always emits). The old Python compute_effective_stats
@@ -1624,10 +1799,15 @@ class TestEBShrinkage:
 
         build = repair_build(
             Build(
-                hull_id="wolf", weapon_assignments={},
-                hullmods=frozenset(), flux_vents=0, flux_capacitors=0,
+                hull_id="wolf",
+                weapon_assignments={},
+                hullmods=frozenset(),
+                flux_vents=0,
+                flux_capacitors=0,
             ),
-            wolf_hull, game_data, manifest,
+            wolf_hull,
+            game_data,
+            manifest,
         )
         sr = heuristic_score(build, wolf_hull, game_data)
         record = _EBRecord(trial_number=7, scorer_result=sr, engine_stats=None, build=build)
@@ -1643,7 +1823,10 @@ class TestStagedEvaluatorEBIntegration:
         """Mock LocalInstancePool returning CombatResults with optional engine_stats."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+            CombatResult,
+            ShipCombatResult,
+            DamageBreakdown,
+            EngineStats,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
@@ -1651,37 +1834,56 @@ class TestStagedEvaluatorEBIntegration:
         mock_pool.game_dir = Path("game/starsector")
         mock_pool.num_workers = num_instances
         default_es = engine_stats or EngineStats(
-            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
-            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            eff_max_flux=12000.0,
+            eff_flux_dissipation=800.0,
+            eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0,
+            ballistic_range_bonus=0.0,
             shield_damage_taken_mult=1.0,
         )
 
         def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=False, hull_fraction=0.7,
-                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
-                disabled_weapons=0, flameouts=0,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=False,
+                hull_fraction=0.7,
+                armor_fraction=0.8,
+                cr_remaining=0.5,
+                peak_time_remaining=100.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=True, hull_fraction=0.0,
-                armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
-                disabled_weapons=0, flameouts=0,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=True,
+                hull_fraction=0.0,
+                armor_fraction=0.0,
+                cr_remaining=0.0,
+                peak_time_remaining=0.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner=winner,
+                matchup_id=m.matchup_id,
+                winner=winner,
                 duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                player_ships_destroyed=0, enemy_ships_destroyed=1,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0,
+                enemy_ships_destroyed=1,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=default_es,
             )
@@ -1696,8 +1898,11 @@ class TestStagedEvaluatorEBIntegration:
         from starsector_optimizer.models import HullSize, EngineStats
 
         custom_es = EngineStats(
-            eff_max_flux=9999.0, eff_flux_dissipation=555.0, eff_armor_rating=777.0,
-            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            eff_max_flux=9999.0,
+            eff_flux_dissipation=555.0,
+            eff_armor_rating=777.0,
+            eff_hull_hp_pct=1.0,
+            ballistic_range_bonus=0.0,
             shield_damage_taken_mult=1.0,
         )
         pool = self._make_mock_pool(engine_stats=custom_es)
@@ -1705,8 +1910,7 @@ class TestStagedEvaluatorEBIntegration:
         config = OptimizerConfig(sim_budget=3, warm_start_n=2, warm_start_sample_n=20)
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) > 0
 
     def test_finalize_uses_raw_alpha_when_few_builds(self, wolf_hull, game_data, manifest):
@@ -1719,15 +1923,19 @@ class TestStagedEvaluatorEBIntegration:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         # Budget of 3 < eb_min_builds=8 → shrinkage never engages
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eb=EBShrinkageConfig(eb_min_builds=8),
         )
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # Pipeline runs cleanly without shrinkage
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE
-                     and t.value is not None]
+        completed = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None
+        ]
         assert len(completed) > 0
 
     def test_eb_pipeline_runs_above_min_builds(self, wolf_hull, game_data, manifest):
@@ -1740,14 +1948,18 @@ class TestStagedEvaluatorEBIntegration:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         # Budget above eb_min_builds → shrinkage activates
         config = OptimizerConfig(
-            sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=12,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eb=EBShrinkageConfig(eb_min_builds=4),
         )
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        completed = [t for t in study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE
-                     and t.value is not None]
+        completed = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None
+        ]
         assert len(completed) >= 4
 
 
@@ -1757,7 +1969,10 @@ class TestEvalLogAuditFields:
     def _make_mock_pool(self, *, engine_stats=None):
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+            CombatResult,
+            ShipCombatResult,
+            DamageBreakdown,
+            EngineStats,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
@@ -1765,37 +1980,56 @@ class TestEvalLogAuditFields:
         mock_pool.game_dir = Path("game/starsector")
         mock_pool.num_workers = 1
         default_es = engine_stats or EngineStats(
-            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
-            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            eff_max_flux=12000.0,
+            eff_flux_dissipation=800.0,
+            eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0,
+            ballistic_range_bonus=0.0,
             shield_damage_taken_mult=1.0,
         )
 
         def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=False, hull_fraction=0.7,
-                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
-                disabled_weapons=0, flameouts=0,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=False,
+                hull_fraction=0.7,
+                armor_fraction=0.8,
+                cr_remaining=0.5,
+                peak_time_remaining=100.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=True, hull_fraction=0.0,
-                armor_fraction=0.0, cr_remaining=0.0, peak_time_remaining=0.0,
-                disabled_weapons=0, flameouts=0,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=True,
+                hull_fraction=0.0,
+                armor_fraction=0.0,
+                cr_remaining=0.0,
+                peak_time_remaining=0.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner="PLAYER",
+                matchup_id=m.matchup_id,
+                winner="PLAYER",
                 duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                player_ships_destroyed=0, enemy_ships_destroyed=1,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0,
+                enemy_ships_destroyed=1,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=default_es,
             )
@@ -1814,7 +2048,9 @@ class TestEvalLogAuditFields:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eval_log_path=log_path,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1834,15 +2070,20 @@ class TestEvalLogAuditFields:
         import json
 
         es = EngineStats(
-            eff_max_flux=9999.0, eff_flux_dissipation=555.0, eff_armor_rating=777.0,
-            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            eff_max_flux=9999.0,
+            eff_flux_dissipation=555.0,
+            eff_armor_rating=777.0,
+            eff_hull_hp_pct=1.0,
+            ballistic_range_bonus=0.0,
             shield_damage_taken_mult=1.0,
         )
         pool = self._make_mock_pool(engine_stats=es)
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eval_log_path=log_path,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1867,7 +2108,9 @@ class TestEvalLogAuditFields:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eval_log_path=log_path,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1882,7 +2125,11 @@ class TestEvalLogAuditFields:
             assert all(isinstance(x, float) for x in rec["covariate_vector"])
 
     def test_eb_diagnostics_omitted_before_shrinkage_kicks_in(
-        self, wolf_hull, game_data, tmp_path, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        tmp_path,
+        manifest,
     ):
         """Pre-shrinkage trials (n < eb_min_builds, or var(α) ≈ 0) omit
         eb_diagnostics — signalling to downstream analysis that eb_fitness
@@ -1899,7 +2146,9 @@ class TestEvalLogAuditFields:
         # Budget 3 → never reaches eb_min_builds (default 8); every row
         # should come back without eb_diagnostics.
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eval_log_path=log_path,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1908,16 +2157,17 @@ class TestEvalLogAuditFields:
         completed = [r for r in recs if not r["pruned"]]
         assert len(completed) > 0
         for rec in completed:
-            assert "eb_diagnostics" not in rec, (
-                "pre-shrinkage rows must not carry eb_diagnostics"
-            )
+            assert "eb_diagnostics" not in rec, "pre-shrinkage rows must not carry eb_diagnostics"
 
     def _make_varying_mock_pool(self):
         """Like ``_make_mock_pool`` but yields varying scores across trials
         so that Var(α̂) > 0 and EB shrinkage actually fits a prior."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+            CombatResult,
+            ShipCombatResult,
+            DamageBreakdown,
+            EngineStats,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
@@ -1925,8 +2175,11 @@ class TestEvalLogAuditFields:
         mock_pool.game_dir = Path("game/starsector")
         mock_pool.num_workers = 1
         default_es = EngineStats(
-            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
-            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            eff_max_flux=12000.0,
+            eff_flux_dissipation=800.0,
+            eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0,
+            ballistic_range_bonus=0.0,
             shield_damage_taken_mult=1.0,
         )
 
@@ -1938,19 +2191,31 @@ class TestEvalLogAuditFields:
             h = (abs(hash(m.player_builds[0].variant_id)) % 1000) / 1000.0
             player_hf = 0.05 + 0.9 * h
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=False, hull_fraction=player_hf,
-                armor_fraction=0.8, cr_remaining=0.5, peak_time_remaining=100.0,
-                disabled_weapons=0, flameouts=0,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=False,
+                hull_fraction=player_hf,
+                armor_fraction=0.8,
+                cr_remaining=0.5,
+                peak_time_remaining=100.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=False, hull_fraction=1.0 - player_hf,
-                armor_fraction=0.5, cr_remaining=0.5, peak_time_remaining=0.0,
-                disabled_weapons=0, flameouts=0,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=False,
+                hull_fraction=1.0 - player_hf,
+                armor_fraction=0.5,
+                cr_remaining=0.5,
+                peak_time_remaining=0.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 overload_count=0,
@@ -1959,10 +2224,12 @@ class TestEvalLogAuditFields:
                 matchup_id=m.matchup_id,
                 winner="PLAYER" if player_hf > 0.5 else "ENEMY",
                 duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
                 player_ships_destroyed=0 if player_hf > 0.5 else 1,
                 enemy_ships_destroyed=1 if player_hf > 0.5 else 0,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=default_es,
             )
@@ -1971,7 +2238,11 @@ class TestEvalLogAuditFields:
         return mock_pool
 
     def test_eb_diagnostics_populated_after_shrinkage_activates(
-        self, wolf_hull, game_data, tmp_path, manifest,
+        self,
+        wolf_hull,
+        game_data,
+        tmp_path,
+        manifest,
     ):
         """Once score_matrix.n_builds >= eb_min_builds AND var(α) is non-
         trivial, completed rows carry eb_diagnostics with all five fields:
@@ -1983,9 +2254,15 @@ class TestEvalLogAuditFields:
         import json
 
         pool = self._make_varying_mock_pool()
-        opp_pool = OpponentPool(pools={HullSize.FRIGATE: (
-            "wolf_Assault", "lasher_Assault", "hound_Standard",
-        )})
+        opp_pool = OpponentPool(
+            pools={
+                HullSize.FRIGATE: (
+                    "wolf_Assault",
+                    "lasher_Assault",
+                    "hound_Standard",
+                )
+            }
+        )
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
             sim_budget=12,
@@ -1997,9 +2274,7 @@ class TestEvalLogAuditFields:
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
-        with_diag = [
-            r for r in recs if not r["pruned"] and "eb_diagnostics" in r
-        ]
+        with_diag = [r for r in recs if not r["pruned"] and "eb_diagnostics" in r]
         assert with_diag, (
             "expected at least one completed trial to carry eb_diagnostics "
             "once eb_min_builds is reached"
@@ -2008,8 +2283,11 @@ class TestEvalLogAuditFields:
             diag = rec["eb_diagnostics"]
             # Every field present + well-typed.
             assert set(diag.keys()) == {
-                "sigma_sq_twfe", "sigma_sq_eb", "tau2",
-                "gamma", "kept_cov_columns",
+                "sigma_sq_twfe",
+                "sigma_sq_eb",
+                "tau2",
+                "gamma",
+                "kept_cov_columns",
             }
             assert isinstance(diag["sigma_sq_twfe"], float)
             assert isinstance(diag["sigma_sq_eb"], float)
@@ -2058,6 +2336,7 @@ class TestShapeFitness:
         assert diag.passthrough_reason == "n<1"
         # Box-Cox case: need n >= min_samples and ptp >= eps
         import random
+
         rng = random.Random(0)
         completed = [rng.gauss(0, 1) for _ in range(20)]
         _val, diag = _shape_fitness(0.3, completed, cfg)
@@ -2158,8 +2437,7 @@ class TestShapeFitness:
         # by `test_shape_fitness_clips_outlier_current_trial`.
         rng = random.Random(1)
         population = [rng.gauss(0.5, 0.2) for _ in range(50)]
-        shaped = [_shape_fitness(v, population, ShapeConfig())[0]
-                  for v in population]
+        shaped = [_shape_fitness(v, population, ShapeConfig())[0] for v in population]
         rho, _ = spearmanr(population, shaped)
         assert rho == pytest.approx(1.0, abs=1e-9)
 
@@ -2175,8 +2453,7 @@ class TestShapeFitness:
         # 100-point sweep across the population range
         lo, hi = min(population), max(population)
         sweep = [lo + i * (hi - lo) / 99 for i in range(100)]
-        shaped = [_shape_fitness(x, population, ShapeConfig())[0]
-                  for x in sweep]
+        shaped = [_shape_fitness(x, population, ShapeConfig())[0] for x in sweep]
         # Strictly non-decreasing
         for a, b in itertools.pairwise(shaped):
             assert a <= b + 1e-12, f"Monotonicity violated: {a} > {b}"
@@ -2206,16 +2483,14 @@ class TestShapeFitness:
         rng = random.Random(3)
         # 90% exploit cluster at ~0.8, 10% at ~0.0 — mirrors sim
         population = [
-            (0.8 + rng.gauss(0, 0.1)) if rng.random() < 0.9
-            else rng.gauss(0.0, 0.3)
+            (0.8 + rng.gauss(0, 0.1)) if rng.random() < 0.9 else rng.gauss(0.0, 0.3)
             for _ in range(200)
         ]
         # Map every population value through _shape_fitness against itself
         shaped = [_shape_fitness(x, population, cfg)[0] for x in population]
         ceiling_frac = sum(1 for v in shaped if v >= 0.99) / len(shaped)
         assert ceiling_frac < 0.05, (
-            f"Ceiling saturation {ceiling_frac:.1%} ≥ 5%; "
-            "Box-Cox should open up the top quartile"
+            f"Ceiling saturation {ceiling_frac:.1%} ≥ 5%; Box-Cox should open up the top quartile"
         )
 
     # --- End-to-end integration tests ---
@@ -2224,7 +2499,10 @@ class TestShapeFitness:
         """Reuse TestEvalLogAuditFields' mock-pool pattern (engine_stats-aware)."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, ShipCombatResult, DamageBreakdown, EngineStats,
+            CombatResult,
+            ShipCombatResult,
+            DamageBreakdown,
+            EngineStats,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
@@ -2232,8 +2510,11 @@ class TestShapeFitness:
         mock_pool.game_dir = Path("game/starsector")
         mock_pool.num_workers = num_instances
         es = EngineStats(
-            eff_max_flux=12000.0, eff_flux_dissipation=800.0, eff_armor_rating=1050.0,
-            eff_hull_hp_pct=1.0, ballistic_range_bonus=0.0,
+            eff_max_flux=12000.0,
+            eff_flux_dissipation=800.0,
+            eff_armor_rating=1050.0,
+            eff_hull_hp_pct=1.0,
+            ballistic_range_bonus=0.0,
             shield_damage_taken_mult=1.0,
         )
 
@@ -2242,35 +2523,45 @@ class TestShapeFitness:
             player_destroyed = winner == "ENEMY"
             enemy_destroyed = winner == "PLAYER"
             player = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=player_destroyed,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=player_destroyed,
                 hull_fraction=0.0 if player_destroyed else 0.7,
                 armor_fraction=0.0 if player_destroyed else 0.8,
                 cr_remaining=0.0 if player_destroyed else 0.5,
                 peak_time_remaining=0.0 if player_destroyed else 100.0,
-                disabled_weapons=0, flameouts=0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 damage_taken=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 overload_count=0,
             )
             enemy = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=enemy_destroyed,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=enemy_destroyed,
                 hull_fraction=0.0 if enemy_destroyed else 0.7,
                 armor_fraction=0.0 if enemy_destroyed else 0.8,
                 cr_remaining=0.0 if enemy_destroyed else 0.5,
                 peak_time_remaining=0.0 if enemy_destroyed else 100.0,
-                disabled_weapons=0, flameouts=0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(50.0, 100.0, 150.0, 0.0),
                 damage_taken=DamageBreakdown(100.0, 200.0, 300.0, 0.0),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner=winner, duration_seconds=60.0,
-                player_ships=(player,), enemy_ships=(enemy,),
+                matchup_id=m.matchup_id,
+                winner=winner,
+                duration_seconds=60.0,
+                player_ships=(player,),
+                enemy_ships=(enemy,),
                 player_ships_destroyed=1 if player_destroyed else 0,
                 enemy_ships_destroyed=1 if enemy_destroyed else 0,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=es,
             )
@@ -2288,13 +2579,18 @@ class TestShapeFitness:
         pool = self._make_mock_pool()
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(
-            sim_budget=10, warm_start_n=3, warm_start_sample_n=20,
+            sim_budget=10,
+            warm_start_n=3,
+            warm_start_sample_n=20,
         )
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        sim_trials = [t for t in study.trials
-                      if t.state == optuna.trial.TrialState.COMPLETE
-                      and t.value is not None
-                      and 0.0 < t.value <= 1.0]
+        sim_trials = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+            and t.value is not None
+            and 0.0 < t.value <= 1.0
+        ]
         assert len(sim_trials) >= 3
         values = [t.value for t in sim_trials if t.value is not None]
         assert len(values) == len(sim_trials)  # narrowing only; filter above guarantees this
@@ -2303,8 +2599,7 @@ class TestShapeFitness:
             assert 0.0 < v <= 1.0
         ceiling_frac = sum(1 for v in values if v >= 0.99) / len(values)
         assert ceiling_frac <= 0.1, (
-            f"ceiling fraction {ceiling_frac:.1%} > 10%; Box-Cox should "
-            "keep the top quartile open"
+            f"ceiling fraction {ceiling_frac:.1%} > 10%; Box-Cox should keep the top quartile open"
         )
 
     def test_eval_log_records_shape_diag(self, wolf_hull, game_data, tmp_path, manifest):
@@ -2319,7 +2614,9 @@ class TestShapeFitness:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=12,
+            warm_start_n=2,
+            warm_start_sample_n=20,
             eval_log_path=log_path,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -2350,12 +2647,13 @@ class TestShapeFitness:
         pool = self._make_mock_pool()
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(
-            sim_budget=12, warm_start_n=2, warm_start_sample_n=20,
+            sim_budget=12,
+            warm_start_n=2,
+            warm_start_sample_n=20,
         )
         with caplog.at_level(logging.INFO, logger="starsector_optimizer.optimizer"):
             optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        activation_records = [r for r in caplog.records
-                              if "Box-Cox activated" in r.getMessage()]
+        activation_records = [r for r in caplog.records if "Box-Cox activated" in r.getMessage()]
         assert len(activation_records) == 1, (
             f"Expected 1 activation log, got {len(activation_records)}"
         )
@@ -2368,7 +2666,10 @@ class TestRegimeStudyIsolation:
         """Reuse TestShapeFitness/TestStagedEvaluator mock-pool pattern (PLAYER winner)."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, ShipCombatResult, EngineStats, DamageBreakdown,
+            CombatResult,
+            ShipCombatResult,
+            EngineStats,
+            DamageBreakdown,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 
@@ -2379,33 +2680,53 @@ class TestRegimeStudyIsolation:
         def mock_run_matchup(matchup):
             m = matchup
             player_ship = ShipCombatResult(
-                fleet_member_id="p0", variant_id=m.player_builds[0].variant_id,
-                hull_id="wolf", destroyed=False,
-                hull_fraction=0.7, armor_fraction=0.8, cr_remaining=0.5,
-                peak_time_remaining=100.0, disabled_weapons=0, flameouts=0,
+                fleet_member_id="p0",
+                variant_id=m.player_builds[0].variant_id,
+                hull_id="wolf",
+                destroyed=False,
+                hull_fraction=0.7,
+                armor_fraction=0.8,
+                cr_remaining=0.5,
+                peak_time_remaining=100.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
                 damage_taken=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
                 overload_count=0,
             )
             enemy_ship = ShipCombatResult(
-                fleet_member_id="e0", variant_id=m.enemy_variants[0],
-                hull_id="enemy", destroyed=True,
-                hull_fraction=0.0, armor_fraction=0.0, cr_remaining=0.0,
-                peak_time_remaining=0.0, disabled_weapons=0, flameouts=0,
+                fleet_member_id="e0",
+                variant_id=m.enemy_variants[0],
+                hull_id="enemy",
+                destroyed=True,
+                hull_fraction=0.0,
+                armor_fraction=0.0,
+                cr_remaining=0.0,
+                peak_time_remaining=0.0,
+                disabled_weapons=0,
+                flameouts=0,
                 damage_dealt=DamageBreakdown(shield=50.0, armor=100.0, hull=150.0, emp=0.0),
                 damage_taken=DamageBreakdown(shield=100.0, armor=200.0, hull=300.0, emp=0.0),
                 overload_count=0,
             )
             return CombatResult(
-                matchup_id=m.matchup_id, winner="PLAYER", duration_seconds=60.0,
-                player_ships=(player_ship,), enemy_ships=(enemy_ship,),
-                player_ships_destroyed=0, enemy_ships_destroyed=1,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                matchup_id=m.matchup_id,
+                winner="PLAYER",
+                duration_seconds=60.0,
+                player_ships=(player_ship,),
+                enemy_ships=(enemy_ship,),
+                player_ships_destroyed=0,
+                enemy_ships_destroyed=1,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=make_pass_diagnostic(1),
                 engine_stats=EngineStats(
-                    eff_max_flux=12000.0, eff_flux_dissipation=800.0,
-                    eff_armor_rating=1050.0, eff_hull_hp_pct=1.0,
-                    ballistic_range_bonus=0.0, shield_damage_taken_mult=1.0,
+                    eff_max_flux=12000.0,
+                    eff_flux_dissipation=800.0,
+                    eff_armor_rating=1050.0,
+                    eff_hull_hp_pct=1.0,
+                    ballistic_range_bonus=0.0,
+                    shield_damage_taken_mult=1.0,
                 ),
             )
 
@@ -2418,19 +2739,27 @@ class TestRegimeStudyIsolation:
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import (
-            HullSize, REGIME_MID, REGIME_ENDGAME,
+            HullSize,
+            REGIME_MID,
+            REGIME_ENDGAME,
         )
 
         pool = self._make_mock_pool()
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         storage = f"sqlite:///{tmp_path}/phase5f.db"
         cfg_mid = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=10,
-            study_storage=storage, regime=REGIME_MID,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=10,
+            study_storage=storage,
+            regime=REGIME_MID,
         )
         cfg_endgame = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=10,
-            study_storage=storage, regime=REGIME_ENDGAME,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=10,
+            study_storage=storage,
+            regime=REGIME_ENDGAME,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, cfg_mid, manifest)
         optimize_hull("wolf", game_data, pool, opp_pool, cfg_endgame, manifest)
@@ -2449,8 +2778,11 @@ class TestRegimeStudyIsolation:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         log_path = tmp_path / "eval.jsonl"
         config = OptimizerConfig(
-            sim_budget=5, warm_start_n=2, warm_start_sample_n=10,
-            eval_log_path=log_path, regime=REGIME_MID,
+            sim_budget=5,
+            warm_start_n=2,
+            warm_start_sample_n=10,
+            eval_log_path=log_path,
+            regime=REGIME_MID,
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         recs = [json.loads(line) for line in log_path.read_text().splitlines()]
@@ -2468,8 +2800,11 @@ class TestRegimeStudyIsolation:
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         storage = f"sqlite:///{tmp_path}/empty.db"
         config = OptimizerConfig(
-            sim_budget=3, warm_start_n=2, warm_start_sample_n=10,
-            study_storage=storage, regime=REGIME_MID,
+            sim_budget=3,
+            warm_start_n=2,
+            warm_start_sample_n=10,
+            study_storage=storage,
+            regime=REGIME_MID,
             warm_start_from_regime="early",
         )
         with pytest.raises(ValueError, match="early"):
@@ -2493,27 +2828,31 @@ class TestRegimeStudyIsolation:
 
         # Seed endgame study with several trials.
         cfg_seed = OptimizerConfig(
-            sim_budget=5, warm_start_n=2, warm_start_sample_n=10,
-            study_storage=storage, regime=REGIME_ENDGAME,
+            sim_budget=5,
+            warm_start_n=2,
+            warm_start_sample_n=10,
+            study_storage=storage,
+            regime=REGIME_ENDGAME,
         )
         seed_study = optimize_hull("wolf", game_data, pool, opp_pool, cfg_seed, manifest)
-        completed = [t for t in seed_study.trials
-                     if t.state == optuna.trial.TrialState.COMPLETE]
+        completed = [t for t in seed_study.trials if t.state == optuna.trial.TrialState.COMPLETE]
         assert len(completed) >= 1, "seed study must have at least one completed trial"
 
         # Warm-start mid from endgame.
         with caplog.at_level(logging.INFO, logger="starsector_optimizer.optimizer"):
             cfg_warm = OptimizerConfig(
-                sim_budget=5, warm_start_n=3, warm_start_sample_n=10,
-                study_storage=storage, regime=REGIME_MID,
+                sim_budget=5,
+                warm_start_n=3,
+                warm_start_sample_n=10,
+                study_storage=storage,
+                regime=REGIME_MID,
                 warm_start_from_regime="endgame",
             )
             optimize_hull("wolf", game_data, pool, opp_pool, cfg_warm, manifest)
 
         # Warm-start summary line must appear; contract is one log per run.
         summary_lines = [
-            r.getMessage() for r in caplog.records
-            if "Warm-start from regime" in r.getMessage()
+            r.getMessage() for r in caplog.records if "Warm-start from regime" in r.getMessage()
         ]
         assert len(summary_lines) == 1, (
             f"Expected 1 warm-start summary log, got {len(summary_lines)}"
@@ -2544,30 +2883,38 @@ class TestRegimeStudyIsolation:
         target_storage = f"sqlite:///{tmp_path}/target.db"
 
         source_study = optuna.create_study(
-            study_name="src", storage=source_storage, direction="maximize",
+            study_name="src",
+            storage=source_storage,
+            direction="maximize",
         )
         # Two synthetic completed trials; their params are shaped like the
         # repair pipeline's inputs but deliberately minimal — the helper
         # must route through repair_build + regime mask to decide each one.
-        source_study.add_trial(optuna.trial.create_trial(
-            params={"flux_vents": 10, "flux_capacitors": 5},
-            distributions={
-                "flux_vents": optuna.distributions.IntDistribution(0, 30),
-                "flux_capacitors": optuna.distributions.IntDistribution(0, 30),
-            },
-            value=0.8,
-        ))
-        source_study.add_trial(optuna.trial.create_trial(
-            params={"flux_vents": 20, "flux_capacitors": 0},
-            distributions={
-                "flux_vents": optuna.distributions.IntDistribution(0, 30),
-                "flux_capacitors": optuna.distributions.IntDistribution(0, 30),
-            },
-            value=0.6,
-        ))
+        source_study.add_trial(
+            optuna.trial.create_trial(
+                params={"flux_vents": 10, "flux_capacitors": 5},
+                distributions={
+                    "flux_vents": optuna.distributions.IntDistribution(0, 30),
+                    "flux_capacitors": optuna.distributions.IntDistribution(0, 30),
+                },
+                value=0.8,
+            )
+        )
+        source_study.add_trial(
+            optuna.trial.create_trial(
+                params={"flux_vents": 20, "flux_capacitors": 0},
+                distributions={
+                    "flux_vents": optuna.distributions.IntDistribution(0, 30),
+                    "flux_capacitors": optuna.distributions.IntDistribution(0, 30),
+                },
+                value=0.6,
+            )
+        )
 
         target_study = optuna.create_study(
-            study_name="tgt", storage=target_storage, direction="maximize",
+            study_name="tgt",
+            storage=target_storage,
+            direction="maximize",
         )
         enqueued, skipped = _enqueue_warm_start_from_regime(
             target_study=target_study,
@@ -2593,15 +2940,20 @@ class TestPhase7PrepInvariants:
         `warm_start`) continues to seed; heuristic prior is opt-in only.
         """
         from starsector_optimizer.optimizer import OptimizerConfig
+
         assert OptimizerConfig().warm_start_n == 0
 
     def test_enginestats_has_six_frozen_fields(self):
         """EngineStats grew from 3 → 6 fields; must be frozen-dataclass
         construction (missing field raises TypeError)."""
         from starsector_optimizer.models import EngineStats
+
         es = EngineStats(
-            eff_max_flux=1.0, eff_flux_dissipation=2.0, eff_armor_rating=3.0,
-            eff_hull_hp_pct=4.0, ballistic_range_bonus=5.0,
+            eff_max_flux=1.0,
+            eff_flux_dissipation=2.0,
+            eff_armor_rating=3.0,
+            eff_hull_hp_pct=4.0,
+            ballistic_range_bonus=5.0,
             shield_damage_taken_mult=6.0,
         )
         assert es.eff_max_flux == 1.0
@@ -2613,6 +2965,7 @@ class TestPhase7PrepInvariants:
             cast(Any, EngineStats)(1.0, 2.0, 3.0)
         # Frozen → cannot mutate (deliberate: exercises FrozenInstanceError)
         import dataclasses as _dc
+
         with pytest.raises(_dc.FrozenInstanceError):
             es.eff_max_flux = 99.0  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
 
@@ -2622,13 +2975,16 @@ class TestPhase7PrepInvariants:
         expected (ΣW + ΣM + vents + caps) / hull.ordnance_points."""
         from starsector_optimizer.optimizer import _op_used_fraction
         from starsector_optimizer.models import Build
+
         hull = game_data.hulls["hammerhead"]  # has BALLISTIC slots
         # Pick a small ballistic weapon and a cheap hullmod that exist in
         # the manifest. Using any BALLISTIC SMALL weapon.
         weapon_id = next(
-            (w.id for w in manifest.weapons.values()
-             if w.size.value == "MEDIUM" and w.op_cost > 0
-             and w.type.value == "BALLISTIC"),
+            (
+                w.id
+                for w in manifest.weapons.values()
+                if w.size.value == "MEDIUM" and w.op_cost > 0 and w.type.value == "BALLISTIC"
+            ),
             None,
         )
         assert weapon_id is not None, "no MEDIUM BALLISTIC weapon in manifest"
@@ -2637,18 +2993,23 @@ class TestPhase7PrepInvariants:
             None,
         )
         assert hullmod_id is not None
-        slot_id = next(s.id for s in hull.weapon_slots
-                       if s.slot_type.value == "BALLISTIC" and s.slot_size.value == "MEDIUM")
+        slot_id = next(
+            s.id
+            for s in hull.weapon_slots
+            if s.slot_type.value == "BALLISTIC" and s.slot_size.value == "MEDIUM"
+        )
         build = Build(
             hull_id="hammerhead",
             weapon_assignments={slot_id: weapon_id},
             hullmods=frozenset([hullmod_id]),
-            flux_vents=3, flux_capacitors=2,
+            flux_vents=3,
+            flux_capacitors=2,
         )
         expected_num = (
             manifest.weapons[weapon_id].op_cost
             + manifest.hullmods[hullmod_id].op_cost(hull.hull_size)
-            + 3 + 2
+            + 3
+            + 2
         )
         expected = expected_num / hull.ordnance_points
         assert _op_used_fraction(build, hull, manifest) == pytest.approx(expected)

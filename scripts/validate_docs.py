@@ -82,9 +82,7 @@ def check_links(root: Path) -> list[str]:
                 continue
             target_path = (path.parent / target.split("#", 1)[0]).resolve()
             if not target_path.exists():
-                errors.append(
-                    f"{path.relative_to(root)}: broken link -> {target}"
-                )
+                errors.append(f"{path.relative_to(root)}: broken link -> {target}")
     return errors
 
 
@@ -100,8 +98,7 @@ def main() -> int:
                 continue
             if member.name not in index_text:
                 errors.append(
-                    f"{member.relative_to(ROOT)} is not linked from "
-                    f"{index_path.relative_to(ROOT)}"
+                    f"{member.relative_to(ROOT)} is not linked from {index_path.relative_to(ROOT)}"
                 )
 
     for fm_dir in FRONTMATTER_DIRS:

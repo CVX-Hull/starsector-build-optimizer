@@ -65,9 +65,13 @@ def get_compatible_weapons(
     """Get weapons compatible with a slot (matching type, size, and assignability)."""
     allowed_types = SLOT_WEAPON_COMPATIBILITY.get(slot.slot_type, frozenset())
     return sorted(
-        [w for w in weapons.values()
-         if w.weapon_type in allowed_types and w.size == slot.slot_size
-         and _is_assignable_weapon(w)],
+        [
+            w
+            for w in weapons.values()
+            if w.weapon_type in allowed_types
+            and w.size == slot.slot_size
+            and _is_assignable_weapon(w)
+        ],
         key=lambda w: w.id,
     )
 
@@ -89,8 +93,7 @@ def get_eligible_hullmods(
     """
     applicable = manifest.hulls[hull.id].applicable_hullmods
     return sorted(
-        (hullmods[m] for m in applicable
-         if m in hullmods and not hullmods[m].is_hidden),
+        (hullmods[m] for m in applicable if m in hullmods and not hullmods[m].is_hidden),
         key=lambda m: m.id,
     )
 
@@ -167,12 +170,14 @@ def build_search_space(
     pairs = _collect_incompatible_pairs(eligible_ids, hull, manifest)
 
     logger.info(
-        "Regime '%s' admits %d/%d hullmods, %d/%d weapons for hull=%s "
-        "(%d incompatibility edges)",
+        "Regime '%s' admits %d/%d hullmods, %d/%d weapons for hull=%s (%d incompatibility edges)",
         regime.name,
-        len(eligible), len(eligible_pre),
-        total_weapons_admitted, total_weapons_considered,
-        hull.id, len(pairs),
+        len(eligible),
+        len(eligible_pre),
+        total_weapons_admitted,
+        total_weapons_considered,
+        hull.id,
+        len(pairs),
     )
 
     return SearchSpace(

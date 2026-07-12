@@ -37,7 +37,9 @@ import yaml
 
 from .cloud_provider import CloudProvider
 from .models import (
-    CampaignConfig, CostLedgerEntry, GlobalAutoStopConfig,
+    CampaignConfig,
+    CostLedgerEntry,
+    GlobalAutoStopConfig,
     StudyConfig,
 )
 
@@ -92,9 +94,7 @@ def _expand_env_var(value: str, *, field_name: str) -> str:
     var = value[2:-1]
     resolved = os.environ.get(var)
     if resolved is None:
-        raise ValueError(
-            f"env var ${{{var}}} referenced by {field_name} is not set"
-        )
+        raise ValueError(f"env var ${{{var}}} referenced by {field_name} is not set")
     return resolved
 
 
@@ -114,8 +114,7 @@ def load_campaign_config(path: Path) -> CampaignConfig:
         )
     if raw.get("provider") not in _ALLOWED_PROVIDERS:
         raise ValueError(
-            f"provider={raw.get('provider')!r} not supported; "
-            f"allowed: {sorted(_ALLOWED_PROVIDERS)}"
+            f"provider={raw.get('provider')!r} not supported; allowed: {sorted(_ALLOWED_PROVIDERS)}"
         )
     if raw.get("partial_fleet_policy") not in _ALLOWED_PARTIAL_POLICIES:
         raise ValueError(
@@ -131,8 +130,7 @@ def load_campaign_config(path: Path) -> CampaignConfig:
     for s in raw["studies"]:
         if s["sampler"] not in _ALLOWED_SAMPLERS:
             raise ValueError(
-                f"study sampler={s['sampler']!r} invalid; "
-                f"allowed: {sorted(_ALLOWED_SAMPLERS)}"
+                f"study sampler={s['sampler']!r} invalid; allowed: {sorted(_ALLOWED_SAMPLERS)}"
             )
         wsr = s.get("warm_start_from_regime")
         if wsr is not None and wsr == s["regime"]:
@@ -144,7 +142,8 @@ def load_campaign_config(path: Path) -> CampaignConfig:
             )
     studies = tuple(
         StudyConfig(
-            hull=s["hull"], regime=s["regime"],
+            hull=s["hull"],
+            regime=s["regime"],
             seeds=tuple(s["seeds"]),
             budget_per_study=s["budget_per_study"],
             workers_per_study=s["workers_per_study"],
@@ -188,17 +187,25 @@ def load_campaign_config(path: Path) -> CampaignConfig:
     # adding a field to the dataclass without listing it here silently
     # drops operator YAML overrides (audit finding V1 / 2026-04-19).
     for opt in (
-        "max_lifetime_hours", "visibility_timeout_seconds",
-        "janitor_interval_seconds", "worker_poll_margin_seconds",
-        "fleet_provision_timeout_seconds", "result_timeout_seconds",
-        "ledger_heartbeat_interval_seconds", "base_flask_port",
-        "redis_port", "redis_preflight_timeout_seconds",
+        "max_lifetime_hours",
+        "visibility_timeout_seconds",
+        "janitor_interval_seconds",
+        "worker_poll_margin_seconds",
+        "fleet_provision_timeout_seconds",
+        "result_timeout_seconds",
+        "ledger_heartbeat_interval_seconds",
+        "base_flask_port",
+        "redis_port",
+        "redis_preflight_timeout_seconds",
         "matchup_slots_per_worker",
-        "teardown_retry_delay_seconds", "teardown_thread_join_seconds",
-        "flask_ports_per_study", "game_dir",
+        "teardown_retry_delay_seconds",
+        "teardown_thread_join_seconds",
+        "flask_ports_per_study",
+        "game_dir",
         # Phase-7-prep additions (spot-price cache TTL, janitor hard cap,
         # heartbeat staleness multiplier).
-        "spot_price_cache_ttl_seconds", "max_requeues",
+        "spot_price_cache_ttl_seconds",
+        "max_requeues",
         "heartbeat_stale_multiplier",
     ):
         if opt in raw:
@@ -279,7 +286,9 @@ class CostLedger:
                 self._warned.add(threshold)
                 logger.warning(
                     "budget threshold crossed: threshold=%.2f cumulative=%.2f budget=%.2f",
-                    threshold, self._cumulative, self._budget_usd,
+                    threshold,
+                    self._cumulative,
+                    self._budget_usd,
                 )
 
 
@@ -318,7 +327,8 @@ def run_janitor_pass(
         if requeue_count > max_requeues:
             logger.error(
                 "matchup %s exceeded max_requeues=%d; dropping",
-                item.get("matchup_id", "?"), max_requeues,
+                item.get("matchup_id", "?"),
+                max_requeues,
             )
             continue
         item["enqueued_at"] = now
@@ -327,7 +337,9 @@ def run_janitor_pass(
         requeued += 1
         logger.warning(
             "requeued stuck matchup: matchup_id=%s age=%.1fs requeue_count=%d",
-            item.get("matchup_id", "?"), now - enqueued_at, requeue_count,
+            item.get("matchup_id", "?"),
+            now - enqueued_at,
+            requeue_count,
         )
     return requeued
 
@@ -376,7 +388,10 @@ def _resolve_tailnet_ip(timeout_seconds: float = _TS_CLI_TIMEOUT_SECONDS) -> str
     cmd = ["tailscale", *_tailscale_socket_args(), "ip", "-4"]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout_seconds,
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
             check=False,
         )
     except FileNotFoundError as e:
@@ -407,7 +422,9 @@ def _tailscale_serve_exposes_port(port: int) -> bool:
     cmd = ["tailscale", *_tailscale_socket_args(), "serve", "status"]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True,
+            cmd,
+            capture_output=True,
+            text=True,
             timeout=_TS_CLI_TIMEOUT_SECONDS,
             check=False,
         )
@@ -418,7 +435,9 @@ def _tailscale_serve_exposes_port(port: int) -> bool:
 
 
 def _check_redis_reachable(
-    tailnet_ip: str, port: int, timeout_seconds: float,
+    tailnet_ip: str,
+    port: int,
+    timeout_seconds: float,
 ) -> None:
     """Verify Redis is running AND reachable by workers over the tailnet.
 
@@ -436,7 +455,9 @@ def _check_redis_reachable(
 
     try:
         redis_mod.Redis(
-            host="127.0.0.1", port=port, socket_timeout=timeout_seconds,
+            host="127.0.0.1",
+            port=port,
+            socket_timeout=timeout_seconds,
         ).ping()
     except Exception as e:
         raise PreflightFailure(
@@ -447,7 +468,9 @@ def _check_redis_reachable(
 
     try:
         redis_mod.Redis(
-            host=tailnet_ip, port=port, socket_timeout=timeout_seconds,
+            host=tailnet_ip,
+            port=port,
+            socket_timeout=timeout_seconds,
         ).ping()
         return
     except Exception:
@@ -466,7 +489,9 @@ def _check_redis_reachable(
 
 
 def _flush_stale_campaign_keys(
-    project_tag: str, port: int, timeout_seconds: float,
+    project_tag: str,
+    port: int,
+    timeout_seconds: float,
 ) -> int:
     """Delete any ``queue:{project_tag}:*`` + ``worker:{project_tag}:*`` keys.
 
@@ -478,7 +503,9 @@ def _flush_stale_campaign_keys(
     import redis as redis_mod
 
     client = redis_mod.Redis(
-        host="127.0.0.1", port=port, socket_timeout=timeout_seconds,
+        host="127.0.0.1",
+        port=port,
+        socket_timeout=timeout_seconds,
     )
     deleted = 0
     for pattern in (f"queue:{project_tag}:*", f"worker:{project_tag}:*"):
@@ -486,8 +513,7 @@ def _flush_stale_campaign_keys(
             client.delete(key)
             deleted += 1
     if deleted:
-        logger.info("preflight: flushed %d stale Redis keys for %s",
-                    deleted, project_tag)
+        logger.info("preflight: flushed %d stale Redis keys for %s", deleted, project_tag)
     return deleted
 
 
@@ -499,6 +525,7 @@ def check_aws_credentials() -> None:
     same gate as `CampaignManager._preflight`.
     """
     import boto3
+
     try:
         boto3.client("sts").get_caller_identity()
     except Exception as e:
@@ -555,9 +582,7 @@ def _git_object_id(path: str) -> str:
         ) from e
     oid = cp.stdout.strip()
     if not oid:
-        raise PreflightFailure(
-            f"Unable to determine git object id for {path!r}: empty output."
-        )
+        raise PreflightFailure(f"Unable to determine git object id for {path!r}: empty output.")
     return oid
 
 
@@ -668,16 +693,24 @@ def check_ami_tags_against_manifest(
     for region, ami_id in ami_ids_by_region.items():
         try:
             ami_gv = provider.describe_ami_tag(
-                ami_id=ami_id, region=region, tag_key="GameVersion",
+                ami_id=ami_id,
+                region=region,
+                tag_key="GameVersion",
             )
             ami_manifest_sha = provider.describe_ami_tag(
-                ami_id=ami_id, region=region, tag_key="ManifestSha256",
+                ami_id=ami_id,
+                region=region,
+                tag_key="ManifestSha256",
             )
             ami_sha = provider.describe_ami_tag(
-                ami_id=ami_id, region=region, tag_key="ModCommitSha",
+                ami_id=ami_id,
+                region=region,
+                tag_key="ModCommitSha",
             )
             ami_worker_sha = provider.describe_ami_tag(
-                ami_id=ami_id, region=region, tag_key="WorkerSourceSha",
+                ami_id=ami_id,
+                region=region,
+                tag_key="WorkerSourceSha",
             )
         except AttributeError:
             logger.warning(
@@ -791,8 +824,10 @@ class CampaignManager:
 
     def install_signal_handlers(self) -> None:
         """Route SIGINT/SIGTERM/SIGHUP → KeyboardInterrupt → finally teardown."""
+
         def handler(signum, _frame):
             raise KeyboardInterrupt(f"received signal {signum}")
+
         signal.signal(signal.SIGINT, handler)
         signal.signal(signal.SIGTERM, handler)
         signal.signal(signal.SIGHUP, handler)
@@ -821,6 +856,7 @@ class CampaignManager:
             # tailscale (tailnet-IP bound locally) and userspace-mode
             # (tailscale serve TCP proxy to localhost).
             import redis
+
             self._redis = redis.Redis(
                 host="127.0.0.1",
                 port=self._config.redis_port,
@@ -838,6 +874,7 @@ class CampaignManager:
         gate (spec 30 §Preflight).
         """
         from .game_manifest import GameManifest
+
         manifest = GameManifest.load()
         check_ami_tags_against_manifest(
             self._provider,
@@ -850,7 +887,11 @@ class CampaignManager:
     # ---- Subprocess env generation ----
 
     def _generate_study_env(
-        self, *, study_idx: int, seed_idx: int, study_cfg: StudyConfig,
+        self,
+        *,
+        study_idx: int,
+        seed_idx: int,
+        study_cfg: StudyConfig,
     ) -> dict[str, str]:
         """Per-study env dict. Never logged (grep invariant enforces)."""
         assert self._tailnet_ip is not None, "_preflight must run before _generate_study_env"
@@ -882,41 +923,57 @@ class CampaignManager:
         warm-start a stable on-disk source.
         """
         from starsector_optimizer.cloud_runner import resolve_study_id
+
         procs: list[subprocess.Popen] = []
         for study_idx, study in enumerate(self._config.studies):
             for seed_idx, _seed in enumerate(study.seeds):
                 study_id = resolve_study_id(self._config, study_idx, seed_idx)
-                study_db_path = (
-                    Path("data/study_dbs") / self._config.name / f"{study_id}.db"
-                )
+                study_db_path = Path("data/study_dbs") / self._config.name / f"{study_id}.db"
                 study_db_path.parent.mkdir(parents=True, exist_ok=True)
                 cmd = [
-                    sys.executable, "scripts/run_optimizer.py",
-                    "--worker-pool", "cloud",
-                    "--campaign-config", str(self._campaign_yaml_path()),
-                    "--study-idx", str(study_idx),
-                    "--seed-idx", str(seed_idx),
-                    "--hull", study.hull,
-                    "--regime", study.regime,
-                    "--sampler", study.sampler,
-                    "--sim-budget", str(study.budget_per_study),
-                    "--game-dir", self._config.game_dir,
-                    "--study-db", str(study_db_path),
+                    sys.executable,
+                    "scripts/run_optimizer.py",
+                    "--worker-pool",
+                    "cloud",
+                    "--campaign-config",
+                    str(self._campaign_yaml_path()),
+                    "--study-idx",
+                    str(study_idx),
+                    "--seed-idx",
+                    str(seed_idx),
+                    "--hull",
+                    study.hull,
+                    "--regime",
+                    study.regime,
+                    "--sampler",
+                    study.sampler,
+                    "--sim-budget",
+                    str(study.budget_per_study),
+                    "--game-dir",
+                    self._config.game_dir,
+                    "--study-db",
+                    str(study_db_path),
                 ]
                 if study.active_opponents is not None:
                     cmd += ["--active-opponents", str(study.active_opponents)]
                 if study.warm_start_from_regime is not None:
                     cmd += ["--warm-start-from-regime", study.warm_start_from_regime]
                 env = self._generate_study_env(
-                    study_idx=study_idx, seed_idx=seed_idx, study_cfg=study,
+                    study_idx=study_idx,
+                    seed_idx=seed_idx,
+                    study_cfg=study,
                 )
                 # NOTE: env dict is deliberately NOT logged here. The grep
                 # invariant in docs/specs/22-cloud-deployment.md enforces
                 # `grep -En "logger.*env" campaign.py` returns empty.
                 logger.info(
                     "spawn study (%d,%d): %s__%s__%s__seed%d",
-                    study_idx, seed_idx, study.hull, study.regime,
-                    study.sampler, study.seeds[seed_idx],
+                    study_idx,
+                    seed_idx,
+                    study.hull,
+                    study.regime,
+                    study.sampler,
+                    study.seeds[seed_idx],
                 )
                 proc = subprocess.Popen(cmd, env=env)
                 procs.append(proc)
@@ -980,7 +1037,10 @@ class CampaignManager:
             )
 
     def _get_spot_price_cached(
-        self, region: str, instance_type: str, now: float,
+        self,
+        region: str,
+        instance_type: str,
+        now: float,
     ) -> float:
         """Return cached spot price, refreshing past ttl."""
         ttl = self._config.spot_price_cache_ttl_seconds
@@ -993,7 +1053,9 @@ class CampaignManager:
         except Exception as e:
             logger.warning(
                 "get_spot_price(%s, %s) failed: %s — using 0.0",
-                region, instance_type, e,
+                region,
+                instance_type,
+                e,
             )
             rate = 0.0
         self._spot_price_cache[key] = (rate, now)
@@ -1024,7 +1086,8 @@ class CampaignManager:
             return
         logger.info(
             "teardown: SIGTERM %d study subprocess(es), wait up to %.0fs",
-            len(live), timeout,
+            len(live),
+            timeout,
         )
         for p in live:
             try:
@@ -1045,7 +1108,8 @@ class CampaignManager:
             logger.warning(
                 "teardown: SIGKILL %d study subprocess(es) that didn't exit "
                 "within %.0fs (likely stuck werkzeug or blocked AWS call)",
-                len(survivors), timeout,
+                len(survivors),
+                timeout,
             )
             for p in survivors:
                 try:
@@ -1083,9 +1147,7 @@ class CampaignManager:
             active = self._provider.list_active(tag)
             if active:
                 self._teardown_done = True
-                raise TeardownError(
-                    f"{len(active)} workers still active after retry: {active[:5]}"
-                )
+                raise TeardownError(f"{len(active)} workers still active after retry: {active[:5]}")
         self._teardown_done = True
         logger.info("teardown complete: campaign=%s", self._config.name)
 
@@ -1115,10 +1177,12 @@ class CampaignManager:
 
 def main(argv: list[str] | None = None) -> int:
     import argparse
+
     parser = argparse.ArgumentParser(description="Run a Phase 6 cloud campaign.")
     parser.add_argument("campaign_yaml", type=Path)
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Validate config + resolve AMI IDs, then exit.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Validate config + resolve AMI IDs, then exit."
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(
@@ -1135,15 +1199,14 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     from .cloud_provider import AWSProvider
+
     provider = AWSProvider(regions=config.regions)
     # Project-relative campaign artifacts. Resolved from the module path
     # (parents[2] = src/starsector_optimizer → src → project_root) so the
     # location is invariant under operator cwd. `launch_campaign.sh` and
     # `scripts/cloud/status.sh` use the same convention.
     project_root = Path(__file__).resolve().parents[2]
-    ledger_path = (
-        project_root / "data" / "campaigns" / config.name / "ledger.jsonl"
-    )
+    ledger_path = project_root / "data" / "campaigns" / config.name / "ledger.jsonl"
     ledger = CostLedger(
         path=ledger_path,
         budget_usd=config.budget_usd,

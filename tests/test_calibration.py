@@ -1,6 +1,5 @@
 """Tests for calibration pipeline."""
 
-
 from starsector_optimizer.models import Build
 from starsector_optimizer.repair import is_feasible
 from starsector_optimizer.calibration import (
@@ -42,9 +41,7 @@ class TestGenerateDiverseBuilds:
         builds = generate_diverse_builds(eagle, game_data, manifest, 20)
         weapon_sets = set()
         for b in builds:
-            equipped = frozenset(
-                (k, v) for k, v in b.weapon_assignments.items() if v is not None
-            )
+            equipped = frozenset((k, v) for k, v in b.weapon_assignments.items() if v is not None)
             weapon_sets.add(equipped)
         assert len(weapon_sets) > 5, "Too little variety in generated builds"
 
@@ -67,10 +64,19 @@ class TestComputeBuildFeatures:
         eagle = game_data.hulls["eagle"]
         build = generate_random_build(eagle, game_data, manifest)
         features = compute_build_features(build, eagle, game_data)
-        for key in ["total_dps", "flux_balance", "flux_efficiency",
-                     "effective_hp", "range_coherence", "damage_mix",
-                     "engagement_range", "n_weapons", "n_hullmods",
-                     "vents", "caps"]:
+        for key in [
+            "total_dps",
+            "flux_balance",
+            "flux_efficiency",
+            "effective_hp",
+            "range_coherence",
+            "damage_mix",
+            "engagement_range",
+            "n_weapons",
+            "n_hullmods",
+            "vents",
+            "caps",
+        ]:
             assert key in features, f"Missing feature: {key}"
 
     def test_values_non_negative(self, game_data, manifest):

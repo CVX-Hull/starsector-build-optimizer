@@ -51,9 +51,10 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class _BuildId:
     """Canonical, stable hash of a build's identity across studies."""
+
     hull_id: str
-    weapons: tuple[tuple[str, str | None], ...]   # sorted (slot, weapon)
-    hullmods: tuple[str, ...]                     # sorted
+    weapons: tuple[tuple[str, str | None], ...]  # sorted (slot, weapon)
+    hullmods: tuple[str, ...]  # sorted
     flux_vents: int
     flux_capacitors: int
 
@@ -66,11 +67,12 @@ class _BuildId:
 @dataclass(frozen=True)
 class TrialRecord:
     """One completed trial's matchup row, normalised for ranker input."""
-    study: str           # e.g. "wave1-c2/seed1"
+
+    study: str  # e.g. "wave1-c2/seed1"
     trial_number: int
     build_id: _BuildId
-    raw_build: dict      # original JSONL "build" dict (for human inspection)
-    matches: tuple[tuple[str, float, str], ...]   # (opponent, hp_diff, winner)
+    raw_build: dict  # original JSONL "build" dict (for human inspection)
+    matches: tuple[tuple[str, float, str], ...]  # (opponent, hp_diff, winner)
 
 
 def load_records(
@@ -121,8 +123,7 @@ def load_records(
                         flux_capacitors=int(b["flux_capacitors"]),
                     )
                     matches = tuple(
-                        (r["opponent"], float(r["hp_differential"]), r["winner"])
-                        for r in results
+                        (r["opponent"], float(r["hp_differential"]), r["winner"]) for r in results
                     )
                     trial_number = int(d["trial_number"])
                 except (KeyError, TypeError, ValueError) as exc:
@@ -134,13 +135,15 @@ def load_records(
                         f"`opponent_results[].{{opponent, hp_differential, "
                         f"winner}}`, `trial_number`."
                     ) from exc
-                out.append(TrialRecord(
-                    study=study,
-                    trial_number=trial_number,
-                    build_id=bid,
-                    raw_build=b,
-                    matches=matches,
-                ))
+                out.append(
+                    TrialRecord(
+                        study=study,
+                        trial_number=trial_number,
+                        build_id=bid,
+                        raw_build=b,
+                        matches=matches,
+                    )
+                )
     return out
 
 
@@ -150,12 +153,13 @@ def load_records(
 @dataclass(frozen=True)
 class RankedBuild:
     """One row of a ranking output: build identity + estimator's score."""
+
     build_id: _BuildId
-    score: float           # estimator point estimate (raw mean, α̂, α̂_EB, or BT-skill)
-    sigma: float           # 1-sigma std error of `score` (NaN if unavailable)
-    n_matches: int         # total opponent matchups for this build (across studies)
+    score: float  # estimator point estimate (raw mean, α̂, α̂_EB, or BT-skill)
+    sigma: float  # 1-sigma std error of `score` (NaN if unavailable)
+    n_matches: int  # total opponent matchups for this build (across studies)
     studies: tuple[str, ...]  # studies in which this build appeared
-    raw_build: dict        # untyped build dict (for human inspection)
+    raw_build: dict  # untyped build dict (for human inspection)
 
 
 # --------------------------------------------------------------- raw mean ---
@@ -179,11 +183,16 @@ def rank_raw_mean(records: Sequence[TrialRecord], k: int) -> list[RankedBuild]:
         n = len(arr)
         mean = float(arr.mean())
         sigma = float(arr.std(ddof=1) / np.sqrt(n)) if n > 1 else float("nan")
-        ranked.append(RankedBuild(
-            build_id=bid, score=mean, sigma=sigma,
-            n_matches=n, studies=tuple(sorted(studies[bid])),
-            raw_build=samples[bid],
-        ))
+        ranked.append(
+            RankedBuild(
+                build_id=bid,
+                score=mean,
+                sigma=sigma,
+                n_matches=n,
+                studies=tuple(sorted(studies[bid])),
+                raw_build=samples[bid],
+            )
+        )
     ranked.sort(key=lambda r: -r.score)
     return ranked[:k]
 
@@ -244,7 +253,11 @@ def rank_twfe(
     n_per_build = observed.sum(axis=1)
 
     ranked = _alpha_to_ranked(
-        alpha, sigma_eps_sq, n_per_build, inv_builds, records,
+        alpha,
+        sigma_eps_sq,
+        n_per_build,
+        inv_builds,
+        records,
     )
     ranked.sort(key=lambda r: -r.score)
     return ranked[:k]
@@ -290,16 +303,25 @@ def rank_twfe_eb(
     X_zero = np.zeros((n_b, 1))
     with warnings.catch_warnings():
         warnings.filterwarnings(
-            "ignore", message="eb_shrinkage dropped zero-std X columns",
+            "ignore",
+            message="eb_shrinkage dropped zero-std X columns",
         )
         alpha_eb, _gamma, tau2, _kept = eb_shrinkage(
-            alpha=alpha, sigma_sq=sigma_sq_per_build, X=X_zero, config=ecfg,
+            alpha=alpha,
+            sigma_sq=sigma_sq_per_build,
+            X=X_zero,
+            config=ecfg,
         )
-    logger.debug("rank_twfe_eb: tau2=%.4f sigma_eps_sq=%.4f n_b=%d n_o=%d",
-                 tau2, sigma_eps_sq, n_b, n_o)
+    logger.debug(
+        "rank_twfe_eb: tau2=%.4f sigma_eps_sq=%.4f n_b=%d n_o=%d", tau2, sigma_eps_sq, n_b, n_o
+    )
 
     ranked = _alpha_to_ranked(
-        alpha_eb, sigma_eps_sq, n_per_build, inv_builds, records,
+        alpha_eb,
+        sigma_eps_sq,
+        n_per_build,
+        inv_builds,
+        records,
     )
     ranked.sort(key=lambda r: -r.score)
     return ranked[:k]
@@ -323,14 +345,16 @@ def _alpha_to_ranked(
     for i, bid in enumerate(inv_builds):
         n = int(n_per_build[i])
         sigma_i = float(np.sqrt(sigma_eps_sq / max(n, 1)))
-        ranked.append(RankedBuild(
-            build_id=bid,
-            score=float(alpha[i]),
-            sigma=sigma_i,
-            n_matches=n,
-            studies=tuple(sorted(by_build_studies.get(bid, set()))),
-            raw_build=by_build_raw.get(bid, {}),
-        ))
+        ranked.append(
+            RankedBuild(
+                build_id=bid,
+                score=float(alpha[i]),
+                sigma=sigma_i,
+                n_matches=n,
+                studies=tuple(sorted(by_build_studies.get(bid, set()))),
+                raw_build=by_build_raw.get(bid, {}),
+            )
+        )
     return ranked
 
 
@@ -348,10 +372,11 @@ class BradleyTerryConfig:
     test `test_timeout_weighted_as_draw` overrides to 0.5 (strong prior)
     to stress-test the all-TIMEOUT case.
     """
+
     ridge: float = 0.1
-    timeout_weight: float = 0.5       # weight on TIMEOUT matches (treated as draw)
+    timeout_weight: float = 0.5  # weight on TIMEOUT matches (treated as draw)
     max_iters: int = 200
-    gtol: float = 1e-6                # L-BFGS-B convergence tolerance
+    gtol: float = 1e-6  # L-BFGS-B convergence tolerance
 
 
 def rank_bradley_terry(
@@ -370,7 +395,7 @@ def rank_bradley_terry(
     opps: dict[str, int] = {}
     bidx: list[int] = []
     oidx: list[int] = []
-    y: list[float] = []   # 1.0 = build won, 0.0 = build lost, 0.5 = draw
+    y: list[float] = []  # 1.0 = build won, 0.0 = build lost, 0.5 = draw
     weight: list[float] = []
     by_build_studies: dict[_BuildId, set[str]] = {}
     by_build_raw: dict[_BuildId, dict] = {}
@@ -424,7 +449,10 @@ def rank_bradley_terry(
 
     theta0 = np.zeros(n_b + n_o)
     res = minimize(
-        nll_grad, theta0, jac=True, method="L-BFGS-B",
+        nll_grad,
+        theta0,
+        jac=True,
+        method="L-BFGS-B",
         options={"maxiter": cfg.max_iters, "gtol": cfg.gtol},
     )
     alpha = res.x[:n_b]
@@ -443,14 +471,16 @@ def rank_bradley_terry(
     inv_builds = sorted(builds, key=builds.__getitem__)
     ranked = []
     for i, bid in enumerate(inv_builds):
-        ranked.append(RankedBuild(
-            build_id=bid,
-            score=float(alpha[i]),
-            sigma=float(np.sqrt(var_alpha[i])),
-            n_matches=int(n_per[i]),
-            studies=tuple(sorted(by_build_studies.get(bid, set()))),
-            raw_build=by_build_raw.get(bid, {}),
-        ))
+        ranked.append(
+            RankedBuild(
+                build_id=bid,
+                score=float(alpha[i]),
+                sigma=float(np.sqrt(var_alpha[i])),
+                n_matches=int(n_per[i]),
+                studies=tuple(sorted(by_build_studies.get(bid, set()))),
+                raw_build=by_build_raw.get(bid, {}),
+            )
+        )
     ranked.sort(key=lambda r: -r.score)
     return ranked[:k]
 

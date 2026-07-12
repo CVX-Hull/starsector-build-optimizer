@@ -53,7 +53,9 @@ def _parse_setup_stats(data: dict) -> EngineStats | None:
     player = setup.get("player")
     if player is None:
         warnings.warn(
-            "setup_stats present but missing 'player' key", UserWarning, stacklevel=2,
+            "setup_stats present but missing 'player' key",
+            UserWarning,
+            stacklevel=2,
         )
         return None
     try:

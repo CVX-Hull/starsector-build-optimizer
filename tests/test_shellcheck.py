@@ -33,7 +33,9 @@ def _shellcheck(name: str, script: str, tmp_path: Path) -> None:
     path.write_text(script)
     proc = subprocess.run(
         [SHELLCHECK, "--shell=bash", str(path)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, f"{name}:\n{proc.stdout}"
 
@@ -50,34 +52,46 @@ def _rendered_templates(tmp_path: Path):
         render_phase7_learned_batch_user_data,
     )
 
-    yield "worker_all_optionals", render_user_data(
-        _make_worker_config(),
-        tailscale_authkey="tskey-test",
-        debug_ssh_pubkey="ssh-ed25519 AAAA test",
-        mod_jar_override_url="http://100.64.0.1:8000/mod.jar",
-        mod_jar_override_sha256="a" * 64,
+    yield (
+        "worker_all_optionals",
+        render_user_data(
+            _make_worker_config(),
+            tailscale_authkey="tskey-test",
+            debug_ssh_pubkey="ssh-ed25519 AAAA test",
+            mod_jar_override_url="http://100.64.0.1:8000/mod.jar",
+            mod_jar_override_sha256="a" * 64,
+        ),
     )
-    yield "worker_no_optionals", render_user_data(
-        _make_worker_config(),
-        tailscale_authkey="tskey-test",
+    yield (
+        "worker_no_optionals",
+        render_user_data(
+            _make_worker_config(),
+            tailscale_authkey="tskey-test",
+        ),
     )
 
     batch_cfg = make_config(tmp_path)
-    yield "phase7_batch_all_optionals", render_phase7_learned_batch_user_data(
-        dataclasses.replace(
-            batch_cfg,
-            noise_floor_override=0.5,
-            fresh_honest_eval_ledger_id="ledger-1",
+    yield (
+        "phase7_batch_all_optionals",
+        render_phase7_learned_batch_user_data(
+            dataclasses.replace(
+                batch_cfg,
+                noise_floor_override=0.5,
+                fresh_honest_eval_ledger_id="ledger-1",
+            ),
+            control_plane_url="http://100.64.0.1:9131",
+            bearer_token="secret-token",
+            bundle_sha256="a" * 64,
         ),
-        control_plane_url="http://100.64.0.1:9131",
-        bearer_token="secret-token",
-        bundle_sha256="a" * 64,
     )
-    yield "phase7_batch_no_optionals", render_phase7_learned_batch_user_data(
-        batch_cfg,
-        control_plane_url="http://100.64.0.1:9131",
-        bearer_token="secret-token",
-        bundle_sha256="a" * 64,
+    yield (
+        "phase7_batch_no_optionals",
+        render_phase7_learned_batch_user_data(
+            batch_cfg,
+            control_plane_url="http://100.64.0.1:9131",
+            bearer_token="secret-token",
+            bundle_sha256="a" * 64,
+        ),
     )
 
     yield "probe", render_probe_user_data("probe-test-campaign")
@@ -102,6 +116,8 @@ def test_repo_shell_scripts_pass_shellcheck():
     assert scripts, "shell-script glob found nothing — check REPO_ROOT"
     proc = subprocess.run(
         [SHELLCHECK, "--shell=bash", *map(str, scripts)],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert proc.returncode == 0, proc.stdout

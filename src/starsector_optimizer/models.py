@@ -214,9 +214,7 @@ class Weapon:
         if self.is_beam:
             return self.damage_per_second
         if self.burst_size > 1:
-            cycle_time = (self.chargeup
-                          + (self.burst_size - 1) * self.burst_delay
-                          + self.chargedown)
+            cycle_time = self.chargeup + (self.burst_size - 1) * self.burst_delay + self.chargedown
         else:
             cycle_time = self.chargeup + self.chargedown
         if cycle_time > 0:
@@ -228,9 +226,7 @@ class Weapon:
         if self.is_beam:
             return self.flux_per_second
         if self.burst_size > 1:
-            cycle_time = (self.chargeup
-                          + (self.burst_size - 1) * self.burst_delay
-                          + self.chargedown)
+            cycle_time = self.chargeup + (self.burst_size - 1) * self.burst_delay + self.chargedown
         else:
             cycle_time = self.chargeup + self.chargedown
         if cycle_time > 0:
@@ -303,6 +299,7 @@ class Build:
 @dataclass(frozen=True)
 class BuildSpec:
     """Build specification for matchup queue serialization. Transfer object."""
+
     variant_id: str
     hull_id: str
     weapon_assignments: dict[str, str]
@@ -344,6 +341,7 @@ class GameData:
 @dataclass(frozen=True)
 class DamageBreakdown:
     """Damage breakdown by target layer (shield/armor/hull/emp)."""
+
     shield: float = 0.0
     armor: float = 0.0
     hull: float = 0.0
@@ -353,6 +351,7 @@ class DamageBreakdown:
 @dataclass(frozen=True)
 class ShipCombatResult:
     """Per-ship combat result from a single matchup."""
+
     fleet_member_id: str
     variant_id: str
     hull_id: str
@@ -381,6 +380,7 @@ class EngineStats:
     hull HP ratio, ballistic range bonus, and shield damage taken multiplier.
     See docs/specs/28-deconfounding.md §10-dim covariate vector.
     """
+
     eff_max_flux: float
     eff_flux_dissipation: float
     eff_armor_rating: float
@@ -402,6 +402,7 @@ class LoadoutDiagnostic:
     values. This diagnostic captures the spec's intent vs the ship's actual
     state so the orchestrator fails fast instead of consuming bad data.
     """
+
     fleet_member_id: str
     spec_weapons: dict[str, str]
     live_weapons: dict[str, str]
@@ -420,6 +421,7 @@ class LoadoutDiagnostic:
 @dataclass(frozen=True)
 class CombatResult:
     """Full result from a single combat matchup."""
+
     matchup_id: str
     winner: str  # "PLAYER", "ENEMY", or "TIMEOUT"
     duration_seconds: float
@@ -449,6 +451,7 @@ class MatchupConfig:
     always emitted regardless — they're bounded to ~4-8 lines per matchup
     and load-bearing for any future loadout regression.
     """
+
     matchup_id: str
     player_builds: tuple[BuildSpec, ...]
     enemy_variants: tuple[str, ...]
@@ -466,6 +469,7 @@ class MatchupConfig:
 @dataclass(frozen=True)
 class Heartbeat:
     """Parsed heartbeat from the combat harness (6-field enriched format)."""
+
     timestamp_ms: int
     elapsed: float
     player_hp: float
@@ -482,6 +486,7 @@ class CombatFitnessConfig:
     losses [-1.0, -0.5], no engagement = -2.0.
     Invariant: win_base > timeout_scale > -(loss_base + loss_bonus_scale) > no_engagement_score.
     """
+
     win_base: float = 1.0
     loss_base: float = -1.0
     win_bonus_scale: float = 0.5
@@ -500,6 +505,7 @@ class HonestEvaluationConfig:
     standard error to ≤ 0.045 score-units for hulls with M ≥ 50 compatible
     opponents (Popoviciu-bounded). Operators raise N for smaller pools.
     """
+
     top_k_per_seed: int = 3
     replicates_per_matchup: int = 30
     max_retries_per_matchup: int = 3
@@ -515,9 +521,7 @@ class HonestEvaluationConfig:
 
     def __post_init__(self) -> None:
         if self.top_k_per_seed < 1:
-            raise ValueError(
-                f"top_k_per_seed must be >= 1, got {self.top_k_per_seed}"
-            )
+            raise ValueError(f"top_k_per_seed must be >= 1, got {self.top_k_per_seed}")
         if self.replicates_per_matchup < 1:
             raise ValueError(
                 f"replicates_per_matchup must be >= 1, got {self.replicates_per_matchup}"
@@ -527,18 +531,14 @@ class HonestEvaluationConfig:
                 f"max_retries_per_matchup must be >= 0, got {self.max_retries_per_matchup}"
             )
         if self.progress_log_buckets < 1:
-            raise ValueError(
-                f"progress_log_buckets must be >= 1, got {self.progress_log_buckets}"
-            )
+            raise ValueError(f"progress_log_buckets must be >= 1, got {self.progress_log_buckets}")
         if self.cloud_lifetime_headroom <= 0:
             raise ValueError(
-                "cloud_lifetime_headroom must be > 0, got "
-                f"{self.cloud_lifetime_headroom}"
+                f"cloud_lifetime_headroom must be > 0, got {self.cloud_lifetime_headroom}"
             )
         if self.cloud_min_lifetime_hours <= 0:
             raise ValueError(
-                "cloud_min_lifetime_hours must be > 0, got "
-                f"{self.cloud_min_lifetime_hours}"
+                f"cloud_min_lifetime_hours must be > 0, got {self.cloud_min_lifetime_hours}"
             )
 
 
@@ -551,6 +551,7 @@ class TWFEConfig:
     anchor-first opponent ordering and incumbent overlap for comparability.
     See spec 28 for algorithm details.
     """
+
     ridge: float = 0.01
     n_iters: int = 20
     trim_worst: int = 2
@@ -568,6 +569,7 @@ class EBShrinkageConfig:
         α̂_EB_i = w_i · α̂_i + (1 − w_i) · γ̂ᵀ[1, X_i],  w_i = τ̂² / (τ̂² + σ̂_i²)
     See spec 28 §EB Shrinkage (A2′).
     """
+
     tau2_floor_frac: float = 0.05
     triple_goal: bool = True
     eb_min_builds: int = 8
@@ -585,6 +587,7 @@ class ShapeConfig:
     and the constant-population `ptp < eps` fallback.
     See spec 24 §A3 Box-Cox Output Warping.
     """
+
     min_samples: int = 8
     positivise_epsilon: float = 1e-6
 
@@ -600,8 +603,9 @@ class RegimeConfig:
     matched pool (open-world framing — any build can face any opponent).
     Four presets below; see docs/reference/phase5f-regime-segmented-optimization.md.
     """
-    name: str                             # "early" | "mid" | "late" | "endgame"
-    max_hullmod_tier: int                 # inclusive ceiling on HullMod.tier; 3 = no filter
+
+    name: str  # "early" | "mid" | "late" | "endgame"
+    max_hullmod_tier: int  # inclusive ceiling on HullMod.tier; 3 = no filter
     exclude_hullmod_tags: frozenset[str]
     exclude_weapon_tags: frozenset[str]
 
@@ -672,6 +676,7 @@ class StudyConfig:
     regime` (Optuna's `load_if_exists` self-seeds; specifying it is a
     config error).
     """
+
     hull: str
     regime: str
     seeds: tuple[int, ...]
@@ -685,7 +690,8 @@ class StudyConfig:
 @dataclass(frozen=True)
 class GlobalAutoStopConfig:
     """Mirrors the YAML global_auto_stop: nested block."""
-    on_budget: str = "hard"              # "hard" | "soft"
+
+    on_budget: str = "hard"  # "hard" | "soft"
     on_plateau: bool = True
 
 
@@ -698,16 +704,17 @@ class CampaignConfig:
     subprocesses; child processes re-parse the YAML path + pick up secrets
     via env vars. See docs/specs/22-cloud-deployment.md.
     """
+
     name: str
     budget_usd: float
-    provider: str                                   # "aws"
+    provider: str  # "aws"
     regions: tuple[str, ...]
     instance_types: tuple[str, ...]
-    spot_allocation_strategy: str                   # "price-capacity-optimized"
+    spot_allocation_strategy: str  # "price-capacity-optimized"
     capacity_rebalancing: bool
     max_concurrent_workers: int
     min_workers_to_start: int
-    partial_fleet_policy: str                       # "proceed_half_speed" | "abort"
+    partial_fleet_policy: str  # "proceed_half_speed" | "abort"
     ami_ids_by_region: dict[str, str]
     ssh_key_name: str
     tailscale_authkey_secret: str
@@ -780,9 +787,10 @@ class WorkerConfig:
     script overwrites it via IMDSv2 before `systemctl start`. The required
     fields come first so dataclass positional ordering holds.
     """
+
     campaign_id: str
     study_id: str
-    project_tag: str              # scopes Redis queue + heartbeat keys
+    project_tag: str  # scopes Redis queue + heartbeat keys
     redis_host: str
     redis_port: int
     http_endpoint: str
@@ -795,7 +803,7 @@ class WorkerConfig:
     http_post_timeout_seconds: float = 30.0
     worker_poll_margin_seconds: float = 5.0
     matchup_slots_per_worker: int = 2
-    worker_id: str = ""           # placeholder; IMDSv2 override wins at VM boot
+    worker_id: str = ""  # placeholder; IMDSv2 override wins at VM boot
 
     def __repr__(self) -> str:
         fields = []
@@ -813,8 +821,9 @@ class CostLedgerEntry:
 
     All fields primitive and secret-free. timestamp is ISO-8601 UTC.
     """
+
     timestamp: str
-    event_type: str                                 # "worker_heartbeat" | "worker_terminated" | "campaign_end"
+    event_type: str  # "worker_heartbeat" | "worker_terminated" | "campaign_end"
     worker_id: str
     region: str
     instance_type: str
@@ -829,4 +838,5 @@ class CostLedgerEntry:
 @dataclass(frozen=True)
 class ImportanceResult:
     """Parameter importance analysis result from fANOVA."""
+
     importances: dict[str, float]  # param_name -> importance (0.0–1.0, sums to ~1.0)

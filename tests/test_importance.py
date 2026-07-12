@@ -13,18 +13,19 @@ def _make_study_with_trials(n_trials: int) -> optuna.Study:
 
     study = optuna.create_study(direction="maximize")
     for _i in range(n_trials):
-        trial = study.ask({
-            "x": optuna.distributions.FloatDistribution(0.0, 1.0),
-            "y": optuna.distributions.FloatDistribution(0.0, 1.0),
-            "cat": optuna.distributions.CategoricalDistribution(["a", "b", "c"]),
-        })
+        trial = study.ask(
+            {
+                "x": optuna.distributions.FloatDistribution(0.0, 1.0),
+                "y": optuna.distributions.FloatDistribution(0.0, 1.0),
+                "cat": optuna.distributions.CategoricalDistribution(["a", "b", "c"]),
+            }
+        )
         # Score based on x (so x should be most important)
         study.tell(trial, trial.params["x"] * 0.8 + random.random() * 0.2)
     return study
 
 
 class TestAnalyzeImportance:
-
     def test_analyze_importance_returns_result(self):
         """Returns an ImportanceResult with float importance values."""
         study = _make_study_with_trials(30)

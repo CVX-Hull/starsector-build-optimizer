@@ -44,10 +44,7 @@ def generate_random_build(
         else:
             weapons[slot_id] = rng.choice(options[1:])
 
-    hullmods = frozenset(
-        m for m in space.eligible_hullmods
-        if rng.random() < 0.2
-    )
+    hullmods = frozenset(m for m in space.eligible_hullmods if rng.random() < 0.2)
 
     vent_fraction = float(rng.random())
 
@@ -59,8 +56,7 @@ def generate_random_build(
         flux_capacitors=0,
     )
 
-    return repair_build(raw_build, hull, game_data, manifest,
-                        vent_fraction=vent_fraction)
+    return repair_build(raw_build, hull, game_data, manifest, vent_fraction=vent_fraction)
 
 
 def generate_diverse_builds(
@@ -77,7 +73,12 @@ def generate_diverse_builds(
     builds = []
     for _ in range(n):
         build = generate_random_build(
-            hull, game_data, manifest, rng, regime=regime, space=space,
+            hull,
+            game_data,
+            manifest,
+            rng,
+            regime=regime,
+            space=space,
         )
         builds.append(build)
     return builds

@@ -31,15 +31,15 @@ build_a = BuildSpec(
     variant_id="eagle_test_ballistic",
     hull_id="eagle",
     weapon_assignments={
-        "WS 007": "heavymauler",   # BALLISTIC MEDIUM hardpoint
-        "WS 008": "heavyac",       # BALLISTIC MEDIUM hardpoint
-        "WS 013": "arbalest",      # BALLISTIC MEDIUM hardpoint
-        "WS 005": "pulselaser",    # ENERGY MEDIUM turret
-        "WS 006": "pulselaser",    # ENERGY MEDIUM turret
+        "WS 007": "heavymauler",  # BALLISTIC MEDIUM hardpoint
+        "WS 008": "heavyac",  # BALLISTIC MEDIUM hardpoint
+        "WS 013": "arbalest",  # BALLISTIC MEDIUM hardpoint
+        "WS 005": "pulselaser",  # ENERGY MEDIUM turret
+        "WS 006": "pulselaser",  # ENERGY MEDIUM turret
         "WS 009": "gravitonbeam",  # ENERGY MEDIUM turret
-        "WS 003": "pdlaser",       # ENERGY SMALL turret
-        "WS 004": "pdlaser",       # ENERGY SMALL turret
-        "WS 010": "taclaser",      # ENERGY SMALL turret
+        "WS 003": "pdlaser",  # ENERGY SMALL turret
+        "WS 004": "pdlaser",  # ENERGY SMALL turret
+        "WS 010": "taclaser",  # ENERGY SMALL turret
         "WS 001": "harpoon_single",  # MISSILE SMALL hardpoint
         "WS 002": "harpoon_single",  # MISSILE SMALL hardpoint
     },
@@ -56,12 +56,12 @@ build_b = BuildSpec(
     weapon_assignments={
         "WS 005": "heavyblaster",  # ENERGY MEDIUM turret
         "WS 006": "heavyblaster",  # ENERGY MEDIUM turret
-        "WS 009": "phasebeam",     # ENERGY MEDIUM turret
-        "WS 003": "irpulse",       # ENERGY SMALL turret
-        "WS 004": "irpulse",       # ENERGY SMALL turret
-        "WS 010": "pdlaser",       # ENERGY SMALL turret
-        "WS 011": "pdlaser",       # ENERGY SMALL turret
-        "WS 012": "taclaser",      # ENERGY SMALL turret
+        "WS 009": "phasebeam",  # ENERGY MEDIUM turret
+        "WS 003": "irpulse",  # ENERGY SMALL turret
+        "WS 004": "irpulse",  # ENERGY SMALL turret
+        "WS 010": "pdlaser",  # ENERGY SMALL turret
+        "WS 011": "pdlaser",  # ENERGY SMALL turret
+        "WS 012": "taclaser",  # ENERGY SMALL turret
         # Leave ballistic and missile slots empty
     },
     hullmods=("fluxcoil", "fluxbreakers"),
@@ -130,12 +130,13 @@ try:
         print(f"  Winner: {result.winner}")
         print(f"  Duration: {result.duration_seconds:.1f}s (wall: {elapsed:.1f}s)")
         for s in result.player_ships:
-            print(f"  Player {s.variant_id}: hull={s.hull_fraction:.2f}, "
-                  f"destroyed={s.destroyed}, dmg_dealt=(shield={s.damage_dealt.shield:.0f}, "
-                  f"armor={s.damage_dealt.armor:.0f}, hull={s.damage_dealt.hull:.0f})")
+            print(
+                f"  Player {s.variant_id}: hull={s.hull_fraction:.2f}, "
+                f"destroyed={s.destroyed}, dmg_dealt=(shield={s.damage_dealt.shield:.0f}, "
+                f"armor={s.damage_dealt.armor:.0f}, hull={s.damage_dealt.hull:.0f})"
+            )
         for s in result.enemy_ships:
-            print(f"  Enemy  {s.variant_id}: hull={s.hull_fraction:.2f}, "
-                  f"destroyed={s.destroyed}")
+            print(f"  Enemy  {s.variant_id}: hull={s.hull_fraction:.2f}, destroyed={s.destroyed}")
 
         results.append((label, build, result))
 
@@ -151,26 +152,34 @@ try:
     # Check 2: Bare build should lose (enemy wins or timeout with low player HP)
     _bare_label, _bare_build, bare_result = results[2]
     bare_player = bare_result.player_ships[0]
-    assert bare_result.winner in ("ENEMY", "TIMEOUT"), \
+    assert bare_result.winner in ("ENEMY", "TIMEOUT"), (
         f"Bare build unexpectedly won: {bare_result.winner}"
+    )
     print(f"[PASS] Bare build lost as expected (winner={bare_result.winner})")
 
     # Check 3: Bare build should deal minimal damage
-    bare_dmg = (bare_player.damage_dealt.shield +
-                bare_player.damage_dealt.armor +
-                bare_player.damage_dealt.hull)
+    bare_dmg = (
+        bare_player.damage_dealt.shield
+        + bare_player.damage_dealt.armor
+        + bare_player.damage_dealt.hull
+    )
     print(f"[INFO] Bare build total damage dealt: {bare_dmg:.0f}")
 
     # Check 4: Armed builds should deal more damage than bare
     for i in range(2):  # builds A and B
         label, _armed_build, armed_result = results[i]
         armed_player = armed_result.player_ships[0]
-        armed_dmg = (armed_player.damage_dealt.shield +
-                     armed_player.damage_dealt.armor +
-                     armed_player.damage_dealt.hull)
-        assert armed_dmg > bare_dmg, \
+        armed_dmg = (
+            armed_player.damage_dealt.shield
+            + armed_player.damage_dealt.armor
+            + armed_player.damage_dealt.hull
+        )
+        assert armed_dmg > bare_dmg, (
             f"Build {label} dealt less damage ({armed_dmg:.0f}) than bare ({bare_dmg:.0f})"
-        print(f"[PASS] Build {label} dealt more damage ({armed_dmg:.0f}) than bare ({bare_dmg:.0f})")
+        )
+        print(
+            f"[PASS] Build {label} dealt more damage ({armed_dmg:.0f}) than bare ({bare_dmg:.0f})"
+        )
 
     # Check 5: Damage dealt differs across builds (proves builds are applied)
     damages = []
@@ -180,11 +189,12 @@ try:
         damages.append(dmg)
     print(f"\n[INFO] Damage dealt per build: {[f'{d:.0f}' for d in damages]}")
     print(f"[INFO] Winners: {[r.winner for _, _, r in results]}")
-    print(f"[INFO] Player hull remaining: {[f'{r.player_ships[0].hull_fraction:.2f}' for _, _, r in results]}")
+    print(
+        f"[INFO] Player hull remaining: {[f'{r.player_ships[0].hull_fraction:.2f}' for _, _, r in results]}"
+    )
 
     unique_damages = len({round(d, -1) for d in damages})
-    assert unique_damages >= 2, \
-        "All builds dealt identical damage — builds may not be applied"
+    assert unique_damages >= 2, "All builds dealt identical damage — builds may not be applied"
     print(f"[PASS] {unique_damages} distinct damage profiles — builds are applied correctly")
 
     print("\n" + "=" * 60)
@@ -194,6 +204,7 @@ try:
 except Exception as e:
     print(f"\nFAILED: {e}")
     import traceback
+
     traceback.print_exc()
     for inst in pool._instances:
         print(f"\nInstance {inst.instance_id}: state={inst.state}")

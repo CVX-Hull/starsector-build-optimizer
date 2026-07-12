@@ -45,11 +45,16 @@ def _make_smoke_config(tmp_path, **overrides):
         "ami_ids_by_region": {"us-east-1": "ami-abc"},
         "ssh_key_name": "starsector-probe",
         "tailscale_authkey_secret": "tskey-auth-SMOKE-TEST-44e7f9b3",
-        "studies": [{
-            "hull": "hammerhead", "regime": "early",
-            "seeds": [0], "budget_per_study": 2,
-            "workers_per_study": 1, "sampler": "tpe",
-        }],
+        "studies": [
+            {
+                "hull": "hammerhead",
+                "regime": "early",
+                "seeds": [0],
+                "budget_per_study": 2,
+                "workers_per_study": 1,
+                "sampler": "tpe",
+            }
+        ],
         "max_lifetime_hours": 0.5,
     }
     defaults.update(overrides)
@@ -61,6 +66,7 @@ def _make_smoke_config(tmp_path, **overrides):
 class TestRequireEnv:
     def test_raises_valueerror_on_missing(self, monkeypatch):
         from starsector_optimizer.cloud_runner import _require_env
+
         monkeypatch.delenv("UT_MISSING_VAR_xyz", raising=False)
         with pytest.raises(ValueError, match="UT_MISSING_VAR_xyz"):
             _require_env("UT_MISSING_VAR_xyz")
@@ -69,6 +75,7 @@ class TestRequireEnv:
         """Specifically ValueError, not KeyError — so error handling in the
         cloud path is explicit and remediation message reaches the user."""
         from starsector_optimizer.cloud_runner import _require_env
+
         monkeypatch.delenv("UT_MISSING_xyz", raising=False)
         try:
             _require_env("UT_MISSING_xyz")
@@ -79,6 +86,7 @@ class TestRequireEnv:
 
     def test_returns_value_when_present(self, monkeypatch):
         from starsector_optimizer.cloud_runner import _require_env
+
         monkeypatch.setenv("UT_PRESENT_VAR", "hello")
         assert _require_env("UT_PRESENT_VAR") == "hello"
 
@@ -86,7 +94,7 @@ class TestRequireEnv:
 class TestRunCloudStudyOrdering:
     """Provisioning and teardown follow the contract:
 
-        provision_fleet  →  pool.setup  →  (optimize_hull)  →  pool.teardown  →  terminate_fleet
+    provision_fleet  →  pool.setup  →  (optimize_hull)  →  pool.teardown  →  terminate_fleet
     """
 
     def _prep_mocks(self, monkeypatch, tmp_path, smoke_env):
@@ -129,12 +137,15 @@ class TestRunCloudStudyOrdering:
         monkeypatch.setattr(cloud_runner, "optimize_hull", fake_optimize_hull)
         # redis.Redis is used inside cloud_runner; mock it.
         import redis as redis_mod
+
         monkeypatch.setattr(redis_mod, "Redis", MagicMock())
         return config, path, call_log, cloud_runner
 
     def test_provision_before_pool_enter(self, monkeypatch, tmp_path, smoke_env):
         _config, path, call_log, cloud_runner = self._prep_mocks(
-            monkeypatch, tmp_path, smoke_env,
+            monkeypatch,
+            tmp_path,
+            smoke_env,
         )
         game_data = MagicMock()
         hull = MagicMock()
@@ -142,50 +153,81 @@ class TestRunCloudStudyOrdering:
         opponent_pool = MagicMock()
         optimizer_config = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=game_data, manifest=MagicMock(),
-            opponent_pool=opponent_pool, optimizer_config=optimizer_config,
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=game_data,
+            manifest=MagicMock(),
+            opponent_pool=opponent_pool,
+            optimizer_config=optimizer_config,
         )
         assert call_log.index("provision_fleet") < call_log.index("pool.__enter__")
 
     def test_teardown_fleet_runs_in_finally_even_after_exception(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         _config, path, call_log, cloud_runner = self._prep_mocks(
-            monkeypatch, tmp_path, smoke_env,
+            monkeypatch,
+            tmp_path,
+            smoke_env,
         )
-        monkeypatch.setattr(cloud_runner, "optimize_hull",
-                            MagicMock(side_effect=RuntimeError("boom")))
+        monkeypatch.setattr(
+            cloud_runner, "optimize_hull", MagicMock(side_effect=RuntimeError("boom"))
+        )
         hull = MagicMock()
         hull.hull_size = MagicMock()
         with pytest.raises(RuntimeError, match="boom"):
             cloud_runner.run_cloud_study(
-                campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-                opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+                campaign_yaml_path=path,
+                study_idx=0,
+                seed_idx=0,
+                hull_id="hammerhead",
+                hull=hull,
+                game_data=MagicMock(),
+                manifest=MagicMock(),
+                opponent_pool=MagicMock(),
+                optimizer_config=MagicMock(),
             )
         assert "terminate_fleet" in call_log
 
     def test_teardown_order_pool_exit_before_terminate_fleet(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         """Pool __exit__ (shuts Flask + janitor) must run BEFORE terminate_fleet —
         otherwise a live worker could POST to a torn-down listener."""
         _config, path, call_log, cloud_runner = self._prep_mocks(
-            monkeypatch, tmp_path, smoke_env,
+            monkeypatch,
+            tmp_path,
+            smoke_env,
         )
         hull = MagicMock()
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
+            manifest=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
         )
         assert call_log.index("pool.__exit__") < call_log.index("terminate_fleet")
 
     def test_fleet_name_equals_study_id(self, monkeypatch, tmp_path, smoke_env):
         _config, path, _call_log, cloud_runner = self._prep_mocks(
-            monkeypatch, tmp_path, smoke_env,
+            monkeypatch,
+            tmp_path,
+            smoke_env,
         )
 
         captured: dict[str, Any] = {}
@@ -206,9 +248,15 @@ class TestRunCloudStudyOrdering:
         hull = MagicMock()
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
+            manifest=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
         )
         expected_study_id = "hammerhead__early__tpe__seed0"
         assert captured["provision"]["fleet_name"] == expected_study_id
@@ -219,17 +267,26 @@ class TestRunCloudStudyOrdering:
         assert captured["terminate"] == (expected_study_id, smoke_env["STARSECTOR_PROJECT_TAG"])
 
     def test_user_data_rendered_with_authkey_from_env(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         _config, path, _call_log, cloud_runner = self._prep_mocks(
-            monkeypatch, tmp_path, smoke_env,
+            monkeypatch,
+            tmp_path,
+            smoke_env,
         )
 
         rendered = {}
 
         def fake_render(
-            worker_cfg, *, tailscale_authkey, debug_ssh_pubkey="",
-            mod_jar_override_url="", mod_jar_override_sha256="",
+            worker_cfg,
+            *,
+            tailscale_authkey,
+            debug_ssh_pubkey="",
+            mod_jar_override_url="",
+            mod_jar_override_sha256="",
         ):
             rendered["worker_cfg"] = worker_cfg
             rendered["authkey"] = tailscale_authkey
@@ -242,9 +299,15 @@ class TestRunCloudStudyOrdering:
         hull = MagicMock()
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
+            manifest=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
         )
         # authkey comes from env (set by smoke_env fixture), not YAML
         assert rendered["authkey"] == smoke_env["STARSECTOR_TAILSCALE_AUTHKEY"]
@@ -261,63 +324,103 @@ class TestRunCloudStudyEnvPreflight:
         return _make_smoke_config(tmp_path)
 
     def test_missing_tailnet_ip_raises_valueerror(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         from starsector_optimizer.cloud_runner import run_cloud_study
+
         monkeypatch.delenv("STARSECTOR_WORKSTATION_TAILNET_IP", raising=False)
         _, path = self._load_smoke(tmp_path)
         hull = MagicMock()
         hull.hull_size = MagicMock()
         with pytest.raises(ValueError, match="STARSECTOR_WORKSTATION_TAILNET_IP"):
             run_cloud_study(
-                campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-                opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+                campaign_yaml_path=path,
+                study_idx=0,
+                seed_idx=0,
+                hull_id="hammerhead",
+                hull=hull,
+                game_data=MagicMock(),
+                manifest=MagicMock(),
+                opponent_pool=MagicMock(),
+                optimizer_config=MagicMock(),
             )
 
     def test_missing_bearer_token_raises_valueerror(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         from starsector_optimizer.cloud_runner import run_cloud_study
+
         monkeypatch.delenv("STARSECTOR_BEARER_TOKEN", raising=False)
         _, path = self._load_smoke(tmp_path)
         hull = MagicMock()
         hull.hull_size = MagicMock()
         with pytest.raises(ValueError, match="STARSECTOR_BEARER_TOKEN"):
             run_cloud_study(
-                campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-                opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+                campaign_yaml_path=path,
+                study_idx=0,
+                seed_idx=0,
+                hull_id="hammerhead",
+                hull=hull,
+                game_data=MagicMock(),
+                manifest=MagicMock(),
+                opponent_pool=MagicMock(),
+                optimizer_config=MagicMock(),
             )
 
     def test_missing_tailscale_authkey_raises_valueerror(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         from starsector_optimizer.cloud_runner import run_cloud_study
+
         monkeypatch.delenv("STARSECTOR_TAILSCALE_AUTHKEY", raising=False)
         _, path = self._load_smoke(tmp_path)
         hull = MagicMock()
         hull.hull_size = MagicMock()
         with pytest.raises(ValueError, match="STARSECTOR_TAILSCALE_AUTHKEY"):
             run_cloud_study(
-                campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-                opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+                campaign_yaml_path=path,
+                study_idx=0,
+                seed_idx=0,
+                hull_id="hammerhead",
+                hull=hull,
+                game_data=MagicMock(),
+                manifest=MagicMock(),
+                opponent_pool=MagicMock(),
+                optimizer_config=MagicMock(),
             )
 
     def test_missing_project_tag_raises_valueerror(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         from starsector_optimizer.cloud_runner import run_cloud_study
+
         monkeypatch.delenv("STARSECTOR_PROJECT_TAG", raising=False)
         _, path = self._load_smoke(tmp_path)
         hull = MagicMock()
         hull.hull_size = MagicMock()
         with pytest.raises(ValueError, match="STARSECTOR_PROJECT_TAG"):
             run_cloud_study(
-                campaign_yaml_path=path, study_idx=0, seed_idx=0,
-                hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-                opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+                campaign_yaml_path=path,
+                study_idx=0,
+                seed_idx=0,
+                hull_id="hammerhead",
+                hull=hull,
+                game_data=MagicMock(),
+                manifest=MagicMock(),
+                opponent_pool=MagicMock(),
+                optimizer_config=MagicMock(),
             )
 
 
@@ -327,46 +430,70 @@ class TestPoolTotalMatchupSlots:
     anything more over-dispatches past Redis consumer capacity."""
 
     def test_pool_receives_total_matchup_slots_equal_to_product(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         import starsector_optimizer.cloud_runner as cloud_runner
+
         _config, path = _make_smoke_config(
             tmp_path,
             matchup_slots_per_worker=2,
-            studies=[{
-                "hull": "hammerhead", "regime": "early",
-                "seeds": [0], "budget_per_study": 20,
-                "workers_per_study": 3, "sampler": "tpe",
-            }],
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 20,
+                    "workers_per_study": 3,
+                    "sampler": "tpe",
+                }
+            ],
         )
 
         pool_kwargs = {}
 
         class Recorder:
-            def __init__(self, *, regions): pass
-            def provision_fleet(self, **kwargs): return ["i-0", "i-1", "i-2"]
-            def terminate_fleet(self, **kwargs): return 3
+            def __init__(self, *, regions):
+                pass
+
+            def provision_fleet(self, **kwargs):
+                return ["i-0", "i-1", "i-2"]
+
+            def terminate_fleet(self, **kwargs):
+                return 3
 
         class RecordingPool:
             def __init__(self, **kwargs):
                 pool_kwargs.update(kwargs)
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
 
         monkeypatch.setattr(cloud_runner, "AWSProvider", Recorder)
         monkeypatch.setattr(cloud_runner, "CloudWorkerPool", RecordingPool)
         monkeypatch.setattr(cloud_runner, "optimize_hull", MagicMock())
-        monkeypatch.setattr(cloud_runner, "render_user_data",
-                            lambda *a, **kw: "#!/bin/bash\n")
+        monkeypatch.setattr(cloud_runner, "render_user_data", lambda *a, **kw: "#!/bin/bash\n")
         import redis as redis_mod
+
         monkeypatch.setattr(redis_mod, "Redis", MagicMock())
 
         hull = MagicMock()
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
+            manifest=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
         )
         assert pool_kwargs["total_matchup_slots"] == 3 * 2
         assert pool_kwargs["project_tag"] == smoke_env["STARSECTOR_PROJECT_TAG"]
@@ -380,38 +507,57 @@ class TestManifestIsThreadedIntoOptimizeHull:
     ever drops the plumbing again."""
 
     def test_manifest_forwarded_to_optimize_hull(
-        self, monkeypatch, tmp_path, smoke_env,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
     ):
         import starsector_optimizer.cloud_runner as cloud_runner
+
         _config, path = _make_smoke_config(tmp_path)
 
         class Recorder:
-            def __init__(self, *, regions): pass
-            def provision_fleet(self, **kwargs): return ["i-0"]
-            def terminate_fleet(self, **kwargs): return 1
+            def __init__(self, *, regions):
+                pass
+
+            def provision_fleet(self, **kwargs):
+                return ["i-0"]
+
+            def terminate_fleet(self, **kwargs):
+                return 1
 
         class FakePool:
-            def __init__(self, *a, **kw): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+            def __init__(self, *a, **kw):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
 
         optimize_hull_mock = MagicMock()
         monkeypatch.setattr(cloud_runner, "AWSProvider", Recorder)
         monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
         monkeypatch.setattr(cloud_runner, "optimize_hull", optimize_hull_mock)
-        monkeypatch.setattr(cloud_runner, "render_user_data",
-                            lambda *a, **kw: "#!/bin/bash\n")
+        monkeypatch.setattr(cloud_runner, "render_user_data", lambda *a, **kw: "#!/bin/bash\n")
         import redis as redis_mod
+
         monkeypatch.setattr(redis_mod, "Redis", MagicMock())
 
         sentinel_manifest = MagicMock(name="sentinel_manifest")
         hull = MagicMock()
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=0,
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(),
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
             manifest=sentinel_manifest,
-            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
         )
         optimize_hull_mock.assert_called_once()
         # Signature is positional: (hull_id, game_data, pool, opponent_pool,
@@ -428,14 +574,20 @@ class TestSeedIndexResolvesCorrectSeed:
 
     def test_seed_idx_picks_the_named_seed(self, monkeypatch, tmp_path, smoke_env):
         import starsector_optimizer.cloud_runner as cloud_runner
+
         # Smoke config with a multi-seed study.
         _config, path = _make_smoke_config(
             tmp_path,
-            studies=[{
-                "hull": "hammerhead", "regime": "early",
-                "seeds": [0, 1, 7],
-                "budget_per_study": 2, "workers_per_study": 1, "sampler": "tpe",
-            }],
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0, 1, 7],
+                    "budget_per_study": 2,
+                    "workers_per_study": 1,
+                    "sampler": "tpe",
+                }
+            ],
         )
 
         captured: dict[str, Any] = {}
@@ -452,24 +604,35 @@ class TestSeedIndexResolvesCorrectSeed:
                 return 1
 
         class FakePool:
-            def __init__(self, *args, **kwargs): pass
-            def __enter__(self): return self
-            def __exit__(self, *a): pass
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
 
         monkeypatch.setattr(cloud_runner, "AWSProvider", Recorder)
         monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
         monkeypatch.setattr(cloud_runner, "optimize_hull", MagicMock())
-        monkeypatch.setattr(cloud_runner, "render_user_data",
-                            lambda *a, **kw: "#!/bin/bash\n")
+        monkeypatch.setattr(cloud_runner, "render_user_data", lambda *a, **kw: "#!/bin/bash\n")
         import redis as redis_mod
+
         monkeypatch.setattr(redis_mod, "Redis", MagicMock())
 
         hull = MagicMock()
         hull.hull_size = MagicMock()
         cloud_runner.run_cloud_study(
-            campaign_yaml_path=path, study_idx=0, seed_idx=2,   # seeds[2] = 7
-            hull_id="hammerhead", hull=hull, game_data=MagicMock(), manifest=MagicMock(),
-            opponent_pool=MagicMock(), optimizer_config=MagicMock(),
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=2,  # seeds[2] = 7
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
+            manifest=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
         )
         assert captured["fleet_name"] == "hammerhead__early__tpe__seed7"
 
@@ -483,6 +646,7 @@ class TestPrepareCloudPool:
 
     def _capture_lifecycle(self, monkeypatch):
         import starsector_optimizer.cloud_runner as cloud_runner
+
         call_log: list[str] = []
         captured: dict = {}
 
@@ -523,9 +687,9 @@ class TestPrepareCloudPool:
 
         monkeypatch.setattr(cloud_runner, "AWSProvider", FakeProvider)
         monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
-        monkeypatch.setattr(cloud_runner, "render_user_data",
-                            lambda *a, **kw: "#!/bin/bash\n")
+        monkeypatch.setattr(cloud_runner, "render_user_data", lambda *a, **kw: "#!/bin/bash\n")
         import redis as redis_mod
+
         monkeypatch.setattr(redis_mod, "Redis", MagicMock())
         return cloud_runner, call_log, captured
 
@@ -550,12 +714,17 @@ class TestPrepareCloudPool:
             log.append("yield_body")
             assert pool is not None
         assert log == [
-            "provision_fleet", "pool.__enter__", "yield_body",
-            "pool.__exit__", "terminate_fleet",
+            "provision_fleet",
+            "pool.__enter__",
+            "yield_body",
+            "pool.__exit__",
+            "terminate_fleet",
         ]
 
     def test_terminate_runs_even_on_exception_in_body(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         cloud_runner, log, _ = self._capture_lifecycle(monkeypatch)
         cfg, _ = _make_smoke_config(tmp_path)
@@ -567,7 +736,9 @@ class TestPrepareCloudPool:
         assert "terminate_fleet" in log
 
     def test_distinct_namespaces_threaded_through(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         """honest-eval contract: all four name-bearing fields can differ
         from any source-campaign fleet's. Verify each is forwarded to the
@@ -587,7 +758,9 @@ class TestPrepareCloudPool:
         assert captured["terminate"] == ("honest-eval-x", "honest-eval-x")
 
     def test_total_matchup_slots_uses_actual_provisioned_workers(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         cloud_runner, _, captured = self._capture_lifecycle(monkeypatch)
         cfg, _ = _make_smoke_config(tmp_path)
@@ -597,12 +770,12 @@ class TestPrepareCloudPool:
         with cloud_runner.prepare_cloud_pool(**kwargs):
             pass
         assert captured["provision"]["target_workers"] == 7
-        assert captured["pool_kwargs"]["total_matchup_slots"] == (
-            1 * cfg.matchup_slots_per_worker
-        )
+        assert captured["pool_kwargs"]["total_matchup_slots"] == (1 * cfg.matchup_slots_per_worker)
 
     def test_no_provisioned_workers_raises_before_pool_enter(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         cloud_runner, log, _ = self._capture_lifecycle(monkeypatch)
         cfg, _ = _make_smoke_config(tmp_path)
@@ -627,7 +800,9 @@ class TestPrepareCloudPool:
         assert "terminate_fleet" in log
 
     def test_project_sweep_is_opt_in_for_honest_eval(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         """Normal campaign studies share a Project tag, so the helper must
         not sweep by default. Honest-eval owns a unique tag and opts into
@@ -646,14 +821,19 @@ class TestPrepareCloudPool:
         with cloud_runner.prepare_cloud_pool(**kwargs):
             pass
         assert log[-3:] == [
-            "terminate_fleet", "terminate_all_tagged", "list_active",
+            "terminate_fleet",
+            "terminate_all_tagged",
+            "list_active",
         ]
         assert captured["sweep_tags"] == ["honest-eval-x"]
 
     def test_project_sweep_retries_if_instances_remain(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         import starsector_optimizer.cloud_runner as cloud_runner
+
         call_log: list[str] = []
 
         class FakeProvider:
@@ -691,10 +871,13 @@ class TestPrepareCloudPool:
         monkeypatch.setattr(cloud_runner, "AWSProvider", FakeProvider)
         monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
         monkeypatch.setattr(
-            cloud_runner, "render_user_data", lambda *a, **kw: "#!/bin/bash\n",
+            cloud_runner,
+            "render_user_data",
+            lambda *a, **kw: "#!/bin/bash\n",
         )
         monkeypatch.setattr(cloud_runner.time, "sleep", lambda _seconds: None)
         import redis as redis_mod
+
         monkeypatch.setattr(redis_mod, "Redis", MagicMock())
 
         cfg, _ = _make_smoke_config(tmp_path)
@@ -703,8 +886,11 @@ class TestPrepareCloudPool:
         with cloud_runner.prepare_cloud_pool(**kwargs):
             pass
         assert call_log[-5:] == [
-            "terminate_fleet", "terminate_all_tagged", "list_active",
-            "terminate_all_tagged", "list_active",
+            "terminate_fleet",
+            "terminate_all_tagged",
+            "list_active",
+            "terminate_all_tagged",
+            "list_active",
         ]
 
 
@@ -717,16 +903,44 @@ class TestResolveStudyId:
 
     def test_shakedown_four_studies_disambiguate_by_seed_value(self, tmp_path):
         from starsector_optimizer.cloud_runner import resolve_study_id
-        config, _ = _make_smoke_config(tmp_path, studies=[
-            {"hull": "hammerhead", "regime": "early", "seeds": [0],
-             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
-            {"hull": "hammerhead", "regime": "early", "seeds": [1],
-             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
-            {"hull": "hammerhead", "regime": "early", "seeds": [2],
-             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
-            {"hull": "hammerhead", "regime": "early", "seeds": [3],
-             "budget_per_study": 60, "workers_per_study": 8, "sampler": "tpe"},
-        ])
+
+        config, _ = _make_smoke_config(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 60,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                },
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [1],
+                    "budget_per_study": 60,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                },
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [2],
+                    "budget_per_study": 60,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                },
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [3],
+                    "budget_per_study": 60,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                },
+            ],
+        )
         ids = {resolve_study_id(config, i, 0) for i in range(4)}
         assert ids == {
             "hammerhead__early__tpe__seed0",
@@ -739,8 +953,18 @@ class TestResolveStudyId:
         """A study with seeds=[7] at seed_idx=0 must resolve to seed7,
         not seed_idx0 — the eval-log dir has to match the study_id."""
         from starsector_optimizer.cloud_runner import resolve_study_id
-        config, _ = _make_smoke_config(tmp_path, studies=[
-            {"hull": "wolf", "regime": "early", "seeds": [7],
-             "budget_per_study": 1, "workers_per_study": 1, "sampler": "tpe"},
-        ])
+
+        config, _ = _make_smoke_config(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "wolf",
+                    "regime": "early",
+                    "seeds": [7],
+                    "budget_per_study": 1,
+                    "workers_per_study": 1,
+                    "sampler": "tpe",
+                },
+            ],
+        )
         assert resolve_study_id(config, 0, 0) == "wolf__early__tpe__seed7"

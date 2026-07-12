@@ -346,18 +346,20 @@ class BatchState:
         with self._lock:
             rows = []
             for state in self._states.values():
-                rows.append({
-                    "job_id": state.job.job_id,
-                    "split": state.job.split,
-                    "model": state.job.model,
-                    "status": state.status,
-                    "attempt": state.attempt,
-                    "worker_id": state.worker_id,
-                    "lease_expires_at": state.lease_expires_at,
-                    "last_requeue_reason": state.last_requeue_reason,
-                    "last_requeued_at": state.last_requeued_at,
-                    "event_count": len(state.events or ()),
-                })
+                rows.append(
+                    {
+                        "job_id": state.job.job_id,
+                        "split": state.job.split,
+                        "model": state.job.model,
+                        "status": state.status,
+                        "attempt": state.attempt,
+                        "worker_id": state.worker_id,
+                        "lease_expires_at": state.lease_expires_at,
+                        "last_requeue_reason": state.last_requeue_reason,
+                        "last_requeued_at": state.last_requeued_at,
+                        "event_count": len(state.events or ()),
+                    }
+                )
             return {
                 "jobs": rows,
                 "counts": {
@@ -420,13 +422,9 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         budget_usd=float(expanded["budget_usd"]),
         max_lifetime_hours=float(expanded["max_lifetime_hours"]),
         max_job_attempts=int(expanded.get("max_job_attempts", 4)),
-        lease_renewal_interval_seconds=float(
-            expanded.get("lease_renewal_interval_seconds", 60.0)
-        ),
+        lease_renewal_interval_seconds=float(expanded.get("lease_renewal_interval_seconds", 60.0)),
         lease_grace_seconds=float(expanded.get("lease_grace_seconds", 300.0)),
-        pending_instance_grace_seconds=float(
-            expanded.get("pending_instance_grace_seconds", 300.0)
-        ),
+        pending_instance_grace_seconds=float(expanded.get("pending_instance_grace_seconds", 300.0)),
         ledger_heartbeat_interval_seconds=float(expanded["ledger_heartbeat_interval_seconds"]),
         ledger_warn_thresholds=tuple(float(v) for v in expanded["ledger_warn_thresholds"]),
         tailscale_authkey_secret=str(expanded["tailscale_authkey_secret"]),
@@ -452,9 +450,7 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         promotion_metric=str(expanded.get("promotion_metric", DEFAULT_PROMOTION_METRIC)),
         promotion_threshold=float(expanded.get("promotion_threshold", 0.0)),
         claim_label=str(expanded.get("claim_label", "exploratory")),
-        final_refit_policy=str(
-            expanded.get("final_refit_policy", DEFAULT_FINAL_REFIT_POLICY)
-        ),
+        final_refit_policy=str(expanded.get("final_refit_policy", DEFAULT_FINAL_REFIT_POLICY)),
         candidate_universe=str(expanded.get("candidate_universe", "source_db_builds")),
         deployment_artifact=str(expanded.get("deployment_artifact", "none")),
         inner_cv_folds=int(expanded.get("inner_cv_folds", DEFAULT_INNER_CV_FOLDS)),
@@ -467,9 +463,7 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
             expanded.get("bootstrap_resamples", EvalMetricsConfig().bootstrap_resamples)
         ),
         component_vocab_max_overshoot=float(
-            expanded.get(
-                "component_vocab_max_overshoot", DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT
-            )
+            expanded.get("component_vocab_max_overshoot", DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT)
         ),
         feature_profile=str(expanded.get("feature_profile", DEFAULT_FEATURE_PROFILE)),
         dependency_extra=str(expanded.get("dependency_extra", DEFAULT_DEPENDENCY_EXTRA)),
@@ -482,9 +476,7 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
             expanded.get("result_upload_attempts", DEFAULT_RESULT_UPLOAD_ATTEMPTS)
         ),
         result_upload_retry_seconds=float(
-            expanded.get(
-                "result_upload_retry_seconds", DEFAULT_RESULT_UPLOAD_RETRY_SECONDS
-            )
+            expanded.get("result_upload_retry_seconds", DEFAULT_RESULT_UPLOAD_RETRY_SECONDS)
         ),
         splits=tuple(str(v) for v in expanded.get("splits", CANONICAL_SPLITS)),
         models=tuple(str(v) for v in expanded.get("models", CANONICAL_MODELS)),
@@ -503,7 +495,9 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
             "Phase 7 learned batch currently supports exactly one region; "
             "replacement provisioning needs per-region allocation before multi-region use"
         )
-    missing_regions = [region for region in config.regions if region not in config.ami_ids_by_region]
+    missing_regions = [
+        region for region in config.regions if region not in config.ami_ids_by_region
+    ]
     if missing_regions:
         raise ValueError(f"AMI IDs missing for regions: {', '.join(missing_regions)}")
     if not config.splits or not config.models:
@@ -562,7 +556,9 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
             "worker loop has enough evidence to justify partial fleets"
         )
     if config.honest_eval_usage not in ("diagnostic_only", "exploratory_selection", "final_claim"):
-        raise ValueError("honest_eval_usage must be diagnostic_only, exploratory_selection, or final_claim")
+        raise ValueError(
+            "honest_eval_usage must be diagnostic_only, exploratory_selection, or final_claim"
+        )
     if config.honest_eval_usage == "final_claim" and not config.fresh_honest_eval_ledger_id:
         raise ValueError("honest_eval_usage=final_claim requires fresh_honest_eval_ledger_id")
     if config.primary_top_k <= 0:
@@ -599,9 +595,7 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         config.result_upload_attempts * config.result_upload_retry_seconds
         >= config.lease_grace_seconds
     ):
-        raise ValueError(
-            "result upload retry window must be shorter than lease grace"
-        )
+        raise ValueError("result upload retry window must be shorter than lease grace")
     if config.hpo_jobs <= 0 or config.model_thread_count <= 0:
         raise ValueError("hpo_jobs and model_thread_count must be positive")
     if any("2xlarge" in item for item in config.instance_types):
@@ -619,8 +613,7 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
     )
     if config.publish_canonical and not canonical_matrix:
         raise ValueError(
-            "publish_canonical is allowed only for the full canonical "
-            "split/model/seed-bank matrix"
+            "publish_canonical is allowed only for the full canonical split/model/seed-bank matrix"
         )
 
 
@@ -630,9 +623,7 @@ def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
     result_dir = config.output_dir / "results"
     jobs: list[LearnedBatchJob] = []
     for split in config.splits:
-        seeds = (
-            (config.split_seeds[0],) if split in SEEDLESS_SPLITS else config.split_seeds
-        )
+        seeds = (config.split_seeds[0],) if split in SEEDLESS_SPLITS else config.split_seeds
         for model in config.models:
             for seed in seeds:
                 job_id = (
@@ -798,8 +789,9 @@ def create_control_plane_app(
                 worker_id=worker_id,
                 attempt=attempt,
                 before_accept=(
-                    lambda: _atomic_write_json(job.output_path, payload)
-                    if config is not None else None
+                    lambda: (
+                        _atomic_write_json(job.output_path, payload) if config is not None else None
+                    )
                 ),
             )
             if status["status"] == "accepted" and config is None:
@@ -1165,16 +1157,18 @@ def record_budget_heartbeat(
         price = float(spot_prices.get((region, instance_type), 0.0))
         delta = price * hours
         total += delta
-        rows.append({
-            "timestamp": timestamp,
-            "event_type": "batch_worker_heartbeat",
-            "worker_id": inst.get("instance_id", inst.get("id", "unknown")),
-            "region": region,
-            "instance_type": instance_type,
-            "hours_elapsed": hours,
-            "delta_usd": delta,
-            "cumulative_usd": total,
-        })
+        rows.append(
+            {
+                "timestamp": timestamp,
+                "event_type": "batch_worker_heartbeat",
+                "worker_id": inst.get("instance_id", inst.get("id", "unknown")),
+                "region": region,
+                "instance_type": instance_type,
+                "hours_elapsed": hours,
+                "delta_usd": delta,
+                "cumulative_usd": total,
+            }
+        )
     with ledger_path.open("a", encoding="utf-8") as fh:
         for row in rows:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
@@ -1368,8 +1362,10 @@ def run_live_batch(
             status = state.status()
             counts = status["counts"]
             spot_prices = {
-                (item.get("region", "unknown"), item.get("instance_type", "unknown")):
-                provider.get_spot_price(
+                (
+                    item.get("region", "unknown"),
+                    item.get("instance_type", "unknown"),
+                ): provider.get_spot_price(
                     item.get("region", "unknown"),
                     item.get("instance_type", "unknown"),
                 )
@@ -1411,9 +1407,7 @@ def run_live_batch(
                     target_workers=replacement_count,
                 )
                 instance_ids.extend(replacements)
-                pending_instance_ids.update(
-                    dict.fromkeys(replacements, now)
-                )
+                pending_instance_ids.update(dict.fromkeys(replacements, now))
                 active = provider.list_active(config.project_tag)
                 active_worker_ids = {
                     str(item.get("instance_id") or item.get("id"))
@@ -1447,9 +1441,7 @@ def run_live_batch(
                 terminal_message = "merged"
                 return merged
             if not active and not pending_instance_ids and counts["completed"] < len(jobs):
-                raise BatchLaunchFailed(
-                    "no active workers remain before all jobs completed"
-                )
+                raise BatchLaunchFailed("no active workers remain before all jobs completed")
             sleep_fn(poll_interval)
     except BaseException as exc:
         primary_exception = exc
@@ -1553,14 +1545,23 @@ def _contract_ok(result: Mapping[str, Any]) -> bool:
     deployment = result.get("deployment_policy")
     hierarchy = result.get("hierarchy_scorecard")
     leakage = result.get("leakage_diagnostics")
-    registry = feature_protocol.get("feature_family_registry") if isinstance(feature_protocol, dict) else None
-    registry_digest = feature_protocol.get("feature_family_registry_sha256") if isinstance(feature_protocol, dict) else None
+    registry = (
+        feature_protocol.get("feature_family_registry")
+        if isinstance(feature_protocol, dict)
+        else None
+    )
+    registry_digest = (
+        feature_protocol.get("feature_family_registry_sha256")
+        if isinstance(feature_protocol, dict)
+        else None
+    )
     rank_metrics = result.get("rank_metrics")
     lineage = result.get("outer_split_lineage")
     return (
         isinstance(claim, dict)
         and claim.get("target_variable") == "training_matchups.target"
-        and claim.get("honest_eval_usage") in ("diagnostic_only", "exploratory_selection", "final_claim")
+        and claim.get("honest_eval_usage")
+        in ("diagnostic_only", "exploratory_selection", "final_claim")
         and isinstance(model_policy, dict)
         and model_policy.get("policy_type") == "fixed_matrix"
         and isinstance(feature_protocol, dict)
@@ -1618,8 +1619,7 @@ def validate_job_payload(
     artifact = dict(payload)
     if artifact.get("experiment_schema_version") != EXPERIMENT_SCHEMA_VERSION:
         raise ValueError(
-            f"job {job.job_id} experiment schema version must be "
-            f"{EXPERIMENT_SCHEMA_VERSION}"
+            f"job {job.job_id} experiment schema version must be {EXPERIMENT_SCHEMA_VERSION}"
         )
     if not isinstance(artifact.get("feature_schema_version"), int):
         raise ValueError(f"job {job.job_id} feature schema version missing")
@@ -1728,7 +1728,11 @@ def validate_job_payload(
         "leakage_diagnostics",
     )
     code_version = provenance.get("code_version")
-    if not isinstance(code_version, str) or code_version == "unknown" or code_version.endswith("+dirty"):
+    if (
+        not isinstance(code_version, str)
+        or code_version == "unknown"
+        or code_version.endswith("+dirty")
+    ):
         raise ValueError(f"job {job.job_id} code version is not clean")
     if result.get("status") in INSUFFICIENCY_STATUSES:
         # Structured insufficiency artifacts are terminal, non-retryable
@@ -1821,7 +1825,9 @@ def validate_job_payload(
     for key, expected in expected_deployment.items():
         if deployment.get(key) != expected:
             raise ValueError(f"job {job.job_id} deployment policy field {key!r} mismatch")
-    if claim.get("honest_eval_usage") == "final_claim" and not claim.get("fresh_honest_eval_ledger_id"):
+    if claim.get("honest_eval_usage") == "final_claim" and not claim.get(
+        "fresh_honest_eval_ledger_id"
+    ):
         raise ValueError(f"job {job.job_id} final claim missing fresh honest-eval ledger")
     artifact["provenance"] = provenance
     return artifact
@@ -1915,11 +1921,16 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         "model_families": list(config.models),
         "split_seeds": list(config.split_seeds),
         "claim_boundary": first.get("claim_boundary") or first_result.get("claim_boundary"),
-        "model_family_policy": first.get("model_family_policy") or first_result.get("model_family_policy"),
-        "feature_selection_protocol": first.get("feature_selection_protocol") or first_result.get("feature_selection_protocol"),
-        "deployment_policy": first.get("deployment_policy") or first_result.get("deployment_policy"),
-        "hierarchy_scorecard": first.get("hierarchy_scorecard") or first_result.get("hierarchy_scorecard"),
-        "leakage_diagnostics": first.get("leakage_diagnostics") or first_result.get("leakage_diagnostics"),
+        "model_family_policy": first.get("model_family_policy")
+        or first_result.get("model_family_policy"),
+        "feature_selection_protocol": first.get("feature_selection_protocol")
+        or first_result.get("feature_selection_protocol"),
+        "deployment_policy": first.get("deployment_policy")
+        or first_result.get("deployment_policy"),
+        "hierarchy_scorecard": first.get("hierarchy_scorecard")
+        or first_result.get("hierarchy_scorecard"),
+        "leakage_diagnostics": first.get("leakage_diagnostics")
+        or first_result.get("leakage_diagnostics"),
         "provenance": provenance,
         "result_count": len(results),
         "skipped_models": [],
@@ -1938,8 +1949,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         )
         if not canonical_matrix:
             raise ValueError(
-                "canonical publication requires the full canonical "
-                "split/model/seed-bank matrix"
+                "canonical publication requires the full canonical split/model/seed-bank matrix"
             )
         _guard_canonical_overwrite(config)
         _atomic_write_json(config.canonical_output_path, merged)
@@ -1977,10 +1987,17 @@ def _seed_aggregates(
     """
     metric_paths = dict(SEED_AGGREGATE_METRIC_PATHS)
     metric_paths["precision_at_primary_k"] = (
-        "rank_metrics", "build_aggregate", "precision_at_k", str(primary_top_k),
+        "rank_metrics",
+        "build_aggregate",
+        "precision_at_k",
+        str(primary_top_k),
     )
     metric_paths["regret_at_primary_k"] = (
-        "rank_metrics", "build_aggregate", "regret_at_k", str(primary_top_k), "raw",
+        "rank_metrics",
+        "build_aggregate",
+        "regret_at_k",
+        str(primary_top_k),
+        "raw",
     )
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for result in results:
@@ -1997,9 +2014,7 @@ def _seed_aggregates(
             ]
             metrics[name] = {
                 "mean": sum(values) / len(values) if values else None,
-                "sd": (
-                    float(_std(values)) if len(values) > 1 else None
-                ),
+                "sd": (float(_std(values)) if len(values) > 1 else None),
                 "min": min(values) if values else None,
                 "max": max(values) if values else None,
                 "n_finite": len(values),
@@ -2024,8 +2039,7 @@ def _guard_canonical_overwrite(config: LearnedBatchConfig) -> None:
         existing_batch = existing.get("provenance", {}).get("batch", {}).get("name")
     except (json.JSONDecodeError, OSError) as exc:
         raise ValueError(
-            f"canonical output path {path} exists but is unreadable ({exc}); "
-            "refusing to overwrite"
+            f"canonical output path {path} exists but is unreadable ({exc}); refusing to overwrite"
         ) from exc
     if existing_batch != config.name:
         raise ValueError(

@@ -47,12 +47,14 @@ _SG_VISIBILITY_WAITER_MAX_ATTEMPTS = 10
 # propagation completes); permanent errors like `InvalidFleetConfiguration`
 # (AZ missing the requested instance type) are NOT in this set and short-
 # circuit the retry loop.
-_FLEET_TRANSIENT_ERROR_CODES = frozenset({
-    "InvalidGroup.NotFound",
-    "InvalidSecurityGroupID.NotFound",
-    "InvalidLaunchTemplateName.NotFoundException",
-    "InvalidLaunchTemplateId.VersionNotFound",
-})
+_FLEET_TRANSIENT_ERROR_CODES = frozenset(
+    {
+        "InvalidGroup.NotFound",
+        "InvalidSecurityGroupID.NotFound",
+        "InvalidLaunchTemplateName.NotFoundException",
+        "InvalidLaunchTemplateId.VersionNotFound",
+    }
+)
 
 # Error codes that mean "the resource is already gone" — i.e. the delete
 # operation's postcondition is satisfied. Treat these as success during
@@ -60,10 +62,12 @@ _FLEET_TRANSIENT_ERROR_CODES = frozenset({
 # paths (CampaignManager.teardown sweep + per-study `finally:
 # terminate_fleet`) routinely race on the same SG; without this, the
 # loser of the race burns the full _SG_DELETE_DEADLINE_SECONDS budget.
-_SG_DELETE_IDEMPOTENT_ERROR_CODES = frozenset({
-    "InvalidGroup.NotFound",
-    "InvalidSecurityGroupID.NotFound",
-})
+_SG_DELETE_IDEMPOTENT_ERROR_CODES = frozenset(
+    {
+        "InvalidGroup.NotFound",
+        "InvalidSecurityGroupID.NotFound",
+    }
+)
 
 _HETZNER_STUB_MESSAGE = (
     "HetznerProvider is stubbed; implement when campaign budget >= $500. "
@@ -82,7 +86,8 @@ class CloudProvider(abc.ABC):
 
     @abc.abstractmethod
     def provision_fleet(
-        self, *,
+        self,
+        *,
         fleet_name: str,
         project_tag: str,
         regions: Sequence[str],
@@ -123,7 +128,11 @@ class CloudProvider(abc.ABC):
         """Most-recent observed spot price in USD/hour."""
 
     def describe_ami_tag(
-        self, *, ami_id: str, region: str, tag_key: str,
+        self,
+        *,
+        ami_id: str,
+        region: str,
+        tag_key: str,
     ) -> str:
         """Look up a tag value on an AMI. Default impl raises AttributeError
         so the preflight code can skip the check on providers that don't
@@ -162,13 +171,15 @@ class AWSProvider(CloudProvider):
     def _client(self, region: str):
         if region not in self._clients:
             import boto3
+
             self._clients[region] = boto3.client("ec2", region_name=region)
         return self._clients[region]
 
     # ---- provision ------------------------------------------------------
 
     def provision_fleet(
-        self, *,
+        self,
+        *,
         fleet_name: str,
         project_tag: str,
         regions: Sequence[str],
@@ -187,33 +198,47 @@ class AWSProvider(CloudProvider):
             ami_id = ami_ids_by_region.get(region)
             if not ami_id:
                 logger.warning(
-                    "provision_fleet: no AMI id for region=%s; skipping", region,
+                    "provision_fleet: no AMI id for region=%s; skipping",
+                    region,
                 )
                 continue
             sg_id = self._ensure_security_group(
-                region=region, resource_name=resource_name,
-                project_tag=project_tag, fleet_name=fleet_name,
+                region=region,
+                resource_name=resource_name,
+                project_tag=project_tag,
+                fleet_name=fleet_name,
             )
             self._ensure_launch_template(
-                region=region, resource_name=resource_name,
-                project_tag=project_tag, fleet_name=fleet_name,
-                ami_id=ami_id, key_name=ssh_key_name,
-                sg_id=sg_id, user_data=user_data,
+                region=region,
+                resource_name=resource_name,
+                project_tag=project_tag,
+                fleet_name=fleet_name,
+                ami_id=ami_id,
+                key_name=ssh_key_name,
+                sg_id=sg_id,
+                user_data=user_data,
                 root_volume_size_gb=root_volume_size_gb,
             )
-            instance_ids.extend(self._create_fleet_in_region(
-                region=region, resource_name=resource_name,
-                project_tag=project_tag, fleet_name=fleet_name,
-                instance_types=instance_types,
-                spot_allocation_strategy=spot_allocation_strategy,
-                target=per_region_target,
-            ))
+            instance_ids.extend(
+                self._create_fleet_in_region(
+                    region=region,
+                    resource_name=resource_name,
+                    project_tag=project_tag,
+                    fleet_name=fleet_name,
+                    instance_types=instance_types,
+                    spot_allocation_strategy=spot_allocation_strategy,
+                    target=per_region_target,
+                )
+            )
         return instance_ids
 
     def _ensure_security_group(
-        self, *,
-        region: str, resource_name: str,
-        project_tag: str, fleet_name: str,
+        self,
+        *,
+        region: str,
+        resource_name: str,
+        project_tag: str,
+        fleet_name: str,
     ) -> str:
         client = self._client(region)
         existing = client.describe_security_groups(
@@ -224,13 +249,15 @@ class AWSProvider(CloudProvider):
         response = client.create_security_group(
             GroupName=resource_name,
             Description=f"Starsector Phase 6 worker SG for {resource_name} (egress-only)",
-            TagSpecifications=[{
-                "ResourceType": "security-group",
-                "Tags": [
-                    {"Key": _PROJECT_KEY, "Value": project_tag},
-                    {"Key": _FLEET_KEY, "Value": fleet_name},
-                ],
-            }],
+            TagSpecifications=[
+                {
+                    "ResourceType": "security-group",
+                    "Tags": [
+                        {"Key": _PROJECT_KEY, "Value": project_tag},
+                        {"Key": _FLEET_KEY, "Value": fleet_name},
+                    ],
+                }
+            ],
         )
         sg_id = response["GroupId"]
         # Block until describe_security_groups returns the new SG. Under
@@ -248,7 +275,8 @@ class AWSProvider(CloudProvider):
         return sg_id
 
     def _ensure_launch_template(
-        self, *,
+        self,
+        *,
         region: str,
         resource_name: str,
         project_tag: str,
@@ -270,10 +298,12 @@ class AWSProvider(CloudProvider):
             "SecurityGroupIds": [sg_id],
             "UserData": user_data_b64,
             "InstanceMarketOptions": {"MarketType": "spot"},
-            "BlockDeviceMappings": [{
-                "DeviceName": "/dev/sda1",
-                "Ebs": ebs,
-            }],
+            "BlockDeviceMappings": [
+                {
+                    "DeviceName": "/dev/sda1",
+                    "Ebs": ebs,
+                }
+            ],
             "TagSpecifications": [
                 {
                     "ResourceType": "instance",
@@ -308,17 +338,20 @@ class AWSProvider(CloudProvider):
             client.create_launch_template(
                 LaunchTemplateName=resource_name,
                 LaunchTemplateData=launch_template_data,
-                TagSpecifications=[{
-                    "ResourceType": "launch-template",
-                    "Tags": [
-                        {"Key": _PROJECT_KEY, "Value": project_tag},
-                        {"Key": _FLEET_KEY, "Value": fleet_name},
-                    ],
-                }],
+                TagSpecifications=[
+                    {
+                        "ResourceType": "launch-template",
+                        "Tags": [
+                            {"Key": _PROJECT_KEY, "Value": project_tag},
+                            {"Key": _FLEET_KEY, "Value": fleet_name},
+                        ],
+                    }
+                ],
             )
 
     def _create_fleet_in_region(
-        self, *,
+        self,
+        *,
         region: str,
         resource_name: str,
         project_tag: str,
@@ -328,15 +361,15 @@ class AWSProvider(CloudProvider):
         target: int,
     ) -> list[str]:
         client = self._client(region)
-        launch_template_configs = [{
-            "LaunchTemplateSpecification": {
-                "LaunchTemplateName": resource_name,
-                "Version": "$Latest",
-            },
-            "Overrides": [
-                {"InstanceType": itype} for itype in instance_types
-            ],
-        }]
+        launch_template_configs = [
+            {
+                "LaunchTemplateSpecification": {
+                    "LaunchTemplateName": resource_name,
+                    "Version": "$Latest",
+                },
+                "Overrides": [{"InstanceType": itype} for itype in instance_types],
+            }
+        ]
         # `Type="instant"` = ephemeral fleet; no fleet resource remains to
         # clean up. `MaintenanceStrategies` (CapacityRebalance) is only valid
         # on `Type="maintain"` fleets. Spot preemption is handled by the
@@ -361,13 +394,15 @@ class AWSProvider(CloudProvider):
                 },
                 LaunchTemplateConfigs=launch_template_configs,
                 Type="instant",
-                TagSpecifications=[{
-                    "ResourceType": "instance",
-                    "Tags": [
-                        {"Key": _PROJECT_KEY, "Value": project_tag},
-                        {"Key": _FLEET_KEY, "Value": fleet_name},
-                    ],
-                }],
+                TagSpecifications=[
+                    {
+                        "ResourceType": "instance",
+                        "Tags": [
+                            {"Key": _PROJECT_KEY, "Value": project_tag},
+                            {"Key": _FLEET_KEY, "Value": fleet_name},
+                        ],
+                    }
+                ],
             )
             last_errors = response.get("Errors", [])
             ids = []
@@ -381,17 +416,19 @@ class AWSProvider(CloudProvider):
             # with transient SG/LT errors on the other AZs — retrying still
             # succeeds on the non-1e AZs once the resource propagates.
             any_transient = any(
-                e.get("ErrorCode") in _FLEET_TRANSIENT_ERROR_CODES
-                for e in last_errors
+                e.get("ErrorCode") in _FLEET_TRANSIENT_ERROR_CODES for e in last_errors
             )
             if not any_transient or attempt == _FLEET_PROVISION_MAX_RETRIES - 1:
                 break
             logger.warning(
                 "create_fleet in %s transient visibility errors "
                 "(attempt %d/%d): %s; retrying after %.1fs",
-                region, attempt + 1, _FLEET_PROVISION_MAX_RETRIES,
-                sorted({str(e.get("ErrorCode")) for e in last_errors}
-                       & _FLEET_TRANSIENT_ERROR_CODES),
+                region,
+                attempt + 1,
+                _FLEET_PROVISION_MAX_RETRIES,
+                sorted(
+                    {str(e.get("ErrorCode")) for e in last_errors} & _FLEET_TRANSIENT_ERROR_CODES
+                ),
                 _FLEET_PROVISION_RETRY_DELAY_SECONDS,
             )
             time.sleep(_FLEET_PROVISION_RETRY_DELAY_SECONDS)
@@ -399,12 +436,14 @@ class AWSProvider(CloudProvider):
             if not ids:
                 logger.error("create_fleet errors in %s: %s", region, last_errors)
                 raise RuntimeError(
-                    f"create_fleet produced zero instances in {region}; "
-                    f"errors: {last_errors}"
+                    f"create_fleet produced zero instances in {region}; errors: {last_errors}"
                 )
             logger.warning(
                 "create_fleet partial errors in %s (fleet provisioned %d "
-                "instance(s) despite these): %s", region, len(ids), last_errors,
+                "instance(s) despite these): %s",
+                region,
+                len(ids),
+                last_errors,
             )
         return ids
 
@@ -439,9 +478,7 @@ class AWSProvider(CloudProvider):
 
     def _terminate_by_tags(self, region: str, tags: dict[str, str]) -> int:
         client = self._client(region)
-        filters = [
-            {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
-        ]
+        filters = [{"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()]
         filters.append(
             {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}
         )
@@ -455,20 +492,23 @@ class AWSProvider(CloudProvider):
         client.terminate_instances(InstanceIds=ids)
         logger.info(
             "terminated %d instances in %s for tags=%s",
-            len(ids), region, tags,
+            len(ids),
+            region,
+            tags,
         )
         return len(ids)
 
     def _delete_launch_templates_by_tags(
-        self, region: str, tags: dict[str, str],
+        self,
+        region: str,
+        tags: dict[str, str],
     ) -> None:
         client = self._client(region)
-        filters = [
-            {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
-        ]
+        filters = [{"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()]
         try:
             existing = client.describe_launch_templates(Filters=filters).get(
-                "LaunchTemplates", [],
+                "LaunchTemplates",
+                [],
             )
         except Exception as e:
             logger.warning("describe_launch_templates failed in %s: %s", region, e)
@@ -480,11 +520,16 @@ class AWSProvider(CloudProvider):
                 logger.info("deleted launch template %s in %s", name, region)
             except Exception as e:
                 logger.warning(
-                    "delete_launch_template(%s) failed in %s: %s", name, region, e,
+                    "delete_launch_template(%s) failed in %s: %s",
+                    name,
+                    region,
+                    e,
                 )
 
     def _delete_security_groups_by_tags(
-        self, region: str, tags: dict[str, str],
+        self,
+        region: str,
+        tags: dict[str, str],
     ) -> None:
         """Delete SGs matching ALL tags, retrying past AWS's ENI-detach delay.
 
@@ -495,12 +540,11 @@ class AWSProvider(CloudProvider):
         unexpected instance we missed) surfaces as a warning after the deadline.
         """
         client = self._client(region)
-        filters = [
-            {"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()
-        ]
+        filters = [{"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()]
         try:
             existing = client.describe_security_groups(Filters=filters).get(
-                "SecurityGroups", [],
+                "SecurityGroups",
+                [],
             )
         except Exception as e:
             logger.warning("describe_security_groups failed in %s: %s", region, e)
@@ -514,7 +558,9 @@ class AWSProvider(CloudProvider):
                     client.delete_security_group(GroupId=group_id)
                     logger.info(
                         "deleted security group %s (id=%s) in %s",
-                        sg.get("GroupName", "?"), group_id, region,
+                        sg.get("GroupName", "?"),
+                        group_id,
+                        region,
                     )
                     break
                 except Exception as e:
@@ -523,7 +569,9 @@ class AWSProvider(CloudProvider):
                         logger.info(
                             "security group %s (id=%s) already gone in %s "
                             "(concurrent teardown won the race; treating as success)",
-                            sg.get("GroupName", "?"), group_id, region,
+                            sg.get("GroupName", "?"),
+                            group_id,
+                            region,
                         )
                         break
                     last_error = e
@@ -531,7 +579,10 @@ class AWSProvider(CloudProvider):
             else:
                 logger.warning(
                     "delete_security_group(id=%s) gave up after %.0fs in %s: %s",
-                    group_id, _SG_DELETE_DEADLINE_SECONDS, region, last_error,
+                    group_id,
+                    _SG_DELETE_DEADLINE_SECONDS,
+                    region,
+                    last_error,
                 )
 
     # ---- introspection --------------------------------------------------
@@ -544,19 +595,23 @@ class AWSProvider(CloudProvider):
 
     def _describe_active(self, region: str, project_tag: str) -> list[dict]:
         client = self._client(region)
-        response = client.describe_instances(Filters=[
-            {"Name": f"tag:{_PROJECT_KEY}", "Values": [project_tag]},
-            {"Name": "instance-state-name", "Values": ["pending", "running"]},
-        ])
+        response = client.describe_instances(
+            Filters=[
+                {"Name": f"tag:{_PROJECT_KEY}", "Values": [project_tag]},
+                {"Name": "instance-state-name", "Values": ["pending", "running"]},
+            ]
+        )
         out: list[dict] = []
         for reservation in response.get("Reservations", []):
             for inst in reservation.get("Instances", []):
-                out.append({
-                    "id": inst["InstanceId"],
-                    "region": region,
-                    "state": inst["State"]["Name"],
-                    "instance_type": inst.get("InstanceType", "unknown"),
-                })
+                out.append(
+                    {
+                        "id": inst["InstanceId"],
+                        "region": region,
+                        "state": inst["State"]["Name"],
+                        "instance_type": inst.get("InstanceType", "unknown"),
+                    }
+                )
         return out
 
     def get_spot_price(self, region: str, instance_type: str) -> float:
@@ -572,7 +627,11 @@ class AWSProvider(CloudProvider):
         return float(prices[0]["SpotPrice"])
 
     def describe_ami_tag(
-        self, *, ami_id: str, region: str, tag_key: str,
+        self,
+        *,
+        ami_id: str,
+        region: str,
+        tag_key: str,
     ) -> str:
         """Read a tag value off the named AMI (image-id must match exactly).
 

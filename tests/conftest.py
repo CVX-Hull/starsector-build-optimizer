@@ -17,6 +17,7 @@ def make_pass_diagnostic(
     need a synthetic block that satisfies it.
     """
     from starsector_optimizer.models import LoadoutDiagnostic
+
     return tuple(
         LoadoutDiagnostic(
             fleet_member_id=f"{fleet_member_id_prefix}{i}",
@@ -50,6 +51,7 @@ def game_dir():
 def game_data(game_dir):
     """Fully parsed game data."""
     from starsector_optimizer.parser import load_game_data
+
     return load_game_data(game_dir)
 
 
@@ -62,13 +64,21 @@ def manifest():
     should construct their own local manifest, not modify this fixture.
     """
     from starsector_optimizer.game_manifest import GameManifest
+
     return GameManifest.load()
 
 
-def attach_synthetic_hull(manifest, hull_id, applicable_mod_ids,
-                          conditional_exclusions=None, *,
-                          size=None, shield_type=None, is_carrier=False,
-                          built_in_mods=()):
+def attach_synthetic_hull(
+    manifest,
+    hull_id,
+    applicable_mod_ids,
+    conditional_exclusions=None,
+    *,
+    size=None,
+    shield_type=None,
+    is_carrier=False,
+    built_in_mods=(),
+):
     """Test helper: return a copy of `manifest` with one synthetic
     `HullManifestEntry` added (or replaced) for the given hull_id.
 
@@ -78,7 +88,8 @@ def attach_synthetic_hull(manifest, hull_id, applicable_mod_ids,
     includes it. Does NOT mutate the session-scoped manifest fixture.
     """
     from starsector_optimizer.game_manifest import (
-        GameManifest, HullManifestEntry,
+        GameManifest,
+        HullManifestEntry,
     )
     from starsector_optimizer.models import HullSize, ShieldType
 
@@ -110,12 +121,17 @@ def attach_synthetic_hull(manifest, hull_id, applicable_mod_ids,
     # tests pass `applicable_mod_ids` that may not exist in the base
     # manifest, so we construct stub HullmodSpec entries for them).
     from starsector_optimizer.game_manifest import HullmodSpec
+
     new_hullmods = dict(manifest.hullmods)
     for mid in applicable_mod_ids:
         if mid not in new_hullmods:
             new_hullmods[mid] = HullmodSpec(
-                id=mid, tier=0, hidden=False, hidden_everywhere=False,
-                tags=frozenset(), ui_tags=frozenset(),
+                id=mid,
+                tier=0,
+                hidden=False,
+                hidden_everywhere=False,
+                tags=frozenset(),
+                ui_tags=frozenset(),
                 op_cost_by_size={},
             )
     return GameManifest(
@@ -143,6 +159,7 @@ def aws_mocked():
     """
     moto = pytest.importorskip("moto")
     import os
+
     os.environ.setdefault("AWS_ACCESS_KEY_ID", "testing")
     os.environ.setdefault("AWS_SECRET_ACCESS_KEY", "testing")
     os.environ.setdefault("AWS_SECURITY_TOKEN", "testing")
@@ -162,9 +179,11 @@ def flask_test_client_factory():
             client = flask_test_client_factory(pool.app)
             response = client.post('/result', json={...})
     """
+
     def _factory(app):
         app.config["TESTING"] = True
         return app.test_client()
+
     return _factory
 
 

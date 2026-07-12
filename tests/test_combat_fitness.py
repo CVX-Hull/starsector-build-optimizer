@@ -52,6 +52,7 @@ def _result(
     if enemy_ships is None:
         enemy_ships = (_ship(hull_fraction=0.0, destroyed=True),)
     from tests.conftest import make_pass_diagnostic
+
     return CombatResult(
         matchup_id="test_001",
         winner=winner,
@@ -70,7 +71,6 @@ def _result(
 
 
 class TestCombatFitness:
-
     def test_player_win_in_range(self):
         """PLAYER win returns score in [1.0, 1.5]."""
         r = _result(winner="PLAYER", duration=60.0)
@@ -103,14 +103,18 @@ class TestCombatFitness:
         r = _result(
             winner="TIMEOUT",
             duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=0.9,
-                damage_dealt=DamageBreakdown(armor=800, hull=200),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.3,
-                damage_dealt=DamageBreakdown(armor=100),
-            ),),
+            player_ships=(
+                _ship(
+                    hull_fraction=0.9,
+                    damage_dealt=DamageBreakdown(armor=800, hull=200),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.3,
+                    damage_dealt=DamageBreakdown(armor=100),
+                ),
+            ),
         )
         score = combat_fitness(r)
         assert score > 0
@@ -120,14 +124,18 @@ class TestCombatFitness:
         r = _result(
             winner="TIMEOUT",
             duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=0.3,
-                damage_dealt=DamageBreakdown(armor=100),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.9,
-                damage_dealt=DamageBreakdown(armor=800, hull=200),
-            ),),
+            player_ships=(
+                _ship(
+                    hull_fraction=0.3,
+                    damage_dealt=DamageBreakdown(armor=100),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.9,
+                    damage_dealt=DamageBreakdown(armor=800, hull=200),
+                ),
+            ),
         )
         score = combat_fitness(r)
         assert score < 0
@@ -135,12 +143,14 @@ class TestCombatFitness:
     def test_decisive_win_beats_close_win(self):
         """Win with full survival beats win with low survival."""
         dominant = _result(
-            winner="PLAYER", duration=30.0,
+            winner="PLAYER",
+            duration=30.0,
             player_ships=(_ship(hull_fraction=1.0, armor_fraction=1.0),),
             enemy_ships=(_ship(hull_fraction=0.0, destroyed=True),),
         )
         scrappy = _result(
-            winner="PLAYER", duration=170.0,
+            winner="PLAYER",
+            duration=170.0,
             player_ships=(_ship(hull_fraction=0.1, armor_fraction=0.1),),
             enemy_ships=(_ship(hull_fraction=0.0, destroyed=True),),
         )
@@ -149,34 +159,46 @@ class TestCombatFitness:
     def test_no_tier_violation(self):
         """Strict tier ordering: win > timeout > loss > no_engagement."""
         worst_win = _result(
-            winner="PLAYER", duration=179.0,
+            winner="PLAYER",
+            duration=179.0,
             player_ships=(_ship(hull_fraction=0.01),),
             enemy_ships=(_ship(hull_fraction=0.0, destroyed=True),),
         )
         best_timeout = _result(
-            winner="TIMEOUT", duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=1.0,
-                damage_dealt=DamageBreakdown(armor=5000, hull=3000),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.01,
-                damage_dealt=DamageBreakdown(),
-            ),),
+            winner="TIMEOUT",
+            duration=180.0,
+            player_ships=(
+                _ship(
+                    hull_fraction=1.0,
+                    damage_dealt=DamageBreakdown(armor=5000, hull=3000),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.01,
+                    damage_dealt=DamageBreakdown(),
+                ),
+            ),
         )
         best_loss = _result(
             winner="ENEMY",
-            player_ships=(_ship(
-                hull_fraction=0.0, destroyed=True,
-                damage_dealt=DamageBreakdown(armor=5000, hull=3000),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.01,
-                damage_dealt=DamageBreakdown(armor=8000, hull=5000),
-            ),),
+            player_ships=(
+                _ship(
+                    hull_fraction=0.0,
+                    destroyed=True,
+                    damage_dealt=DamageBreakdown(armor=5000, hull=3000),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.01,
+                    damage_dealt=DamageBreakdown(armor=8000, hull=5000),
+                ),
+            ),
         )
         no_engagement = _result(
-            winner="TIMEOUT", duration=300.0,
+            winner="TIMEOUT",
+            duration=300.0,
             player_ships=(_ship(damage_dealt=DamageBreakdown()),),
             enemy_ships=(_ship(damage_dealt=DamageBreakdown()),),
         )
@@ -188,15 +210,20 @@ class TestCombatFitness:
     def test_stopped_treated_as_timeout(self):
         """STOPPED (legacy) treated same as TIMEOUT."""
         stopped = _result(
-            winner="STOPPED", duration=90.0,
-            player_ships=(_ship(
-                hull_fraction=0.8,
-                damage_dealt=DamageBreakdown(armor=800),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.4,
-                damage_dealt=DamageBreakdown(armor=200),
-            ),),
+            winner="STOPPED",
+            duration=90.0,
+            player_ships=(
+                _ship(
+                    hull_fraction=0.8,
+                    damage_dealt=DamageBreakdown(armor=800),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.4,
+                    damage_dealt=DamageBreakdown(armor=200),
+                ),
+            ),
         )
         score = combat_fitness(stopped)
         assert -0.49 <= score <= 0.49
@@ -205,34 +232,34 @@ class TestCombatFitness:
         """TIMEOUT with partial kills scores higher than uniform damage."""
         # 2/3 enemies destroyed + 1 at 50% hull = kill_progress ≈ 0.833
         partial_kills = _result(
-            winner="TIMEOUT", duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=0.5,
-                damage_dealt=DamageBreakdown(armor=3000, hull=2000),
-            ),),
+            winner="TIMEOUT",
+            duration=180.0,
+            player_ships=(
+                _ship(
+                    hull_fraction=0.5,
+                    damage_dealt=DamageBreakdown(armor=3000, hull=2000),
+                ),
+            ),
             enemy_ships=(
-                _ship(hull_fraction=0.0, destroyed=True,
-                      damage_dealt=DamageBreakdown(armor=500)),
-                _ship(hull_fraction=0.0, destroyed=True,
-                      damage_dealt=DamageBreakdown(armor=500)),
-                _ship(hull_fraction=0.5,
-                      damage_dealt=DamageBreakdown(armor=500)),
+                _ship(hull_fraction=0.0, destroyed=True, damage_dealt=DamageBreakdown(armor=500)),
+                _ship(hull_fraction=0.0, destroyed=True, damage_dealt=DamageBreakdown(armor=500)),
+                _ship(hull_fraction=0.5, damage_dealt=DamageBreakdown(armor=500)),
             ),
         )
         # All 3 enemies at 80% hull = kill_progress = 0.2
         uniform_damage = _result(
-            winner="TIMEOUT", duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=0.5,
-                damage_dealt=DamageBreakdown(armor=600),
-            ),),
+            winner="TIMEOUT",
+            duration=180.0,
+            player_ships=(
+                _ship(
+                    hull_fraction=0.5,
+                    damage_dealt=DamageBreakdown(armor=600),
+                ),
+            ),
             enemy_ships=(
-                _ship(hull_fraction=0.8,
-                      damage_dealt=DamageBreakdown(armor=500)),
-                _ship(hull_fraction=0.8,
-                      damage_dealt=DamageBreakdown(armor=500)),
-                _ship(hull_fraction=0.8,
-                      damage_dealt=DamageBreakdown(armor=500)),
+                _ship(hull_fraction=0.8, damage_dealt=DamageBreakdown(armor=500)),
+                _ship(hull_fraction=0.8, damage_dealt=DamageBreakdown(armor=500)),
+                _ship(hull_fraction=0.8, damage_dealt=DamageBreakdown(armor=500)),
             ),
         )
         assert combat_fitness(partial_kills) > combat_fitness(uniform_damage)
@@ -245,7 +272,8 @@ class TestCombatFitness:
             enemy_ships=(_ship(hull_fraction=1.0),),
         )
         no_engagement = _result(
-            winner="TIMEOUT", duration=300.0,
+            winner="TIMEOUT",
+            duration=300.0,
             player_ships=(_ship(damage_dealt=DamageBreakdown()),),
             enemy_ships=(_ship(damage_dealt=DamageBreakdown()),),
         )
@@ -270,25 +298,35 @@ class TestCombatFitness:
         """Losses with different kill progress are clearly distinguishable."""
         near_win = _result(
             winner="ENEMY",
-            player_ships=(_ship(
-                hull_fraction=0.0, destroyed=True,
-                damage_dealt=DamageBreakdown(armor=5000, hull=3000),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.1,
-                damage_dealt=DamageBreakdown(armor=8000, hull=5000),
-            ),),
+            player_ships=(
+                _ship(
+                    hull_fraction=0.0,
+                    destroyed=True,
+                    damage_dealt=DamageBreakdown(armor=5000, hull=3000),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.1,
+                    damage_dealt=DamageBreakdown(armor=8000, hull=5000),
+                ),
+            ),
         )
         blowout = _result(
             winner="ENEMY",
-            player_ships=(_ship(
-                hull_fraction=0.0, destroyed=True,
-                damage_dealt=DamageBreakdown(armor=100),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.95,
-                damage_dealt=DamageBreakdown(armor=5000, hull=3000),
-            ),),
+            player_ships=(
+                _ship(
+                    hull_fraction=0.0,
+                    destroyed=True,
+                    damage_dealt=DamageBreakdown(armor=100),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.95,
+                    damage_dealt=DamageBreakdown(armor=5000, hull=3000),
+                ),
+            ),
         )
         diff = combat_fitness(near_win) - combat_fitness(blowout)
         assert diff > 0.3  # Wide band
@@ -296,15 +334,20 @@ class TestCombatFitness:
     def test_timeout_margin_symmetry(self):
         """Timeout margin is symmetric around zero for equal exchange."""
         even = _result(
-            winner="TIMEOUT", duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=0.5,
-                damage_dealt=DamageBreakdown(armor=1000),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.5,
-                damage_dealt=DamageBreakdown(armor=1000),
-            ),),
+            winner="TIMEOUT",
+            duration=180.0,
+            player_ships=(
+                _ship(
+                    hull_fraction=0.5,
+                    damage_dealt=DamageBreakdown(armor=1000),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.5,
+                    damage_dealt=DamageBreakdown(armor=1000),
+                ),
+            ),
         )
         score = combat_fitness(even)
         assert score == pytest.approx(0.0)
@@ -312,15 +355,22 @@ class TestCombatFitness:
     def test_mutual_destruction_is_neutral_timeout(self):
         """Both sides destroyed (TIMEOUT from harness) scores near 0."""
         mutual = _result(
-            winner="TIMEOUT", duration=180.0,
-            player_ships=(_ship(
-                hull_fraction=0.0, destroyed=True,
-                damage_dealt=DamageBreakdown(armor=5000, hull=3000),
-            ),),
-            enemy_ships=(_ship(
-                hull_fraction=0.0, destroyed=True,
-                damage_dealt=DamageBreakdown(armor=5000, hull=3000),
-            ),),
+            winner="TIMEOUT",
+            duration=180.0,
+            player_ships=(
+                _ship(
+                    hull_fraction=0.0,
+                    destroyed=True,
+                    damage_dealt=DamageBreakdown(armor=5000, hull=3000),
+                ),
+            ),
+            enemy_ships=(
+                _ship(
+                    hull_fraction=0.0,
+                    destroyed=True,
+                    damage_dealt=DamageBreakdown(armor=5000, hull=3000),
+                ),
+            ),
         )
         score = combat_fitness(mutual)
         assert score == pytest.approx(0.0)
@@ -330,12 +380,12 @@ class TestCombatFitness:
 
 
 class TestAggregateFitness:
-
     def test_mean_mode(self):
         """Average of combat_fitness across results."""
         r1 = _result(winner="PLAYER")  # ~1.0+
         r2 = _result(
-            winner="TIMEOUT", duration=180.0,
+            winner="TIMEOUT",
+            duration=180.0,
             player_ships=(_ship(damage_dealt=DamageBreakdown()),),
             enemy_ships=(_ship(damage_dealt=DamageBreakdown()),),
         )  # -2.0 (no engagement)
@@ -346,7 +396,8 @@ class TestAggregateFitness:
         """Minimum of combat_fitness across results."""
         r1 = _result(winner="PLAYER")
         r2 = _result(
-            winner="TIMEOUT", duration=180.0,
+            winner="TIMEOUT",
+            duration=180.0,
             player_ships=(_ship(damage_dealt=DamageBreakdown()),),
             enemy_ships=(_ship(damage_dealt=DamageBreakdown()),),
         )

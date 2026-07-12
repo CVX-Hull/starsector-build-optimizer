@@ -30,8 +30,10 @@ def compute_op_cost(build: Build, hull: ShipHull, game_data: GameData) -> int:
 
 
 def _repair_incompatibilities(
-    hullmods: set[str], hull: ShipHull,
-    game_data: GameData, manifest: GameManifest,
+    hullmods: set[str],
+    hull: ShipHull,
+    game_data: GameData,
+    manifest: GameManifest,
 ) -> set[str]:
     """Drop any hullmod not per-hull applicable, then resolve pairwise
     conditional exclusions on this hull by cheaper-side-loses.
@@ -62,24 +64,26 @@ def _repair_incompatibilities(
         for b in sorted(blocked):
             if b not in hullmods or b == a:
                 continue
-            cost_a = (game_data.hullmods[a].op_cost(hull.hull_size)
-                      if a in game_data.hullmods else 0)
-            cost_b = (game_data.hullmods[b].op_cost(hull.hull_size)
-                      if b in game_data.hullmods else 0)
+            cost_a = game_data.hullmods[a].op_cost(hull.hull_size) if a in game_data.hullmods else 0
+            cost_b = game_data.hullmods[b].op_cost(hull.hull_size) if b in game_data.hullmods else 0
             hullmods.discard(b if cost_b <= cost_a else a)
 
     return hullmods
 
 
 def _repair_logistics(
-    hullmods: set[str], hull: ShipHull,
-    game_data: GameData, manifest: GameManifest,
+    hullmods: set[str],
+    hull: ShipHull,
+    game_data: GameData,
+    manifest: GameManifest,
 ) -> set[str]:
     """Enforce max_logistics_hullmods cap from the manifest."""
     cap = manifest.constants.max_logistics_hullmods
-    logistics = [(m, game_data.hullmods[m].op_cost(hull.hull_size))
-                 for m in hullmods
-                 if m in game_data.hullmods and game_data.hullmods[m].is_logistics]
+    logistics = [
+        (m, game_data.hullmods[m].op_cost(hull.hull_size))
+        for m in hullmods
+        if m in game_data.hullmods and game_data.hullmods[m].is_logistics
+    ]
     if len(logistics) <= cap:
         return hullmods
     logistics.sort(key=lambda x: x[1], reverse=True)
@@ -94,6 +98,7 @@ def _repair_op_budget(
     game_data: GameData,
 ) -> tuple[dict[str, str | None], set[str]]:
     """Greedily drop lowest value-per-OP items until budget is met."""
+
     def _total_cost():
         c = 0
         for wid in weapons.values():
@@ -220,23 +225,17 @@ def is_feasible(
         installed = build.hullmods
         for mod_id in installed:
             if mod_id not in hull_entry.applicable_hullmods:
-                violations.append(
-                    f"Hullmod {mod_id} not applicable on hull {hull.id}"
-                )
+                violations.append(f"Hullmod {mod_id} not applicable on hull {hull.id}")
         for a in installed:
             blocked = hull_entry.conditional_exclusions.get(a, frozenset())
             for b in blocked:
                 if b in installed and a < b:
-                    violations.append(
-                        f"Conditional conflict on hull {hull.id}: "
-                        f"{a} blocks {b}"
-                    )
+                    violations.append(f"Conditional conflict on hull {hull.id}: {a} blocks {b}")
 
     # C5: Logistics limit
     cap = manifest.constants.max_logistics_hullmods
     logistics_count = sum(
-        1 for m in build.hullmods
-        if m in game_data.hullmods and game_data.hullmods[m].is_logistics
+        1 for m in build.hullmods if m in game_data.hullmods and game_data.hullmods[m].is_logistics
     )
     if logistics_count > cap:
         violations.append(f"Too many logistics mods: {logistics_count} > {cap}")

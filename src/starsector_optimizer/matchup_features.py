@@ -60,9 +60,7 @@ PROFILE_SPARSE_COMPONENT_INCLUDE_PARTS = (
     "_hull_id",
     "_variant_id",
 )
-PROFILE_SPARSE_CROSS_INCLUDE_PREFIXES = (
-    "interaction_",
-)
+PROFILE_SPARSE_CROSS_INCLUDE_PREFIXES = ("interaction_",)
 ARC_BUCKET_FRONT = "front"
 ARC_BUCKET_AFT = "aft"
 ARC_BUCKET_PORT = "port"
@@ -133,8 +131,12 @@ def _weapon_aggregate(prefix: str, weapons: tuple[Weapon, ...]) -> dict[str, Fea
         row[f"{prefix}_damage_{key}_dps"] = sum(
             w.sustained_dps for w in weapons if w.damage_type == damage_type
         )
-    _add_tag_count_features(row, f"{prefix}_weapon_hint", tuple(tag for w in weapons for tag in w.hints))
-    _add_tag_count_features(row, f"{prefix}_weapon_tag", tuple(tag for w in weapons for tag in w.tags))
+    _add_tag_count_features(
+        row, f"{prefix}_weapon_hint", tuple(tag for w in weapons for tag in w.hints)
+    )
+    _add_tag_count_features(
+        row, f"{prefix}_weapon_tag", tuple(tag for w in weapons for tag in w.tags)
+    )
     return row
 
 
@@ -146,13 +148,7 @@ def _add_tag_count_features(row: dict[str, FeatureValue], prefix: str, tags: Ite
 
 
 def _feature_key(value: str) -> str:
-    return (
-        value.lower()
-        .replace(" ", "_")
-        .replace("/", "_")
-        .replace("-", "_")
-        .replace(".", "_")
-    )
+    return value.lower().replace(" ", "_").replace("/", "_").replace("-", "_").replace(".", "_")
 
 
 def _slot_counts(prefix: str, hull: ShipHull) -> dict[str, FeatureValue]:
@@ -226,19 +222,25 @@ def _arc_pressure_features(
     for slot in hull.weapon_slots:
         bucket = _arc_bucket(slot.angle)
         row[f"{prefix}_arc_{bucket}_slot_count"] = int(row[f"{prefix}_arc_{bucket}_slot_count"]) + 1
-        assigned_weapon_id = build.weapon_assignments.get(slot.id) or hull.built_in_weapons.get(slot.id)
+        assigned_weapon_id = build.weapon_assignments.get(slot.id) or hull.built_in_weapons.get(
+            slot.id
+        )
         weapon = game_data.weapons.get(assigned_weapon_id) if assigned_weapon_id else None
         if weapon is None:
             continue
         arc_weight = max(slot.arc / 360.0, 0.0)
-        row[f"{prefix}_arc_{bucket}_weapon_dps"] = float(row[f"{prefix}_arc_{bucket}_weapon_dps"]) + weapon.sustained_dps
+        row[f"{prefix}_arc_{bucket}_weapon_dps"] = (
+            float(row[f"{prefix}_arc_{bucket}_weapon_dps"]) + weapon.sustained_dps
+        )
         row[f"{prefix}_arc_{bucket}_weapon_range_weighted_dps"] = (
             float(row[f"{prefix}_arc_{bucket}_weapon_range_weighted_dps"])
             + weapon.sustained_dps * weapon.range * arc_weight
         )
-        row[f"{prefix}_arc_{bucket}_pd_count"] = int(row[f"{prefix}_arc_{bucket}_pd_count"]) + int(weapon.is_pd)
-    row[f"{prefix}_arc_broadside_weapon_dps"] = (
-        float(row[f"{prefix}_arc_port_weapon_dps"]) + float(row[f"{prefix}_arc_starboard_weapon_dps"])
+        row[f"{prefix}_arc_{bucket}_pd_count"] = int(row[f"{prefix}_arc_{bucket}_pd_count"]) + int(
+            weapon.is_pd
+        )
+    row[f"{prefix}_arc_broadside_weapon_dps"] = float(row[f"{prefix}_arc_port_weapon_dps"]) + float(
+        row[f"{prefix}_arc_starboard_weapon_dps"]
     )
     row[f"{prefix}_arc_frontal_weapon_dps"] = float(row[f"{prefix}_arc_front_weapon_dps"])
     row[f"{prefix}_arc_aft_weapon_dps"] = float(row[f"{prefix}_arc_aft_weapon_dps"])
@@ -264,49 +266,65 @@ def _slot_feature_row(
             weapon_id = UNKNOWN_SENTINEL
         angle_radians = math.radians(slot.angle)
         x, y = slot.position
-        row.update({
-            f"{slot_prefix}_slot_id": slot.id,
-            f"{slot_prefix}_slot_type": slot.slot_type.value,
-            f"{slot_prefix}_slot_size": slot.slot_size.value,
-            f"{slot_prefix}_mount_type": slot.mount_type.value,
-            f"{slot_prefix}_angle_degrees": slot.angle,
-            f"{slot_prefix}_angle_sin": math.sin(angle_radians),
-            f"{slot_prefix}_angle_cos": math.cos(angle_radians),
-            f"{slot_prefix}_arc_degrees": slot.arc,
-            f"{slot_prefix}_arc_fraction": slot.arc / 360.0,
-            f"{slot_prefix}_arc_bucket": _arc_bucket(slot.angle),
-            f"{slot_prefix}_x": x,
-            f"{slot_prefix}_y": y,
-            f"{slot_prefix}_x_norm": x / x_scale,
-            f"{slot_prefix}_y_norm": y / y_scale,
-            f"{slot_prefix}_forward_projection": math.cos(angle_radians),
-            f"{slot_prefix}_lateral_offset": abs(x) / x_scale,
-            f"{slot_prefix}_longitudinal_offset": y / y_scale,
-            f"{slot_prefix}_weapon_id": weapon_id,
-            f"{slot_prefix}_weapon_known": int(weapon is not None),
-            f"{slot_prefix}_weapon_type": (
-                weapon.weapon_type.value if weapon else UNKNOWN_SENTINEL if assigned_weapon_id else EMPTY_SENTINEL
-            ),
-            f"{slot_prefix}_weapon_size": (
-                weapon.size.value if weapon else UNKNOWN_SENTINEL if assigned_weapon_id else EMPTY_SENTINEL
-            ),
-            f"{slot_prefix}_damage_type": (
-                weapon.damage_type.value if weapon else UNKNOWN_SENTINEL if assigned_weapon_id else EMPTY_SENTINEL
-            ),
-            f"{slot_prefix}_weapon_op": weapon.op_cost if weapon else 0,
-            f"{slot_prefix}_weapon_dps": weapon.sustained_dps if weapon else 0.0,
-            f"{slot_prefix}_weapon_flux": weapon.sustained_flux if weapon else 0.0,
-            f"{slot_prefix}_weapon_range": weapon.range if weapon else 0.0,
-            f"{slot_prefix}_weapon_ammo": weapon.ammo if weapon else 0,
-            f"{slot_prefix}_weapon_proj_speed": weapon.proj_speed if weapon else 0.0,
-            f"{slot_prefix}_weapon_turn_rate": weapon.turn_rate if weapon else 0.0,
-            f"{slot_prefix}_weapon_is_pd": int(weapon.is_pd) if weapon else 0,
-            f"{slot_prefix}_weapon_is_beam": int(weapon.is_beam) if weapon else 0,
-        })
+        row.update(
+            {
+                f"{slot_prefix}_slot_id": slot.id,
+                f"{slot_prefix}_slot_type": slot.slot_type.value,
+                f"{slot_prefix}_slot_size": slot.slot_size.value,
+                f"{slot_prefix}_mount_type": slot.mount_type.value,
+                f"{slot_prefix}_angle_degrees": slot.angle,
+                f"{slot_prefix}_angle_sin": math.sin(angle_radians),
+                f"{slot_prefix}_angle_cos": math.cos(angle_radians),
+                f"{slot_prefix}_arc_degrees": slot.arc,
+                f"{slot_prefix}_arc_fraction": slot.arc / 360.0,
+                f"{slot_prefix}_arc_bucket": _arc_bucket(slot.angle),
+                f"{slot_prefix}_x": x,
+                f"{slot_prefix}_y": y,
+                f"{slot_prefix}_x_norm": x / x_scale,
+                f"{slot_prefix}_y_norm": y / y_scale,
+                f"{slot_prefix}_forward_projection": math.cos(angle_radians),
+                f"{slot_prefix}_lateral_offset": abs(x) / x_scale,
+                f"{slot_prefix}_longitudinal_offset": y / y_scale,
+                f"{slot_prefix}_weapon_id": weapon_id,
+                f"{slot_prefix}_weapon_known": int(weapon is not None),
+                f"{slot_prefix}_weapon_type": (
+                    weapon.weapon_type.value
+                    if weapon
+                    else UNKNOWN_SENTINEL
+                    if assigned_weapon_id
+                    else EMPTY_SENTINEL
+                ),
+                f"{slot_prefix}_weapon_size": (
+                    weapon.size.value
+                    if weapon
+                    else UNKNOWN_SENTINEL
+                    if assigned_weapon_id
+                    else EMPTY_SENTINEL
+                ),
+                f"{slot_prefix}_damage_type": (
+                    weapon.damage_type.value
+                    if weapon
+                    else UNKNOWN_SENTINEL
+                    if assigned_weapon_id
+                    else EMPTY_SENTINEL
+                ),
+                f"{slot_prefix}_weapon_op": weapon.op_cost if weapon else 0,
+                f"{slot_prefix}_weapon_dps": weapon.sustained_dps if weapon else 0.0,
+                f"{slot_prefix}_weapon_flux": weapon.sustained_flux if weapon else 0.0,
+                f"{slot_prefix}_weapon_range": weapon.range if weapon else 0.0,
+                f"{slot_prefix}_weapon_ammo": weapon.ammo if weapon else 0,
+                f"{slot_prefix}_weapon_proj_speed": weapon.proj_speed if weapon else 0.0,
+                f"{slot_prefix}_weapon_turn_rate": weapon.turn_rate if weapon else 0.0,
+                f"{slot_prefix}_weapon_is_pd": int(weapon.is_pd) if weapon else 0,
+                f"{slot_prefix}_weapon_is_beam": int(weapon.is_beam) if weapon else 0,
+            }
+        )
     return row
 
 
-def _hullmod_feature_row(prefix: str, build: Build, hull: ShipHull, game_data: GameData) -> dict[str, FeatureValue]:
+def _hullmod_feature_row(
+    prefix: str, build: Build, hull: ShipHull, game_data: GameData
+) -> dict[str, FeatureValue]:
     row: dict[str, FeatureValue] = {}
     unknown_count = 0
     for hullmod_id in sorted(build.hullmods):
@@ -331,21 +349,25 @@ def _hullmod_feature_row(prefix: str, build: Build, hull: ShipHull, game_data: G
     return row
 
 
-def _small_weapon_composition(prefix: str, build: Build, hull: ShipHull, game_data: GameData) -> dict[str, FeatureValue]:
+def _small_weapon_composition(
+    prefix: str, build: Build, hull: ShipHull, game_data: GameData
+) -> dict[str, FeatureValue]:
     small_slots = tuple(slot for slot in hull.weapon_slots if slot.slot_size == SlotSize.SMALL)
     resolved_weapon_ids = tuple(
         build.weapon_assignments.get(slot.id) or hull.built_in_weapons.get(slot.id)
         for slot in small_slots
     )
-    weapons = tuple(game_data.weapons[wid] for wid in resolved_weapon_ids if wid in game_data.weapons)
-    row = _weapon_aggregate(f"{prefix}_small", weapons)
-    row[f"{prefix}_small_empty_count"] = sum(
-        1 for wid in resolved_weapon_ids if wid is None
+    weapons = tuple(
+        game_data.weapons[wid] for wid in resolved_weapon_ids if wid in game_data.weapons
     )
+    row = _weapon_aggregate(f"{prefix}_small", weapons)
+    row[f"{prefix}_small_empty_count"] = sum(1 for wid in resolved_weapon_ids if wid is None)
     return row
 
 
-def _wing_aggregate(prefix: str, wing_ids: Iterable[str], game_data: GameData) -> dict[str, FeatureValue]:
+def _wing_aggregate(
+    prefix: str, wing_ids: Iterable[str], game_data: GameData
+) -> dict[str, FeatureValue]:
     if not isinstance(wing_ids, tuple | list):
         raise ValueError(f"{prefix} wings must be a list")
     resolved = tuple(game_data.wings[wing_id] for wing_id in wing_ids if wing_id in game_data.wings)
@@ -355,12 +377,20 @@ def _wing_aggregate(prefix: str, wing_ids: Iterable[str], game_data: GameData) -
         f"{prefix}_wing_fleet_points": sum(wing.fleet_points for wing in resolved),
         f"{prefix}_wing_size": sum(wing.num for wing in resolved),
         f"{prefix}_wing_range_mean": _safe_mean(wing.range for wing in resolved),
-        f"{prefix}_wing_attack_run_range_mean": _safe_mean(wing.attack_run_range for wing in resolved),
+        f"{prefix}_wing_attack_run_range_mean": _safe_mean(
+            wing.attack_run_range for wing in resolved
+        ),
         f"{prefix}_wing_refit_mean": _safe_mean(wing.refit for wing in resolved),
-        f"{prefix}_unknown_wing_count": sum(1 for wing_id in wing_ids if wing_id not in game_data.wings),
+        f"{prefix}_unknown_wing_count": sum(
+            1 for wing_id in wing_ids if wing_id not in game_data.wings
+        ),
     }
-    _add_tag_count_features(row, f"{prefix}_wing_role", tuple(wing.role for wing in resolved if wing.role))
-    _add_tag_count_features(row, f"{prefix}_wing_tag", tuple(tag for wing in resolved for tag in wing.tags))
+    _add_tag_count_features(
+        row, f"{prefix}_wing_role", tuple(wing.role for wing in resolved if wing.role)
+    )
+    _add_tag_count_features(
+        row, f"{prefix}_wing_tag", tuple(tag for wing in resolved for tag in wing.tags)
+    )
     return row
 
 
@@ -392,7 +422,8 @@ def build_feature_row(
     weapons = _weapons_for_build(build, hull, game_data)
     known_weapon_ids = {w.id for w in weapons}
     unknown_weapon_count = sum(
-        1 for wid in _resolved_weapon_ids(build, hull)
+        1
+        for wid in _resolved_weapon_ids(build, hull)
         if wid is not None and wid not in known_weapon_ids
     )
     row: dict[str, FeatureValue] = {
@@ -417,10 +448,13 @@ def build_feature_row(
         "build_hullmod_count": len(build.hullmods),
         "build_hullmod_op": sum(
             game_data.hullmods[hid].op_cost(hull.hull_size)
-            for hid in build.hullmods if hid in game_data.hullmods
+            for hid in build.hullmods
+            if hid in game_data.hullmods
         ),
         "build_builtin_hullmod_overlap": len(set(build.hullmods) & set(hull.built_in_mods)),
-        "build_empty_slot_count": sum(1 for wid in build.weapon_assignments.values() if wid is None),
+        "build_empty_slot_count": sum(
+            1 for wid in build.weapon_assignments.values() if wid is None
+        ),
         "build_unknown_weapon_count": unknown_weapon_count,
     }
     row.update(_hull_geometry_features("build", hull))
@@ -474,12 +508,16 @@ def opponent_feature_row(
         "opponent_hullmod_count": len(build.hullmods),
         "opponent_hullmod_op": sum(
             game_data.hullmods[hid].op_cost(hull.hull_size)
-            for hid in build.hullmods if hid in game_data.hullmods
+            for hid in build.hullmods
+            if hid in game_data.hullmods
         ),
         "opponent_builtin_hullmod_overlap": len(set(build.hullmods) & set(hull.built_in_mods)),
-        "opponent_empty_slot_count": sum(1 for wid in build.weapon_assignments.values() if wid is None),
+        "opponent_empty_slot_count": sum(
+            1 for wid in build.weapon_assignments.values() if wid is None
+        ),
         "opponent_unknown_weapon_count": sum(
-            1 for wid in _resolved_weapon_ids(build, hull)
+            1
+            for wid in _resolved_weapon_ids(build, hull)
             if wid is not None and wid not in game_data.weapons
         ),
     }
@@ -510,53 +548,60 @@ def matchup_feature_row(
     row = build_feature_row(build, hull, game_data, manifest)
     opponent = opponent_feature_row(opponent_variant_id, game_dir, game_data)
     row.update(opponent)
-    row.update({
-        "interaction_range_delta": float(row["build_range_mean"]) - float(row["opponent_range_mean"]),
-        "interaction_speed_delta": float(row["build_hull_speed"]) - float(row["opponent_hull_speed"]),
-        "interaction_armor_delta": float(row["build_hull_armor"]) - float(row["opponent_hull_armor"]),
-        "interaction_flux_delta": float(row["build_hull_flux"]) - float(row["opponent_hull_flux"]),
-        "interaction_shield_efficiency_delta": (
-            float(row["opponent_hull_shield_efficiency"])
-            - float(row["build_hull_shield_efficiency"])
-        ),
-        "interaction_kinetic_vs_shield": (
-            float(row["build_damage_kinetic_dps"])
-            / max(float(row["opponent_hull_shield_efficiency"]), 1.0)
-        ),
-        "interaction_he_vs_armor": (
-            float(row["build_damage_he_dps"])
-            / max(float(row["opponent_hull_armor"]), 1.0)
-        ),
-        "interaction_pd_vs_missile": (
-            float(row["build_pd_count"]) / max(float(row["opponent_missile_count"]), 1.0)
-        ),
-        "interaction_small_pd_vs_missile": (
-            float(row["build_small_pd_count"]) / max(float(row["opponent_missile_count"]), 1.0)
-        ),
-        "interaction_small_range_delta": (
-            float(row["build_small_range_mean"]) - float(row["opponent_range_mean"])
-        ),
-        "interaction_weapon_flux_pressure_delta": (
-            float(row["build_weapon_flux"]) - float(row["opponent_weapon_flux"])
-        ),
-        "interaction_front_dps_delta": (
-            float(row["build_arc_front_weapon_dps"]) - float(row["opponent_arc_front_weapon_dps"])
-        ),
-        "interaction_broadside_dps_delta": (
-            float(row["build_arc_broadside_weapon_dps"]) - float(row["opponent_arc_broadside_weapon_dps"])
-        ),
-        "interaction_pd_arc_vs_missile": (
-            (
-                float(row["build_arc_front_pd_count"])
-                + float(row["build_arc_port_pd_count"])
-                + float(row["build_arc_starboard_pd_count"])
-            )
-            / max(float(row["opponent_missile_count"]), 1.0)
-        ),
-        "interaction_wing_pressure_vs_pd": (
-            float(row["opponent_wing_count"]) / max(float(row["build_pd_count"]), 1.0)
-        ),
-    })
+    row.update(
+        {
+            "interaction_range_delta": float(row["build_range_mean"])
+            - float(row["opponent_range_mean"]),
+            "interaction_speed_delta": float(row["build_hull_speed"])
+            - float(row["opponent_hull_speed"]),
+            "interaction_armor_delta": float(row["build_hull_armor"])
+            - float(row["opponent_hull_armor"]),
+            "interaction_flux_delta": float(row["build_hull_flux"])
+            - float(row["opponent_hull_flux"]),
+            "interaction_shield_efficiency_delta": (
+                float(row["opponent_hull_shield_efficiency"])
+                - float(row["build_hull_shield_efficiency"])
+            ),
+            "interaction_kinetic_vs_shield": (
+                float(row["build_damage_kinetic_dps"])
+                / max(float(row["opponent_hull_shield_efficiency"]), 1.0)
+            ),
+            "interaction_he_vs_armor": (
+                float(row["build_damage_he_dps"]) / max(float(row["opponent_hull_armor"]), 1.0)
+            ),
+            "interaction_pd_vs_missile": (
+                float(row["build_pd_count"]) / max(float(row["opponent_missile_count"]), 1.0)
+            ),
+            "interaction_small_pd_vs_missile": (
+                float(row["build_small_pd_count"]) / max(float(row["opponent_missile_count"]), 1.0)
+            ),
+            "interaction_small_range_delta": (
+                float(row["build_small_range_mean"]) - float(row["opponent_range_mean"])
+            ),
+            "interaction_weapon_flux_pressure_delta": (
+                float(row["build_weapon_flux"]) - float(row["opponent_weapon_flux"])
+            ),
+            "interaction_front_dps_delta": (
+                float(row["build_arc_front_weapon_dps"])
+                - float(row["opponent_arc_front_weapon_dps"])
+            ),
+            "interaction_broadside_dps_delta": (
+                float(row["build_arc_broadside_weapon_dps"])
+                - float(row["opponent_arc_broadside_weapon_dps"])
+            ),
+            "interaction_pd_arc_vs_missile": (
+                (
+                    float(row["build_arc_front_pd_count"])
+                    + float(row["build_arc_port_pd_count"])
+                    + float(row["build_arc_starboard_pd_count"])
+                )
+                / max(float(row["opponent_missile_count"]), 1.0)
+            ),
+            "interaction_wing_pressure_vs_pd": (
+                float(row["opponent_wing_count"]) / max(float(row["build_pd_count"]), 1.0)
+            ),
+        }
+    )
     return row
 
 
@@ -571,34 +616,35 @@ def filter_feature_profile(
         return dict(row)
     if feature_profile == "aggregate":
         return {
-            key: value for key, value in row.items()
-            if not _is_sparse_component_key(key)
-            and not key.startswith("interaction_")
+            key: value
+            for key, value in row.items()
+            if not _is_sparse_component_key(key) and not key.startswith("interaction_")
         }
     if feature_profile == "geometry":
         return {
-            key: value for key, value in row.items()
+            key: value
+            for key, value in row.items()
             if not _is_sparse_component_key(key)
             or any(part in key for part in PROFILE_GEOMETRY_INCLUDE_PARTS)
         }
     if feature_profile == "opponent-parity":
         return {
-            key: value for key, value in row.items()
+            key: value
+            for key, value in row.items()
             if key.startswith(("build_", "opponent_"))
             and not _is_sparse_component_key(key)
             and not key.startswith("interaction_")
         }
     if feature_profile == "sparse-component":
         return {
-            key: value for key, value in row.items()
+            key: value
+            for key, value in row.items()
             if _is_sparse_component_key(key)
-            or (
-                not _is_sparse_component_key(key)
-                and not key.startswith("interaction_")
-            )
+            or (not _is_sparse_component_key(key) and not key.startswith("interaction_"))
         }
     return {
-        key: value for key, value in row.items()
+        key: value
+        for key, value in row.items()
         if key.startswith(PROFILE_SPARSE_CROSS_INCLUDE_PREFIXES)
         or _is_sparse_component_key(key)
         or not _is_sparse_component_key(key)
@@ -606,7 +652,6 @@ def filter_feature_profile(
 
 
 def _is_sparse_component_key(key: str) -> bool:
-    return (
-        PER_SLOT_FEATURE_RE.match(key) is not None
-        or any(part in key for part in PROFILE_SPARSE_COMPONENT_INCLUDE_PARTS)
+    return PER_SLOT_FEATURE_RE.match(key) is not None or any(
+        part in key for part in PROFILE_SPARSE_COMPONENT_INCLUDE_PARTS
     )

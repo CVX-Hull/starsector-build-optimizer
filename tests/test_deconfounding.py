@@ -11,7 +11,6 @@ from starsector_optimizer.models import EBShrinkageConfig, TWFEConfig
 
 
 class TestTWFEConfig:
-
     def test_frozen(self):
         """TWFEConfig is a frozen dataclass."""
         config = TWFEConfig()
@@ -33,7 +32,6 @@ class TestTWFEConfig:
 
 
 class TestTWFEDecompose:
-
     def test_known_values(self):
         """Recover known alpha + beta from a fully-observed 3x3 matrix."""
         from starsector_optimizer.deconfounding import twfe_decompose
@@ -54,11 +52,13 @@ class TestTWFEDecompose:
         """NaN entries produce reasonable decomposition."""
         from starsector_optimizer.deconfounding import twfe_decompose
 
-        Y = np.array([
-            [1.0, np.nan, 0.5],
-            [np.nan, 2.0, 1.5],
-            [0.0, 1.0, np.nan],
-        ])
+        Y = np.array(
+            [
+                [1.0, np.nan, 0.5],
+                [np.nan, 2.0, 1.5],
+                [0.0, 1.0, np.nan],
+            ]
+        )
         alpha, beta = twfe_decompose(Y)
         # Should not crash, should produce finite values
         assert np.all(np.isfinite(alpha))
@@ -81,11 +81,13 @@ class TestTWFEDecompose:
         """All-NaN column doesn't cause division by zero."""
         from starsector_optimizer.deconfounding import twfe_decompose
 
-        Y = np.array([
-            [1.0, np.nan],
-            [2.0, np.nan],
-            [3.0, np.nan],
-        ])
+        Y = np.array(
+            [
+                [1.0, np.nan],
+                [2.0, np.nan],
+                [3.0, np.nan],
+            ]
+        )
         alpha, beta = twfe_decompose(Y, ridge=0.01)
         assert np.all(np.isfinite(alpha))
         assert np.all(np.isfinite(beta))
@@ -95,7 +97,6 @@ class TestTWFEDecompose:
 
 
 class TestTrimmedAlpha:
-
     def test_drops_worst(self):
         """Trimming drops the lowest residuals."""
         from starsector_optimizer.deconfounding import trimmed_alpha
@@ -162,7 +163,6 @@ class TestTrimmedAlpha:
 
 
 class TestScoreMatrix:
-
     def test_record_round_trip(self):
         """Record scores and retrieve build alpha."""
         from starsector_optimizer.deconfounding import ScoreMatrix
@@ -266,7 +266,6 @@ class TestScoreMatrix:
 
 
 class TestBuildSigmaSq:
-
     def test_raises_before_decompose(self):
         """build_sigma_sq raises ValueError before any build_alpha() call."""
         from starsector_optimizer.deconfounding import ScoreMatrix
@@ -324,7 +323,6 @@ class TestBuildSigmaSq:
 
 
 class TestEBShrinkage:
-
     def _make_synthetic(self, n=50, p=3, tau=0.5, sigma=0.1, seed=0):
         """Generate (alpha_hat, sigma_sq, X, alpha_true) from a 2-level Gaussian model."""
         rng = np.random.default_rng(seed)
@@ -333,7 +331,7 @@ class TestEBShrinkage:
         # After in-function standardization: X has mean 0, std 1 columnwise in expectation
         mu_true = X @ gamma[1:] + gamma[0]
         alpha_true = mu_true + rng.normal(scale=tau, size=n)
-        sigma_sq = np.full(n, sigma ** 2)
+        sigma_sq = np.full(n, sigma**2)
         alpha_hat = alpha_true + rng.normal(scale=sigma, size=n)
         return alpha_hat, sigma_sq, X, alpha_true
 
@@ -343,7 +341,11 @@ class TestEBShrinkage:
 
         # High sigma / moderate tau — EB should pull toward prior
         alpha_hat, sigma_sq, X, alpha_true = self._make_synthetic(
-            n=100, p=3, tau=0.5, sigma=1.0, seed=42,
+            n=100,
+            p=3,
+            tau=0.5,
+            sigma=1.0,
+            seed=42,
         )
         cfg = EBShrinkageConfig()
         alpha_eb, _gamma, tau2, kept = eb_shrinkage(alpha_hat, sigma_sq, X, cfg)
@@ -378,7 +380,10 @@ class TestEBShrinkage:
         X = rng.normal(size=(n, 3))
 
         alpha_eb, gamma, _, _ = eb_shrinkage(
-            alpha_hat, sigma_sq, X, EBShrinkageConfig(),
+            alpha_hat,
+            sigma_sq,
+            X,
+            EBShrinkageConfig(),
         )
 
         # α̂_EB should be on the fitted line (near the regression prior)
@@ -420,7 +425,10 @@ class TestEBShrinkage:
 
         with pytest.warns(UserWarning, match="zero-std|dropped"):
             alpha_eb, gamma, _, kept = eb_shrinkage(
-                alpha_hat, sigma_sq, X, EBShrinkageConfig(),
+                alpha_hat,
+                sigma_sq,
+                X,
+                EBShrinkageConfig(),
             )
 
         assert 2 not in kept
@@ -475,7 +483,10 @@ class TestEBShrinkage:
 
         with pytest.warns(UserWarning):
             alpha_eb, _, tau2, _ = eb_shrinkage(
-                alpha_hat, sigma_sq, X, EBShrinkageConfig(),
+                alpha_hat,
+                sigma_sq,
+                X,
+                EBShrinkageConfig(),
             )
         np.testing.assert_allclose(alpha_eb, alpha_hat)
         assert tau2 == 0.0
@@ -485,7 +496,6 @@ class TestEBShrinkage:
 
 
 class TestTripleGoalRank:
-
     def test_preserves_rank_of_posterior(self):
         """α̂_EBT has identical rank ordering to α̂_EB."""
         from starsector_optimizer.deconfounding import triple_goal_rank

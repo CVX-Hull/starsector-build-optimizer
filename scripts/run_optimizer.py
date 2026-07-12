@@ -14,7 +14,10 @@ from typing import TypedDict
 
 from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.models import (
-    EBShrinkageConfig, REGIME_PRESETS, ShapeConfig, TWFEConfig,
+    EBShrinkageConfig,
+    REGIME_PRESETS,
+    ShapeConfig,
+    TWFEConfig,
 )
 from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
@@ -29,10 +32,10 @@ from starsector_optimizer.optimizer import OptimizerConfig, optimize_hull
 # args would require StudyConfig + campaign.py wire-through. Unset → use the
 # OptimizerConfig defaults; set → override the matching frozen-dataclass field.
 _ABLATION_ENV_VARS = (
-    "STARSECTOR_EB_MIN_BUILDS",      # C0a/C0b: set to sim_budget+1 to disable EB
+    "STARSECTOR_EB_MIN_BUILDS",  # C0a/C0b: set to sim_budget+1 to disable EB
     "STARSECTOR_SHAPE_MIN_SAMPLES",  # C1: set to sim_budget+1 to disable Box-Cox A3
-    "STARSECTOR_TWFE_TRIM_WORST",    # C0a: set to 0 to disable scalar-CV trimming
-    "STARSECTOR_WARM_START_N",       # C3: set to 50 to enable heuristic warm-start
+    "STARSECTOR_TWFE_TRIM_WORST",  # C0a: set to 0 to disable scalar-CV trimming
+    "STARSECTOR_WARM_START_N",  # C3: set to 50 to enable heuristic warm-start
 )
 
 
@@ -71,8 +74,10 @@ def _install_signal_handlers() -> None:
 
     SIGINT already raises KeyboardInterrupt by default (Ctrl-C works).
     """
+
     def handler(signum, _frame):
         raise KeyboardInterrupt(f"received signal {signum}")
+
     signal.signal(signal.SIGTERM, handler)
     signal.signal(signal.SIGHUP, handler)
 
@@ -80,51 +85,94 @@ def _install_signal_handlers() -> None:
 def main():
     parser = argparse.ArgumentParser(description="Optimize a ship build")
     parser.add_argument("--hull", required=True, help="Hull ID to optimize (e.g. wolf, eagle)")
-    parser.add_argument("--game-dir", required=True, type=Path, help="Path to Starsector installation")
+    parser.add_argument(
+        "--game-dir", required=True, type=Path, help="Path to Starsector installation"
+    )
     parser.add_argument("--num-instances", type=int, default=2, help="Parallel game instances")
     parser.add_argument("--sim-budget", type=int, default=50, help="Number of build evaluations")
-    parser.add_argument("--study-db", type=str, default=None, help="SQLite path for study persistence")
-    parser.add_argument("--sampler", choices=["tpe"], default="tpe",
-                        help="Optimization sampler: tpe (only option on this "
-                             "codebase; see optimizer.py docstring)")
-    parser.add_argument("--heuristic-only", action="store_true",
-                        help="Use heuristic score instead of simulation (for testing)")
-    parser.add_argument("--analyze-importance", action="store_true",
-                        help="Run fANOVA importance analysis on existing study and exit")
-    parser.add_argument("--active-opponents", type=int, default=10,
-                        help="Max opponents per build (default 10, selects top-K from pool)")
-    parser.add_argument("--fix-params", type=Path, default=None,
-                        help="JSON file mapping param names to fixed values")
-    parser.add_argument("--regime", choices=list(REGIME_PRESETS.keys()), default="early",
-                        help="Loadout regime. Filters hullmods/weapons by component "
-                             "availability. Default 'early' is the most conservative "
-                             "filter (tier<=1, no rare blueprints); opt up with "
-                             "'mid'/'late'/'endgame' as the save's unlocked inventory "
-                             "grows. See docs/reference/phase5f-*.md.")
-    parser.add_argument("--warm-start-from-regime",
-                        choices=list(REGIME_PRESETS.keys()), default=None,
-                        help="Name of a prior regime whose top trials will be "
-                             "enqueued as warm-start seeds. Requires the prior "
-                             "study to exist in the same --study-db. Typos fail "
-                             "at argparse rather than at study-load time.")
-    parser.add_argument("--worker-pool", choices=["local", "cloud"], default="local",
-                        help="Where workers live. 'local' uses LocalInstancePool "
-                             "(JVMs on this host); 'cloud' uses CloudWorkerPool "
-                             "(workstation-as-orchestrator, AWS spot VMs; see "
-                             "docs/specs/22-cloud-deployment.md).")
-    parser.add_argument("--campaign-config", type=Path, default=None,
-                        help="Campaign YAML path. Required when --worker-pool=cloud.")
-    parser.add_argument("--study-idx", type=int, default=0,
-                        help="Study index within the campaign (indexes "
-                             "campaign.studies[]). Required when --worker-pool=cloud.")
-    parser.add_argument("--seed-idx", type=int, default=0,
-                        help="Seed index within the selected study's seeds tuple. "
-                             "Required when --worker-pool=cloud; avoids the "
-                             "flat-idx bug when a study has >1 seed.")
+    parser.add_argument(
+        "--study-db", type=str, default=None, help="SQLite path for study persistence"
+    )
+    parser.add_argument(
+        "--sampler",
+        choices=["tpe"],
+        default="tpe",
+        help="Optimization sampler: tpe (only option on this codebase; see optimizer.py docstring)",
+    )
+    parser.add_argument(
+        "--heuristic-only",
+        action="store_true",
+        help="Use heuristic score instead of simulation (for testing)",
+    )
+    parser.add_argument(
+        "--analyze-importance",
+        action="store_true",
+        help="Run fANOVA importance analysis on existing study and exit",
+    )
+    parser.add_argument(
+        "--active-opponents",
+        type=int,
+        default=10,
+        help="Max opponents per build (default 10, selects top-K from pool)",
+    )
+    parser.add_argument(
+        "--fix-params",
+        type=Path,
+        default=None,
+        help="JSON file mapping param names to fixed values",
+    )
+    parser.add_argument(
+        "--regime",
+        choices=list(REGIME_PRESETS.keys()),
+        default="early",
+        help="Loadout regime. Filters hullmods/weapons by component "
+        "availability. Default 'early' is the most conservative "
+        "filter (tier<=1, no rare blueprints); opt up with "
+        "'mid'/'late'/'endgame' as the save's unlocked inventory "
+        "grows. See docs/reference/phase5f-*.md.",
+    )
+    parser.add_argument(
+        "--warm-start-from-regime",
+        choices=list(REGIME_PRESETS.keys()),
+        default=None,
+        help="Name of a prior regime whose top trials will be "
+        "enqueued as warm-start seeds. Requires the prior "
+        "study to exist in the same --study-db. Typos fail "
+        "at argparse rather than at study-load time.",
+    )
+    parser.add_argument(
+        "--worker-pool",
+        choices=["local", "cloud"],
+        default="local",
+        help="Where workers live. 'local' uses LocalInstancePool "
+        "(JVMs on this host); 'cloud' uses CloudWorkerPool "
+        "(workstation-as-orchestrator, AWS spot VMs; see "
+        "docs/specs/22-cloud-deployment.md).",
+    )
+    parser.add_argument(
+        "--campaign-config",
+        type=Path,
+        default=None,
+        help="Campaign YAML path. Required when --worker-pool=cloud.",
+    )
+    parser.add_argument(
+        "--study-idx",
+        type=int,
+        default=0,
+        help="Study index within the campaign (indexes "
+        "campaign.studies[]). Required when --worker-pool=cloud.",
+    )
+    parser.add_argument(
+        "--seed-idx",
+        type=int,
+        default=0,
+        help="Seed index within the selected study's seeds tuple. "
+        "Required when --worker-pool=cloud; avoids the "
+        "flat-idx bug when a study has >1 seed.",
+    )
     args = parser.parse_args()
 
-    if (args.warm_start_from_regime is not None
-            and args.warm_start_from_regime == args.regime):
+    if args.warm_start_from_regime is not None and args.warm_start_from_regime == args.regime:
         parser.error(
             f"--warm-start-from-regime={args.warm_start_from_regime} "
             f"cannot equal --regime={args.regime} (self-seeding is handled "
@@ -149,7 +197,9 @@ def main():
     )
 
     if args.hull not in game_data.hulls:
-        print(f"Error: hull '{args.hull}' not found. Available: {sorted(game_data.hulls.keys())[:10]}...")
+        print(
+            f"Error: hull '{args.hull}' not found. Available: {sorted(game_data.hulls.keys())[:10]}..."
+        )
         sys.exit(1)
 
     hull = game_data.hulls[args.hull]
@@ -163,6 +213,7 @@ def main():
     fixed_params = None
     if args.fix_params:
         import json
+
         with open(args.fix_params) as f:
             fixed_params = json.load(f)
         if not isinstance(fixed_params, dict):
@@ -177,8 +228,10 @@ def main():
             sys.exit(1)
         import optuna
         from starsector_optimizer.importance import analyze_importance, print_importance_report
+
         study = optuna.load_study(
-            study_name=f"{args.hull}__{args.regime}", storage=storage,
+            study_name=f"{args.hull}__{args.regime}",
+            storage=storage,
         )
         result = analyze_importance(study)
         print(print_importance_report(result))
@@ -197,9 +250,12 @@ def main():
     if args.worker_pool == "cloud":
         from starsector_optimizer.campaign import load_campaign_config
         from starsector_optimizer.cloud_runner import resolve_study_id
+
         _campaign = load_campaign_config(args.campaign_config)
         eval_log_subdir = resolve_study_id(
-            _campaign, args.study_idx, args.seed_idx,
+            _campaign,
+            args.study_idx,
+            args.seed_idx,
         )
         # Include the campaign name as a parent directory so two ablation
         # cells with the same {hull, regime, sampler, seed} combination
@@ -211,9 +267,7 @@ def main():
     else:
         # Local runs have no campaign YAML / seeds tuple; keep the seed_idx
         # form for backwards-compat with existing single-hull dev workflow.
-        eval_log_dirname = (
-            f"{args.hull}__{args.regime}__{args.sampler}__seed_idx{args.seed_idx}"
-        )
+        eval_log_dirname = f"{args.hull}__{args.regime}__{args.sampler}__seed_idx{args.seed_idx}"
         eval_log_dir = Path(f"data/logs/{eval_log_dirname}")
     eval_log_dir.mkdir(parents=True, exist_ok=True)
     eval_log_path = eval_log_dir / "evaluation_log.jsonl"
@@ -242,12 +296,16 @@ def main():
         print("Heuristic-only mode: warm-start only, no simulation.")
         import optuna
         from starsector_optimizer.optimizer import (
-            _enqueue_warm_start_from_regime, warm_start,
+            _enqueue_warm_start_from_regime,
+            warm_start,
         )
         from starsector_optimizer.search_space import build_search_space
+
         study = optuna.create_study(
-            direction="maximize", storage=storage,
-            study_name=f"{args.hull}__{args.regime}", load_if_exists=True,
+            direction="maximize",
+            storage=storage,
+            study_name=f"{args.hull}__{args.regime}",
+            load_if_exists=True,
         )
         if args.warm_start_from_regime is not None:
             if storage is None:
@@ -275,6 +333,7 @@ def main():
         if args.campaign_config is None:
             parser.error("--worker-pool=cloud requires --campaign-config")
         from starsector_optimizer.cloud_runner import run_cloud_study
+
         try:
             study = run_cloud_study(
                 campaign_yaml_path=args.campaign_config,
@@ -301,7 +360,12 @@ def main():
         try:
             with LocalInstancePool(instance_config) as pool:
                 study = optimize_hull(
-                    args.hull, game_data, pool, opponent_pool, config, manifest,
+                    args.hull,
+                    game_data,
+                    pool,
+                    opponent_pool,
+                    config,
+                    manifest,
                     game_dir=args.game_dir,
                 )
         except KeyboardInterrupt:
@@ -331,10 +395,12 @@ def _print_results(study, hull_id: str, game_data=None, manifest=None):
     completed = [t for t in all_trials if t.state == TrialState.COMPLETE]
     pruned = [t for t in all_trials if t.state == TrialState.PRUNED]
     trials = sorted(completed, key=lambda t: t.value or 0, reverse=True)
-    print(f"\n{'='*60}")
-    print(f"Top 10 builds for {hull_id} ({len(completed)} completed, "
-          f"{len(pruned)} pruned, {len(all_trials)} total)")
-    print(f"{'='*60}")
+    print(f"\n{'=' * 60}")
+    print(
+        f"Top 10 builds for {hull_id} ({len(completed)} completed, "
+        f"{len(pruned)} pruned, {len(all_trials)} total)"
+    )
+    print(f"{'=' * 60}")
     for i, trial in enumerate(trials[:10]):
         if game_data and manifest and hull_id in game_data.hulls:
             hull = game_data.hulls[hull_id]
@@ -344,13 +410,17 @@ def _print_results(study, hull_id: str, game_data=None, manifest=None):
             mods = sorted(build.hullmods)
             vents, caps = build.flux_vents, build.flux_capacitors
         else:
-            weapons = {k: v for k, v in trial.params.items()
-                       if k.startswith("weapon_") and v != "empty"}
-            mods = sorted(k.removeprefix("hullmod_") for k, v in trial.params.items()
-                          if k.startswith("hullmod_") and v is True)
+            weapons = {
+                k: v for k, v in trial.params.items() if k.startswith("weapon_") and v != "empty"
+            }
+            mods = sorted(
+                k.removeprefix("hullmod_")
+                for k, v in trial.params.items()
+                if k.startswith("hullmod_") and v is True
+            )
             vents = trial.params.get("flux_vents", 0)
             caps = trial.params.get("flux_capacitors", 0)
-        print(f"\n#{i+1} fitness={trial.value:.4f}")
+        print(f"\n#{i + 1} fitness={trial.value:.4f}")
         print(f"  Weapons: {', '.join(f'{k}={v}' for k, v in sorted(weapons.items()))}")
         print(f"  Hullmods: {', '.join(mods)}")
         print(f"  Vents={vents}, Caps={caps}")

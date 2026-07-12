@@ -104,32 +104,34 @@ def parse_ship_csv(csv_path: Path) -> list[ShipHull]:
         if shield_type is None:
             shield_type = ShieldType.NONE
 
-        hulls.append(ShipHull(
-            id=row.get("id", "").strip(),
-            name=row.get("name", "").strip(),
-            hull_size=hull_size,
-            designation=row.get("designation", "").strip(),
-            tech_manufacturer=row.get("tech/manufacturer", "").strip(),
-            system_id=row.get("system id", "").strip(),
-            fleet_pts=_safe_int(row.get("fleet pts")),
-            hitpoints=_safe_float(row.get("hitpoints")),
-            armor_rating=_safe_float(row.get("armor rating")),
-            max_flux=_safe_float(row.get("max flux")),
-            flux_dissipation=_safe_float(row.get("flux dissipation")),
-            ordnance_points=_safe_int(row.get("ordnance points")),
-            fighter_bays=_safe_int(row.get("fighter bays")),
-            max_speed=_safe_float(row.get("max speed")),
-            shield_type=shield_type,
-            shield_arc=_safe_float(row.get("shield arc")),
-            shield_upkeep=_safe_float(row.get("shield upkeep")),
-            shield_efficiency=_safe_float(row.get("shield efficiency")),
-            phase_cost=_safe_float(row.get("phase cost")),
-            phase_upkeep=_safe_float(row.get("phase upkeep")),
-            peak_cr_sec=_safe_float(row.get("peak CR sec")),
-            cr_loss_per_sec=_safe_float(row.get("CR loss/sec")),
-            hints=_parse_tags(row.get("hints")),
-            tags=_parse_tags(row.get("tags")),
-        ))
+        hulls.append(
+            ShipHull(
+                id=row.get("id", "").strip(),
+                name=row.get("name", "").strip(),
+                hull_size=hull_size,
+                designation=row.get("designation", "").strip(),
+                tech_manufacturer=row.get("tech/manufacturer", "").strip(),
+                system_id=row.get("system id", "").strip(),
+                fleet_pts=_safe_int(row.get("fleet pts")),
+                hitpoints=_safe_float(row.get("hitpoints")),
+                armor_rating=_safe_float(row.get("armor rating")),
+                max_flux=_safe_float(row.get("max flux")),
+                flux_dissipation=_safe_float(row.get("flux dissipation")),
+                ordnance_points=_safe_int(row.get("ordnance points")),
+                fighter_bays=_safe_int(row.get("fighter bays")),
+                max_speed=_safe_float(row.get("max speed")),
+                shield_type=shield_type,
+                shield_arc=_safe_float(row.get("shield arc")),
+                shield_upkeep=_safe_float(row.get("shield upkeep")),
+                shield_efficiency=_safe_float(row.get("shield efficiency")),
+                phase_cost=_safe_float(row.get("phase cost")),
+                phase_upkeep=_safe_float(row.get("phase upkeep")),
+                peak_cr_sec=_safe_float(row.get("peak CR sec")),
+                cr_loss_per_sec=_safe_float(row.get("CR loss/sec")),
+                hints=_parse_tags(row.get("hints")),
+                tags=_parse_tags(row.get("tags")),
+            )
+        )
     return hulls
 
 
@@ -164,13 +166,15 @@ def parse_engine_slots(raw_slots) -> tuple[EngineSlot, ...]:
         if not isinstance(raw, dict):
             logger.debug("Skipping malformed engine slot: %r", raw)
             continue
-        slots.append(EngineSlot(
-            angle=_safe_float(raw.get("angle")),
-            location=_tuple_float_pair(raw.get("location")),
-            length=_safe_float(raw.get("length")),
-            width=_safe_float(raw.get("width")),
-            style=str(raw.get("style", "") or ""),
-        ))
+        slots.append(
+            EngineSlot(
+                angle=_safe_float(raw.get("angle")),
+                location=_tuple_float_pair(raw.get("location")),
+                length=_safe_float(raw.get("length")),
+                width=_safe_float(raw.get("width")),
+                style=str(raw.get("style", "") or ""),
+            )
+        )
     return tuple(slots)
 
 
@@ -219,19 +223,22 @@ def merge_ship_hull_data(hulls: list[ShipHull], ship_dir: Path) -> list[ShipHull
             ss = SlotSize.from_str(ws.get("size", ""))
             mt = MountType.from_str(ws.get("mount", ""))
             if st is None or ss is None or mt is None:
-                logger.debug("Skipping weapon slot %s in %s (unknown type/size/mount)",
-                               ws.get("id"), hull.id)
+                logger.debug(
+                    "Skipping weapon slot %s in %s (unknown type/size/mount)", ws.get("id"), hull.id
+                )
                 continue
             loc = ws.get("locations", [0, 0])
-            slots.append(WeaponSlot(
-                id=ws.get("id", ""),
-                slot_type=st,
-                slot_size=ss,
-                mount_type=mt,
-                angle=_safe_float(ws.get("angle")),
-                arc=_safe_float(ws.get("arc")),
-                position=_tuple_float_pair(loc),
-            ))
+            slots.append(
+                WeaponSlot(
+                    id=ws.get("id", ""),
+                    slot_type=st,
+                    slot_size=ss,
+                    mount_type=mt,
+                    angle=_safe_float(ws.get("angle")),
+                    arc=_safe_float(ws.get("arc")),
+                    position=_tuple_float_pair(loc),
+                )
+            )
         hull.weapon_slots = slots
         hull.built_in_mods = ship_data.get("builtInMods", [])
         hull.built_in_weapons = ship_data.get("builtInWeapons", {})
@@ -248,22 +255,24 @@ def parse_wing_csv(csv_path: Path) -> list[Wing]:
         wid = row.get("id", "").strip()
         if not wid:
             continue
-        wings.append(Wing(
-            id=wid,
-            variant=row.get("variant", "").strip(),
-            tags=tuple(_parse_tags(row.get("tags"))),
-            tier=_safe_int(row.get("tier")),
-            fleet_points=_safe_int(row.get("fleet pts")),
-            op_cost=_safe_int(row.get("op cost")),
-            formation=row.get("formation", "").strip(),
-            range=_safe_float(row.get("range")),
-            attack_run_range=_safe_float(row.get("attackRunRange")),
-            attack_position_offset=_safe_float(row.get("attackPositionOffset")),
-            num=_safe_int(row.get("num")),
-            role=row.get("role", "").strip(),
-            role_desc=row.get("role desc", "").strip(),
-            refit=_safe_float(row.get("refit")),
-        ))
+        wings.append(
+            Wing(
+                id=wid,
+                variant=row.get("variant", "").strip(),
+                tags=tuple(_parse_tags(row.get("tags"))),
+                tier=_safe_int(row.get("tier")),
+                fleet_points=_safe_int(row.get("fleet pts")),
+                op_cost=_safe_int(row.get("op cost")),
+                formation=row.get("formation", "").strip(),
+                range=_safe_float(row.get("range")),
+                attack_run_range=_safe_float(row.get("attackRunRange")),
+                attack_position_offset=_safe_float(row.get("attackPositionOffset")),
+                num=_safe_int(row.get("num")),
+                role=row.get("role", "").strip(),
+                role_desc=row.get("role desc", "").strip(),
+                refit=_safe_float(row.get("refit")),
+            )
+        )
     return wings
 
 
@@ -310,30 +319,32 @@ def parse_weapon_csv(csv_path: Path, wpn_dir: Path) -> list[Weapon]:
             logger.debug("Skipping weapon %s: missing weapon_type or size", wid)
             continue
 
-        weapons.append(Weapon(
-            id=wid,
-            name=row.get("name", "").strip(),
-            size=size,
-            weapon_type=weapon_type,
-            damage_per_shot=_safe_float(row.get("damage/shot")),
-            damage_per_second=_safe_float(row.get("damage/second")),
-            damage_type=damage_type,
-            emp=_safe_float(row.get("emp")),
-            flux_per_shot=_safe_float(row.get("energy/shot")),
-            flux_per_second=_safe_float(row.get("energy/second")),
-            range=_safe_float(row.get("range")),
-            op_cost=_safe_int(row.get("OPs")),
-            chargeup=_safe_float(row.get("chargeup")),
-            chargedown=_safe_float(row.get("chargedown")),
-            burst_size=_safe_int(row.get("burst size"), 1),
-            burst_delay=_safe_float(row.get("burst delay")),
-            ammo=_safe_int(row.get("ammo")),
-            ammo_per_sec=_safe_float(row.get("ammo/sec")),
-            proj_speed=_safe_float(row.get("proj speed")),
-            turn_rate=_safe_float(row.get("turn rate")),
-            hints=_parse_tags(row.get("hints")),
-            tags=_parse_tags(row.get("tags")),
-        ))
+        weapons.append(
+            Weapon(
+                id=wid,
+                name=row.get("name", "").strip(),
+                size=size,
+                weapon_type=weapon_type,
+                damage_per_shot=_safe_float(row.get("damage/shot")),
+                damage_per_second=_safe_float(row.get("damage/second")),
+                damage_type=damage_type,
+                emp=_safe_float(row.get("emp")),
+                flux_per_shot=_safe_float(row.get("energy/shot")),
+                flux_per_second=_safe_float(row.get("energy/second")),
+                range=_safe_float(row.get("range")),
+                op_cost=_safe_int(row.get("OPs")),
+                chargeup=_safe_float(row.get("chargeup")),
+                chargedown=_safe_float(row.get("chargedown")),
+                burst_size=_safe_int(row.get("burst size"), 1),
+                burst_delay=_safe_float(row.get("burst delay")),
+                ammo=_safe_int(row.get("ammo")),
+                ammo_per_sec=_safe_float(row.get("ammo/sec")),
+                proj_speed=_safe_float(row.get("proj speed")),
+                turn_rate=_safe_float(row.get("turn rate")),
+                hints=_parse_tags(row.get("hints")),
+                tags=_parse_tags(row.get("tags")),
+            )
+        )
     return weapons
 
 
@@ -352,19 +363,21 @@ def parse_hullmod_csv(csv_path: Path) -> list[HullMod]:
             continue
         hidden = row.get("hidden", "").strip().lower() in ("true", "1")
         hidden_everywhere = row.get("hiddenEverywhere", "").strip().lower() in ("true", "1")
-        mods.append(HullMod(
-            id=mid,
-            name=row.get("name", "").strip(),
-            tier=_safe_int(row.get("tier")),
-            tags=_parse_tags(row.get("tags")),
-            ui_tags=_parse_tags(row.get("uiTags")),
-            cost_frigate=_safe_int(row.get("cost_frigate")),
-            cost_destroyer=_safe_int(row.get("cost_dest")),
-            cost_cruiser=_safe_int(row.get("cost_cruiser")),
-            cost_capital=_safe_int(row.get("cost_capital")),
-            is_hidden=hidden or hidden_everywhere,
-            script=row.get("script", "").strip(),
-        ))
+        mods.append(
+            HullMod(
+                id=mid,
+                name=row.get("name", "").strip(),
+                tier=_safe_int(row.get("tier")),
+                tags=_parse_tags(row.get("tags")),
+                ui_tags=_parse_tags(row.get("uiTags")),
+                cost_frigate=_safe_int(row.get("cost_frigate")),
+                cost_destroyer=_safe_int(row.get("cost_dest")),
+                cost_cruiser=_safe_int(row.get("cost_cruiser")),
+                cost_capital=_safe_int(row.get("cost_capital")),
+                is_hidden=hidden or hidden_everywhere,
+                script=row.get("script", "").strip(),
+            )
+        )
     return mods
 
 
@@ -404,9 +417,11 @@ def load_game_data(game_dir: Path) -> GameData:
     logger.info(
         "Loaded game data: %d hulls (%d with weapon slots), "
         "%d weapons, %d hullmods (%d hidden), %d wings",
-        len(game_data.hulls), hulls_with_slots,
+        len(game_data.hulls),
+        hulls_with_slots,
         len(game_data.weapons),
-        len(game_data.hullmods), hidden_mods,
+        len(game_data.hullmods),
+        hidden_mods,
         len(game_data.wings),
     )
 

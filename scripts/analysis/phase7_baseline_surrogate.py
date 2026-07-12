@@ -144,21 +144,33 @@ class PredictionResult:
 
 
 class BaselineModel(Protocol):
-    def fit(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]], targets: np.ndarray) -> None:
-        ...
+    def fit(
+        self,
+        rows: Sequence[Row],
+        records: Sequence[Mapping[str, FeatureValue]],
+        targets: np.ndarray,
+    ) -> None: ...
 
-    def predict(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]) -> PredictionResult:
-        ...
+    def predict(
+        self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]
+    ) -> PredictionResult: ...
 
 
 class GlobalMeanModel:
     def __init__(self) -> None:
         self.mean = 0.0
 
-    def fit(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]], targets: np.ndarray) -> None:
+    def fit(
+        self,
+        rows: Sequence[Row],
+        records: Sequence[Mapping[str, FeatureValue]],
+        targets: np.ndarray,
+    ) -> None:
         self.mean = float(np.mean(targets))
 
-    def predict(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]) -> PredictionResult:
+    def predict(
+        self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]
+    ) -> PredictionResult:
         return PredictionResult(np.full(len(rows), self.mean), {})
 
 
@@ -175,7 +187,12 @@ class GroupMeanModel:
             return row.opponent_variant_id
         raise ValueError(f"unknown group {self.group_name!r}")
 
-    def fit(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]], targets: np.ndarray) -> None:
+    def fit(
+        self,
+        rows: Sequence[Row],
+        records: Sequence[Mapping[str, FeatureValue]],
+        targets: np.ndarray,
+    ) -> None:
         self.global_mean = float(np.mean(targets))
         sums: dict[str, float] = defaultdict(float)
         counts: dict[str, int] = defaultdict(int)
@@ -185,7 +202,9 @@ class GroupMeanModel:
             counts[group] += 1
         self.group_means = {key: sums[key] / counts[key] for key in sums}
 
-    def predict(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]) -> PredictionResult:
+    def predict(
+        self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]
+    ) -> PredictionResult:
         fallback_count = 0
         preds: list[float] = []
         for row in rows:
@@ -207,7 +226,12 @@ class TwfeAdditiveModel:
         self.build_effects: dict[str, float] = {}
         self.opponent_effects: dict[str, float] = {}
 
-    def fit(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]], targets: np.ndarray) -> None:
+    def fit(
+        self,
+        rows: Sequence[Row],
+        records: Sequence[Mapping[str, FeatureValue]],
+        targets: np.ndarray,
+    ) -> None:
         self.global_mean = float(np.mean(targets))
         build_sums: dict[str, float] = defaultdict(float)
         build_counts: dict[str, int] = defaultdict(int)
@@ -223,7 +247,9 @@ class TwfeAdditiveModel:
         self.build_effects = {key: build_sums[key] / build_counts[key] for key in build_sums}
         self.opponent_effects = {key: opp_sums[key] / opp_counts[key] for key in opp_sums}
 
-    def predict(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]) -> PredictionResult:
+    def predict(
+        self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]
+    ) -> PredictionResult:
         build_fallback_count = 0
         opponent_fallback_count = 0
         preds: list[float] = []
@@ -253,17 +279,22 @@ class PipelineModel:
     def __init__(self, pipeline: Pipeline) -> None:
         self.pipeline = pipeline
 
-    def fit(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]], targets: np.ndarray) -> None:
+    def fit(
+        self,
+        rows: Sequence[Row],
+        records: Sequence[Mapping[str, FeatureValue]],
+        targets: np.ndarray,
+    ) -> None:
         self.pipeline.fit(list(records), targets)
 
-    def predict(self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]) -> PredictionResult:
+    def predict(
+        self, rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]]
+    ) -> PredictionResult:
         return PredictionResult(np.asarray(self.pipeline.predict(list(records)), dtype=float), {})
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Fit comparator-gate Phase 7 matchup baselines."
-    )
+    parser = argparse.ArgumentParser(description="Fit comparator-gate Phase 7 matchup baselines.")
     parser.add_argument("db_path", type=Path)
     parser.add_argument("--game-dir", type=Path, default=Path("game/starsector"))
     parser.add_argument("--split", choices=(*SPLIT_CHOICES, "all"), default="build")
@@ -275,7 +306,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ridge-alpha", type=float, default=DEFAULT_RIDGE_ALPHA)
     parser.add_argument("--top-k", default=",".join(str(item) for item in DEFAULT_TOP_K_VALUES))
     parser.add_argument("--max-rows", type=int, default=None)
-    parser.add_argument("--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE)
+    parser.add_argument(
+        "--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE
+    )
     parser.add_argument("--noise-floor-override", type=float, default=None)
     parser.add_argument(
         "--bootstrap-resamples", type=int, default=EvalMetricsConfig().bootstrap_resamples
@@ -312,7 +345,7 @@ def _split_rows(
     build_lookup = {item.build_key: item.build for item in load_recovered_builds(config.db_path)}
     rows = list(load_training_matchups(config.db_path))
     if config.max_rows is not None:
-        rows = rows[:config.max_rows]
+        rows = rows[: config.max_rows]
     rows = [row for row in rows if row.build_key in build_lookup]
     extras: dict[str, object] = {}
     if config.split == "build":
@@ -367,8 +400,7 @@ def opponent_group_maps(
         missing = [field for field in family_fields if field not in features]
         if missing:
             raise ValueError(
-                f"opponent variant {variant_id!r} is missing family field(s): "
-                f"{', '.join(missing)}"
+                f"opponent variant {variant_id!r} is missing family field(s): {', '.join(missing)}"
             )
         hull_by_variant[variant_id] = hull_id
         family_by_variant[variant_id] = ":".join(str(features[field]) for field in family_fields)
@@ -502,9 +534,7 @@ def component_overlap_diagnostics(
             train_combos.update(_k_combinations(_component_tokens(build), k))
         for build in test_builds:
             test_combos.update(_k_combinations(_component_tokens(build), k))
-        diagnostics[f"k_{k}_component_combinations"] = _overlap_summary(
-            train_combos, test_combos
-        )
+        diagnostics[f"k_{k}_component_combinations"] = _overlap_summary(train_combos, test_combos)
     return diagnostics
 
 
@@ -566,8 +596,16 @@ def split_overlap_counts(
             },
         ),
         "hull_id": _overlap_count(
-            {build_lookup[row.build_key].hull_id for row in train_rows if row.build_key in build_lookup},
-            {build_lookup[row.build_key].hull_id for row in test_rows if row.build_key in build_lookup},
+            {
+                build_lookup[row.build_key].hull_id
+                for row in train_rows
+                if row.build_key in build_lookup
+            },
+            {
+                build_lookup[row.build_key].hull_id
+                for row in test_rows
+                if row.build_key in build_lookup
+            },
         ),
         "component_combination": _overlap_count(train_components, test_components),
         "campaign_cell": _overlap_count(
@@ -594,7 +632,12 @@ def _feature_bundle(rows: Sequence[Row], build_lookup, config: BaselineConfig) -
     for row in rows:
         if row.build_key is None:
             continue
-        cache_key = (str(config.game_dir), row.build_key, row.opponent_variant_id, config.feature_profile)
+        cache_key = (
+            str(config.game_dir),
+            row.build_key,
+            row.opponent_variant_id,
+            config.feature_profile,
+        )
         if cache_key not in _FEATURE_CACHE:
             _FEATURE_CACHE[cache_key] = filter_feature_profile(
                 matchup_feature_row(
@@ -622,20 +665,31 @@ def make_model(name: str, config: BaselineConfig) -> BaselineModel:
     if name == "twfe_additive":
         return TwfeAdditiveModel()
     if name == "ridge_hybrid":
-        return PipelineModel(Pipeline([
-            ("features", DictVectorizer(sparse=True)),
-            ("model", Ridge(alpha=config.ridge_alpha)),
-        ]))
+        return PipelineModel(
+            Pipeline(
+                [
+                    ("features", DictVectorizer(sparse=True)),
+                    ("model", Ridge(alpha=config.ridge_alpha)),
+                ]
+            )
+        )
     if name == "random_forest":
-        return PipelineModel(Pipeline([
-            ("features", DictVectorizer(sparse=True)),
-            ("model", RandomForestRegressor(
-                n_estimators=config.tree_count,
-                random_state=config.seed,
-                n_jobs=ALL_AVAILABLE_CORES,
-                min_samples_leaf=DEFAULT_MIN_SAMPLES_LEAF,
-            )),
-        ]))
+        return PipelineModel(
+            Pipeline(
+                [
+                    ("features", DictVectorizer(sparse=True)),
+                    (
+                        "model",
+                        RandomForestRegressor(
+                            n_estimators=config.tree_count,
+                            random_state=config.seed,
+                            n_jobs=ALL_AVAILABLE_CORES,
+                            min_samples_leaf=DEFAULT_MIN_SAMPLES_LEAF,
+                        ),
+                    ),
+                ]
+            )
+        )
     raise ValueError(f"unknown model {name!r}")
 
 
@@ -662,7 +716,13 @@ def _score_regime(value: float) -> str:
     return "timeout_like"
 
 
-def _group_metric(rows: Sequence[Row], records: Sequence[Mapping[str, FeatureValue]], y_true: np.ndarray, pred: np.ndarray, group_key: str) -> dict[str, dict[str, float | int | None]]:
+def _group_metric(
+    rows: Sequence[Row],
+    records: Sequence[Mapping[str, FeatureValue]],
+    y_true: np.ndarray,
+    pred: np.ndarray,
+    group_key: str,
+) -> dict[str, dict[str, float | int | None]]:
     grouped_true: dict[str, list[float]] = defaultdict(list)
     grouped_pred: dict[str, list[float]] = defaultdict(list)
     for row, record, target, prediction in zip(rows, records, y_true, pred, strict=True):
@@ -714,9 +774,7 @@ def stratified_metrics(bundle: FeatureBundle, pred: np.ndarray) -> dict[str, obj
         "score_regime": _group_metric(
             bundle.rows, bundle.records, bundle.targets, pred, "score_regime"
         ),
-        "campaign": _group_metric(
-            bundle.rows, bundle.records, bundle.targets, pred, "campaign"
-        ),
+        "campaign": _group_metric(bundle.rows, bundle.records, bundle.targets, pred, "campaign"),
     }
 
 
@@ -764,9 +822,7 @@ def degenerate_opponents_for_panel(
     for row, target in zip(rows, targets, strict=True):
         grouped[row.opponent_variant_id].append(float(target))
     return frozenset(
-        opponent
-        for opponent, values in grouped.items()
-        if sample_sd(values) < noise_floor
+        opponent for opponent, values in grouped.items() if sample_sd(values) < noise_floor
     )
 
 
@@ -788,9 +844,7 @@ def evaluation_metric_suite(
     include_bootstrap: bool = True,
 ) -> dict[str, object]:
     """Spec 31 evaluation-metric suite over an outer test panel."""
-    noise = resolve_noise_floor(
-        config.eval_metrics, load_honest_eval_matchups(config.db_path)
-    )
+    noise = resolve_noise_floor(config.eval_metrics, load_honest_eval_matchups(config.db_path))
     floor = _noise_floor_value(noise)
     opponents = [row.opponent_variant_id for row in test.rows]
     builds = [row_build_key(row) for row in test.rows]
@@ -839,11 +893,12 @@ def honest_eval_diagnostic_for_model(
     primary_k: int,
 ) -> dict[str, object]:
     rows = [
-        row for row in load_honest_eval_matchups(config.db_path)
+        row
+        for row in load_honest_eval_matchups(config.db_path)
         if row.build_key is not None and row.build_key in build_lookup
     ]
     if config.max_rows is not None:
-        rows = rows[:config.max_rows]
+        rows = rows[: config.max_rows]
     if not rows:
         return {"honest_eval_builds": 0}
     bundle = _feature_bundle(rows, build_lookup, config)
@@ -857,9 +912,7 @@ def honest_eval_diagnostic_for_model(
         [row.opponent_variant_id for row in honest_rows],
         bundle.targets,
         pred,
-        degenerate_opponents=degenerate_opponents_for_panel(
-            honest_rows, bundle.targets, floor
-        ),
+        degenerate_opponents=degenerate_opponents_for_panel(honest_rows, bundle.targets, floor),
         outer_train_build_keys=outer_train_build_keys,
         k_values=config.top_k_values,
         primary_k=primary_k,
@@ -926,10 +979,13 @@ def run_one(config: BaselineConfig) -> dict[str, object]:
         "diagnostics": diagnostics,
         "stratified": stratified_metrics(test, result.predictions),
         "honest_eval_top_k": honest_eval_diagnostic_for_model(
-            model, build_lookup, config, outer_train_build_keys,
+            model,
+            build_lookup,
+            config,
+            outer_train_build_keys,
             min(config.top_k_values),
         ),
-}
+    }
 
 
 def provenance(config: BaselineConfig) -> dict[str, object]:
@@ -1038,14 +1094,18 @@ def main() -> None:
             f"eta={_format_duration(remaining)}",
             config.progress,
         )
-    payload: object = results[0] if len(results) == 1 else {
-        "db_path": str(config.db_path),
-        "feature_schema_version": FEATURE_SCHEMA_VERSION,
-        "feature_profile": config.feature_profile,
-        "provenance": provenance(config),
-        "result_count": len(results),
-        "results": results,
-    }
+    payload: object = (
+        results[0]
+        if len(results) == 1
+        else {
+            "db_path": str(config.db_path),
+            "feature_schema_version": FEATURE_SCHEMA_VERSION,
+            "feature_profile": config.feature_profile,
+            "provenance": provenance(config),
+            "result_count": len(results),
+            "results": results,
+        }
+    )
     print(json.dumps(payload, indent=2, sort_keys=True))
 
 

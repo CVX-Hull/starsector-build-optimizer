@@ -19,7 +19,11 @@ from starsector_optimizer.repair import repair_build
 from starsector_optimizer.variant import build_to_build_spec
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.opponent_pool import (
-    OpponentPool, generate_matchups, compute_fitness, hp_differential, get_opponents,
+    OpponentPool,
+    generate_matchups,
+    compute_fitness,
+    hp_differential,
+    get_opponents,
 )
 from starsector_optimizer.models import HullSize, REGIME_ENDGAME
 
@@ -27,9 +31,11 @@ GAME_DIR = Path("game/starsector")
 EVAL_LOG = Path("data/integration_test_eval.jsonl")
 
 # Reduced opponent pool for speed (2 opponents instead of 6)
-TEST_OPPONENT_POOL = OpponentPool(pools={
-    HullSize.CRUISER: ("dominator_Assault", "eagle_Assault"),
-})
+TEST_OPPONENT_POOL = OpponentPool(
+    pools={
+        HullSize.CRUISER: ("dominator_Assault", "eagle_Assault"),
+    }
+)
 
 print("=" * 60)
 print("Phase 4 Integration Test: Eagle optimization (2 instances)")
@@ -41,9 +47,11 @@ game_data = load_game_data(GAME_DIR)
 manifest = GameManifest.load()
 hull = game_data.hulls["eagle"]
 space = build_search_space(hull, game_data, REGIME_ENDGAME, manifest)
-print(f"   Eagle: {len(space.weapon_options)} weapon slots, "
-      f"{len(space.eligible_hullmods)} hullmods, "
-      f"total dims={len(space.weapon_options) + len(space.eligible_hullmods) + 2}")
+print(
+    f"   Eagle: {len(space.weapon_options)} weapon slots, "
+    f"{len(space.eligible_hullmods)} hullmods, "
+    f"total dims={len(space.weapon_options) + len(space.eligible_hullmods) + 2}"
+)
 
 # Generate and score builds with heuristic
 print("\n2. Generating diverse builds...")
@@ -51,8 +59,10 @@ builds = generate_diverse_builds(hull, game_data, manifest, n=1000)
 scored = [(b, heuristic_score(b, hull, game_data)) for b in builds]
 scored.sort(key=lambda x: -x[1].composite_score)
 top3 = scored[:3]
-print(f"   Generated 1000 builds, top-3 heuristic scores: "
-      f"{[f'{s.composite_score:.3f}' for _, s in top3]}")
+print(
+    f"   Generated 1000 builds, top-3 heuristic scores: "
+    f"{[f'{s.composite_score:.3f}' for _, s in top3]}"
+)
 
 # Setup instance pool
 print("\n3. Setting up 2 Xvfb instances...")
@@ -77,13 +87,14 @@ try:
         build_spec = build_to_build_spec(repaired, hull, game_data, variant_id)
 
         matchups = generate_matchups(
-            build_spec, opponents,
+            build_spec,
+            opponents,
             matchup_id_prefix=f"inttest_{idx:03d}",
             time_mult=5.0,
             time_limit_seconds=180.0,
         )
 
-        print(f"\n   Build #{idx+1} (heuristic={scorer_result.composite_score:.3f}):")
+        print(f"\n   Build #{idx + 1} (heuristic={scorer_result.composite_score:.3f}):")
         print(f"   Weapons: {sum(1 for v in repaired.weapon_assignments.values() if v)} equipped")
         print(f"   Hullmods: {', '.join(sorted(repaired.hullmods)) or 'none'}")
         print(f"   Vents={repaired.flux_vents}, Caps={repaired.flux_capacitors}")
@@ -98,8 +109,10 @@ try:
         for r in results:
             diff = hp_differential(r)
             opponent = r.matchup_id.split("_vs_")[-1] if "_vs_" in r.matchup_id else "?"
-            print(f"     vs {opponent}: winner={r.winner}, duration={r.duration_seconds:.1f}s, "
-                  f"hp_diff={diff:+.3f}")
+            print(
+                f"     vs {opponent}: winner={r.winner}, duration={r.duration_seconds:.1f}s, "
+                f"hp_diff={diff:+.3f}"
+            )
             build_results.append(r)
 
         fitness = compute_fitness(build_results)
@@ -112,7 +125,7 @@ try:
     print("=" * 60)
     print(f"{'Build':>6} {'Heuristic':>10} {'Sim Fitness':>12} {'Correlation':>12}")
     for idx, heur, fit in all_results:
-        print(f"{'#'+str(idx+1):>6} {heur:>10.3f} {fit:>+12.3f}")
+        print(f"{'#' + str(idx + 1):>6} {heur:>10.3f} {fit:>+12.3f}")
 
     heur_scores = [h for _, h, _ in all_results]
     sim_scores = [f for _, _, f in all_results]

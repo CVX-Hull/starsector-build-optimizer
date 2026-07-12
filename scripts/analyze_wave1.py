@@ -14,6 +14,7 @@ Reads:
     data/logs/hammerhead__early__tpe__seed{0,1,2}/evaluation_log.jsonl
     data/campaigns/wave1-{c0a,c0b,c1,c2,c3}/{ledger.jsonl,orchestrator.log}
 """
+
 from __future__ import annotations
 
 import argparse
@@ -62,13 +63,21 @@ def _parse_jsonl_timestamp(s: str) -> datetime:
 
 def load_cell_seed_window(cell: str, seed: int) -> dict[str, Any] | None:
     """Open per-cell per-seed SQLite, return trial summary + timestamp window."""
-    db_path = REPO_ROOT / "data" / "study_dbs" / f"wave1-{cell}" / f"{HULL}__{REGIME}__{SAMPLER}__seed{seed}.db"
+    db_path = (
+        REPO_ROOT
+        / "data"
+        / "study_dbs"
+        / f"wave1-{cell}"
+        / f"{HULL}__{REGIME}__{SAMPLER}__seed{seed}.db"
+    )
     if not db_path.exists():
         return None
     conn = sqlite3.connect(str(db_path))
     try:
         n_total = conn.execute("SELECT COUNT(*) FROM trials").fetchone()[0]
-        n_complete = conn.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'").fetchone()[0]
+        n_complete = conn.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'").fetchone()[
+            0
+        ]
         n_pruned = conn.execute("SELECT COUNT(*) FROM trials WHERE state='PRUNED'").fetchone()[0]
         n_fail = conn.execute("SELECT COUNT(*) FROM trials WHERE state='FAIL'").fetchone()[0]
         n_running = conn.execute("SELECT COUNT(*) FROM trials WHERE state='RUNNING'").fetchone()[0]
@@ -100,7 +109,13 @@ def load_cell_seed_window(cell: str, seed: int) -> dict[str, Any] | None:
 
 def load_jsonl_slice(seed: int, t_min: datetime, t_max: datetime) -> list[dict[str, Any]]:
     """Load JSONL rows whose `timestamp` falls in [t_min, t_max] (inclusive on both ends)."""
-    log_path = REPO_ROOT / "data" / "logs" / f"{HULL}__{REGIME}__{SAMPLER}__seed{seed}" / "evaluation_log.jsonl"
+    log_path = (
+        REPO_ROOT
+        / "data"
+        / "logs"
+        / f"{HULL}__{REGIME}__{SAMPLER}__seed{seed}"
+        / "evaluation_log.jsonl"
+    )
     if not log_path.exists():
         return []
     out = []
@@ -141,10 +156,7 @@ def twfe_bounded_check(jsonl_rows: list[dict[str, Any]]) -> dict[str, Any]:
     approximately the design tier ranges (per `models.py:438-440`):
     wins [1.0, 1.5], timeouts [-0.49, +0.49]. Combined practical bound:
     fitness in [-1.5, 2.0] is generous; out-of-bound is a regression."""
-    completed = [
-        r for r in jsonl_rows
-        if not r.get("pruned") and r.get("twfe_fitness") is not None
-    ]
+    completed = [r for r in jsonl_rows if not r.get("pruned") and r.get("twfe_fitness") is not None]
     if not completed:
         return {"passes": False, "reason": "no twfe_fitness rows"}
     in_range = 0
@@ -195,6 +207,7 @@ def triple_goal_rho_delta(jsonl_rows: list[dict[str, Any]]) -> dict[str, Any]:
     flagging false failures.
     """
     from scipy.stats import spearmanr
+
     pairs = [
         (r["twfe_fitness"], r["eb_fitness"])
         for r in jsonl_rows
@@ -203,8 +216,12 @@ def triple_goal_rho_delta(jsonl_rows: list[dict[str, Any]]) -> dict[str, Any]:
         and r.get("eb_fitness") is not None
     ]
     if len(pairs) < 30:
-        return {"passes": True, "diagnostic": True, "rho": None,
-                "reason": f"only {len(pairs)} paired rows; diagnostic-only"}
+        return {
+            "passes": True,
+            "diagnostic": True,
+            "rho": None,
+            "reason": f"only {len(pairs)} paired rows; diagnostic-only",
+        }
     xs, ys = zip(*pairs, strict=True)
     rho, _ = spearmanr(xs, ys)
     return {
@@ -248,10 +265,12 @@ def top5_jaccard(rows_a: list[dict[str, Any]], rows_b: list[dict[str, Any]]) -> 
 
     Per validation plan mech 8: top-5 identification overlap ≥ 0.40.
     """
+
     def top5_keys(rows):
         finalized = [r for r in rows if not r.get("pruned") and r.get("eb_fitness") is not None]
         finalized.sort(key=lambda r: r["eb_fitness"], reverse=True)
         return {build_hash(r["build"]) for r in finalized[:5]}
+
     a, b = top5_keys(rows_a), top5_keys(rows_b)
     if not a and not b:
         return 0.0
@@ -264,7 +283,8 @@ def build_hash(build: dict[str, Any]) -> str:
         f"caps={build.get('flux_capacitors')}",
         f"vents={build.get('flux_vents')}",
         "hm=" + ",".join(sorted(build.get("hullmods", []))),
-        "wp=" + ",".join(f"{k}:{v}" for k, v in sorted((build.get("weapon_assignments") or {}).items())),
+        "wp="
+        + ",".join(f"{k}:{v}" for k, v in sorted((build.get("weapon_assignments") or {}).items())),
     ]
     return "|".join(parts)
 
@@ -283,11 +303,11 @@ def loocv_anchor_spearman(jsonl_rows: list[dict[str, Any]], fitness_field: str) 
     Returns ρ per anchor + mean ρ. Anchors are the most-frequent opp_ids in the post-burn-in JSONL.
     """
     from scipy.stats import spearmanr
+
     finalized = [
-        r for r in jsonl_rows
-        if not r.get("pruned")
-        and r.get(fitness_field) is not None
-        and r.get("opponent_results")
+        r
+        for r in jsonl_rows
+        if not r.get("pruned") and r.get(fitness_field) is not None and r.get("opponent_results")
     ]
     if len(finalized) < 30:
         return {"mean": float("nan"), "anchors": {}, "n": len(finalized)}
@@ -338,6 +358,7 @@ def bootstrap_delta_rho(
     Bootstraps over per-anchor LOOO ρ samples (5 anchors × 200 resamples = 1000-sample pool).
     """
     import random
+
     rng = random.Random(seed)
     treat_lo = loocv_anchor_spearman(rows_treat, fitness_field_treat)
     ctrl_lo = loocv_anchor_spearman(rows_ctrl, fitness_field_ctrl)
@@ -374,16 +395,24 @@ def bootstrap_delta_rho(
     }
 
 
-def best_fitness_sigma_delta(rows_a: list[dict[str, Any]], rows_b: list[dict[str, Any]]) -> dict[str, float]:
+def best_fitness_sigma_delta(
+    rows_a: list[dict[str, Any]], rows_b: list[dict[str, Any]]
+) -> dict[str, float]:
     """C3 vs C2: |Δ best-fitness| in σ units across seeds."""
     import statistics
+
     def best_per_seed(rows):
         completed = [r for r in rows if not r.get("pruned") and r.get("fitness") is not None]
         return max((r["fitness"] for r in completed), default=float("nan"))
+
     a = best_per_seed(rows_a)
     b = best_per_seed(rows_b)
-    completed_a = [r["fitness"] for r in rows_a if not r.get("pruned") and r.get("fitness") is not None]
-    completed_b = [r["fitness"] for r in rows_b if not r.get("pruned") and r.get("fitness") is not None]
+    completed_a = [
+        r["fitness"] for r in rows_a if not r.get("pruned") and r.get("fitness") is not None
+    ]
+    completed_b = [
+        r["fitness"] for r in rows_b if not r.get("pruned") and r.get("fitness") is not None
+    ]
     pooled = completed_a + completed_b
     if len(pooled) < 2:
         return {"a_best": a, "b_best": b, "delta": float("nan"), "sigma_delta": float("nan")}
@@ -549,7 +578,9 @@ def evaluate_gates(cells: dict[str, dict[str, Any]]) -> dict[str, Any]:
     # HARD GATE: 0 null engine_stats across all cells
     null_total = sum(
         s.get("engine_stats_null_count", 0)
-        for c in cells.values() for s in c["seeds"].values() if isinstance(s, dict)
+        for c in cells.values()
+        for s in c["seeds"].values()
+        if isinstance(s, dict)
     )
     verdicts["engine_stats_null_hard_gate"] = {
         "passes": null_total == 0,
@@ -644,13 +675,17 @@ def evaluate_gates(cells: dict[str, dict[str, Any]]) -> dict[str, Any]:
     # Anchor-lock per cell (3 seeds × 1 lock each = 3 expected)
     anchor_failures = []
     for cell_name, c in cells.items():
-        seeds_present = sum(1 for s in c["seeds"].values() if isinstance(s, dict) and s.get("n_total", 0) > 30)
+        seeds_present = sum(
+            1 for s in c["seeds"].values() if isinstance(s, dict) and s.get("n_total", 0) > 30
+        )
         if seeds_present > 0 and c["anchor_locks_in_log"] < seeds_present:
-            anchor_failures.append({
-                "cell": cell_name,
-                "expected_min": seeds_present,
-                "observed": c["anchor_locks_in_log"],
-            })
+            anchor_failures.append(
+                {
+                    "cell": cell_name,
+                    "expected_min": seeds_present,
+                    "observed": c["anchor_locks_in_log"],
+                }
+            )
     verdicts["anchor_first_lock"] = {
         "passes": not anchor_failures,
         "failures": anchor_failures,
@@ -678,7 +713,9 @@ def evaluate_gates(cells: dict[str, dict[str, Any]]) -> dict[str, Any]:
     # triple_goal only meaningful in EB-on cells where eb_fitness diverges from twfe_fitness
     triple_goal_eb_on = {k: v for k, v in triple_goal_per_cell.items() if k in {"c1", "c2", "c3"}}
     verdicts["triple_goal_rank_correction"] = {
-        "passes": all(v.get("passes") for v in triple_goal_eb_on.values()) if triple_goal_eb_on else True,
+        "passes": all(v.get("passes") for v in triple_goal_eb_on.values())
+        if triple_goal_eb_on
+        else True,
         "per_cell_eb_on_only": triple_goal_eb_on,
     }
 
@@ -688,19 +725,25 @@ def evaluate_gates(cells: dict[str, dict[str, Any]]) -> dict[str, Any]:
     # mid-run analysis. The post-completion run will have full samples.
     def _has_enough(rows, n=30):
         return sum(1 for r in rows if not r.get("pruned")) >= n
+
     if "c2" in cells and "c0a" in cells:
-        if not (_has_enough(cells["c2"]["all_jsonl_rows"]) and
-                _has_enough(cells["c0a"]["all_jsonl_rows"])):
+        if not (
+            _has_enough(cells["c2"]["all_jsonl_rows"])
+            and _has_enough(cells["c0a"]["all_jsonl_rows"])
+        ):
             verdicts["eb_vs_a0_delta_rho"] = {
-                "passes": True, "skipped": True,
+                "passes": True,
+                "skipped": True,
                 "reason": "insufficient finalized rows in C2 or C0a (cell still running?)",
             }
             verdicts["eb_vs_a_delta_rho"] = {
-                "passes": True, "skipped": True,
+                "passes": True,
+                "skipped": True,
                 "reason": "insufficient finalized rows in C2 or C0b (cell still running?)",
             }
             verdicts["boxcox_top5_jaccard"] = {
-                "passes": True, "skipped": True,
+                "passes": True,
+                "skipped": True,
                 "reason": "insufficient finalized rows in C2 or C1 (cell still running?)",
             }
             return verdicts
@@ -735,8 +778,7 @@ def evaluate_gates(cells: dict[str, dict[str, Any]]) -> dict[str, Any]:
     # Box-Cox: C2 ceiling vs C1 (Box-Cox off in C1)
     if "c2" in cells:
         c2_ceiling = sum(
-            s.get("boxcox_ceiling", 0)
-            for s in cells["c2"]["seeds"].values() if isinstance(s, dict)
+            s.get("boxcox_ceiling", 0) for s in cells["c2"]["seeds"].values() if isinstance(s, dict)
         ) / max(1, sum(1 for s in cells["c2"]["seeds"].values() if isinstance(s, dict)))
         verdicts["boxcox_ceiling"] = {
             "passes": c2_ceiling <= BOXCOX_CEILING_MAX,
@@ -772,10 +814,18 @@ def render_console(cells: dict[str, dict[str, Any]], gates: dict[str, Any]) -> N
             print(f"\n[cell {cell_name}] MISSING (study DBs not present)")
             continue
         c = cells[cell_name]
-        print(f"\n[cell {cell_name}]  cost=${c['cost_usd']:.2f}  loadout_mismatches={c['loadout_mismatch_count']}  anchor_locks={c['anchor_locks_in_log']}")
+        print(
+            f"\n[cell {cell_name}]  cost=${c['cost_usd']:.2f}  loadout_mismatches={c['loadout_mismatch_count']}  anchor_locks={c['anchor_locks_in_log']}"
+        )
         thr = c["throughput"]
-        thr_str = f"{thr['matchups_per_hr_per_vm']:.1f}" if not math.isnan(thr["matchups_per_hr_per_vm"]) else "n/a"
-        print(f"  throughput: {thr_str} matchups/hr/VM  ({thr['matchups']} matchups / {thr['vm_hours']:.1f} VM-hr)")
+        thr_str = (
+            f"{thr['matchups_per_hr_per_vm']:.1f}"
+            if not math.isnan(thr["matchups_per_hr_per_vm"])
+            else "n/a"
+        )
+        print(
+            f"  throughput: {thr_str} matchups/hr/VM  ({thr['matchups']} matchups / {thr['vm_hours']:.1f} VM-hr)"
+        )
         for seed, s in c["seeds"].items():
             if not isinstance(s, dict) or "n_finalized" not in s:
                 print(f"    seed{seed}: {s.get('status', 'unknown')}")
@@ -838,11 +888,17 @@ def main() -> int:
 
     out_path = REPO_ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps({
-        "generated_at": datetime.now(UTC).isoformat(),
-        "cells": serialize_for_json(cells),
-        "gates": gates,
-    }, indent=2, default=str))
+    out_path.write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now(UTC).isoformat(),
+                "cells": serialize_for_json(cells),
+                "gates": gates,
+            },
+            indent=2,
+            default=str,
+        )
+    )
     print(f"\nWrote {out_path}")
 
     n_fail = sum(1 for v in gates.values() if isinstance(v, dict) and v.get("passes") is False)

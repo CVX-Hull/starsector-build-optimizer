@@ -43,6 +43,7 @@ class AuthError(Exception):
 def _install_signal_handlers() -> None:
     def handler(signum, _frame):
         raise KeyboardInterrupt(f"received signal {signum}")
+
     signal.signal(signal.SIGTERM, handler)
     signal.signal(signal.SIGHUP, handler)
 
@@ -89,8 +90,7 @@ def load_worker_config_from_env() -> WorkerConfig:
         raw = os.environ.get(env_key)
         if raw is None:
             has_default = (
-                f.default is not dataclasses.MISSING
-                or f.default_factory is not dataclasses.MISSING
+                f.default is not dataclasses.MISSING or f.default_factory is not dataclasses.MISSING
             )
             if not has_default:
                 raise ValueError(
@@ -152,7 +152,8 @@ def post_result(
     for attempt in range(config.http_retry_count + 1):
         try:
             response = requests.post(
-                config.http_endpoint, json=body,
+                config.http_endpoint,
+                json=body,
                 timeout=config.http_post_timeout_seconds,
             )
             if response.status_code == 200:
@@ -173,14 +174,13 @@ def post_result(
                 return
             if response.status_code == 401:
                 raise AuthError(f"401 from orchestrator: matchup_id={matchup_id}")
-            last_error = RuntimeError(
-                f"POST /result status={response.status_code}"
-            )
+            last_error = RuntimeError(f"POST /result status={response.status_code}")
         except requests.RequestException as e:
             last_error = e
         if attempt < config.http_retry_count:
-            logger.warning("POST retry %d/%d after: %s",
-                           attempt + 1, config.http_retry_count, last_error)
+            logger.warning(
+                "POST retry %d/%d after: %s", attempt + 1, config.http_retry_count, last_error
+            )
             time.sleep(min(backoff, config.http_retry_max_seconds))
             backoff *= config.http_retry_backoff_multiplier
     raise RuntimeError(f"POST /result failed after {config.http_retry_count} retries: {last_error}")
@@ -216,6 +216,7 @@ def _fetch_vm_metadata() -> dict[str, str]:
     """
     import urllib.request
     import urllib.error
+
     if _WORKER_VM_METADATA:
         return _WORKER_VM_METADATA
     fallback = {"region": "unknown", "instance_type": "unknown"}
@@ -228,7 +229,8 @@ def _fetch_vm_metadata() -> dict[str, str]:
             },
         )
         with urllib.request.urlopen(
-            token_req, timeout=_IMDS_REQUEST_TIMEOUT_SECONDS,
+            token_req,
+            timeout=_IMDS_REQUEST_TIMEOUT_SECONDS,
         ) as resp:
             token = resp.read().decode().strip()
 
@@ -238,7 +240,8 @@ def _fetch_vm_metadata() -> dict[str, str]:
                 headers={"X-aws-ec2-metadata-token": token},
             )
             with urllib.request.urlopen(
-                req, timeout=_IMDS_REQUEST_TIMEOUT_SECONDS,
+                req,
+                timeout=_IMDS_REQUEST_TIMEOUT_SECONDS,
             ) as r:
                 return r.read().decode().strip()
 
@@ -320,6 +323,7 @@ def _mod_jar_sha256(game_dir: Path) -> str:
     if key in _MOD_JAR_SHA_CACHE:
         return _MOD_JAR_SHA_CACHE[key]
     import hashlib
+
     jar_path = game_dir / _MOD_JAR_RELATIVE_PATH
     try:
         h = hashlib.sha256()
@@ -335,8 +339,11 @@ def _mod_jar_sha256(game_dir: Path) -> str:
 
 
 def heartbeat(
-    redis_client: Any, project_tag: str, worker_id: str,
-    *, game_dir: Path,
+    redis_client: Any,
+    project_tag: str,
+    worker_id: str,
+    *,
+    game_dir: Path,
 ) -> None:
     """Write worker liveness + CPU-load + VM-identity telemetry +
     per-instance game_stdout.log tail + mod-jar SHA.
@@ -391,6 +398,7 @@ def _load_matchup(matchup_dict: dict[str, Any]) -> MatchupConfig:
     field is a wire-format invariant violation, not a recoverable case.
     """
     from .models import BuildSpec
+
     player_builds = tuple(
         BuildSpec(
             variant_id=b["variant_id"],
@@ -449,8 +457,7 @@ def _consumer_loop(
             result = pool.run_matchup(matchup)
             if result.matchup_id != matchup_id:
                 raise RuntimeError(
-                    f"result matchup_id mismatch: envelope={matchup_id} "
-                    f"result={result.matchup_id}"
+                    f"result matchup_id mismatch: envelope={matchup_id} result={result.matchup_id}"
                 )
             result_dict = dataclasses.asdict(result)
             post_result(
@@ -479,7 +486,9 @@ def _heartbeat_loop(
     """Write worker heartbeat (with CPU load) every interval_seconds."""
     while not stop_event.is_set():
         heartbeat(
-            redis_client, config.project_tag, config.worker_id,
+            redis_client,
+            config.project_tag,
+            config.worker_id,
             game_dir=game_dir,
         )
         stop_event.wait(timeout=interval_seconds)
@@ -503,7 +512,9 @@ def main() -> int:
     game_dir = Path(os.environ.get("STARSECTOR_GAME_DIR", "/opt/starsector"))
 
     redis_client = redis.Redis(
-        host=config.redis_host, port=config.redis_port, decode_responses=True,
+        host=config.redis_host,
+        port=config.redis_port,
+        decode_responses=True,
     )
     source = f"queue:{config.project_tag}:{config.study_id}:source"
     processing = f"queue:{config.project_tag}:{config.study_id}:processing"

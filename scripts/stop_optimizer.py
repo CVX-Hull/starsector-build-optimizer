@@ -23,6 +23,7 @@ Patterns matched:
 Usage:
     uv run python scripts/stop_optimizer.py [--instance-root PATH] [--grace N]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -85,6 +86,7 @@ def _write_shutdown_signals(instance_root: Path) -> int:
 
 def _signal_pids(pids: list[int], sig: signal.Signals) -> None:
     import os
+
     for pid in pids:
         try:
             os.kill(pid, sig)
@@ -96,10 +98,18 @@ def _signal_pids(pids: list[int], sig: signal.Signals) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Stop all optimizer processes")
-    ap.add_argument("--instance-root", type=Path, default=DEFAULT_INSTANCE_ROOT,
-                    help=f"Work-dir root (default {DEFAULT_INSTANCE_ROOT})")
-    ap.add_argument("--grace", type=int, default=DEFAULT_GRACE_SECONDS,
-                    help=f"Seconds to wait for graceful exit (default {DEFAULT_GRACE_SECONDS})")
+    ap.add_argument(
+        "--instance-root",
+        type=Path,
+        default=DEFAULT_INSTANCE_ROOT,
+        help=f"Work-dir root (default {DEFAULT_INSTANCE_ROOT})",
+    )
+    ap.add_argument(
+        "--grace",
+        type=int,
+        default=DEFAULT_GRACE_SECONDS,
+        help=f"Seconds to wait for graceful exit (default {DEFAULT_GRACE_SECONDS})",
+    )
     args = ap.parse_args()
 
     print(f"[1/5] Writing shutdown signals under {args.instance_root}...")
@@ -126,8 +136,7 @@ def main() -> int:
     jvm_pids = _pids_matching(substring=JVM_PATTERN)
     xvfb_pids = _pids_matching(regex=XVFB_REGEX)
     if jvm_pids or xvfb_pids:
-        print(f"  FAIL: still running — JVMs={jvm_pids}, Xvfb={xvfb_pids}",
-              file=sys.stderr)
+        print(f"  FAIL: still running — JVMs={jvm_pids}, Xvfb={xvfb_pids}", file=sys.stderr)
         return 1
     print("  OK: all optimizer processes stopped")
     return 0

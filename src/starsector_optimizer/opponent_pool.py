@@ -83,14 +83,13 @@ def discover_opponent_pool(game_dir: Path, game_data: GameData) -> OpponentPool:
             logger.warning(
                 "Hull size %s has only %d opponent variant(s) — "
                 "pruning requires at least 2 opponents for meaningful comparison",
-                size.name, len(variants),
+                size.name,
+                len(variants),
             )
 
-    return OpponentPool(pools={
-        size: tuple(sorted(variants))
-        for size, variants in pools.items()
-        if variants
-    })
+    return OpponentPool(
+        pools={size: tuple(sorted(variants)) for size, variants in pools.items() if variants}
+    )
 
 
 def get_opponents(pool: OpponentPool, hull_size: HullSize) -> tuple[str, ...]:

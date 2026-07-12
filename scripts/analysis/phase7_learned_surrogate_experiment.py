@@ -67,7 +67,9 @@ if TYPE_CHECKING:
 
 
 _BASELINE_PATH = Path(__file__).with_name("phase7_baseline_surrogate.py")
-_BASELINE_SPEC = importlib.util.spec_from_file_location("_phase7_baseline_surrogate", _BASELINE_PATH)
+_BASELINE_SPEC = importlib.util.spec_from_file_location(
+    "_phase7_baseline_surrogate", _BASELINE_PATH
+)
 assert _BASELINE_SPEC is not None and _BASELINE_SPEC.loader is not None
 baseline = importlib.util.module_from_spec(_BASELINE_SPEC)
 sys.modules.setdefault("_phase7_baseline_surrogate", baseline)
@@ -222,15 +224,13 @@ class LearnedModel(Protocol):
         rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
         targets: np.ndarray,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     def predict(
         self,
         rows: Sequence[MatchupRow],
         records: Sequence[Mapping[str, FeatureValue]],
-    ) -> PredictionResult:
-        ...
+    ) -> PredictionResult: ...
 
 
 class PipelineModel:
@@ -274,14 +274,18 @@ class CatBoostModel:
         if fit:
             self.columns = list(frame.columns)
             self.categorical_columns = [
-                column for column in frame.columns
-                if frame[column].dtype == object or frame[column].map(lambda item: isinstance(item, str)).any()
+                column
+                for column in frame.columns
+                if frame[column].dtype == object
+                or frame[column].map(lambda item: isinstance(item, str)).any()
             ]
         else:
             frame = frame.reindex(columns=self.columns)
         for column in self.categorical_columns:
             frame[column] = frame[column].fillna("MISSING").astype(str)
-        numeric_columns = [column for column in frame.columns if column not in self.categorical_columns]
+        numeric_columns = [
+            column for column in frame.columns if column not in self.categorical_columns
+        ]
         for column in numeric_columns:
             frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
         return frame
@@ -320,9 +324,7 @@ def _missing_catboost_error() -> RuntimeError:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Fit learned Phase 7 matchup surrogate baselines."
-    )
+    parser = argparse.ArgumentParser(description="Fit learned Phase 7 matchup surrogate baselines.")
     parser.add_argument("db_path", type=Path)
     parser.add_argument("--game-dir", type=Path, default=Path("game/starsector"))
     parser.add_argument("--split", choices=(*SPLIT_CHOICES, "all"), default="build")
@@ -344,10 +346,16 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=baseline.DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT,
     )
-    parser.add_argument("--top-k", default=",".join(str(item) for item in baseline.DEFAULT_TOP_K_VALUES))
+    parser.add_argument(
+        "--top-k", default=",".join(str(item) for item in baseline.DEFAULT_TOP_K_VALUES)
+    )
     parser.add_argument("--max-rows", type=int, default=None)
-    parser.add_argument("--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE)
-    parser.add_argument("--honest-eval-usage", choices=HONEST_EVAL_USAGE_CHOICES, default=DEFAULT_HONEST_EVAL_USAGE)
+    parser.add_argument(
+        "--feature-profile", choices=FEATURE_PROFILES, default=DEFAULT_FEATURE_PROFILE
+    )
+    parser.add_argument(
+        "--honest-eval-usage", choices=HONEST_EVAL_USAGE_CHOICES, default=DEFAULT_HONEST_EVAL_USAGE
+    )
     parser.add_argument("--fresh-honest-eval-ledger-id", default=None)
     parser.add_argument("--primary-top-k", type=int, default=DEFAULT_PRIMARY_TOP_K)
     parser.add_argument("--promotion-metric", default=DEFAULT_PROMOTION_METRIC)
@@ -372,11 +380,7 @@ def parse_top_k_values(raw: str) -> tuple[int, ...]:
 def build_experiment_configs(config: LearnedExperimentConfig) -> list[LearnedExperimentConfig]:
     splits = SPLIT_CHOICES if config.split == "all" else (config.split,)
     models = MODEL_CHOICES if config.model == "all" else (config.model,)
-    return [
-        replace(config, split=split, model=model)
-        for split in splits
-        for model in models
-    ]
+    return [replace(config, split=split, model=model) for split in splits for model in models]
 
 
 def _baseline_config(config: LearnedExperimentConfig) -> BaselineConfig:
@@ -437,7 +441,7 @@ def _rolling_origin_folds(
         folds.append(
             SplitIds(
                 train=tuple(ordered[:train_end]),
-                test=tuple(ordered[val_indices[0]:val_indices[-1] + 1]),
+                test=tuple(ordered[val_indices[0] : val_indices[-1] + 1]),
             )
         )
     return tuple(folds)
@@ -504,18 +508,14 @@ def inner_validation_metadata(config: LearnedExperimentConfig) -> dict[str, obje
 def _require_int(params: Mapping[str, object], key: str) -> int:
     value = params[key]
     if isinstance(value, bool) or not isinstance(value, (int, np.integer)):
-        raise TypeError(
-            f"hyperparameter {key!r} must be an int, got {type(value).__name__}"
-        )
+        raise TypeError(f"hyperparameter {key!r} must be an int, got {type(value).__name__}")
     return int(value)
 
 
 def _require_float(params: Mapping[str, object], key: str) -> float:
     value = params[key]
     if isinstance(value, bool) or not isinstance(value, (int, float, np.floating)):
-        raise TypeError(
-            f"hyperparameter {key!r} must be numeric, got {type(value).__name__}"
-        )
+        raise TypeError(f"hyperparameter {key!r} must be numeric, got {type(value).__name__}")
     return float(value)
 
 
@@ -556,37 +556,53 @@ def make_model(
 ) -> LearnedModel:
     if model == "random_forest_tuned":
         params = dict(hyperparameters)
-        return PipelineModel(Pipeline([
-            ("features", DictVectorizer(sparse=True)),
-            ("model", RandomForestRegressor(
-                n_estimators=_require_int(params, "n_estimators"),
-                max_depth=params["max_depth"],
-                min_samples_leaf=_require_int(params, "min_samples_leaf"),
-                max_features=params["max_features"],
-                bootstrap=bool(params["bootstrap"]),
-                max_samples=params["max_samples"],
-                random_state=hpo_seed,
-                n_jobs=model_thread_count,
-                criterion="squared_error",
-            )),
-        ]))
+        return PipelineModel(
+            Pipeline(
+                [
+                    ("features", DictVectorizer(sparse=True)),
+                    (
+                        "model",
+                        RandomForestRegressor(
+                            n_estimators=_require_int(params, "n_estimators"),
+                            max_depth=params["max_depth"],
+                            min_samples_leaf=_require_int(params, "min_samples_leaf"),
+                            max_features=params["max_features"],
+                            bootstrap=bool(params["bootstrap"]),
+                            max_samples=params["max_samples"],
+                            random_state=hpo_seed,
+                            n_jobs=model_thread_count,
+                            criterion="squared_error",
+                        ),
+                    ),
+                ]
+            )
+        )
     if model == "catboost_regressor":
         return CatBoostModel({**hyperparameters, "thread_count": model_thread_count}, hpo_seed)
     if model == "sparse_pairwise_ridge":
         params = dict(hyperparameters)
-        transformer = FeatureUnion([
-            ("identity", SparseIdentity()),
-            ("pairwise", PolynomialCountSketch(
-                degree=_require_int(params, "degree"),
-                n_components=_require_int(params, "n_components"),
-                random_state=hpo_seed,
-            )),
-        ])
-        return PipelineModel(Pipeline([
-            ("features", DictVectorizer(sparse=True)),
-            ("interactions", transformer),
-            ("model", Ridge(alpha=_require_float(params, "alpha"), random_state=hpo_seed)),
-        ]))
+        transformer = FeatureUnion(
+            [
+                ("identity", SparseIdentity()),
+                (
+                    "pairwise",
+                    PolynomialCountSketch(
+                        degree=_require_int(params, "degree"),
+                        n_components=_require_int(params, "n_components"),
+                        random_state=hpo_seed,
+                    ),
+                ),
+            ]
+        )
+        return PipelineModel(
+            Pipeline(
+                [
+                    ("features", DictVectorizer(sparse=True)),
+                    ("interactions", transformer),
+                    ("model", Ridge(alpha=_require_float(params, "alpha"), random_state=hpo_seed)),
+                ]
+            )
+        )
     raise ValueError(f"unknown model {model!r}")
 
 
@@ -676,10 +692,7 @@ def tune_hyperparameters(
         config.progress,
     )
     rng = np.random.default_rng(config.hpo_seed)
-    params_by_trial = [
-        sample_hyperparameters(config.model, rng)
-        for _ in range(config.hpo_trials)
-    ]
+    params_by_trial = [sample_hyperparameters(config.model, rng) for _ in range(config.hpo_trials)]
     completed: list[TrialResult] = []
 
     def run_trial(idx: int, params: Mapping[str, object]) -> TrialResult:
@@ -778,8 +791,12 @@ def run_inline_comparators(
         model.fit(train.rows, train.records, train.targets)
         predictions = model.predict(test.rows, test.records).predictions
         suite = baseline.evaluation_metric_suite(
-            train, test, predictions, bl_config,
-            config.primary_top_k, include_bootstrap=False,
+            train,
+            test,
+            predictions,
+            bl_config,
+            config.primary_top_k,
+            include_bootstrap=False,
         )
         results[name] = {
             **baseline.regression_metrics(test.targets, predictions),
@@ -810,24 +827,20 @@ def comparator_deltas(
             learned_value = learned_metrics.get(key)
             comparator_value = comparator.get(key)
             if learned_value is not None and comparator_value is not None:
-                out[key] = (
-                    _as_float(learned_value, f"learned {key}")
-                    - _as_float(comparator_value, f"comparator {key}")
+                out[key] = _as_float(learned_value, f"learned {key}") - _as_float(
+                    comparator_value, f"comparator {key}"
                 )
         learned_mean = _require_mapping(
             learned_rank_metrics["per_opponent"], "learned per_opponent"
         )["mean_spearman"]
         comparator_mean = _require_mapping(
-            _require_mapping(comparator["rank_metrics"], "comparator rank_metrics")[
-                "per_opponent"
-            ],
+            _require_mapping(comparator["rank_metrics"], "comparator rank_metrics")["per_opponent"],
             "comparator per_opponent",
         )["mean_spearman"]
         if learned_mean is not None and comparator_mean is not None:
-            out["mean_per_opponent_spearman"] = (
-                _as_float(learned_mean, "learned mean_spearman")
-                - _as_float(comparator_mean, "comparator mean_spearman")
-            )
+            out["mean_per_opponent_spearman"] = _as_float(
+                learned_mean, "learned mean_spearman"
+            ) - _as_float(comparator_mean, "comparator mean_spearman")
         return out
 
     matched_name = MATCHED_COMPARATOR_FAMILY[model]
@@ -905,8 +918,12 @@ def claim_boundary(
         "claim_label": config.claim_label,
         "honest_eval_usage": config.honest_eval_usage,
         "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
-        "honest_eval_ledger_id": None if honest_eval_lineage is None else honest_eval_lineage.get("ledger_id"),
-        "honest_eval_run_lineage": [] if honest_eval_lineage is None else honest_eval_lineage.get("run_lineage", []),
+        "honest_eval_ledger_id": None
+        if honest_eval_lineage is None
+        else honest_eval_lineage.get("ledger_id"),
+        "honest_eval_run_lineage": []
+        if honest_eval_lineage is None
+        else honest_eval_lineage.get("run_lineage", []),
     }
 
 
@@ -923,9 +940,17 @@ def _feature_family_for_key(key: str) -> str:
     normalized = key.removeprefix("build_").removeprefix("opponent_")
     if "hullmod" in normalized:
         return "hullmod"
-    if normalized.startswith("slot_") or "_slot_" in normalized or "geometry" in normalized or "arc_" in normalized:
+    if (
+        normalized.startswith("slot_")
+        or "_slot_" in normalized
+        or "geometry" in normalized
+        or "arc_" in normalized
+    ):
         return "slot_geometry"
-    if any(token in normalized for token in ("weapon", "dps", "damage", "range", "missile", "pd_", "beam")):
+    if any(
+        token in normalized
+        for token in ("weapon", "dps", "damage", "range", "missile", "pd_", "beam")
+    ):
         return "weapon_pressure"
     if any(token in normalized for token in ("flux", "vent", "capacitor", "dissipation")):
         return "flux"
@@ -947,7 +972,12 @@ def _feature_template_for_key(key: str) -> str:
         return "sparse_indicator"
     if "_minus_" in key or "_vs_" in key or "interaction" in key:
         return "interaction"
-    if key.endswith("_id") or key.endswith("_type") or key.endswith("_size") or key.endswith("_designation"):
+    if (
+        key.endswith("_id")
+        or key.endswith("_type")
+        or key.endswith("_size")
+        or key.endswith("_designation")
+    ):
         return "categorical_residual"
     if any(token in key for token in ("mean", "total", "count", "sum", "min", "max", "std")):
         return "aggregate"
@@ -956,7 +986,9 @@ def _feature_template_for_key(key: str) -> str:
     return "raw_descriptor"
 
 
-def feature_family_registry(records: Sequence[Mapping[str, FeatureValue]]) -> dict[str, dict[str, object]]:
+def feature_family_registry(
+    records: Sequence[Mapping[str, FeatureValue]],
+) -> dict[str, dict[str, object]]:
     keys = sorted({key for record in records for key in record})
     excluded = set(EXCLUDED_FEATURE_COLUMNS)
     return {
@@ -1001,11 +1033,9 @@ def feature_selection_protocol(
     feature_profile: str,
 ) -> dict[str, object]:
     registry = feature_family_registry(records)
-    selected = sorted({
-        family
-        for item in registry.values()
-        if isinstance((family := item.get("family")), str)
-    })
+    selected = sorted(
+        {family for item in registry.values() if isinstance((family := item.get("family")), str)}
+    )
     return {
         "policy_type": "fixed_profile_no_selector",
         "feature_profile": feature_profile,
@@ -1116,7 +1146,11 @@ def hierarchy_scorecard(
             "build": ["build_key"],
             "opponent": ["opponent_variant_id"],
             "opponent-hull": ["opponent_hull_id"],
-            "opponent-family": ["opponent_hull_size", "opponent_hull_designation", "opponent_hull_tech_manufacturer"],
+            "opponent-family": [
+                "opponent_hull_size",
+                "opponent_hull_designation",
+                "opponent_hull_tech_manufacturer",
+            ],
             "component-vocab": ["component_vocabulary"],
             "seed-cell": ["campaign", "seed"],
             "forward-time": ["future_rows"],
@@ -1137,32 +1171,50 @@ def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[s
     overlaps = hierarchy.get("overlap_counts") if isinstance(hierarchy, Mapping) else None
     split_level_raw = hierarchy.get("split_level") if isinstance(hierarchy, Mapping) else None
     split_level = split_level_raw if isinstance(split_level_raw, str) else None
-    forbidden_count_key = {
-        "build": "exact_build",
-        "opponent": "exact_opponent",
-        "opponent-hull": "opponent_hull",
-        "opponent-family": "opponent_family",
-        "component-vocab": "component_vocabulary",
-        "seed-cell": "campaign_cell",
-        "forward-time": None,
-    }.get(split_level) if split_level is not None else None
+    forbidden_count_key = (
+        {
+            "build": "exact_build",
+            "opponent": "exact_opponent",
+            "opponent-hull": "opponent_hull",
+            "opponent-family": "opponent_family",
+            "component-vocab": "component_vocabulary",
+            "seed-cell": "campaign_cell",
+            "forward-time": None,
+        }.get(split_level)
+        if split_level is not None
+        else None
+    )
     forbidden_status: dict[str, object]
     if split_level not in SPLIT_CHOICES:
         forbidden_status = {"status": "not_applicable", "reason": "split_unavailable"}
     elif forbidden_count_key is None:
         forbidden_status = {"status": "not_applicable", "reason": "no_forbidden_overlap_key"}
     else:
-        forbidden_overlap = int(overlaps.get(forbidden_count_key, 0)) if isinstance(overlaps, Mapping) else 0
+        forbidden_overlap = (
+            int(overlaps.get(forbidden_count_key, 0)) if isinstance(overlaps, Mapping) else 0
+        )
         forbidden_status = {
             "status": "pass" if forbidden_overlap == 0 else "fail",
             "value": forbidden_overlap,
         }
     return {
         "forbidden_key_overlap": forbidden_status,
-        "adversarial_validation_auc": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
-        "rare_combination_overlap": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
-        "nearest_neighbor_overlap": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
-        "sparse_id_ablation_delta": {"status": "not_applicable", "reason": "diagnostic_not_implemented"},
+        "adversarial_validation_auc": {
+            "status": "not_applicable",
+            "reason": "diagnostic_not_implemented",
+        },
+        "rare_combination_overlap": {
+            "status": "not_applicable",
+            "reason": "diagnostic_not_implemented",
+        },
+        "nearest_neighbor_overlap": {
+            "status": "not_applicable",
+            "reason": "diagnostic_not_implemented",
+        },
+        "sparse_id_ablation_delta": {
+            "status": "not_applicable",
+            "reason": "diagnostic_not_implemented",
+        },
     }
 
 
@@ -1347,8 +1399,11 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
         "diagnostics": final_prediction.diagnostics,
         "stratified": baseline.stratified_metrics(outer_test, final_prediction.predictions),
         "honest_eval_top_k": baseline.honest_eval_diagnostic_for_model(
-            final_model, build_lookup, _baseline_config(config),
-            outer_train_build_keys, config.primary_top_k,
+            final_model,
+            build_lookup,
+            _baseline_config(config),
+            outer_train_build_keys,
+            config.primary_top_k,
         ),
         "hpo": hpo,
         "default_result": {
@@ -1535,11 +1590,13 @@ def _experiment_payload(
             **feature_protocol,
             "feature_family_registry": merged_registry,
             "feature_family_registry_sha256": _registry_digest(merged_registry),
-            "selected_feature_families": sorted({
-                family
-                for item in merged_registry.values()
-                if isinstance((family := item.get("family")), str)
-            }),
+            "selected_feature_families": sorted(
+                {
+                    family
+                    for item in merged_registry.values()
+                    if isinstance((family := item.get("family")), str)
+                }
+            ),
             "selected_feature_count": len(merged_registry),
         }
     return {
@@ -1591,11 +1648,15 @@ def run_experiment(
     )
     for idx, item in enumerate(configs, start=1):
         run_started = time.monotonic()
-        _progress(f"{idx}/{len(configs)} start split={item.split} model={item.model}", config.progress)
+        _progress(
+            f"{idx}/{len(configs)} start split={item.split} model={item.model}", config.progress
+        )
         result = run_one(item)
         results.append(result)
         if result.get("status") == "skipped":
-            skipped.append({"split": item.split, "model": item.model, "reason": result.get("reason")})
+            skipped.append(
+                {"split": item.split, "model": item.model, "reason": result.get("reason")}
+            )
         if checkpoint_path is not None:
             payload = _experiment_payload(
                 config,
@@ -1605,7 +1666,10 @@ def run_experiment(
                 started=started,
             )
             _write_json_payload(checkpoint_path, payload)
-            _progress(f"checkpoint wrote output={checkpoint_path} results={len(results)}/{len(configs)}", config.progress)
+            _progress(
+                f"checkpoint wrote output={checkpoint_path} results={len(results)}/{len(configs)}",
+                config.progress,
+            )
         duration = time.monotonic() - run_started
         durations.append(duration)
         mean_duration = sum(durations) / len(durations)

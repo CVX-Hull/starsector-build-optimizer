@@ -76,10 +76,8 @@ def heuristic_score(
 
     # --- Flux balance (raw hull dissipation, no vent/cap bonuses) ---
     total_weapon_flux = sum(w.sustained_flux for w in weapons)
-    flux_balance = (total_weapon_flux / hull.flux_dissipation
-                    if hull.flux_dissipation > 0 else 0.0)
-    flux_efficiency = (total_dps / total_weapon_flux
-                       if total_weapon_flux > 0 else 0.0)
+    flux_balance = total_weapon_flux / hull.flux_dissipation if hull.flux_dissipation > 0 else 0.0
+    flux_efficiency = total_dps / total_weapon_flux if total_weapon_flux > 0 else 0.0
 
     # --- Effective HP (raw hull armor + hull HP; no hullmod multipliers) ---
     armor_ehp = hull.armor_rating * 5.0  # armor × coverage factor
@@ -102,9 +100,7 @@ def heuristic_score(
 
     # --- Engagement range (DPS-weighted mean of raw weapon ranges) ---
     if total_dps > 0:
-        engagement_range = sum(
-            w.sustained_dps * w.range for w in weapons
-        ) / total_dps
+        engagement_range = sum(w.sustained_dps * w.range for w in weapons) / total_dps
     else:
         engagement_range = 0.0
 
@@ -122,6 +118,7 @@ def heuristic_score(
 
     # --- OP efficiency ---
     from .repair import compute_op_cost
+
     op_used = compute_op_cost(build, hull, game_data)
     op_efficiency = (total_dps + effective_hp * 0.01) / max(op_used, 1)
 

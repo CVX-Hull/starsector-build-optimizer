@@ -56,18 +56,14 @@ def twfe_decompose(
             mask = observed[:, j]
             count = mask.sum()
             if count > 0:
-                beta[j] = np.sum(score_matrix[mask, j] - alpha[mask]) / (
-                    count + ridge
-                )
+                beta[j] = np.sum(score_matrix[mask, j] - alpha[mask]) / (count + ridge)
 
         # Update alpha: α_i = mean(Y_ij − β_j) for observed j
         for i in range(n_builds):
             mask = observed[i, :]
             count = mask.sum()
             if count > 0:
-                alpha[i] = np.sum(score_matrix[i, mask] - beta[mask]) / (
-                    count + ridge
-                )
+                alpha[i] = np.sum(score_matrix[i, mask] - beta[mask]) / (count + ridge)
 
     return alpha, beta
 
@@ -97,8 +93,7 @@ def trimmed_alpha(
 
     if trim_worst >= n:
         warnings.warn(
-            f"trim_worst={trim_worst} >= n_observed={n}; "
-            f"returning untrimmed mean",
+            f"trim_worst={trim_worst} >= n_observed={n}; returning untrimmed mean",
             UserWarning,
             stacklevel=2,
         )
@@ -121,7 +116,7 @@ class ScoreMatrix:
 
     def __init__(self) -> None:
         self._build_map: dict[int, int] = {}  # build_idx → row index
-        self._opp_map: dict[str, int] = {}    # opp_name → col index
+        self._opp_map: dict[str, int] = {}  # opp_name → col index
         self._entries: list[tuple[int, int, float]] = []
         self._dirty: bool = True
         self._alpha: np.ndarray | None = None
@@ -163,9 +158,7 @@ class ScoreMatrix:
         Raises ValueError if no decomposition has been computed.
         """
         if self._beta is None:
-            raise ValueError(
-                "No decomposition computed yet — call build_alpha() first"
-            )
+            raise ValueError("No decomposition computed yet — call build_alpha() first")
         col = self._opp_map.get(opp_name)
         if col is None:
             raise ValueError(f"Unknown opponent: {opp_name}")
@@ -180,10 +173,7 @@ class ScoreMatrix:
         before calling this.
         """
         if self._sigma_eps_sq is None or self._dirty:
-            raise ValueError(
-                "No decomposition computed yet (or dirty) — "
-                "call build_alpha() first"
-            )
+            raise ValueError("No decomposition computed yet (or dirty) — call build_alpha() first")
         row = self._build_map.get(build_idx)
         if row is None:
             raise ValueError(f"Unknown build: {build_idx}")
@@ -211,9 +201,7 @@ class ScoreMatrix:
             return
 
         matrix = self._materialize()
-        self._alpha, self._beta = twfe_decompose(
-            matrix, n_iters=config.n_iters, ridge=config.ridge
-        )
+        self._alpha, self._beta = twfe_decompose(matrix, n_iters=config.n_iters, ridge=config.ridge)
 
         # Pooled residual MSE over observed cells (Phase 5D).
         # n_params = n_builds + n_opps - 1 (one identifying constraint:

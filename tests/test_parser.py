@@ -1,7 +1,5 @@
 """Tests for game data parser using real 0.98a game data."""
 
-
-
 from starsector_optimizer.models import (
     DamageType,
     GameData,

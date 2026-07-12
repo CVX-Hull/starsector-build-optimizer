@@ -32,20 +32,32 @@ class TestQueueGeneration:
         queue = [
             {
                 "matchup_id": "test_001",
-                "player_builds": [{"variant_id": spec.variant_id, "hull_id": spec.hull_id,
-                                    "weapon_assignments": dict(spec.weapon_assignments),
-                                    "hullmods": list(spec.hullmods),
-                                    "flux_vents": spec.flux_vents, "flux_capacitors": spec.flux_capacitors}],
+                "player_builds": [
+                    {
+                        "variant_id": spec.variant_id,
+                        "hull_id": spec.hull_id,
+                        "weapon_assignments": dict(spec.weapon_assignments),
+                        "hullmods": list(spec.hullmods),
+                        "flux_vents": spec.flux_vents,
+                        "flux_capacitors": spec.flux_capacitors,
+                    }
+                ],
                 "enemy_variants": ["dominator_Assault"],
                 "time_limit_seconds": 180,
                 "time_mult": 3.0,
             },
             {
                 "matchup_id": "test_002",
-                "player_builds": [{"variant_id": spec.variant_id, "hull_id": spec.hull_id,
-                                    "weapon_assignments": dict(spec.weapon_assignments),
-                                    "hullmods": list(spec.hullmods),
-                                    "flux_vents": spec.flux_vents, "flux_capacitors": spec.flux_capacitors}],
+                "player_builds": [
+                    {
+                        "variant_id": spec.variant_id,
+                        "hull_id": spec.hull_id,
+                        "weapon_assignments": dict(spec.weapon_assignments),
+                        "hullmods": list(spec.hullmods),
+                        "flux_vents": spec.flux_vents,
+                        "flux_capacitors": spec.flux_capacitors,
+                    }
+                ],
                 "enemy_variants": ["enforcer_Assault"],
                 "time_limit_seconds": 180,
                 "time_mult": 3.0,
@@ -59,8 +71,14 @@ class TestQueueGeneration:
         assert parsed[1]["matchup_id"] == "test_002"
 
     def test_matchup_config_construction(self):
-        spec = BuildSpec(variant_id="eagle_test", hull_id="eagle", weapon_assignments={},
-                         hullmods=(), flux_vents=0, flux_capacitors=0)
+        spec = BuildSpec(
+            variant_id="eagle_test",
+            hull_id="eagle",
+            weapon_assignments={},
+            hullmods=(),
+            flux_vents=0,
+            flux_capacitors=0,
+        )
         mc = MatchupConfig(
             matchup_id="eval_001",
             player_builds=(spec,),
@@ -81,10 +99,16 @@ class TestQueueGeneration:
         queue = [
             {
                 "matchup_id": "integration_test",
-                "player_builds": [{"variant_id": spec.variant_id, "hull_id": spec.hull_id,
-                                    "weapon_assignments": dict(spec.weapon_assignments),
-                                    "hullmods": list(spec.hullmods),
-                                    "flux_vents": spec.flux_vents, "flux_capacitors": spec.flux_capacitors}],
+                "player_builds": [
+                    {
+                        "variant_id": spec.variant_id,
+                        "hull_id": spec.hull_id,
+                        "weapon_assignments": dict(spec.weapon_assignments),
+                        "hullmods": list(spec.hullmods),
+                        "flux_vents": spec.flux_vents,
+                        "flux_capacitors": spec.flux_capacitors,
+                    }
+                ],
                 "enemy_variants": ["dominator_Assault"],
                 "time_limit_seconds": 120,
                 "time_mult": 3.0,
@@ -122,7 +146,12 @@ class TestBatchResultParsing:
                     "flameouts": 0,
                     "damage_dealt": {"shield": 4300.0, "armor": 0.0, "hull": 0.0, "emp": 0.0},
                     "damage_taken": {"shield": 0.0, "armor": 5098.0, "hull": 24588.0, "emp": 0.0},
-                    "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 12900.0, "overload_count": 0},
+                    "flux_stats": {
+                        "curr_flux": 0.0,
+                        "hard_flux": 0.0,
+                        "max_flux": 12900.0,
+                        "overload_count": 0,
+                    },
                 }
             ],
             "enemy_ships": [
@@ -139,7 +168,12 @@ class TestBatchResultParsing:
                     "flameouts": 0,
                     "damage_dealt": {"shield": 0.0, "armor": 5098.0, "hull": 24588.0, "emp": 0.0},
                     "damage_taken": {"shield": 4300.0, "armor": 0.0, "hull": 0.0, "emp": 0.0},
-                    "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 13000.0, "overload_count": 0},
+                    "flux_stats": {
+                        "curr_flux": 0.0,
+                        "hard_flux": 0.0,
+                        "max_flux": 13000.0,
+                        "overload_count": 0,
+                    },
                 }
             ],
             "aggregate": {
@@ -151,21 +185,23 @@ class TestBatchResultParsing:
                 "enemy_ships_retreated": 0,
             },
             "loadout_diagnostic": {
-                "player": [{
-                    "fleet_member_id": "uuid-1",
-                    "spec_weapons": {},
-                    "live_weapons": {},
-                    "spec_hullmods": [],
-                    "live_hullmods": [],
-                    "spec_flux_vents": 0,
-                    "live_flux_vents": 0,
-                    "spec_flux_capacitors": 0,
-                    "live_flux_capacitors": 0,
-                    "weapons_match": True,
-                    "hullmods_match": True,
-                    "flux_vents_match": True,
-                    "flux_capacitors_match": True,
-                }],
+                "player": [
+                    {
+                        "fleet_member_id": "uuid-1",
+                        "spec_weapons": {},
+                        "live_weapons": {},
+                        "spec_hullmods": [],
+                        "live_hullmods": [],
+                        "spec_flux_vents": 0,
+                        "live_flux_vents": 0,
+                        "spec_flux_capacitors": 0,
+                        "live_flux_capacitors": 0,
+                        "weapons_match": True,
+                        "hullmods_match": True,
+                        "flux_vents_match": True,
+                        "flux_capacitors_match": True,
+                    }
+                ],
             },
         },
     ]

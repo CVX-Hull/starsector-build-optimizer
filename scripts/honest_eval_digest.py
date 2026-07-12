@@ -5,6 +5,7 @@ Wave 1 report § 3.
 Usage:
     uv run python scripts/honest_eval_digest.py
 """
+
 from __future__ import annotations
 
 import json
@@ -33,19 +34,20 @@ def cell_summary(cell: str) -> dict:
     # Build a per-build summary
     rows = []
     for eb in builds:
-        rows.append({
-            "build_id": f"{eb['source_campaign']}__s{eb['source_study_idx']}__seed{eb['source_seed_idx']}__rank{eb['source_rank']}",
-            "training_value": eb.get("source_value"),
-            "honest_mean": eb.get("oracle_score"),
-            "honest_sem": eb.get("oracle_se"),
-            "n_matchups_succeeded": eb.get("n_matchups_succeeded"),
-            "build_short": _build_short(eb["build"]),
-        })
+        rows.append(
+            {
+                "build_id": f"{eb['source_campaign']}__s{eb['source_study_idx']}__seed{eb['source_seed_idx']}__rank{eb['source_rank']}",
+                "training_value": eb.get("source_value"),
+                "honest_mean": eb.get("oracle_score"),
+                "honest_sem": eb.get("oracle_se"),
+                "n_matchups_succeeded": eb.get("n_matchups_succeeded"),
+                "build_short": _build_short(eb["build"]),
+            }
+        )
     rows.sort(key=lambda r: r["honest_mean"] or float("-inf"), reverse=True)
     top1 = rows[0]
-    top1_diff_in_sigma = (
-        ((top1["honest_mean"] or 0) - (top1["training_value"] or 0))
-        / max(top1["honest_sem"] or 1e-9, 1e-9)
+    top1_diff_in_sigma = ((top1["honest_mean"] or 0) - (top1["training_value"] or 0)) / max(
+        top1["honest_sem"] or 1e-9, 1e-9
     )
     return {
         "missing": False,
@@ -67,9 +69,13 @@ def main() -> int:
         cell_data[cell] = cell_summary(cell)
 
     print("\n## Top-1 honest fitness across cells (the headline)\n")
-    print(f"{'Cell':<14} {'top-1 honest':>12} {'top-1 training':>15} {'Δ(honest-train)/σ':>18} {'build':<60}")
+    print(
+        f"{'Cell':<14} {'top-1 honest':>12} {'top-1 training':>15} {'Δ(honest-train)/σ':>18} {'build':<60}"
+    )
     print("-" * 122)
-    cells_with_data = [(c, d) for c, d in cell_data.items() if not d.get("missing") and d.get("n_builds", 0) > 0]
+    cells_with_data = [
+        (c, d) for c, d in cell_data.items() if not d.get("missing") and d.get("n_builds", 0) > 0
+    ]
     for cell, d in cells_with_data:
         top1 = d["top1"]
         ht = top1["honest_mean"] or 0.0
@@ -80,7 +86,9 @@ def main() -> int:
 
     # Cell ranking by best honest fitness
     print("\n## Cell ranking by top-1 honest fitness (which cell's optimizer wins?)\n")
-    ranked = sorted(cells_with_data, key=lambda x: x[1]["top1"]["honest_mean"] or float("-inf"), reverse=True)
+    ranked = sorted(
+        cells_with_data, key=lambda x: x[1]["top1"]["honest_mean"] or float("-inf"), reverse=True
+    )
     for rank, (cell, d) in enumerate(ranked, start=1):
         print(f"  {rank}. {cell}  honest={d['top1']['honest_mean']:.4f}  n_builds={d['n_builds']}")
 
@@ -92,7 +100,7 @@ def main() -> int:
         margin = (winner_d["top1"]["honest_mean"] or 0) - (runner_d["top1"]["honest_mean"] or 0)
         winner_sem = winner_d["top1"]["honest_sem"] or 0
         runner_sem = runner_d["top1"]["honest_sem"] or 0
-        margin_in_sigma = margin / max((winner_sem ** 2 + runner_sem ** 2) ** 0.5, 1e-9)
+        margin_in_sigma = margin / max((winner_sem**2 + runner_sem**2) ** 0.5, 1e-9)
         print(f"  Winner: {winner_cell}, Runner-up: {runner_cell}")
         print(f"  Margin: {margin:.4f} ({margin_in_sigma:.2f}σ)")
 

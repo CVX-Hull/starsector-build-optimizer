@@ -80,9 +80,7 @@ class TestNoiseFloor:
         result = noise_floor_from_replicates(rows)
         assert result["n_groups"] == 2
         assert result["source"] == "honest_eval_replicates"
-        assert result["noise_floor"] == pytest.approx(
-            np.median([np.std([0.0, 1.0], ddof=1), 0.0])
-        )
+        assert result["noise_floor"] == pytest.approx(np.median([np.std([0.0, 1.0], ddof=1), 0.0]))
 
     def test_no_replicated_groups_returns_none(self):
         rows = _replicate_rows({("b1", "o1"): [1.0], ("b2", "o2"): [0.5]})
@@ -127,9 +125,7 @@ class TestPerOpponentRankMetrics:
         assert out["mean_spearman"] == pytest.approx(0.0)
 
     def test_low_variance_opponents_excluded(self):
-        builds, opponents, y_true, y_pred = _ranked_panel(
-            8, 3, constant_opponents={"opp2": -1.0}
-        )
+        builds, opponents, y_true, y_pred = _ranked_panel(8, 3, constant_opponents={"opp2": -1.0})
         out = per_opponent_rank_metrics(builds, opponents, y_true, y_pred, 0.05, CONFIG)
         assert out["included_opponents"] == 2
         assert out["excluded_low_variance"] == 1
@@ -187,7 +183,9 @@ class TestPerOpponentRankMetrics:
         y_true = np.asarray([0.0, 0.04, 1.0, 1.04])
         y_pred = np.asarray([0.0, -1.0, 2.0, 3.0])  # inverts the within-bin pair
         config = EvalMetricsConfig(min_builds_per_opponent=2)
-        out = per_opponent_rank_metrics([f"b{i}" for i in range(4)], opponents, y_true, y_pred, 0.5, config)
+        out = per_opponent_rank_metrics(
+            [f"b{i}" for i in range(4)], opponents, y_true, y_pred, 0.5, config
+        )
         row = _as_dict(out["per_opponent"])["o"]
         assert row["sparse_kendall"] is not None
         assert row["sparse_kendall"] > row["kendall"]
@@ -214,9 +212,7 @@ class TestBuildAggregateRankMetrics:
         assert out["n_builds"] == 6
 
     def test_degenerate_opponents_excluded_from_aggregates(self):
-        builds, opponents, y_true, y_pred = _ranked_panel(
-            6, 4, constant_opponents={"opp3": -1.0}
-        )
+        builds, opponents, y_true, y_pred = _ranked_panel(6, 4, constant_opponents={"opp3": -1.0})
         out = build_aggregate_rank_metrics(
             builds, opponents, y_true, y_pred, frozenset({"opp3"}), (1,), CONFIG
         )
@@ -374,7 +370,10 @@ class TestHonestEvalBuildMetrics:
         y_pred = np.zeros(6)
         config = EvalMetricsConfig(bootstrap_resamples=10)
         out = honest_eval_build_metrics(
-            builds, opponents, y_true, y_pred,
+            builds,
+            opponents,
+            y_true,
+            y_pred,
             degenerate_opponents=frozenset({"o0", "o1", "o2"}),
             outer_train_build_keys=frozenset(),
             k_values=(1,),
@@ -387,12 +386,12 @@ class TestHonestEvalBuildMetrics:
 
 class TestJsonSafety:
     def test_all_metric_outputs_survive_json_round_trip(self):
-        builds, opponents, y_true, y_pred = _ranked_panel(
-            8, 3, constant_opponents={"opp2": -1.0}
-        )
+        builds, opponents, y_true, y_pred = _ranked_panel(8, 3, constant_opponents={"opp2": -1.0})
         config = EvalMetricsConfig(bootstrap_resamples=10)
         blobs = [
-            per_opponent_rank_metrics(builds, opponents, y_true, np.zeros_like(y_pred), 0.05, config),
+            per_opponent_rank_metrics(
+                builds, opponents, y_true, np.zeros_like(y_pred), 0.05, config
+            ),
             build_aggregate_rank_metrics(
                 builds, opponents, y_true, y_pred, frozenset({"opp2"}), (1, 3), config
             ),

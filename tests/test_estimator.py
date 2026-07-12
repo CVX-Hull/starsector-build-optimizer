@@ -1,6 +1,5 @@
 """Tests for throughput estimator."""
 
-
 import pytest
 
 from starsector_optimizer.estimator import (
@@ -31,20 +30,44 @@ from starsector_optimizer.models import (
 
 def _make_weapon(id: str, size: SlotSize, wtype: WeaponType, op: int = 5) -> Weapon:
     return Weapon(
-        id=id, name=id, size=size, weapon_type=wtype,
-        damage_per_shot=100, damage_per_second=50, damage_type=DamageType.ENERGY,
-        emp=0, flux_per_shot=50, flux_per_second=25, range=600,
-        op_cost=op, chargeup=0, chargedown=0, burst_size=1, burst_delay=0,
-        ammo=-1, ammo_per_sec=0, proj_speed=800, turn_rate=0,
-        hints=[], tags=[],
+        id=id,
+        name=id,
+        size=size,
+        weapon_type=wtype,
+        damage_per_shot=100,
+        damage_per_second=50,
+        damage_type=DamageType.ENERGY,
+        emp=0,
+        flux_per_shot=50,
+        flux_per_second=25,
+        range=600,
+        op_cost=op,
+        chargeup=0,
+        chargedown=0,
+        burst_size=1,
+        burst_delay=0,
+        ammo=-1,
+        ammo_per_sec=0,
+        proj_speed=800,
+        turn_rate=0,
+        hints=[],
+        tags=[],
     )
 
 
 def _make_hullmod(id: str, hidden: bool = False) -> HullMod:
     return HullMod(
-        id=id, name=id, tier=1, is_hidden=hidden, script="",
-        cost_frigate=5, cost_destroyer=10, cost_cruiser=15, cost_capital=20,
-        ui_tags=[], tags=[],
+        id=id,
+        name=id,
+        tier=1,
+        is_hidden=hidden,
+        script="",
+        cost_frigate=5,
+        cost_destroyer=10,
+        cost_cruiser=15,
+        cost_capital=20,
+        ui_tags=[],
+        tags=[],
     )
 
 
@@ -56,19 +79,37 @@ def _make_hull(
 ) -> ShipHull:
     if slots is None:
         slots = [
-            WeaponSlot("WS01", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 360, (0, 0)),
+            WeaponSlot(
+                "WS01", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 360, (0, 0)
+            ),
             WeaponSlot("WS02", SlotType.ENERGY, SlotSize.SMALL, MountType.TURRET, 0, 360, (0, 0)),
             WeaponSlot("WS03", SlotType.MISSILE, SlotSize.LARGE, MountType.TURRET, 0, 360, (0, 0)),
         ]
     return ShipHull(
-        id=id, name=id, hull_size=hull_size, designation="Cruiser",
-        tech_manufacturer="test", system_id="", fleet_pts=15,
-        hitpoints=10000, armor_rating=1000, max_flux=5000, flux_dissipation=300,
-        ordnance_points=100, fighter_bays=0, max_speed=50,
-        shield_type=ShieldType.OMNI, shield_arc=360, shield_upkeep=0.2,
-        shield_efficiency=1.0, phase_cost=0, phase_upkeep=0,
-        peak_cr_sec=480, cr_loss_per_sec=0.01,
-        weapon_slots=slots, built_in_mods=built_in_mods or [],
+        id=id,
+        name=id,
+        hull_size=hull_size,
+        designation="Cruiser",
+        tech_manufacturer="test",
+        system_id="",
+        fleet_pts=15,
+        hitpoints=10000,
+        armor_rating=1000,
+        max_flux=5000,
+        flux_dissipation=300,
+        ordnance_points=100,
+        fighter_bays=0,
+        max_speed=50,
+        shield_type=ShieldType.OMNI,
+        shield_arc=360,
+        shield_upkeep=0.2,
+        shield_efficiency=1.0,
+        phase_cost=0,
+        phase_upkeep=0,
+        peak_cr_sec=480,
+        cr_loss_per_sec=0.01,
+        weapon_slots=slots,
+        built_in_mods=built_in_mods or [],
     )
 
 
@@ -98,11 +139,11 @@ def _attach(manifest, hull_id, applicable=("mod_a", "mod_b", "mod_c", "mod_hidde
     entry or `get_eligible_hullmods` KeyErrors. Builds a patched manifest
     that admits the given synthetic mods for `hull_id`."""
     from tests.conftest import attach_synthetic_hull
+
     return attach_synthetic_hull(manifest, hull_id, applicable)
 
 
 class TestHullSpaceStats:
-
     def test_basic_stats(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
@@ -148,8 +189,7 @@ class TestHullSpaceStats:
         Simulated here by omitting mod_a from the applicable set."""
         hull = _make_hull(built_in_mods=["mod_a"])
         gd = _make_game_data(hull)
-        m = _attach(manifest, hull.id,
-                    applicable=("mod_b", "mod_c", "mod_hidden"))
+        m = _attach(manifest, hull.id, applicable=("mod_b", "mod_c", "mod_hidden"))
         stats = compute_hull_space_stats(hull, gd, m)
 
         assert stats.num_eligible_hullmods == 2  # mod_b, mod_c (mod_hidden filtered)
@@ -187,7 +227,6 @@ class TestHullSpaceStats:
 
 
 class TestEstimateThroughput:
-
     def test_wall_seconds_per_matchup(self):
         """Wall time = game_time_limit / time_mult."""
         params = SimulationParams(time_mult=3.0, game_time_limit_seconds=180)
@@ -206,12 +245,14 @@ class TestEstimateThroughput:
 
     def test_startup_overhead(self):
         """Startup fraction decreases with larger batches."""
-        p1 = SimulationParams(startup_seconds=35, batch_size=1, time_mult=3.0,
-                              game_time_limit_seconds=180)
+        p1 = SimulationParams(
+            startup_seconds=35, batch_size=1, time_mult=3.0, game_time_limit_seconds=180
+        )
         e1 = estimate_throughput(p1)
 
-        p50 = SimulationParams(startup_seconds=35, batch_size=50, time_mult=3.0,
-                               game_time_limit_seconds=180)
+        p50 = SimulationParams(
+            startup_seconds=35, batch_size=50, time_mult=3.0, game_time_limit_seconds=180
+        )
         e50 = estimate_throughput(p50)
 
         # batch=1: 35 / (35 + 60) ≈ 0.368
@@ -237,8 +278,11 @@ class TestEstimateThroughput:
     def test_cost_estimates(self):
         """Cost = total_hours * provider.cost_per_hour, adjusted for instances per machine."""
         params = SimulationParams(
-            num_instances=8, sims_per_hull=100, num_hulls=10,
-            time_mult=5.0, game_time_limit_seconds=180,
+            num_instances=8,
+            sims_per_hull=100,
+            num_hulls=10,
+            time_mult=5.0,
+            game_time_limit_seconds=180,
             providers=[
                 CloudProvider("Hetzner CCX43", cost_per_hour=0.22, max_instances=8),
             ],
@@ -251,13 +295,17 @@ class TestEstimateThroughput:
         # Cost = hours * 1 machine * $0.22/hr
         expected_hours = est.total_hours
         assert est.cost_estimates["Hetzner CCX43"] == pytest.approx(
-            expected_hours * 1 * 0.22, rel=0.01)
+            expected_hours * 1 * 0.22, rel=0.01
+        )
 
     def test_multiple_machines_needed(self):
         """When num_instances > provider max, need multiple machines."""
         params = SimulationParams(
-            num_instances=16, sims_per_hull=100, num_hulls=10,
-            time_mult=5.0, game_time_limit_seconds=180,
+            num_instances=16,
+            sims_per_hull=100,
+            num_hulls=10,
+            time_mult=5.0,
+            game_time_limit_seconds=180,
             providers=[
                 CloudProvider("Small VM", cost_per_hour=0.10, max_instances=4),
             ],
@@ -265,8 +313,7 @@ class TestEstimateThroughput:
         est = estimate_throughput(params)
         # 16 instances / 4 per machine = 4 machines
         expected_hours = est.total_hours
-        assert est.cost_estimates["Small VM"] == pytest.approx(
-            expected_hours * 4 * 0.10, rel=0.01)
+        assert est.cost_estimates["Small VM"] == pytest.approx(expected_hours * 4 * 0.10, rel=0.01)
 
     def test_5x_faster_than_3x(self):
         p3 = SimulationParams(time_mult=3.0, game_time_limit_seconds=180)
@@ -276,7 +323,8 @@ class TestEstimateThroughput:
 
         assert e5.total_hours < e3.total_hours
         assert e5.wall_seconds_per_matchup == pytest.approx(
-            e3.wall_seconds_per_matchup * 3 / 5, rel=0.01)
+            e3.wall_seconds_per_matchup * 3 / 5, rel=0.01
+        )
 
     def test_shorter_time_limit(self):
         """60s game limit at 5x = 12s wall-clock per matchup."""
@@ -290,7 +338,6 @@ class TestEstimateThroughput:
 
 
 class TestFormatReport:
-
     def test_report_contains_key_sections(self, manifest):
         hull = _make_hull()
         gd = _make_game_data(hull)
@@ -308,7 +355,9 @@ class TestFormatReport:
     def test_report_large_numbers_readable(self, manifest):
         """Weapon combinations should be formatted with exponent for large numbers."""
         slots = [
-            WeaponSlot(f"WS{i:02d}", SlotType.UNIVERSAL, SlotSize.MEDIUM, MountType.TURRET, 0, 360, (0, 0))
+            WeaponSlot(
+                f"WS{i:02d}", SlotType.UNIVERSAL, SlotSize.MEDIUM, MountType.TURRET, 0, 360, (0, 0)
+            )
             for i in range(10)
         ]
         hull = _make_hull(slots=slots)

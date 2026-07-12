@@ -41,20 +41,21 @@ logger = logging.getLogger("probe")
 
 # Probe-specific deadlines; strictly bounded so a crashed probe can't leak
 # into a pending campaign.
-_RUN_DEADLINE_SECONDS = 600.0   # 10 min; provision_fleet → all running
+_RUN_DEADLINE_SECONDS = 600.0  # 10 min; provision_fleet → all running
 _CLOUD_INIT_GRACE_SECONDS = 45.0
 _TEARDOWN_DEADLINE_SECONDS = 300.0  # 5 min to reach terminated state
 _POLL_INTERVAL_SECONDS = 10.0
 
 
 def _poll_until_running(
-    provider: AWSProvider, project_tag: str, target: int, deadline: float,
+    provider: AWSProvider,
+    project_tag: str,
+    target: int,
+    deadline: float,
 ) -> list[dict]:
     while time.monotonic() < deadline:
         active = provider.list_active(project_tag)
-        if len(active) >= target and all(
-            inst["state"] == "running" for inst in active
-        ):
+        if len(active) >= target and all(inst["state"] == "running" for inst in active):
             return active
         logger.info(
             "waiting for fleet: running=%d/%d states=%s",
@@ -71,7 +72,9 @@ def _poll_until_running(
 
 
 def _poll_until_empty(
-    provider: AWSProvider, project_tag: str, deadline: float,
+    provider: AWSProvider,
+    project_tag: str,
+    deadline: float,
 ) -> None:
     while time.monotonic() < deadline:
         active = provider.list_active(project_tag)
@@ -81,8 +84,7 @@ def _poll_until_empty(
         time.sleep(_POLL_INTERVAL_SECONDS)
     active = provider.list_active(project_tag)
     raise TimeoutError(
-        f"teardown did not clear within {_TEARDOWN_DEADLINE_SECONDS}s; "
-        f"residual: {active}"
+        f"teardown did not clear within {_TEARDOWN_DEADLINE_SECONDS}s; residual: {active}"
     )
 
 
@@ -90,7 +92,8 @@ def _run_final_audit(campaign_name: str) -> int:
     repo_root = Path(__file__).resolve().parent.parent.parent
     audit = repo_root / "scripts" / "cloud" / "final_audit.sh"
     result = subprocess.run(
-        [str(audit), campaign_name], check=False,
+        [str(audit), campaign_name],
+        check=False,
     )
     return result.returncode
 
@@ -99,8 +102,9 @@ def run_probe(config_path: Path) -> int:
     config = load_campaign_config(config_path)
     logger.info("probe campaign: %s", config.name)
     logger.info("regions: %s", config.regions)
-    logger.info("target workers: %d (min=%d)",
-                config.max_concurrent_workers, config.min_workers_to_start)
+    logger.info(
+        "target workers: %d (min=%d)", config.max_concurrent_workers, config.min_workers_to_start
+    )
 
     provider = AWSProvider(regions=config.regions)
     user_data = render_probe_user_data(campaign_id=config.name)
@@ -128,20 +132,22 @@ def run_probe(config_path: Path) -> int:
         logger.info("=== phase 2: wait for RUNNING ===")
         deadline = time.monotonic() + _RUN_DEADLINE_SECONDS
         active = _poll_until_running(
-            provider, project_tag, target=len(instance_ids), deadline=deadline,
+            provider,
+            project_tag,
+            target=len(instance_ids),
+            deadline=deadline,
         )
-        logger.info("all %d instances running: %s",
-                    len(active), [i["id"] for i in active])
+        logger.info("all %d instances running: %s", len(active), [i["id"] for i in active])
 
-        logger.info("=== phase 3: cloud-init grace (%.0fs) ===",
-                    _CLOUD_INIT_GRACE_SECONDS)
+        logger.info("=== phase 3: cloud-init grace (%.0fs) ===", _CLOUD_INIT_GRACE_SECONDS)
         time.sleep(_CLOUD_INIT_GRACE_SECONDS)
         return 0
     finally:
         logger.info("=== phase 4: teardown (targeted terminate_fleet) ===")
         try:
             terminated = provider.terminate_fleet(
-                fleet_name=fleet_name, project_tag=project_tag,
+                fleet_name=fleet_name,
+                project_tag=project_tag,
             )
             logger.info("terminated: %d instances", terminated)
         except Exception as e:
@@ -169,8 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("campaign_yaml", type=Path)
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Load + validate the YAML; skip AWS calls.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Load + validate the YAML; skip AWS calls."
+    )
     args = parser.parse_args(argv)
 
     if args.dry_run:

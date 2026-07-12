@@ -52,41 +52,53 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 # --- publication-quality matplotlib defaults (aligned with sibling producer) ---
-plt.rcParams.update({
-    "figure.dpi": 110,
-    "savefig.dpi": 200,
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.15,
-    "figure.constrained_layout.use": True,
-    "axes.prop_cycle": plt.cycler(color=[
-        "#006BA4", "#FF800E", "#ABABAB", "#595959", "#5F9ED1",
-        "#C85200", "#898989", "#A2C8EC", "#FFBC79", "#CFCFCF",
-    ]),
-    "axes.grid": True,
-    "axes.grid.axis": "y",
-    "axes.axisbelow": True,
-    "grid.color": "#cccccc",
-    "grid.linewidth": 0.6,
-    "grid.alpha": 0.7,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.linewidth": 0.8,
-    "xtick.direction": "out",
-    "ytick.direction": "out",
-    "xtick.major.size": 3.5,
-    "ytick.major.size": 3.5,
-    "font.size": 10,
-    "axes.titlesize": 11,
-    "axes.titleweight": "bold",
-    "axes.labelsize": 10,
-    "xtick.labelsize": 9,
-    "ytick.labelsize": 9,
-    "legend.fontsize": 9,
-    "legend.frameon": False,
-    "figure.titlesize": 12,
-    "figure.titleweight": "bold",
-    "image.cmap": "viridis",
-})
+plt.rcParams.update(
+    {
+        "figure.dpi": 110,
+        "savefig.dpi": 200,
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.15,
+        "figure.constrained_layout.use": True,
+        "axes.prop_cycle": plt.cycler(
+            color=[
+                "#006BA4",
+                "#FF800E",
+                "#ABABAB",
+                "#595959",
+                "#5F9ED1",
+                "#C85200",
+                "#898989",
+                "#A2C8EC",
+                "#FFBC79",
+                "#CFCFCF",
+            ]
+        ),
+        "axes.grid": True,
+        "axes.grid.axis": "y",
+        "axes.axisbelow": True,
+        "grid.color": "#cccccc",
+        "grid.linewidth": 0.6,
+        "grid.alpha": 0.7,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.linewidth": 0.8,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "xtick.major.size": 3.5,
+        "ytick.major.size": 3.5,
+        "font.size": 10,
+        "axes.titlesize": 11,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "legend.fontsize": 9,
+        "legend.frameon": False,
+        "figure.titlesize": 12,
+        "figure.titleweight": "bold",
+        "image.cmap": "viridis",
+    }
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -94,9 +106,9 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 CELLS = ["c0a", "c0b", "c1", "c2", "c3"]
 SEEDS = ["0", "1", "2"]
 CHECKPOINTS = (50, 100, 150, 200)
-WINDOW_W = 50          # exploration-window width (trials) for §7
-BUCKET_W = 25          # bucket width for §5/§6 trajectory rates
-TIME_TO_FRAC = 0.90    # §4 — fraction of eventual best to detect
+WINDOW_W = 50  # exploration-window width (trials) for §7
+BUCKET_W = 25  # bucket width for §5/§6 trajectory rates
+TIME_TO_FRAC = 0.90  # §4 — fraction of eventual best to detect
 
 CHARTS_DIR = REPO_ROOT / "data" / "wave1-trajectory" / "charts"
 HEADLINES_PATH = REPO_ROOT / "data" / "wave1-trajectory" / "headline_numbers.json"
@@ -133,12 +145,13 @@ class TrialRow:
         mean across opponents. None when `opponent_results` is empty
         (cache-hit and invalid-spec rows).
     """
+
     cell: str
     seed: str
     trial_number: int
-    kind: str          # "finalized" | "pruned" | "cache_hit" | "invalid_spec"
-    raw_fitness: float | None     # ledger field — see docstring
-    fitness: float | None         # ledger field — post-A3 shaped value
+    kind: str  # "finalized" | "pruned" | "cache_hit" | "invalid_spec"
+    raw_fitness: float | None  # ledger field — see docstring
+    fitness: float | None  # ledger field — post-A3 shaped value
     twfe_fitness: float | None
     eb_fitness: float | None
     raw_mean_hp_diff: float | None  # derived: mean(opponent_results[i].hp_differential)
@@ -158,8 +171,14 @@ def _build_id(b: dict) -> tuple:
 
 
 def _load_cell_seed(cell: str, seed: str) -> list[TrialRow]:
-    p = (REPO_ROOT / "data" / "logs" / f"wave1-{cell}" /
-         f"hammerhead__early__tpe__seed{seed}" / "evaluation_log.jsonl")
+    p = (
+        REPO_ROOT
+        / "data"
+        / "logs"
+        / f"wave1-{cell}"
+        / f"hammerhead__early__tpe__seed{seed}"
+        / "evaluation_log.jsonl"
+    )
     if not p.exists():
         return []
     out: list[TrialRow] = []
@@ -184,23 +203,25 @@ def _load_cell_seed(cell: str, seed: str) -> list[TrialRow]:
             b = d.get("build")
             bid = _build_id(b) if b else None
             opp_results = d.get("opponent_results") or []
-            hp_diffs = [r["hp_differential"] for r in opp_results
-                        if r.get("hp_differential") is not None]
-            raw_mean_hp_diff = (
-                sum(hp_diffs) / len(hp_diffs) if hp_diffs else None
+            hp_diffs = [
+                r["hp_differential"] for r in opp_results if r.get("hp_differential") is not None
+            ]
+            raw_mean_hp_diff = sum(hp_diffs) / len(hp_diffs) if hp_diffs else None
+            out.append(
+                TrialRow(
+                    cell=cell,
+                    seed=seed,
+                    trial_number=trial_number,
+                    kind=kind,
+                    raw_fitness=d.get("raw_fitness"),
+                    fitness=d.get("fitness"),
+                    twfe_fitness=d.get("twfe_fitness"),
+                    eb_fitness=d.get("eb_fitness"),
+                    raw_mean_hp_diff=raw_mean_hp_diff,
+                    build_id=bid,
+                    timestamp=d.get("timestamp"),
+                )
             )
-            out.append(TrialRow(
-                cell=cell, seed=seed,
-                trial_number=trial_number,
-                kind=kind,
-                raw_fitness=d.get("raw_fitness"),
-                fitness=d.get("fitness"),
-                twfe_fitness=d.get("twfe_fitness"),
-                eb_fitness=d.get("eb_fitness"),
-                raw_mean_hp_diff=raw_mean_hp_diff,
-                build_id=bid,
-                timestamp=d.get("timestamp"),
-            ))
     out.sort(key=lambda r: r.trial_number)
     return out
 
@@ -213,9 +234,10 @@ def _load_all() -> dict[tuple[str, str], list[TrialRow]]:
             if rows:
                 out[(cell, seed)] = rows
                 log.info(
-                    "  loaded %s seed=%s: %d rows (%d finalized, %d pruned, "
-                    "%d cache, %d invalid)",
-                    cell, seed, len(rows),
+                    "  loaded %s seed=%s: %d rows (%d finalized, %d pruned, %d cache, %d invalid)",
+                    cell,
+                    seed,
+                    len(rows),
                     sum(1 for r in rows if r.kind == "finalized"),
                     sum(1 for r in rows if r.kind == "pruned"),
                     sum(1 for r in rows if r.kind == "cache_hit"),
@@ -227,7 +249,9 @@ def _load_all() -> dict[tuple[str, str], list[TrialRow]]:
 # ----------------------------------------------------------- trajectory ops ---
 
 
-def _best_so_far(rows: Sequence[TrialRow], field: str = "raw_fitness") -> tuple[np.ndarray, np.ndarray]:
+def _best_so_far(
+    rows: Sequence[TrialRow], field: str = "raw_fitness"
+) -> tuple[np.ndarray, np.ndarray]:
     """Return (trial_numbers, best-so-far). Steps forward at finalized rows;
     pruned / cache / invalid rows do not update the running max but still
     occupy a position on the trial-number axis."""
@@ -259,8 +283,9 @@ def _best_at(rows: Sequence[TrialRow], T: int, field: str = "raw_fitness") -> fl
     return best
 
 
-def _time_to_target(rows: Sequence[TrialRow], target: float,
-                    field: str = "raw_fitness") -> int | None:
+def _time_to_target(
+    rows: Sequence[TrialRow], target: float, field: str = "raw_fitness"
+) -> int | None:
     """First trial_number whose finalized best-so-far ≥ target. None if never."""
     cur = float("-inf")
     for r in rows:
@@ -308,9 +333,11 @@ def section_01_best_so_far(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
         ax.set_xlabel("trial number")
         if ax_i == 0:
             ax.set_ylabel(r"best-so-far raw fitness, $\hat{r}^{\max}_{T}$")
-        ax.set_title(f"({chr(97 + ax_i)}) {cell}\n"
-                     f"final best = "
-                     f"{', '.join(f'{seed_finals[s]:.3f}' if s in seed_finals else '—' for s in SEEDS)}")
+        ax.set_title(
+            f"({chr(97 + ax_i)}) {cell}\n"
+            f"final best = "
+            f"{', '.join(f'{seed_finals[s]:.3f}' if s in seed_finals else '—' for s in SEEDS)}"
+        )
         ax.legend(loc="lower right", ncol=1)
         out[cell] = {"final_best_per_seed": seed_finals}
     fig.suptitle("Wave 1 — best-so-far raw fitness by trial, per cell × seed")
@@ -342,10 +369,14 @@ def section_02_sample_efficiency(data: dict[tuple[str, str], list[TrialRow]]) ->
             hi = float(np.max(vals))
             out[cell][f"T={T}"] = {
                 "n_seeds": len(vals),
-                "median": med, "min": lo, "max": hi,
+                "median": med,
+                "min": lo,
+                "max": hi,
                 "values": [float(v) for v in vals],
             }
-            table.append({"cell": cell, "T": T, "median": med, "min": lo, "max": hi, "n": len(vals)})
+            table.append(
+                {"cell": cell, "T": T, "median": med, "min": lo, "max": hi, "n": len(vals)}
+            )
 
     # Bar chart with seed-spread error bars
     fig, ax = plt.subplots(figsize=(11, 5))
@@ -366,14 +397,14 @@ def section_02_sample_efficiency(data: dict[tuple[str, str], list[TrialRow]]) ->
                 errs_lo.append(entry["median"] - entry["min"])
                 errs_hi.append(entry["max"] - entry["median"])
         offsets = (ci - 2) * bar_w
-        ax.bar(x + offsets, meds, bar_w, yerr=[errs_lo, errs_hi],
-               capsize=2.5, label=cell)
+        ax.bar(x + offsets, meds, bar_w, yerr=[errs_lo, errs_hi], capsize=2.5, label=cell)
     ax.set_xticks(x)
     ax.set_xticklabels([f"T = {T}" for T in CHECKPOINTS])
     ax.set_xlabel("trial-budget checkpoint")
     ax.set_ylabel(r"best raw fitness reached, $\hat{r}^{\max}_{T}$  (median across seeds)")
-    ax.set_title("Sample efficiency at matched trial budgets — per-cell median, "
-                 "error bars = seed min/max")
+    ax.set_title(
+        "Sample efficiency at matched trial budgets — per-cell median, error bars = seed min/max"
+    )
     ax.legend(ncol=5, loc="lower right")
     fig.savefig(CHARTS_DIR / "02_sample_efficiency.png")
     plt.close(fig)
@@ -408,14 +439,10 @@ def section_03_time_to_target(data: dict[tuple[str, str], list[TrialRow]]) -> di
                 "n_visible_rows": n_visible,
                 "max_trial_number": max_trial_number,
                 "frac_visible_rows": (
-                    tt / n_visible
-                    if (tt is not None and n_visible > 0)
-                    else None
+                    tt / n_visible if (tt is not None and n_visible > 0) else None
                 ),
                 "frac_trial_axis": (
-                    tt / max_trial_number
-                    if (tt is not None and max_trial_number)
-                    else None
+                    tt / max_trial_number if (tt is not None and max_trial_number) else None
                 ),
             }
             if tt is not None:
@@ -426,18 +453,24 @@ def section_03_time_to_target(data: dict[tuple[str, str], list[TrialRow]]) -> di
             box_labels.append(cell)
 
     fig, ax = plt.subplots(figsize=(8.5, 4.6))
-    bp = ax.boxplot(box_data, tick_labels=box_labels, widths=0.5,
-                    patch_artist=True, medianprops={"color": "#C85200"})
+    bp = ax.boxplot(
+        box_data,
+        tick_labels=box_labels,
+        widths=0.5,
+        patch_artist=True,
+        medianprops={"color": "#C85200"},
+    )
     for patch in bp["boxes"]:
         patch.set_facecolor("#A2C8EC")
         patch.set_edgecolor("#006BA4")
     for ci, vals in enumerate(box_data):
-        ax.scatter([ci + 1] * len(vals), vals, color="#595959",
-                   s=22, zorder=3, alpha=0.8)
+        ax.scatter([ci + 1] * len(vals), vals, color="#595959", s=22, zorder=3, alpha=0.8)
     ax.set_xlabel("cell")
     ax.set_ylabel(r"trials until best-so-far $\geq 0.9 \cdot \hat{r}^{\max}_{\mathrm{final}}$")
-    ax.set_title(f"Time to {TIME_TO_FRAC:.0%}-of-final best — per-cell distribution "
-                 f"over the {len(SEEDS)} seeds")
+    ax.set_title(
+        f"Time to {TIME_TO_FRAC:.0%}-of-final best — per-cell distribution "
+        f"over the {len(SEEDS)} seeds"
+    )
     fig.savefig(CHARTS_DIR / "03_time_to_90.png")
     plt.close(fig)
     return out
@@ -507,14 +540,14 @@ def section_05_pruner_trajectory(data: dict[tuple[str, str], list[TrialRow]]) ->
         out[cell] = {
             "n_trials": len(all_rows),
             "n_pruned_total": sum(1 for r in all_rows if r.kind == "pruned"),
-            "overall_pruner_rate": (
-                sum(1 for r in all_rows if r.kind == "pruned") / len(all_rows)),
+            "overall_pruner_rate": (sum(1 for r in all_rows if r.kind == "pruned") / len(all_rows)),
             "bucket_rates": [(int(b[0]), int(b[1]), int(b[2])) for b in buckets],
         }
     ax.set_xlabel(f"trial-number bucket centre  (width = {BUCKET_W} trials)")
     ax.set_ylabel(r"$N_{\mathrm{pruned}} / N_{\mathrm{total}}$")
-    ax.set_title("Pruner-fire rate over time — testing whether TPE learns "
-                 "to avoid prunable regions")
+    ax.set_title(
+        "Pruner-fire rate over time — testing whether TPE learns to avoid prunable regions"
+    )
     ax.set_ylim(0, max(0.05, ax.get_ylim()[1]))
     ax.legend(ncol=5, loc="upper right")
     fig.savefig(CHARTS_DIR / "05_pruner_trajectory.png")
@@ -549,13 +582,12 @@ def section_06_invalid_cache_trajectory(data: dict[tuple[str, str], list[TrialRo
             cache_rates.append(n_cache / n_total)
             inv_xs.append(lo + BUCKET_W // 2)
             inv_rates.append(n_inv / n_total)
-        ax_cache.plot(cache_xs, cache_rates, marker="o", markersize=3,
-                      label=cell, linewidth=1.4)
-        ax_inv.plot(inv_xs, inv_rates, marker="o", markersize=3,
-                    label=cell, linewidth=1.4)
+        ax_cache.plot(cache_xs, cache_rates, marker="o", markersize=3, label=cell, linewidth=1.4)
+        ax_inv.plot(inv_xs, inv_rates, marker="o", markersize=3, label=cell, linewidth=1.4)
         out[cell] = {
             "cache_hit_rate": sum(1 for r in all_rows if r.kind == "cache_hit") / len(all_rows),
-            "invalid_spec_rate": sum(1 for r in all_rows if r.kind == "invalid_spec") / len(all_rows),
+            "invalid_spec_rate": sum(1 for r in all_rows if r.kind == "invalid_spec")
+            / len(all_rows),
             "n_total": len(all_rows),
         }
     ax_cache.set_xlabel("trial-number bucket centre")
@@ -564,8 +596,9 @@ def section_06_invalid_cache_trajectory(data: dict[tuple[str, str], list[TrialRo
     ax_cache.legend(ncol=5, loc="upper left")
     ax_inv.set_xlabel("trial-number bucket centre")
     ax_inv.set_title("(b) invalid-spec rate by bucket")
-    fig.suptitle("Optimizer drift diagnostics — TPE re-proposing already-evaluated "
-                 "or repair-failing builds")
+    fig.suptitle(
+        "Optimizer drift diagnostics — TPE re-proposing already-evaluated or repair-failing builds"
+    )
     fig.savefig(CHARTS_DIR / "06_invalid_cache_trajectory.png")
     plt.close(fig)
     return out
@@ -584,15 +617,14 @@ def section_07_unique_builds_window(data: dict[tuple[str, str], list[TrialRow]])
             rows = data.get((cell, seed), [])
             if not rows:
                 continue
-            n_uniq_per_seed.append(len({r.build_id for r in rows
-                                        if r.build_id is not None}))
+            n_uniq_per_seed.append(len({r.build_id for r in rows if r.build_id is not None}))
             max_T = max(r.trial_number for r in rows)
             xs = []
             ys = []
             for T in range(WINDOW_W, max_T + 1, 5):
-                window = [r for r in rows
-                          if T - WINDOW_W < r.trial_number <= T
-                          and r.build_id is not None]
+                window = [
+                    r for r in rows if T - WINDOW_W < r.trial_number <= T and r.build_id is not None
+                ]
                 if not window:
                     continue
                 xs.append(T)
@@ -612,12 +644,14 @@ def section_07_unique_builds_window(data: dict[tuple[str, str], list[TrialRow]])
         out[cell] = {
             "unique_builds_per_seed": n_uniq_per_seed,
             "mean_unique_builds_per_seed": (
-                float(np.mean(n_uniq_per_seed)) if n_uniq_per_seed else None),
+                float(np.mean(n_uniq_per_seed)) if n_uniq_per_seed else None
+            ),
         }
     ax.set_xlabel("trial number, T")
     ax.set_ylabel(f"distinct build_ids in window (T − {WINDOW_W}, T]")
-    ax.set_title(f"Local search diversity — distinct builds per {WINDOW_W}-trial "
-                 f"window (mean over seeds)")
+    ax.set_title(
+        f"Local search diversity — distinct builds per {WINDOW_W}-trial window (mean over seeds)"
+    )
     ax.legend(ncol=5, loc="lower right")
     fig.savefig(CHARTS_DIR / "07_unique_builds_window.png")
     plt.close(fig)
@@ -662,7 +696,7 @@ def section_08_proposal_distance(data: dict[tuple[str, str], list[TrialRow]]) ->
             kernel = np.ones(rolling) / rolling
             if len(ys) >= rolling:
                 roll = np.convolve(ys, kernel, mode="valid")
-                roll_xs = xs[rolling - 1:]
+                roll_xs = xs[rolling - 1 :]
                 all_curves_xs.append(roll_xs)
                 all_curves_ys.append(roll)
             per_seed_means.append(float(np.mean(ys)))
@@ -671,20 +705,21 @@ def section_08_proposal_distance(data: dict[tuple[str, str], list[TrialRow]]) ->
             T_max = min(xs[-1] for xs in all_curves_xs)
             if T_max > T_min:
                 grid = np.arange(T_min, T_max + 1, 5)
-                stacked = [np.interp(grid, xs, ys)
-                           for xs, ys in zip(all_curves_xs, all_curves_ys,
-                                             strict=True)]
+                stacked = [
+                    np.interp(grid, xs, ys)
+                    for xs, ys in zip(all_curves_xs, all_curves_ys, strict=True)
+                ]
                 ax.plot(grid, np.mean(stacked, axis=0), label=cell, linewidth=1.6)
         out[cell] = {
             "mean_proposal_distance_per_seed": per_seed_means,
-            "mean_proposal_distance": (
-                float(np.mean(per_seed_means)) if per_seed_means else None),
+            "mean_proposal_distance": (float(np.mean(per_seed_means)) if per_seed_means else None),
         }
     ax.set_xlabel("trial number, T")
-    ax.set_ylabel(r"$J_{\mathrm{dist}}(\mathrm{HM}_t, \mathrm{HM}_{t-1})$  "
-                  r"(rolling mean, 25 trials)")
-    ax.set_title("Proposal locality — Jaccard distance between consecutive "
-                 "proposals' hullmod sets")
+    ax.set_ylabel(
+        r"$J_{\mathrm{dist}}(\mathrm{HM}_t, \mathrm{HM}_{t-1})$  "
+        r"(rolling mean, 25 trials)"
+    )
+    ax.set_title("Proposal locality — Jaccard distance between consecutive proposals' hullmod sets")
     ax.legend(ncol=5, loc="lower left")
     ax.set_ylim(0, 1)
     fig.savefig(CHARTS_DIR / "08_proposal_distance.png")
@@ -714,8 +749,8 @@ def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> d
     out: dict[str, dict] = {}
     AXES = [
         ("raw_mean_hp_diff", "naive mean", "#006BA4", "-"),
-        ("twfe_fitness",     "TWFE α",     "#FF800E", "--"),
-        ("eb_fitness",       "EB-shrunk α", "#C85200", ":"),
+        ("twfe_fitness", "TWFE α", "#FF800E", "--"),
+        ("eb_fitness", "EB-shrunk α", "#C85200", ":"),
     ]
     for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
         cell_out: dict[str, dict] = {}
@@ -742,12 +777,10 @@ def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> d
                 yi = np.interp(grid, xs, ys, left=np.nan, right=np.nan)
                 interp_curves.append(yi)
             curve = np.nanmedian(np.array(interp_curves), axis=0)
-            ax.plot(grid, curve, label=label, color=color,
-                    linewidth=1.5, linestyle=ls)
+            ax.plot(grid, curve, label=label, color=color, linewidth=1.5, linestyle=ls)
             cell_out[field] = {
                 "final_best_per_seed": finals,
-                "median_final_best": (
-                    float(np.median(finals)) if finals else None),
+                "median_final_best": (float(np.median(finals)) if finals else None),
             }
         ax.set_xlabel("trial number")
         if ax_i == 0:
@@ -756,8 +789,10 @@ def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> d
         ax.legend(loc="lower right")
         ax.axhline(0, color="#cccccc", linewidth=0.6, zorder=0)
         out[cell] = cell_out
-    fig.suptitle("Best-so-far across deconfounding stages — naive opponent-mean / "
-                 "TWFE α / EB-shrunk α (median across seeds)")
+    fig.suptitle(
+        "Best-so-far across deconfounding stages — naive opponent-mean / "
+        "TWFE α / EB-shrunk α (median across seeds)"
+    )
     fig.savefig(CHARTS_DIR / "09_axis_comparison.png")
     plt.close(fig)
 
@@ -772,8 +807,7 @@ def section_09_axis_comparison(data: dict[tuple[str, str], list[TrialRow]]) -> d
                 v = _best_at(rows, 200, field)
                 if v is not None:
                     vals.append(v)
-            cross_table[label][cell] = (
-                float(np.median(vals)) if vals else None)
+            cross_table[label][cell] = float(np.median(vals)) if vals else None
     out["T200_per_axis"] = cross_table
     return out
 
@@ -796,6 +830,7 @@ def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
     """
     log.info("[10] Q4 — shape transform fidelity ρ(eb, fitness)")
     from scipy.stats import spearmanr
+
     fig, axes = plt.subplots(1, 2, figsize=(12, 5))
     out: dict[str, dict] = {}
     for ax, cell in zip(axes, ["c2", "c3"], strict=True):
@@ -804,14 +839,16 @@ def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
         fits_pool: list[float] = []
         for seed in SEEDS:
             rows = data.get((cell, seed), [])
-            ebs = [r.eb_fitness for r in rows
-                   if r.kind == "finalized"
-                   and r.eb_fitness is not None
-                   and r.fitness is not None]
-            fits = [r.fitness for r in rows
-                    if r.kind == "finalized"
-                    and r.eb_fitness is not None
-                    and r.fitness is not None]
+            ebs = [
+                r.eb_fitness
+                for r in rows
+                if r.kind == "finalized" and r.eb_fitness is not None and r.fitness is not None
+            ]
+            fits = [
+                r.fitness
+                for r in rows
+                if r.kind == "finalized" and r.eb_fitness is not None and r.fitness is not None
+            ]
             if len(ebs) >= 5:
                 rho_s, _ = spearmanr(ebs, fits)
                 cell_out["per_seed"][seed] = {
@@ -822,16 +859,20 @@ def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
             fits_pool.extend(fits)
         if ebs_pool:
             rho_pool, _ = spearmanr(ebs_pool, fits_pool)
-            ax.scatter(ebs_pool, fits_pool, s=12, alpha=0.55,
-                       color="#006BA4", edgecolors="none")
+            ax.scatter(ebs_pool, fits_pool, s=12, alpha=0.55, color="#006BA4", edgecolors="none")
             # Reference line: a perfect monotone CDF-like map from eb to [0,1]
             eb_arr = np.array(ebs_pool)
             ranks = np.argsort(np.argsort(eb_arr))
             cdf = ranks / max(len(eb_arr) - 1, 1)
             order = np.argsort(eb_arr)
-            ax.plot(eb_arr[order], cdf[order], color="#C85200",
-                    linewidth=1.2, linestyle="--",
-                    label="rank-CDF(eb) reference")
+            ax.plot(
+                eb_arr[order],
+                cdf[order],
+                color="#C85200",
+                linewidth=1.2,
+                linestyle="--",
+                label="rank-CDF(eb) reference",
+            )
             # Top-K overlap (pooled)
             n = len(ebs_pool)
             order_eb = np.argsort(-eb_arr)
@@ -839,23 +880,26 @@ def section_10_q4_boxcox(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
             topk_overlaps: dict[str, int] = {}
             for K in (5, 10):
                 if n >= K:
-                    overlap = len(set(order_eb[:K].tolist())
-                                  & set(order_fit[:K].tolist()))
+                    overlap = len(set(order_eb[:K].tolist()) & set(order_fit[:K].tolist()))
                     topk_overlaps[f"top{K}"] = int(overlap)
             cell_out["pooled"] = {
                 "n_finalized": n,
                 "spearman_rho": float(rho_pool),
                 "topk_overlap": topk_overlaps,
             }
-            ax.set_title(f"{cell} — pooled  n = {n},  "
-                         r"$\rho_{\mathrm{Spearman}}$ = "
-                         f"{rho_pool:.3f}")
+            ax.set_title(
+                f"{cell} — pooled  n = {n},  "
+                r"$\rho_{\mathrm{Spearman}}$ = "
+                f"{rho_pool:.3f}"
+            )
             ax.legend(loc="lower right")
         ax.set_xlabel(r"eb_fitness  (post-EB-shrinkage TWFE $\hat{\alpha}$)")
         ax.set_ylabel("fitness  (TPE objective: shaped + clamped to [0, 1])")
         out[cell] = cell_out
-    fig.suptitle("Q4 — A3 shape-transform fidelity:  ρ between deconfounded α "
-                 "and the TPE objective TPE actually saw")
+    fig.suptitle(
+        "Q4 — A3 shape-transform fidelity:  ρ between deconfounded α "
+        "and the TPE objective TPE actually saw"
+    )
     fig.savefig(CHARTS_DIR / "10_q4_shape_fidelity.png")
     plt.close(fig)
     return out
@@ -889,14 +933,18 @@ def section_12_combat_budget_pooled(
     """
     log.info("[12] Combat-budget axis × pooled α̂_EB retrospective")
     from starsector_optimizer.posthoc_ranker import (
-        _BuildId, load_records, rank_twfe_eb,
+        _BuildId,
+        load_records,
+        rank_twfe_eb,
     )
 
-    paths = sorted((REPO_ROOT / "data" / "logs").glob(
-        "wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl"))
+    paths = sorted(
+        (REPO_ROOT / "data" / "logs").glob(
+            "wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl"
+        )
+    )
     records = load_records(paths)
-    log.info("    loaded %d pooled records across %d JSONLs",
-             len(records), len(paths))
+    log.info("    loaded %d pooled records across %d JSONLs", len(records), len(paths))
     ranked = rank_twfe_eb(records, k=10**6)
     pooled_alpha: dict = {r.build_id: float(r.score) for r in ranked}
     log.info("    pooled α̂_EB fit over %d distinct builds", len(pooled_alpha))
@@ -945,9 +993,11 @@ def section_12_combat_budget_pooled(
         ax.set_xlabel("combat-sim count, B")
         if ax_i == 0:
             ax.set_ylabel(r"best-so-far pooled $\hat{\alpha}^{\mathrm{EB}}$")
-        ax.set_title(f"({chr(97 + ax_i)}) {cell}\n"
-                     f"final = "
-                     f"{', '.join(f'{seed_finals[s]:.3f}' if s in seed_finals else '—' for s in SEEDS)}")
+        ax.set_title(
+            f"({chr(97 + ax_i)}) {cell}\n"
+            f"final = "
+            f"{', '.join(f'{seed_finals[s]:.3f}' if s in seed_finals else '—' for s in SEEDS)}"
+        )
         ax.legend(loc="lower right")
         ax.axhline(0, color="#cccccc", linewidth=0.6, zorder=0)
         per_cell_finals[cell] = {"final_per_seed": seed_finals}
@@ -962,16 +1012,21 @@ def section_12_combat_budget_pooled(
                     "values": [float(v) for v in vals],
                 }
                 B = int(key.split("=")[1])
-                cross_axis_table.append({
-                    "cell": cell, "B": B,
-                    "median": float(np.median(vals)),
-                    "min": float(np.min(vals)),
-                    "max": float(np.max(vals)),
-                    "n": len(vals),
-                })
-    fig.suptitle("Combat-budget retrospective — pooled "
-                 r"$\hat{\alpha}^{\mathrm{EB}}$ vs combat-sim count "
-                 "(warm-start trials excluded by axis definition)")
+                cross_axis_table.append(
+                    {
+                        "cell": cell,
+                        "B": B,
+                        "median": float(np.median(vals)),
+                        "min": float(np.min(vals)),
+                        "max": float(np.max(vals)),
+                        "n": len(vals),
+                    }
+                )
+    fig.suptitle(
+        "Combat-budget retrospective — pooled "
+        r"$\hat{\alpha}^{\mathrm{EB}}$ vs combat-sim count "
+        "(warm-start trials excluded by axis definition)"
+    )
     fig.savefig(CHARTS_DIR / "12_combat_budget_pooled.png")
     plt.close(fig)
 
@@ -998,10 +1053,12 @@ def section_11_early_stop(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
 
     fig, ax = plt.subplots(figsize=(10, 4.8))
     per_cell: dict[str, dict] = {}
-    out: dict[str, object] = {"slope_window_W": SLOPE_W,
-                              "k_consec": K_CONSEC,
-                              "thresholds": THRESHOLDS,
-                              "per_cell": per_cell}
+    out: dict[str, object] = {
+        "slope_window_W": SLOPE_W,
+        "k_consec": K_CONSEC,
+        "thresholds": THRESHOLDS,
+        "per_cell": per_cell,
+    }
     for cell in CELLS:
         cell_results: dict[float, dict] = {}
         for thresh in THRESHOLDS:
@@ -1051,19 +1108,22 @@ def section_11_early_stop(data: dict[tuple[str, str], list[TrialRow]]) -> dict:
             thresh_xs.append(thresh)
             cap_ys.append(entry["mean_captured_frac"])
         if thresh_xs:
-            ax.plot(thresh_xs, cap_ys, marker="o", markersize=5,
-                    label=cell, linewidth=1.6)
+            ax.plot(thresh_xs, cap_ys, marker="o", markersize=5, label=cell, linewidth=1.6)
 
     ax.axhline(0.9, color="#595959", linestyle=":", linewidth=0.8)
-    ax.text(THRESHOLDS[0], 0.905, "0.9-of-final reference",
-            color="#595959", fontsize=8)
+    ax.text(THRESHOLDS[0], 0.905, "0.9-of-final reference", color="#595959", fontsize=8)
     ax.set_xscale("log")
-    ax.set_xlabel(r"slope threshold $\varepsilon$  (best-so-far slope over "
-                  f"{SLOPE_W}-trial window)")
-    ax.set_ylabel(r"$\hat{r}^{\max}_{\mathrm{stop}} \,/\, "
-                  r"\hat{r}^{\max}_{\mathrm{final}}$  (mean over seeds)")
-    ax.set_title(f"Q3 — slope-based early-stop: stop when slope < ε for "
-                 f"{K_CONSEC} consecutive trials")
+    ax.set_xlabel(
+        r"slope threshold $\varepsilon$  (best-so-far slope over "
+        f"{SLOPE_W}-trial window)"
+    )
+    ax.set_ylabel(
+        r"$\hat{r}^{\max}_{\mathrm{stop}} \,/\, "
+        r"\hat{r}^{\max}_{\mathrm{final}}$  (mean over seeds)"
+    )
+    ax.set_title(
+        f"Q3 — slope-based early-stop: stop when slope < ε for {K_CONSEC} consecutive trials"
+    )
     ax.legend(ncol=5, loc="lower right")
     ax.set_ylim(0, 1.05)
     fig.savefig(CHARTS_DIR / "11_early_stop.png")
@@ -1085,8 +1145,7 @@ def main() -> None:
     out: dict[str, object] = {
         "n_studies": n_studies,
         "n_total_trial_rows": n_rows,
-        "per_study_row_counts": {f"{c}_seed{s}": len(rs)
-                                 for (c, s), rs in data.items()},
+        "per_study_row_counts": {f"{c}_seed{s}": len(rs) for (c, s), rs in data.items()},
         "checkpoints_T": list(CHECKPOINTS),
         "window_W": WINDOW_W,
         "bucket_W": BUCKET_W,
@@ -1107,10 +1166,12 @@ def main() -> None:
 
     HEADLINES_PATH.parent.mkdir(parents=True, exist_ok=True)
     HEADLINES_PATH.write_text(json.dumps(out, indent=2, default=str))
-    log.info("Wrote %s and %d charts to %s",
-             HEADLINES_PATH.relative_to(REPO_ROOT),
-             len(list(CHARTS_DIR.glob("*.png"))),
-             CHARTS_DIR.relative_to(REPO_ROOT))
+    log.info(
+        "Wrote %s and %d charts to %s",
+        HEADLINES_PATH.relative_to(REPO_ROOT),
+        len(list(CHARTS_DIR.glob("*.png"))),
+        CHARTS_DIR.relative_to(REPO_ROOT),
+    )
 
 
 if __name__ == "__main__":

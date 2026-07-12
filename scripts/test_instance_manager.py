@@ -67,7 +67,7 @@ try:
         results.append(result)
     elapsed = time.monotonic() - start
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Completed in {elapsed:.1f}s")
     print(f"Results: {len(results)}")
     for r in results:
@@ -76,7 +76,7 @@ try:
             print(f"    Player {s.variant_id}: destroyed={s.destroyed}, hull={s.hull_fraction:.2f}")
         for s in r.enemy_ships:
             print(f"    Enemy  {s.variant_id}: destroyed={s.destroyed}, hull={s.hull_fraction:.2f}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 except Exception as e:
     print(f"\nFAILED: {e}")
     # Print instance state for debugging

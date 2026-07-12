@@ -116,8 +116,15 @@ class TestWeaponSlot:
         assert slot.mount_type == MountType.HARDPOINT
 
     def test_frozen(self):
-        slot = WeaponSlot("WS 001", SlotType.BALLISTIC, SlotSize.MEDIUM,
-                          MountType.HARDPOINT, 0.0, 5.0, (80.0, 20.0))
+        slot = WeaponSlot(
+            "WS 001",
+            SlotType.BALLISTIC,
+            SlotSize.MEDIUM,
+            MountType.HARDPOINT,
+            0.0,
+            5.0,
+            (80.0, 20.0),
+        )
         with pytest.raises(AttributeError):
             # deliberately mutates a frozen dataclass: exercises the AttributeError path
             slot.id = "WS 002"  # type: ignore[misc]  # deliberate: frozen-dataclass mutation must raise
@@ -128,15 +135,33 @@ class TestWeaponSlot:
 
 def _make_hull(hull_size=HullSize.CRUISER, **kwargs):
     defaults = {
-        "id": "eagle", "name": "Eagle", "hull_size": hull_size, "designation": "Cruiser",
-        "tech_manufacturer": "Midline", "system_id": "maneuveringjets", "fleet_pts": 14,
-        "hitpoints": 8000.0, "armor_rating": 1000.0, "max_flux": 11000.0,
-        "flux_dissipation": 700.0, "ordnance_points": 155, "fighter_bays": 0,
-        "max_speed": 60.0, "shield_type": ShieldType.FRONT, "shield_arc": 270.0,
-        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0.0,
-        "phase_upkeep": 0.0, "peak_cr_sec": 480.0, "cr_loss_per_sec": 0.25,
-        "weapon_slots": [], "built_in_mods": [], "built_in_weapons": {},
-        "hints": [], "tags": ["rare_bp", "merc"],
+        "id": "eagle",
+        "name": "Eagle",
+        "hull_size": hull_size,
+        "designation": "Cruiser",
+        "tech_manufacturer": "Midline",
+        "system_id": "maneuveringjets",
+        "fleet_pts": 14,
+        "hitpoints": 8000.0,
+        "armor_rating": 1000.0,
+        "max_flux": 11000.0,
+        "flux_dissipation": 700.0,
+        "ordnance_points": 155,
+        "fighter_bays": 0,
+        "max_speed": 60.0,
+        "shield_type": ShieldType.FRONT,
+        "shield_arc": 270.0,
+        "shield_upkeep": 0.4,
+        "shield_efficiency": 0.8,
+        "phase_cost": 0.0,
+        "phase_upkeep": 0.0,
+        "peak_cr_sec": 480.0,
+        "cr_loss_per_sec": 0.25,
+        "weapon_slots": [],
+        "built_in_mods": [],
+        "built_in_weapons": {},
+        "hints": [],
+        "tags": ["rare_bp", "merc"],
     }
     defaults.update(kwargs)
     return ShipHull(**defaults)
@@ -165,13 +190,28 @@ class TestShipHull:
 
 def _make_weapon(**kwargs):
     defaults: dict[str, Any] = {
-        "id": "heavymauler", "name": "Heavy Mauler", "size": SlotSize.MEDIUM,
-        "weapon_type": WeaponType.BALLISTIC, "damage_per_shot": 200.0,
-        "damage_per_second": 0.0, "damage_type": DamageType.KINETIC, "emp": 0.0,
-        "flux_per_shot": 200.0, "flux_per_second": 0.0, "range": 700.0, "op_cost": 10,
-        "chargeup": 0.0, "chargedown": 0.75, "burst_size": 1, "burst_delay": 0.0,
-        "ammo": 0, "ammo_per_sec": 0.0, "proj_speed": 500.0, "turn_rate": 30.0,
-        "hints": [], "tags": ["kinetic3"],
+        "id": "heavymauler",
+        "name": "Heavy Mauler",
+        "size": SlotSize.MEDIUM,
+        "weapon_type": WeaponType.BALLISTIC,
+        "damage_per_shot": 200.0,
+        "damage_per_second": 0.0,
+        "damage_type": DamageType.KINETIC,
+        "emp": 0.0,
+        "flux_per_shot": 200.0,
+        "flux_per_second": 0.0,
+        "range": 700.0,
+        "op_cost": 10,
+        "chargeup": 0.0,
+        "chargedown": 0.75,
+        "burst_size": 1,
+        "burst_delay": 0.0,
+        "ammo": 0,
+        "ammo_per_sec": 0.0,
+        "proj_speed": 500.0,
+        "turn_rate": 30.0,
+        "hints": [],
+        "tags": ["kinetic3"],
     }
     defaults.update(kwargs)
     return Weapon(**defaults)
@@ -180,41 +220,43 @@ def _make_weapon(**kwargs):
 class TestWeaponSustainedDps:
     def test_single_shot_weapon(self):
         """Heavy Mauler: 200 damage, 0.75s chargedown = 266.67 DPS."""
-        w = _make_weapon(damage_per_shot=200.0, chargeup=0.0, chargedown=0.75,
-                         burst_size=1)
+        w = _make_weapon(damage_per_shot=200.0, chargeup=0.0, chargedown=0.75, burst_size=1)
         assert pytest.approx(w.sustained_dps, rel=0.01) == 200.0 / 0.75
 
     def test_burst_weapon(self):
         """Burst weapon: 5 shots, 0.1s delay, 0.5s chargedown."""
-        w = _make_weapon(damage_per_shot=25.0, chargeup=0.0, chargedown=0.5,
-                         burst_size=5, burst_delay=0.1)
+        w = _make_weapon(
+            damage_per_shot=25.0, chargeup=0.0, chargedown=0.5, burst_size=5, burst_delay=0.1
+        )
         # cycle = 0 + (5-1)*0.1 + 0.5 = 0.9s, total damage = 125
         expected = 25.0 * 5 / 0.9
         assert pytest.approx(w.sustained_dps, rel=0.01) == expected
 
     def test_beam_weapon(self):
         """Beam weapon: uses damage_per_second directly."""
-        w = _make_weapon(damage_per_shot=0.0, damage_per_second=300.0,
-                         chargeup=0.0, chargedown=0.0, burst_size=1)
+        w = _make_weapon(
+            damage_per_shot=0.0, damage_per_second=300.0, chargeup=0.0, chargedown=0.0, burst_size=1
+        )
         assert w.sustained_dps == 300.0
 
     def test_zero_cycle_non_beam(self):
         """Non-beam with zero cycle time returns 0."""
-        w = _make_weapon(damage_per_shot=100.0, damage_per_second=0.0,
-                         chargeup=0.0, chargedown=0.0, burst_size=1)
+        w = _make_weapon(
+            damage_per_shot=100.0, damage_per_second=0.0, chargeup=0.0, chargedown=0.0, burst_size=1
+        )
         assert w.sustained_dps == 0.0
 
 
 class TestWeaponSustainedFlux:
     def test_projectile_weapon(self):
-        w = _make_weapon(flux_per_shot=200.0, chargeup=0.0, chargedown=0.75,
-                         burst_size=1)
+        w = _make_weapon(flux_per_shot=200.0, chargeup=0.0, chargedown=0.75, burst_size=1)
         # flux/s = flux_per_shot * burst_size / cycle_time = 200/0.75
         assert pytest.approx(w.sustained_flux, rel=0.01) == 200.0 / 0.75
 
     def test_beam_weapon(self):
-        w = _make_weapon(damage_per_shot=0.0, damage_per_second=300.0,
-                         flux_per_shot=0.0, flux_per_second=250.0)
+        w = _make_weapon(
+            damage_per_shot=0.0, damage_per_second=300.0, flux_per_shot=0.0, flux_per_second=250.0
+        )
         assert w.sustained_flux == 250.0
 
 
@@ -269,10 +311,17 @@ class TestWeaponDerivedMetrics:
 
 def _make_hullmod(**kwargs):
     defaults: dict[str, Any] = {
-        "id": "heavyarmor", "name": "Heavy Armor", "tier": 1,
-        "tags": ["defensive", "armor"], "ui_tags": ["Armor"],
-        "cost_frigate": 8, "cost_destroyer": 12, "cost_cruiser": 16, "cost_capital": 24,
-        "is_hidden": False, "script": "data.hullmods.HeavyArmor",
+        "id": "heavyarmor",
+        "name": "Heavy Armor",
+        "tier": 1,
+        "tags": ["defensive", "armor"],
+        "ui_tags": ["Armor"],
+        "cost_frigate": 8,
+        "cost_destroyer": 12,
+        "cost_cruiser": 16,
+        "cost_capital": 24,
+        "is_hidden": False,
+        "script": "data.hullmods.HeavyArmor",
     }
     defaults.update(kwargs)
     return HullMod(**defaults)
@@ -333,11 +382,20 @@ class TestBuild:
 class TestScorerResult:
     def test_construction(self):
         result = ScorerResult(
-            composite_score=0.75, total_dps=500.0, kinetic_dps=300.0,
-            he_dps=200.0, energy_dps=0.0, flux_balance=0.7,
-            flux_efficiency=1.5, effective_hp=20000.0, armor_ehp=5000.0,
-            shield_ehp=10000.0, range_coherence=0.9, damage_mix=0.8,
-            engagement_range=700.0, op_efficiency=3.5,
+            composite_score=0.75,
+            total_dps=500.0,
+            kinetic_dps=300.0,
+            he_dps=200.0,
+            energy_dps=0.0,
+            flux_balance=0.7,
+            flux_efficiency=1.5,
+            effective_hp=20000.0,
+            armor_ehp=5000.0,
+            shield_ehp=10000.0,
+            range_coherence=0.9,
+            damage_mix=0.8,
+            engagement_range=700.0,
+            op_efficiency=3.5,
         )
         assert result.composite_score == 0.75
         assert result.total_dps == 500.0
@@ -400,11 +458,18 @@ class TestShipCombatResult:
 
     def test_frozen(self):
         scr = ShipCombatResult(
-            fleet_member_id="0", variant_id="x", hull_id="x",
-            destroyed=False, hull_fraction=1.0, armor_fraction=1.0,
-            cr_remaining=1.0, peak_time_remaining=0.0,
-            disabled_weapons=0, flameouts=0,
-            damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+            fleet_member_id="0",
+            variant_id="x",
+            hull_id="x",
+            destroyed=False,
+            hull_fraction=1.0,
+            armor_fraction=1.0,
+            cr_remaining=1.0,
+            peak_time_remaining=0.0,
+            disabled_weapons=0,
+            flameouts=0,
+            damage_dealt=DamageBreakdown(),
+            damage_taken=DamageBreakdown(),
             overload_count=0,
         )
         with pytest.raises(AttributeError):
@@ -415,14 +480,22 @@ class TestShipCombatResult:
 class TestCombatResult:
     def test_construction(self):
         ship = ShipCombatResult(
-            fleet_member_id="0", variant_id="eagle_test", hull_id="eagle",
-            destroyed=False, hull_fraction=0.9, armor_fraction=0.7,
-            cr_remaining=0.5, peak_time_remaining=100.0,
-            disabled_weapons=0, flameouts=0,
-            damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+            fleet_member_id="0",
+            variant_id="eagle_test",
+            hull_id="eagle",
+            destroyed=False,
+            hull_fraction=0.9,
+            armor_fraction=0.7,
+            cr_remaining=0.5,
+            peak_time_remaining=100.0,
+            disabled_weapons=0,
+            flameouts=0,
+            damage_dealt=DamageBreakdown(),
+            damage_taken=DamageBreakdown(),
             overload_count=0,
         )
         from tests.conftest import make_pass_diagnostic
+
         cr = CombatResult(
             matchup_id="eval_001",
             winner="PLAYER",
@@ -443,10 +516,15 @@ class TestCombatResult:
 
     def test_frozen(self):
         cr = CombatResult(
-            matchup_id="x", winner="PLAYER", duration_seconds=0.0,
-            player_ships=(), enemy_ships=(),
-            player_ships_destroyed=0, enemy_ships_destroyed=0,
-            player_ships_retreated=0, enemy_ships_retreated=0,
+            matchup_id="x",
+            winner="PLAYER",
+            duration_seconds=0.0,
+            player_ships=(),
+            enemy_ships=(),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=0,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
             player_loadout_diagnostics=(),
         )
         with pytest.raises(AttributeError):
@@ -455,8 +533,14 @@ class TestCombatResult:
 
 
 def _build_spec(variant_id="eagle_test", hull_id="eagle"):
-    return BuildSpec(variant_id=variant_id, hull_id=hull_id, weapon_assignments={},
-                     hullmods=(), flux_vents=0, flux_capacitors=0)
+    return BuildSpec(
+        variant_id=variant_id,
+        hull_id=hull_id,
+        weapon_assignments={},
+        hullmods=(),
+        flux_vents=0,
+        flux_capacitors=0,
+    )
 
 
 class TestMatchupConfig:
@@ -543,15 +627,11 @@ class TestRegimeConfig:
         assert REGIME_EARLY.exclude_hullmod_tags == frozenset(
             {"no_drop", "no_drop_salvage", "codex_unlockable"}
         )
-        assert REGIME_EARLY.exclude_weapon_tags == frozenset(
-            {"rare_bp", "codex_unlockable"}
-        )
+        assert REGIME_EARLY.exclude_weapon_tags == frozenset({"rare_bp", "codex_unlockable"})
 
         assert REGIME_MID.name == "mid"
         assert REGIME_MID.max_hullmod_tier == 3
-        assert REGIME_MID.exclude_hullmod_tags == frozenset(
-            {"no_drop", "no_drop_salvage"}
-        )
+        assert REGIME_MID.exclude_hullmod_tags == frozenset({"no_drop", "no_drop_salvage"})
         assert REGIME_MID.exclude_weapon_tags == frozenset({"rare_bp"})
 
         assert REGIME_LATE.name == "late"

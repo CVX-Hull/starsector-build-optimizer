@@ -220,18 +220,20 @@ def recover_logged_builds(paths: Sequence[Path]) -> tuple[RecoveredBuild, ...]:
                 if dedupe in seen:
                     continue
                 seen.add(dedupe)
-                out.append(RecoveredBuild(
-                    build_key=key,
-                    build=build,
-                    source_kind=BuildSourceKind.EXACT_LOGGED_BUILD,
-                    campaign=campaign,
-                    study=study,
-                    seed=seed,
-                    rank=None,
-                    trial_number=trial_number,
-                    score=_score_from_log_row(row),
-                    source_path=str(path),
-                ))
+                out.append(
+                    RecoveredBuild(
+                        build_key=key,
+                        build=build,
+                        source_kind=BuildSourceKind.EXACT_LOGGED_BUILD,
+                        campaign=campaign,
+                        study=study,
+                        seed=seed,
+                        rank=None,
+                        trial_number=trial_number,
+                        score=_score_from_log_row(row),
+                        source_path=str(path),
+                    )
+                )
     return tuple(out)
 
 
@@ -313,18 +315,20 @@ def recover_study_db_builds(
                 raise ValueError(
                     f"DB-reconstructed trial {number} from {db_path} is infeasible after repair: {violations}"
                 )
-            out.append(RecoveredBuild(
-                build_key=build_key(repaired),
-                build=repaired,
-                source_kind=BuildSourceKind.DB_RECONSTRUCTED_BUILD,
-                campaign=campaign,
-                study=study or db_path.stem,
-                seed=seed,
-                rank=None,
-                trial_number=int(number),
-                score=float(value) if value is not None else None,
-                source_path=str(db_path),
-            ))
+            out.append(
+                RecoveredBuild(
+                    build_key=build_key(repaired),
+                    build=repaired,
+                    source_kind=BuildSourceKind.DB_RECONSTRUCTED_BUILD,
+                    campaign=campaign,
+                    study=study or db_path.stem,
+                    seed=seed,
+                    rank=None,
+                    trial_number=int(number),
+                    score=float(value) if value is not None else None,
+                    source_path=str(db_path),
+                )
+            )
         return tuple(out)
     finally:
         con.close()
@@ -376,20 +380,27 @@ def recover_honest_eval_candidate_builds(
         seed = _path_seed(path)
         study = path.parent.name
         for rank, score, build in extract_top_builds(
-            path, hull, game_data, manifest, top_k, method=method,
+            path,
+            hull,
+            game_data,
+            manifest,
+            top_k,
+            method=method,
         ):
-            out.append(RecoveredBuild(
-                build_key=build_key(build),
-                build=build,
-                source_kind=BuildSourceKind.HONEST_EVAL_CANDIDATE_BUILD,
-                campaign=campaign,
-                study=study,
-                seed=seed,
-                rank=rank,
-                trial_number=None,
-                score=score,
-                source_path=str(path),
-            ))
+            out.append(
+                RecoveredBuild(
+                    build_key=build_key(build),
+                    build=build,
+                    source_kind=BuildSourceKind.HONEST_EVAL_CANDIDATE_BUILD,
+                    campaign=campaign,
+                    study=study,
+                    seed=seed,
+                    rank=rank,
+                    trial_number=None,
+                    score=score,
+                    source_path=str(path),
+                )
+            )
     return tuple(out)
 
 
@@ -422,9 +433,7 @@ def recover_honest_eval_output_builds(paths: Sequence[Path]) -> tuple[RecoveredB
                     rank=int(row["source_rank"]) if row.get("source_rank") is not None else None,
                     trial_number=None,
                     score=(
-                        float(row["oracle_score"])
-                        if row.get("oracle_score") is not None
-                        else None
+                        float(row["oracle_score"]) if row.get("oracle_score") is not None else None
                     ),
                     source_path=str(path),
                 )
@@ -530,13 +539,15 @@ def materialize_sqlite(
         """,
         [
             (
-                "|".join((
-                    item.build_key,
-                    item.source_kind.value,
-                    item.source_path,
-                    str(item.trial_number if item.trial_number is not None else -1),
-                    str(item.rank if item.rank is not None else -1),
-                )),
+                "|".join(
+                    (
+                        item.build_key,
+                        item.source_kind.value,
+                        item.source_path,
+                        str(item.trial_number if item.trial_number is not None else -1),
+                        str(item.rank if item.rank is not None else -1),
+                    )
+                ),
                 item.build_key,
                 item.source_kind.value,
                 item.campaign,
@@ -702,9 +713,7 @@ def held_out_build_split(
 def held_out_opponent_split(
     rows: Sequence[TrainingMatchupRow], holdout_fraction: float, seed: int
 ) -> SplitIds:
-    return _group_split(
-        rows, [row.opponent_variant_id for row in rows], holdout_fraction, seed
-    )
+    return _group_split(rows, [row.opponent_variant_id for row in rows], holdout_fraction, seed)
 
 
 def held_out_opponent_hull_split(
@@ -715,7 +724,10 @@ def held_out_opponent_hull_split(
 ) -> SplitIds:
     return _group_split(
         rows,
-        [_lookup_opponent_group(opponent_hull_by_variant, row.opponent_variant_id, "hull") for row in rows],
+        [
+            _lookup_opponent_group(opponent_hull_by_variant, row.opponent_variant_id, "hull")
+            for row in rows
+        ],
         holdout_fraction,
         seed,
     )
@@ -729,7 +741,10 @@ def held_out_opponent_family_split(
 ) -> SplitIds:
     return _group_split(
         rows,
-        [_lookup_opponent_group(opponent_family_by_variant, row.opponent_variant_id, "family") for row in rows],
+        [
+            _lookup_opponent_group(opponent_family_by_variant, row.opponent_variant_id, "family")
+            for row in rows
+        ],
         holdout_fraction,
         seed,
     )
@@ -753,10 +768,7 @@ def held_out_replicate_split(
 ) -> SplitIds:
     return _group_split(
         rows,
-        [
-            f"{row.build_key or row.build_id}:{row.opponent_variant_id}"
-            for row in rows
-        ],
+        [f"{row.build_key or row.build_id}:{row.opponent_variant_id}" for row in rows],
         holdout_fraction,
         seed,
     )
@@ -800,9 +812,7 @@ def held_out_component_vocabulary_split(
     """
     _validate_fraction("holdout_fraction", holdout_fraction)
     if max_overshoot_fraction < 0.0:
-        raise ValueError(
-            f"max_overshoot_fraction must be >= 0, got {max_overshoot_fraction}"
-        )
+        raise ValueError(f"max_overshoot_fraction must be >= 0, got {max_overshoot_fraction}")
     row_build_keys = {row.build_key for row in rows}
     vocab_by_build = {
         key: frozenset(component_vocabulary(build_lookup[key])) for key in row_build_keys

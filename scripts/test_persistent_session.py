@@ -14,15 +14,17 @@ from starsector_optimizer.models import MatchupConfig, BuildSpec
 def make_matchup(name, enemy):
     return MatchupConfig(
         matchup_id=name,
-        player_builds=(BuildSpec(
-            variant_id="test_build",
-            hull_id="hammerhead",
-            weapon_assignments={"WS 001": "heavyac", "WS 002": "heavyac"},
-            hullmods=("heavyarmor",),
-            flux_vents=10,
-            flux_capacitors=5,
-            cr=0.7,
-        ),),
+        player_builds=(
+            BuildSpec(
+                variant_id="test_build",
+                hull_id="hammerhead",
+                weapon_assignments={"WS 001": "heavyac", "WS 002": "heavyac"},
+                hullmods=("heavyarmor",),
+                flux_vents=10,
+                flux_capacitors=5,
+                cr=0.7,
+            ),
+        ),
         enemy_variants=(enemy,),
         time_limit_seconds=60,
         time_mult=5.0,
@@ -31,11 +33,16 @@ def make_matchup(name, enemy):
 
 def main():
     import logging
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s: %(message)s",
-                        datefmt="%H:%M:%S")
 
-    config = InstanceConfig(game_dir=Path("game/starsector"), num_instances=1,
-                            heartbeat_timeout_seconds=180.0)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+
+    config = InstanceConfig(
+        game_dir=Path("game/starsector"), num_instances=1, heartbeat_timeout_seconds=180.0
+    )
     pool = LocalInstancePool(config)
     pool.setup()
 
@@ -46,8 +53,10 @@ def main():
         try:
             result = pool.run_matchup(matchup)
             elapsed = time.time() - start
-            print(f"Matchup {i} vs {enemy}: {result.winner} in {elapsed:.1f}s "
-                  f"(game={result.duration_seconds:.1f}s)")
+            print(
+                f"Matchup {i} vs {enemy}: {result.winner} in {elapsed:.1f}s "
+                f"(game={result.duration_seconds:.1f}s)"
+            )
         except Exception as e:
             elapsed = time.time() - start
             print(f"Matchup {i} vs {enemy}: FAILED in {elapsed:.1f}s - {e}")

@@ -45,7 +45,10 @@ from starsector_optimizer.cloud_userdata import render_user_data
 from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
 from starsector_optimizer.game_manifest import GameManifest
 from starsector_optimizer.models import (
-    BuildSpec, CombatResult, MatchupConfig, WorkerConfig,
+    BuildSpec,
+    CombatResult,
+    MatchupConfig,
+    WorkerConfig,
 )
 
 logging.basicConfig(
@@ -71,14 +74,14 @@ BUILD_ARMED = BuildSpec(
     variant_id="hammerhead_AB_ARMED",
     hull_id=HULL,
     weapon_assignments={
-        "WS 001": "heavymortar",      # M ballistic HE
-        "WS 002": "heavymortar",      # M ballistic HE
-        "WS 003": "swarmer",          # S missile PD
-        "WS 004": "swarmer",          # S missile PD
-        "WS 005": "lightdualac",      # S ballistic kinetic
-        "WS 006": "lightdualac",      # S ballistic kinetic
-        "WS 007": "vulcan",           # S ballistic PD
-        "WS 008": "vulcan",           # S ballistic PD
+        "WS 001": "heavymortar",  # M ballistic HE
+        "WS 002": "heavymortar",  # M ballistic HE
+        "WS 003": "swarmer",  # S missile PD
+        "WS 004": "swarmer",  # S missile PD
+        "WS 005": "lightdualac",  # S ballistic kinetic
+        "WS 006": "lightdualac",  # S ballistic kinetic
+        "WS 007": "vulcan",  # S ballistic PD
+        "WS 008": "vulcan",  # S ballistic PD
     },
     hullmods=("hardenedshieldemitter", "reinforcedhull"),
     flux_vents=6,
@@ -90,7 +93,7 @@ BUILD_UNARMED = BuildSpec(
     hull_id=HULL,
     weapon_assignments={},  # ZERO weapons — every slot empty
     hullmods=("shield_shunt",),  # shield_shunt removes shields entirely
-    flux_vents=6,                # IDENTICAL flux config to ARMED — flux is the control
+    flux_vents=6,  # IDENTICAL flux config to ARMED — flux is the control
     flux_capacitors=6,
 )
 
@@ -132,15 +135,17 @@ def _summarize(matchup: MatchupConfig, result) -> dict:
         "winner": result.winner,
         "duration": round(result.duration_seconds, 1),
         "player_dealt_total": round(
-            (pd.shield + pd.armor + pd.hull) if pd else 0.0, 1,
+            (pd.shield + pd.armor + pd.hull) if pd else 0.0,
+            1,
         ),
-        "player_dealt_breakdown":
-            f"shield={round(pd.shield, 1)} armor={round(pd.armor, 1)} hull={round(pd.hull, 1)}"
-            if pd else "(no player ship)",
+        "player_dealt_breakdown": f"shield={round(pd.shield, 1)} armor={round(pd.armor, 1)} hull={round(pd.hull, 1)}"
+        if pd
+        else "(no player ship)",
         "player_hull_remaining": round(pship.hull_fraction, 3) if pship else "?",
         "enemy_hull_remaining": round(eship.hull_fraction, 3) if eship else "?",
         "enemy_dealt_total": round(
-            (ed.shield + ed.armor + ed.hull) if ed else 0.0, 1,
+            (ed.shield + ed.armor + ed.hull) if ed else 0.0,
+            1,
         ),
     }
 
@@ -198,17 +203,16 @@ def main() -> int:
         redis_client=redis_client,
         flask_port=flask_port,
         bearer_token=bearer_token,
-        total_matchup_slots=2,             # 1 VM × 2 slots = 2 concurrent matchups
+        total_matchup_slots=2,  # 1 VM × 2 slots = 2 concurrent matchups
         result_timeout_seconds=600.0,
         visibility_timeout_seconds=300.0,
         janitor_interval_seconds=60.0,
         max_requeues=3,
     )
 
-    matchups = (
-        [_make_matchup(BUILD_ARMED, i) for i in range(RUNS_PER_BUILD)]
-        + [_make_matchup(BUILD_UNARMED, i) for i in range(RUNS_PER_BUILD)]
-    )
+    matchups = [_make_matchup(BUILD_ARMED, i) for i in range(RUNS_PER_BUILD)] + [
+        _make_matchup(BUILD_UNARMED, i) for i in range(RUNS_PER_BUILD)
+    ]
 
     try:
         logger.info("provisioning 1 c7a.2xlarge spot in %s (study_id=%s)", region, study_id)
@@ -241,8 +245,10 @@ def main() -> int:
         print("=" * 100)
         print("LOADOUT A/B TEST — combat-based evidence (weapons + hullmods applied)")
         print("=" * 100)
-        for build_label, build in (("ARMED-SHIELDED", BUILD_ARMED),
-                                    ("UNARMED-SHIELDLESS", BUILD_UNARMED)):
+        for build_label, build in (
+            ("ARMED-SHIELDED", BUILD_ARMED),
+            ("UNARMED-SHIELDLESS", BUILD_UNARMED),
+        ):
             print()
             print(f"--- BUILD {build_label} ({build.variant_id}) ---")
             print(f"  weapons: {len(build.weapon_assignments)} mounted")
@@ -254,8 +260,12 @@ def main() -> int:
                 s = _summarize(m, r)
                 print(f"  {s['matchup']}")
                 print(f"    winner={s['winner']:7s}  duration={s['duration']:6.1f}s")
-                print(f"    player_hull_remaining={s['player_hull_remaining']}  enemy_hull_remaining={s['enemy_hull_remaining']}")
-                print(f"    player_dealt_total={s['player_dealt_total']:8.1f}  ({s['player_dealt_breakdown']})")
+                print(
+                    f"    player_hull_remaining={s['player_hull_remaining']}  enemy_hull_remaining={s['enemy_hull_remaining']}"
+                )
+                print(
+                    f"    player_dealt_total={s['player_dealt_total']:8.1f}  ({s['player_dealt_breakdown']})"
+                )
                 print(f"    enemy_dealt_total ={s['enemy_dealt_total']:8.1f}")
         print()
         return 0
@@ -263,7 +273,8 @@ def main() -> int:
         logger.info("tearing down fleet %s", study_id)
         try:
             provider.terminate_fleet(
-                fleet_name=study_id, project_tag=project_tag,
+                fleet_name=study_id,
+                project_tag=project_tag,
             )
         except Exception:
             logger.exception("terminate_fleet failed for study=%s", study_id)

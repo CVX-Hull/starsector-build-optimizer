@@ -23,11 +23,13 @@ def assign_weapon_groups(
             continue
         if weapon_id not in game_data.weapons:
             continue
-        groups.append({
-            "autofire": True,
-            "mode": "LINKED",
-            "weapons": {slot_id: weapon_id},
-        })
+        groups.append(
+            {
+                "autofire": True,
+                "mode": "LINKED",
+                "weapons": {slot_id: weapon_id},
+            }
+        )
     return groups
 
 

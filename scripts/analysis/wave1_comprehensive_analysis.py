@@ -67,41 +67,53 @@ from matplotlib.collections import PolyCollection
 #   - Grids on by default; light grey, behind data, never on top.
 #   - Spines minimised: top/right off, left/bottom thin.
 #   - Titles never include trailing punctuation. Axes always have units.
-plt.rcParams.update({
-    "figure.dpi": 110,            # screen preview
-    "savefig.dpi": 200,           # production output
-    "savefig.bbox": "tight",
-    "savefig.pad_inches": 0.15,
-    "figure.constrained_layout.use": True,
-    "axes.prop_cycle": plt.cycler(color=[
-        "#006BA4", "#FF800E", "#ABABAB", "#595959", "#5F9ED1",
-        "#C85200", "#898989", "#A2C8EC", "#FFBC79", "#CFCFCF",
-    ]),
-    "axes.grid": True,
-    "axes.grid.axis": "y",
-    "axes.axisbelow": True,
-    "grid.color": "#cccccc",
-    "grid.linewidth": 0.6,
-    "grid.alpha": 0.7,
-    "axes.spines.top": False,
-    "axes.spines.right": False,
-    "axes.linewidth": 0.8,
-    "xtick.direction": "out",
-    "ytick.direction": "out",
-    "xtick.major.size": 3.5,
-    "ytick.major.size": 3.5,
-    "font.size": 10,
-    "axes.titlesize": 11,
-    "axes.titleweight": "bold",
-    "axes.labelsize": 10,
-    "xtick.labelsize": 9,
-    "ytick.labelsize": 9,
-    "legend.fontsize": 9,
-    "legend.frameon": False,
-    "figure.titlesize": 12,
-    "figure.titleweight": "bold",
-    "image.cmap": "viridis",
-})
+plt.rcParams.update(
+    {
+        "figure.dpi": 110,  # screen preview
+        "savefig.dpi": 200,  # production output
+        "savefig.bbox": "tight",
+        "savefig.pad_inches": 0.15,
+        "figure.constrained_layout.use": True,
+        "axes.prop_cycle": plt.cycler(
+            color=[
+                "#006BA4",
+                "#FF800E",
+                "#ABABAB",
+                "#595959",
+                "#5F9ED1",
+                "#C85200",
+                "#898989",
+                "#A2C8EC",
+                "#FFBC79",
+                "#CFCFCF",
+            ]
+        ),
+        "axes.grid": True,
+        "axes.grid.axis": "y",
+        "axes.axisbelow": True,
+        "grid.color": "#cccccc",
+        "grid.linewidth": 0.6,
+        "grid.alpha": 0.7,
+        "axes.spines.top": False,
+        "axes.spines.right": False,
+        "axes.linewidth": 0.8,
+        "xtick.direction": "out",
+        "ytick.direction": "out",
+        "xtick.major.size": 3.5,
+        "ytick.major.size": 3.5,
+        "font.size": 10,
+        "axes.titlesize": 11,
+        "axes.titleweight": "bold",
+        "axes.labelsize": 10,
+        "xtick.labelsize": 9,
+        "ytick.labelsize": 9,
+        "legend.fontsize": 9,
+        "legend.frameon": False,
+        "figure.titlesize": 12,
+        "figure.titleweight": "bold",
+        "image.cmap": "viridis",
+    }
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -130,9 +142,9 @@ METHOD_FNS = {
     "bradley_terry": rank_bradley_terry,
 }
 METHOD_ORDER = ["raw_mean", "twfe", "twfe_eb", "bradley_terry"]
-SAT_THRESHOLD = 0.99            # eb_fitness saturation cutoff
-SAT_FAIL_FRAC = 0.01            # F2a doc-gate trigger (1 %)
-F1C_TARGET_DELTA = 0.02         # phase5d Δρ doc-gate
+SAT_THRESHOLD = 0.99  # eb_fitness saturation cutoff
+SAT_FAIL_FRAC = 0.01  # F2a doc-gate trigger (1 %)
+F1C_TARGET_DELTA = 0.02  # phase5d Δρ doc-gate
 BOOTSTRAP_ITERS = 5000
 BOOTSTRAP_SEED = 0xC0DE
 
@@ -147,21 +159,31 @@ log = logging.getLogger("wave1-analysis")
 
 
 def _cell_log_paths(cell: str) -> list[Path]:
-    return sorted((REPO_ROOT / "data" / "logs" / f"wave1-{cell}").glob(
-        "hammerhead__early__tpe__seed*/evaluation_log.jsonl"
-    ))
+    return sorted(
+        (REPO_ROOT / "data" / "logs" / f"wave1-{cell}").glob(
+            "hammerhead__early__tpe__seed*/evaluation_log.jsonl"
+        )
+    )
 
 
 def _seed_log_paths(cell: str, seed: str) -> list[Path]:
-    p = (REPO_ROOT / "data" / "logs" / f"wave1-{cell}" /
-         f"hammerhead__early__tpe__seed{seed}" / "evaluation_log.jsonl")
+    p = (
+        REPO_ROOT
+        / "data"
+        / "logs"
+        / f"wave1-{cell}"
+        / f"hammerhead__early__tpe__seed{seed}"
+        / "evaluation_log.jsonl"
+    )
     return [p] if p.exists() else []
 
 
 def _all_logs() -> list[Path]:
-    return sorted((REPO_ROOT / "data" / "logs").glob(
-        "wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl"
-    ))
+    return sorted(
+        (REPO_ROOT / "data" / "logs").glob(
+            "wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl"
+        )
+    )
 
 
 def _jaccard(a: Sequence[RankedBuild], b: Sequence[RankedBuild]) -> float:
@@ -192,8 +214,7 @@ def _iter_log_rows(paths: Sequence[Path]):
 def section_01_topk_per_cell(k: int = 5) -> dict:
     """5-panel grid of per-cell 4×4 Jaccard agreement matrices (top-K)."""
     log.info("[01] Per-cell top-%d agreement (Jaccard)", k)
-    fig, axes = plt.subplots(1, 5, figsize=(18, 4.6),
-                             sharey=True)
+    fig, axes = plt.subplots(1, 5, figsize=(18, 4.6), sharey=True)
     out: dict[str, dict] = {}
     im = None
     for ax_i, (ax, cell) in enumerate(zip(axes, CELLS, strict=True)):
@@ -213,14 +234,21 @@ def section_01_topk_per_cell(k: int = 5) -> dict:
         ax.set_title(f"({chr(97 + ax_i)}) {cell}\nn_trials = {len(records)}")
         for i in range(4):
             for j in range(4):
-                ax.text(j, i, f"{mat[i, j]:.2f}", ha="center", va="center",
-                        color="white" if mat[i, j] < 0.5 else "black",
-                        fontsize=9)
+                ax.text(
+                    j,
+                    i,
+                    f"{mat[i, j]:.2f}",
+                    ha="center",
+                    va="center",
+                    color="white" if mat[i, j] < 0.5 else "black",
+                    fontsize=9,
+                )
         out[cell] = {"matrix": mat.tolist(), "n_trials": len(records)}
     fig.suptitle(f"Top-{k} Jaccard agreement between rankers, per cell")
     assert im is not None  # CELLS is non-empty, so the loop always ran
-    fig.colorbar(im, ax=axes.tolist(), shrink=0.85,
-                 label=f"Jaccard similarity J(top-{k}_a, top-{k}_b)")
+    fig.colorbar(
+        im, ax=axes.tolist(), shrink=0.85, label=f"Jaccard similarity J(top-{k}_a, top-{k}_b)"
+    )
     fig.savefig(CHARTS_DIR / "01_top_k_agreement_per_cell.png")
     plt.close(fig)
     return {"k": k, "per_cell": out}
@@ -237,8 +265,11 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
     """
     log.info("[02] Pooled top-K agreement (all 15 studies)")
     records = load_records(_all_logs())
-    log.info("    pooled records=%d, total matchups=%d",
-             len(records), sum(len(r.matches) for r in records))
+    log.info(
+        "    pooled records=%d, total matchups=%d",
+        len(records),
+        sum(len(r.matches) for r in records),
+    )
     out: dict[str, dict] = {}
     for k in ks:
         rankings = {n: METHOD_FNS[n](records, k=k) for n in METHOD_ORDER}
@@ -253,10 +284,8 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
         out[f"k={k}"] = {
             "jaccard": mat_jac.tolist(),
             "overlap": mat_ov.tolist(),
-            "spearman": [[None if np.isnan(v) else v for v in row]
-                         for row in mat_rho.tolist()],
-            "top_builds": {n: [r.build_id.short for r in rankings[n]]
-                           for n in METHOD_ORDER},
+            "spearman": [[None if np.isnan(v) else v for v in row] for row in mat_rho.tolist()],
+            "top_builds": {n: [r.build_id.short for r in rankings[n]] for n in METHOD_ORDER},
         }
 
     # Spearman ρ across ALL builds (not just top-K) — more stable diagnostic.
@@ -264,11 +293,8 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
     mat_rho_full = np.full((4, 4), np.nan)
     for i, a in enumerate(METHOD_ORDER):
         for j, b in enumerate(METHOD_ORDER):
-            mat_rho_full[i, j] = spearman_rho(
-                rankings_full[a], rankings_full[b]
-            )
-    full_spearman = [[None if np.isnan(v) else v for v in row]
-                     for row in mat_rho_full.tolist()]
+            mat_rho_full[i, j] = spearman_rho(rankings_full[a], rankings_full[b])
+    full_spearman = [[None if np.isnan(v) else v for v in row] for row in mat_rho_full.tolist()]
 
     # Headline chart: K=5 Jaccard.
     k_main = 5
@@ -283,18 +309,21 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
     ax.set_yticklabels(METHOD_ORDER)
     for i in range(4):
         for j in range(4):
-            ax.text(j, i,
-                    f"J = {mat[i, j]:.2f}\novl = {mat_ov_main[i, j]}",
-                    ha="center", va="center",
-                    color="white" if mat[i, j] < 0.5 else "black",
-                    fontsize=10)
+            ax.text(
+                j,
+                i,
+                f"J = {mat[i, j]:.2f}\novl = {mat_ov_main[i, j]}",
+                ha="center",
+                va="center",
+                color="white" if mat[i, j] < 0.5 else "black",
+                fontsize=10,
+            )
     ax.set_title(
         f"Pooled top-{k_main} ranker agreement\n"
         f"15 studies · {len(records):,} builds · "
         f"{sum(len(r.matches) for r in records):,} matchups"
     )
-    fig.colorbar(im, ax=ax,
-                 label=f"Jaccard similarity J(top-{k_main}_a, top-{k_main}_b)")
+    fig.colorbar(im, ax=ax, label=f"Jaccard similarity J(top-{k_main}_a, top-{k_main}_b)")
     fig.savefig(CHARTS_DIR / "02_top_k_agreement_pooled.png")
     plt.close(fig)
     return {
@@ -330,27 +359,42 @@ def section_03_alpha_distribution() -> dict:
             "p95": float(np.percentile(alphas, 95)) if len(alphas) else float("nan"),
             "p05": float(np.percentile(alphas, 5)) if len(alphas) else float("nan"),
         }
-    parts = ax.violinplot(data, showmeans=False, showmedians=False,
-                          showextrema=False)
+    parts = ax.violinplot(data, showmeans=False, showmedians=False, showextrema=False)
     palette = plt.rcParams["axes.prop_cycle"].by_key()["color"]
     # The stub types violinplot() as dict[str, Collection] but "bodies" is a
     # list of PolyCollection at runtime — cast to the real shape.
     bodies = cast("list[PolyCollection]", parts["bodies"])
-    for pc, color in zip(bodies, palette, strict=False):  # 10-color palette cycle longer than the 5 violin bodies
+    for pc, color in zip(
+        bodies, palette, strict=False
+    ):  # 10-color palette cycle longer than the 5 violin bodies
         pc.set_alpha(0.45)
         pc.set_facecolor(color)
         pc.set_edgecolor("black")
         pc.set_linewidth(0.5)
-    ax.boxplot(data, widths=0.22, patch_artist=False, showfliers=False,
-               medianprops={"color": "black", "linewidth": 1.4})
+    ax.boxplot(
+        data,
+        widths=0.22,
+        patch_artist=False,
+        showfliers=False,
+        medianprops={"color": "black", "linewidth": 1.4},
+    )
     means = [float(d.mean()) for d in data]
-    ax.scatter(range(1, len(CELLS) + 1), means, marker="D",
-               color="white", edgecolor="black", zorder=5, s=24,
-               label="mean")
+    ax.scatter(
+        range(1, len(CELLS) + 1),
+        means,
+        marker="D",
+        color="white",
+        edgecolor="black",
+        zorder=5,
+        s=24,
+        label="mean",
+    )
     ax.set_xticks(range(1, len(CELLS) + 1))
     ax.set_xticklabels(labels)
-    ax.set_ylabel(r"TWFE estimate $\hat{\alpha}_i$  "
-                  r"(residual hp-differential, dimensionless)")
+    ax.set_ylabel(
+        r"TWFE estimate $\hat{\alpha}_i$  "
+        r"(residual hp-differential, dimensionless)"
+    )
     ax.set_xlabel("cell (configuration)")
     ax.axhline(0.0, color="grey", lw=0.7, ls="--", label=r"$\hat{\alpha} = 0$")
     ax.set_title(
@@ -387,20 +431,20 @@ def section_04_eb_shrinkage_scatter() -> dict:
         x_arr = np.asarray(x)
         y_arr = np.asarray(y)
         n_arr = np.asarray(n)
-        sc = ax.scatter(x_arr, y_arr, c=n_arr, cmap="plasma", s=18, alpha=0.7,
-                        edgecolors="none")
+        sc = ax.scatter(x_arr, y_arr, c=n_arr, cmap="plasma", s=18, alpha=0.7, edgecolors="none")
         lo = float(min(x_arr.min(), y_arr.min()))
         hi = float(max(x_arr.max(), y_arr.max()))
-        ax.plot([lo, hi], [lo, hi], color="black", ls="--", lw=0.8,
-                label="y = x  (no shrinkage)")
+        ax.plot([lo, hi], [lo, hi], color="black", ls="--", lw=0.8, label="y = x  (no shrinkage)")
         ax.axvline(0, color="grey", lw=0.5, ls=":")
         ax.axhline(0, color="grey", lw=0.5, ls=":")
         if x_arr.std() > 0:
             slope = float(np.polyfit(x_arr, y_arr, 1)[0])
         else:
             slope = float("nan")
-        ax.set_title(f"({chr(97 + ax_i)}) {cell}\n"
-                     fr"shrinkage slope $b$ = {slope:.3f}")
+        ax.set_title(
+            f"({chr(97 + ax_i)}) {cell}\n"
+            rf"shrinkage slope $b$ = {slope:.3f}"
+        )
         ax.set_xlabel(r"$\hat{\alpha}_i$  (TWFE)")
         if ax_i == 0:
             ax.legend(loc="lower right")
@@ -412,8 +456,7 @@ def section_04_eb_shrinkage_scatter() -> dict:
         }
     axes[0].set_ylabel(r"$\hat{\alpha}^{\mathrm{EB}}_i$  (TWFE + Empirical Bayes)")
     assert sc is not None  # CELLS is non-empty, so the loop always ran
-    fig.colorbar(sc, ax=axes.tolist(), shrink=0.85,
-                 label=r"$n_i$  (matchups per build)")
+    fig.colorbar(sc, ax=axes.tolist(), shrink=0.85, label=r"$n_i$  (matchups per build)")
     fig.suptitle(
         r"Empirical-Bayes shrinkage of $\hat{\alpha}_i$ — "
         r"slope $b = \sigma^2_\alpha / (\sigma^2_\alpha + \sigma^2_{e,i})$"
@@ -454,21 +497,29 @@ def section_05_boxcox_saturation() -> dict:
             "n_saturated": int(sat),
             "saturation_pct": float(frac * 100.0),
         }
-    colors = ["#C85200" if b > SAT_FAIL_FRAC * 100.0 else "#006BA4"
-              for b in bars]
+    colors = ["#C85200" if b > SAT_FAIL_FRAC * 100.0 else "#006BA4" for b in bars]
     ax.bar(CELLS, bars, color=colors, edgecolor="black", linewidth=0.6)
-    ax.axhline(SAT_FAIL_FRAC * 100, color="black", ls="--", lw=0.9,
-               label=f"F2a threshold = {SAT_FAIL_FRAC*100:.0f} %")
-    ax.set_ylabel(r"saturation rate  $\frac{|\{i: \mathrm{eb\_fitness}_i \geq 0.99\}|}{N_{\mathrm{nonpruned}}}$  (%)")
-    ax.set_xlabel("cell (configuration)")
-    ax.set_title(
-        "Box-Cox ceiling saturation per cell  "
-        "(F2a gate: orange = exceeds 1 %)"
+    ax.axhline(
+        SAT_FAIL_FRAC * 100,
+        color="black",
+        ls="--",
+        lw=0.9,
+        label=f"F2a threshold = {SAT_FAIL_FRAC * 100:.0f} %",
     )
+    ax.set_ylabel(
+        r"saturation rate  $\frac{|\{i: \mathrm{eb\_fitness}_i \geq 0.99\}|}{N_{\mathrm{nonpruned}}}$  (%)"
+    )
+    ax.set_xlabel("cell (configuration)")
+    ax.set_title("Box-Cox ceiling saturation per cell  (F2a gate: orange = exceeds 1 %)")
     for i, (b, n) in enumerate(zip(bars, n_obs, strict=True)):
-        ax.text(i, b + max(0.05, 0.02 * max([*bars, SAT_FAIL_FRAC * 100])),
-                f"{b:.2f} %\n(n = {n})",
-                ha="center", va="bottom", fontsize=9)
+        ax.text(
+            i,
+            b + max(0.05, 0.02 * max([*bars, SAT_FAIL_FRAC * 100])),
+            f"{b:.2f} %\n(n = {n})",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
     ax.legend(loc="upper left")
     ax.set_ylim(0, max([*bars, SAT_FAIL_FRAC * 100]) * 1.4)
     fig.savefig(CHARTS_DIR / "05_boxcox_saturation_per_cell.png")
@@ -500,16 +551,15 @@ def section_06_pruner_rate() -> dict:
             rate = pr / tot if tot > 0 else 0.0
             ys.append(rate)
             out.setdefault(cell, {})[f"seed{seed}"] = {
-                "n_total": int(tot), "n_pruned": int(pr), "rate": float(rate),
+                "n_total": int(tot),
+                "n_pruned": int(pr),
+                "rate": float(rate),
             }
         xs = np.arange(n_cells) + (j - 1) * width
-        ax.bar(xs, ys, width, label=f"seed {seed}",
-               edgecolor="black", linewidth=0.4)
+        ax.bar(xs, ys, width, label=f"seed {seed}", edgecolor="black", linewidth=0.4)
         for x_, y_ in zip(xs, ys, strict=True):
-            ax.text(x_, y_ + 0.012, f"{y_*100:.0f}%",
-                    ha="center", va="bottom", fontsize=8)
-    ax.axhspan(0.10, 0.60, alpha=0.12, color="#C85200",
-               label="design band  [0.10, 0.60]", zorder=0)
+            ax.text(x_, y_ + 0.012, f"{y_ * 100:.0f}%", ha="center", va="bottom", fontsize=8)
+    ax.axhspan(0.10, 0.60, alpha=0.12, color="#C85200", label="design band  [0.10, 0.60]", zorder=0)
     ax.set_xticks(np.arange(n_cells))
     ax.set_xticklabels(CELLS)
     ax.set_ylabel(r"MedianPruner rate  $N_{\mathrm{pruned}} / N_{\mathrm{total}}$")
@@ -525,11 +575,9 @@ def section_06_pruner_rate() -> dict:
 # -------------------------------------------------------------- section 7 ---
 
 
-def section_07_confounding_heatmap(repr_cell: str = "c2",
-                                   repr_seed: str = "0") -> dict:
+def section_07_confounding_heatmap(repr_cell: str = "c2", repr_seed: str = "0") -> dict:
     """Per-study build × opponent matchup-count heatmap + per-cell imbalance."""
-    log.info("[07] Confounding heatmap (%s/seed%s) + per-cell imbalance",
-             repr_cell, repr_seed)
+    log.info("[07] Confounding heatmap (%s/seed%s) + per-cell imbalance", repr_cell, repr_seed)
 
     # Headline panel: c2/seed0 build × opponent count matrix.
     paths = _seed_log_paths(repr_cell, repr_seed)
@@ -580,8 +628,7 @@ def section_07_confounding_heatmap(repr_cell: str = "c2",
         per_cell_imb[cell] = float(np.mean(ratios)) if ratios else float("nan")
 
     # 2-panel figure: heatmap + per-cell bar.
-    fig, axes = plt.subplots(1, 2, figsize=(14.5, 5.4),
-                             gridspec_kw={"width_ratios": [2.5, 1.2]})
+    fig, axes = plt.subplots(1, 2, figsize=(14.5, 5.4), gridspec_kw={"width_ratios": [2.5, 1.2]})
 
     ax = axes[0]
     ax.grid(False)
@@ -610,8 +657,7 @@ def section_07_confounding_heatmap(repr_cell: str = "c2",
     ymax = max(vals) * 1.15
     ax.set_ylim(0, ymax)
     for i, v in enumerate(vals):
-        ax.text(i, v + ymax * 0.015, f"{v:.2f}", ha="center", va="bottom",
-                fontsize=9)
+        ax.text(i, v + ymax * 0.015, f"{v:.2f}", ha="center", va="bottom", fontsize=9)
     fig.savefig(CHARTS_DIR / "07_confounding_heatmap_seed0.png")
     plt.close(fig)
     return {
@@ -651,8 +697,7 @@ def section_08_pooling_stability(k: int = 10) -> dict:
             jc = _jaccard(seed_top, cell_top)
             # Spearman ρ over UNION of (seed-top-K ∪ pooled-top-K) ranks.
             seed_rank_map = {r.build_id: i for i, r in enumerate(seed_ranked)}
-            common = ({r.build_id for r in seed_top} |
-                      {r.build_id for r in cell_top})
+            common = {r.build_id for r in seed_top} | {r.build_id for r in cell_top}
             common &= set(seed_rank_map.keys())
             common &= set(cell_rank_map.keys())
             if len(common) >= 2:
@@ -672,16 +717,15 @@ def section_08_pooling_stability(k: int = 10) -> dict:
         out[cell] = {
             "per_seed_jaccard": per_seed_jaccard,
             "per_seed_rho": per_seed_rho,
-            "mean_jaccard": float(np.mean(per_seed_jaccard))
-                if per_seed_jaccard else float("nan"),
-            "mean_rho": float(np.nanmean(per_seed_rho))
-                if per_seed_rho else float("nan"),
+            "mean_jaccard": float(np.mean(per_seed_jaccard)) if per_seed_jaccard else float("nan"),
+            "mean_rho": float(np.nanmean(per_seed_rho)) if per_seed_rho else float("nan"),
         }
 
     ax = axes[0]
     xs_pos = np.arange(len(pooled_keys))
-    cell_color = {c: plt.rcParams["axes.prop_cycle"].by_key()["color"][i]
-                  for i, c in enumerate(CELLS)}
+    cell_color = {
+        c: plt.rcParams["axes.prop_cycle"].by_key()["color"][i] for i, c in enumerate(CELLS)
+    }
     bar_colors = [cell_color[k.split("/")[0]] for k in pooled_keys]
     ax.bar(xs_pos, jaccards, color=bar_colors, edgecolor="black", linewidth=0.4)
     ax.set_xticks(xs_pos)
@@ -691,8 +735,7 @@ def section_08_pooling_stability(k: int = 10) -> dict:
     ax.set_ylim(0, 1)
     ax.set_title(f"(a) Top-{k} Jaccard: per-seed TWFE+EB vs within-cell-pooled")
     mean_j = float(np.mean(jaccards))
-    ax.axhline(mean_j, color="black", ls="--", lw=0.9,
-               label=f"overall mean = {mean_j:.2f}")
+    ax.axhline(mean_j, color="black", ls="--", lw=0.9, label=f"overall mean = {mean_j:.2f}")
     ax.legend(loc="upper right")
 
     ax = axes[1]
@@ -705,8 +748,7 @@ def section_08_pooling_stability(k: int = 10) -> dict:
     ax.set_ylim(-1.0, 1.0)
     ax.axhline(0, color="grey", lw=0.5)
     mean_rho = float(np.nanmean(rhos_arr)) if len(rhos_arr) else float("nan")
-    ax.axhline(mean_rho, color="black", ls="--", lw=0.9,
-               label=f"overall mean = {mean_rho:.2f}")
+    ax.axhline(mean_rho, color="black", ls="--", lw=0.9, label=f"overall mean = {mean_rho:.2f}")
     ax.legend(loc="lower right")
     ax.set_title(r"(b) Rank correlation: per-seed top-$K$ positions vs pooled positions")
 
@@ -743,20 +785,42 @@ def section_09_bt_vs_twfe_alpha() -> dict:
     n_disagree = int(disagree_mask.sum())
 
     fig, ax = plt.subplots(1, 1, figsize=(8, 7.2))
-    ax.scatter(xs, ys, c="#006BA4", alpha=0.5, s=20, edgecolors="none",
-               label=f"builds  (n = {len(common):,})")
-    ax.scatter(xs[disagree_mask], ys[disagree_mask], c="#C85200", alpha=0.9,
-               s=24, edgecolors="black", linewidths=0.4,
-               label=fr"$|\Delta z| > 1$  (n = {n_disagree})")
+    ax.scatter(
+        xs,
+        ys,
+        c="#006BA4",
+        alpha=0.5,
+        s=20,
+        edgecolors="none",
+        label=f"builds  (n = {len(common):,})",
+    )
+    ax.scatter(
+        xs[disagree_mask],
+        ys[disagree_mask],
+        c="#C85200",
+        alpha=0.9,
+        s=24,
+        edgecolors="black",
+        linewidths=0.4,
+        label=rf"$|\Delta z| > 1$  (n = {n_disagree})",
+    )
     if xs.std() > 0 and ys.std() > 0:
         slope, intercept = np.polyfit(xs, ys, 1)
         x_line = np.linspace(xs.min(), xs.max(), 50)
-        ax.plot(x_line, slope * x_line + intercept, color="black",
-                ls="--", lw=0.9, label=fr"OLS fit  $b$ = {slope:.2f}")
+        ax.plot(
+            x_line,
+            slope * x_line + intercept,
+            color="black",
+            ls="--",
+            lw=0.9,
+            label=rf"OLS fit  $b$ = {slope:.2f}",
+        )
     ax.axhline(0, color="grey", lw=0.5)
     ax.axvline(0, color="grey", lw=0.5)
-    ax.set_xlabel(r"TWFE+EB  $\hat{\alpha}^{\mathrm{EB}}_i$  "
-                  r"(residual hp-differential, dimensionless)")
+    ax.set_xlabel(
+        r"TWFE+EB  $\hat{\alpha}^{\mathrm{EB}}_i$  "
+        r"(residual hp-differential, dimensionless)"
+    )
     ax.set_ylabel(r"Bradley–Terry skill  $\alpha^{\mathrm{BT}}_i$  (logit units)")
     ax.set_title(
         r"Bradley–Terry skill vs TWFE+EB build-quality  "
@@ -796,10 +860,24 @@ def section_10_search_coverage() -> dict:
     ax = axes[0]
     width = 0.36
     x = np.arange(len(CELLS))
-    ax.bar(x - width / 2, bar_y_total, width, color="#ABABAB",
-           edgecolor="black", linewidth=0.5, label="finalized trials")
-    ax.bar(x + width / 2, bar_y_distinct, width, color="#006BA4",
-           edgecolor="black", linewidth=0.5, label="distinct Build hashes")
+    ax.bar(
+        x - width / 2,
+        bar_y_total,
+        width,
+        color="#ABABAB",
+        edgecolor="black",
+        linewidth=0.5,
+        label="finalized trials",
+    )
+    ax.bar(
+        x + width / 2,
+        bar_y_distinct,
+        width,
+        color="#006BA4",
+        edgecolor="black",
+        linewidth=0.5,
+        label="distinct Build hashes",
+    )
     ax.set_xticks(x)
     ax.set_xticklabels(CELLS)
     ax.set_xlabel("cell (configuration)")
@@ -810,13 +888,19 @@ def section_10_search_coverage() -> dict:
     ax.set_ylim(0, ymax * 1.13)
     for i, cell in enumerate(CELLS):
         dup = out[cell]["duplicate_rate"] * 100
-        ax.text(i, max(bar_y_total[i], bar_y_distinct[i]) + ymax * 0.025,
-                f"dup = {dup:.1f}%", ha="center", fontsize=9)
+        ax.text(
+            i,
+            max(bar_y_total[i], bar_y_distinct[i]) + ymax * 0.025,
+            f"dup = {dup:.1f}%",
+            ha="center",
+            fontsize=9,
+        )
 
     # Cumulative distinct-vs-trial — pool seeds within cell, sort by trial #.
     ax = axes[1]
-    cell_color = {c: plt.rcParams["axes.prop_cycle"].by_key()["color"][i]
-                  for i, c in enumerate(CELLS)}
+    cell_color = {
+        c: plt.rcParams["axes.prop_cycle"].by_key()["color"][i] for i, c in enumerate(CELLS)
+    }
     for cell in CELLS:
         for _seed_i, seed in enumerate(SEEDS):
             recs = load_records(_seed_log_paths(cell, seed))
@@ -828,13 +912,17 @@ def section_10_search_coverage() -> dict:
                 seen.add(r.build_id)
                 xs.append(r.trial_number)
                 ys.append(len(seen))
-            ax.plot(xs, ys, alpha=0.7, lw=1.3,
-                    color=cell_color[cell],
-                    label=cell if seed == SEEDS[0] else None)
+            ax.plot(
+                xs,
+                ys,
+                alpha=0.7,
+                lw=1.3,
+                color=cell_color[cell],
+                label=cell if seed == SEEDS[0] else None,
+            )
     # Reference: y = x (every trial new)
     xref = np.arange(0, max(bar_y_total) * 2)
-    ax.plot(xref, xref, color="black", ls=":", lw=0.8,
-            label=r"$y = x$  (every trial new)")
+    ax.plot(xref, xref, color="black", ls=":", lw=0.8, label=r"$y = x$  (every trial new)")
     ax.set_xlabel("trial number within seed-study")
     ax.set_ylabel("cumulative distinct Build hashes")
     ax.set_title("(b) Search-space coverage  (3 curves per cell — one per seed)")
@@ -849,9 +937,9 @@ def section_10_search_coverage() -> dict:
 # ------------------------------------------------------------- section 11 ---
 
 
-def _bootstrap_top3_alpha_eb(records: Sequence[TrialRecord],
-                             rng: np.random.Generator,
-                             n_iters: int) -> np.ndarray:
+def _bootstrap_top3_alpha_eb(
+    records: Sequence[TrialRecord], rng: np.random.Generator, n_iters: int
+) -> np.ndarray:
     """Bootstrap distribution of mean(top-3 α̂_EB) by resampling builds.
 
     For each iteration: sample n_builds *records* with replacement, refit
@@ -887,8 +975,13 @@ def section_11_f1c_gate(n_boot: int = BOOTSTRAP_ITERS) -> dict:
         bt_mean = float(np.mean([r.score for r in ranked_bt[:3]]))
         point_estimates[cell] = eb_mean
         bt_top3[cell] = bt_mean
-        log.info("    %s top-3 α̂_EB mean = %+.4f  (BT %+.4f)  (n_recs=%d)",
-                 cell, eb_mean, bt_mean, len(recs))
+        log.info(
+            "    %s top-3 α̂_EB mean = %+.4f  (BT %+.4f)  (n_recs=%d)",
+            cell,
+            eb_mean,
+            bt_mean,
+            len(recs),
+        )
         boot_dists[cell] = _bootstrap_top3_alpha_eb(recs, rng, n_boot)
 
     # Decision-tree branch lookup helper.
@@ -915,9 +1008,14 @@ def section_11_f1c_gate(n_boot: int = BOOTSTRAP_ITERS) -> dict:
             "ci_high": ci_high,
             "branch": _branch(delta_point, ci_low, ci_high),
         }
-        log.info("    Δ(c2 − %s) point=%+.4f  95%% CI [%+.4f, %+.4f]  branch=%s",
-                 ctrl, delta_point, ci_low, ci_high,
-                 comparisons[f"c2_vs_{ctrl}"]["branch"])
+        log.info(
+            "    Δ(c2 − %s) point=%+.4f  95%% CI [%+.4f, %+.4f]  branch=%s",
+            ctrl,
+            delta_point,
+            ci_low,
+            ci_high,
+            comparisons[f"c2_vs_{ctrl}"]["branch"],
+        )
 
     # Best cell by honest mean α̂_EB
     best_cell = max(point_estimates, key=lambda cell: point_estimates[cell])
@@ -1014,9 +1112,7 @@ def section_13_pruner_boxcox() -> dict:
             "n_finalized": int(n_finalized),
             "n_finalized_saturated": int(n_finalized_saturated),
             "pruner_rate": (n_pruned / max(n_total, 1)),
-            "saturation_rate_finalized": (
-                n_finalized_saturated / max(n_finalized, 1)
-            ),
+            "saturation_rate_finalized": (n_finalized_saturated / max(n_finalized, 1)),
         }
     # Spearman rank correlation between per-cell pruner_rate and saturation_rate.
     cells = list(out.keys())
@@ -1053,8 +1149,7 @@ def main() -> int:
 
     HEADLINES_PATH.write_text(json.dumps(headline, indent=2, default=float))
     log.info("Wrote %s", HEADLINES_PATH)
-    log.info("Wrote %d charts to %s", len(list(CHARTS_DIR.glob("*.png"))),
-             CHARTS_DIR)
+    log.info("Wrote %d charts to %s", len(list(CHARTS_DIR.glob("*.png"))), CHARTS_DIR)
     return 0
 
 

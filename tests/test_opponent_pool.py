@@ -56,13 +56,10 @@ def _make_result(
     if isinstance(enemy_hp, (int, float)):
         enemy_hp = [enemy_hp]
 
-    player_ships = tuple(
-        _make_ship(hp, destroyed=(hp == 0.0)) for hp in player_hp
-    )
-    enemy_ships = tuple(
-        _make_ship(hp, destroyed=(hp == 0.0)) for hp in enemy_hp
-    )
+    player_ships = tuple(_make_ship(hp, destroyed=(hp == 0.0)) for hp in player_hp)
+    enemy_ships = tuple(_make_ship(hp, destroyed=(hp == 0.0)) for hp in enemy_hp)
     from tests.conftest import make_pass_diagnostic
+
     return CombatResult(
         matchup_id="test_001",
         winner=winner,
@@ -81,7 +78,6 @@ def _make_result(
 
 
 class TestOpponentPool:
-
     def test_get_opponents_returns_tuple(self):
         pool = OpponentPool(pools={HullSize.CRUISER: ("dom_Assault", "eagle_Assault")})
         opponents = get_opponents(pool, HullSize.CRUISER)
@@ -98,10 +94,10 @@ class TestOpponentPool:
 
 
 class TestDiscoverOpponentPool:
-
     @pytest.fixture(scope="module")
     def game_data(self):
         from starsector_optimizer.parser import load_game_data
+
         return load_game_data(Path("game/starsector"))
 
     def test_discover_finds_stock_variants(self, game_data):
@@ -133,8 +129,18 @@ class TestDiscoverOpponentPool:
         variants_dir = tmp_path / "data" / "variants"
         variants_dir.mkdir(parents=True)
 
-        real_variant = {"variantId": "wolf_Test", "hullId": "wolf", "weaponGroups": [], "hullMods": []}
-        opt_variant = {"variantId": "wolf_opt_000001", "hullId": "wolf", "weaponGroups": [], "hullMods": []}
+        real_variant = {
+            "variantId": "wolf_Test",
+            "hullId": "wolf",
+            "weaponGroups": [],
+            "hullMods": [],
+        }
+        opt_variant = {
+            "variantId": "wolf_opt_000001",
+            "hullId": "wolf",
+            "weaponGroups": [],
+            "hullMods": [],
+        }
 
         (variants_dir / "wolf_Test.variant").write_text(json.dumps(real_variant))
         (variants_dir / "wolf_opt_000001.variant").write_text(json.dumps(opt_variant))
@@ -149,7 +155,12 @@ class TestDiscoverOpponentPool:
 
         variants_dir = tmp_path / "data" / "variants"
         variants_dir.mkdir(parents=True)
-        unknown = {"variantId": "alien_Assault", "hullId": "alien_ship", "weaponGroups": [], "hullMods": []}
+        unknown = {
+            "variantId": "alien_Assault",
+            "hullId": "alien_ship",
+            "weaponGroups": [],
+            "hullMods": [],
+        }
         (variants_dir / "alien_Assault.variant").write_text(json.dumps(unknown))
 
         pool = discover_opponent_pool(tmp_path, game_data)
@@ -168,16 +179,36 @@ class TestDiscoverOpponentPool:
 
         # Minimal game data with one hull
         hull = ShipHull(
-            id="wolf", name="Wolf", hull_size=HullSize.FRIGATE, designation="Fast Attack",
-            tech_manufacturer="", system_id="", fleet_pts=5, hitpoints=2000,
-            armor_rating=200, max_flux=2500, flux_dissipation=200, ordnance_points=55,
-            fighter_bays=0, max_speed=150, shield_type=ShieldType.OMNI, shield_arc=360,
-            shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0, phase_upkeep=0,
-            peak_cr_sec=300, cr_loss_per_sec=0.25,
-            weapon_slots=[], built_in_mods=[], built_in_weapons={},
+            id="wolf",
+            name="Wolf",
+            hull_size=HullSize.FRIGATE,
+            designation="Fast Attack",
+            tech_manufacturer="",
+            system_id="",
+            fleet_pts=5,
+            hitpoints=2000,
+            armor_rating=200,
+            max_flux=2500,
+            flux_dissipation=200,
+            ordnance_points=55,
+            fighter_bays=0,
+            max_speed=150,
+            shield_type=ShieldType.OMNI,
+            shield_arc=360,
+            shield_upkeep=0.4,
+            shield_efficiency=0.8,
+            phase_cost=0,
+            phase_upkeep=0,
+            peak_cr_sec=300,
+            cr_loss_per_sec=0.25,
+            weapon_slots=[],
+            built_in_mods=[],
+            built_in_weapons={},
         )
         game_data = GameData(
-            hulls={"wolf": hull}, weapons={}, hullmods={},
+            hulls={"wolf": hull},
+            weapons={},
+            hullmods={},
         )
 
         # Create one variant
@@ -208,7 +239,6 @@ class TestDiscoverOpponentPool:
 
 
 class TestGenerateMatchups:
-
     @staticmethod
     def _build_spec():
         return BuildSpec(
@@ -257,7 +287,6 @@ class TestGenerateMatchups:
 
 
 class TestHpDifferential:
-
     def test_player_wins_positive(self):
         result = _make_result(player_hp=0.8, enemy_hp=0.0, winner="PLAYER")
         diff = hp_differential(result)
@@ -287,11 +316,17 @@ class TestHpDifferential:
     def test_empty_player_ships(self):
         """Empty player_ships returns 0.0."""
         from tests.conftest import make_pass_diagnostic
+
         result = CombatResult(
-            matchup_id="test", winner="ENEMY", duration_seconds=60.0,
-            player_ships=(), enemy_ships=(_make_ship(0.5),),
-            player_ships_destroyed=0, enemy_ships_destroyed=0,
-            player_ships_retreated=0, enemy_ships_retreated=0,
+            matchup_id="test",
+            winner="ENEMY",
+            duration_seconds=60.0,
+            player_ships=(),
+            enemy_ships=(_make_ship(0.5),),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=0,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
             player_loadout_diagnostics=make_pass_diagnostic(0),
         )
         assert hp_differential(result) == 0.0
@@ -299,11 +334,17 @@ class TestHpDifferential:
     def test_empty_enemy_ships(self):
         """Empty enemy_ships returns 0.0."""
         from tests.conftest import make_pass_diagnostic
+
         result = CombatResult(
-            matchup_id="test", winner="PLAYER", duration_seconds=60.0,
-            player_ships=(_make_ship(0.8),), enemy_ships=(),
-            player_ships_destroyed=0, enemy_ships_destroyed=0,
-            player_ships_retreated=0, enemy_ships_retreated=0,
+            matchup_id="test",
+            winner="PLAYER",
+            duration_seconds=60.0,
+            player_ships=(_make_ship(0.8),),
+            enemy_ships=(),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=0,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
             player_loadout_diagnostics=make_pass_diagnostic(1),
         )
         assert hp_differential(result) == 0.0
@@ -313,7 +354,6 @@ class TestHpDifferential:
 
 
 class TestComputeFitness:
-
     def test_mean_mode(self):
         r1 = _make_result(player_hp=0.8, enemy_hp=0.0)  # diff = 0.8
         r2 = _make_result(player_hp=0.0, enemy_hp=0.6)  # diff = -0.6

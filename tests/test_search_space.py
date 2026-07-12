@@ -5,9 +5,22 @@ from typing import Any
 import pytest
 
 from starsector_optimizer.models import (
-    HullSize, SlotType, SlotSize, MountType, ShieldType, WeaponType,
-    WeaponSlot, ShipHull, Weapon, HullMod, DamageType, GameData,
-    REGIME_EARLY, REGIME_MID, REGIME_LATE, REGIME_ENDGAME,
+    HullSize,
+    SlotType,
+    SlotSize,
+    MountType,
+    ShieldType,
+    WeaponType,
+    WeaponSlot,
+    ShipHull,
+    Weapon,
+    HullMod,
+    DamageType,
+    GameData,
+    REGIME_EARLY,
+    REGIME_MID,
+    REGIME_LATE,
+    REGIME_ENDGAME,
 )
 from starsector_optimizer.search_space import (
     get_compatible_weapons,
@@ -19,13 +32,36 @@ from starsector_optimizer.search_space import (
 
 # --- Helpers ---
 
+
 def _slot(slot_type=SlotType.BALLISTIC, slot_size=SlotSize.MEDIUM):
     return WeaponSlot("WS 001", slot_type, slot_size, MountType.TURRET, 0, 150, (0, 0))
 
 
 def _weapon(wid="w1", weapon_type=WeaponType.BALLISTIC, size=SlotSize.MEDIUM):
-    return Weapon(wid, wid, size, weapon_type, 100, 0, DamageType.KINETIC, 0,
-                  100, 0, 700, 10, 0, 0.5, 1, 0, 0, 0, 500, 30, [], [])
+    return Weapon(
+        wid,
+        wid,
+        size,
+        weapon_type,
+        100,
+        0,
+        DamageType.KINETIC,
+        0,
+        100,
+        0,
+        700,
+        10,
+        0,
+        0.5,
+        1,
+        0,
+        0,
+        0,
+        500,
+        30,
+        [],
+        [],
+    )
 
 
 def _hullmod(mid="mod1", is_hidden=False):
@@ -34,13 +70,33 @@ def _hullmod(mid="mod1", is_hidden=False):
 
 def _hull(**kw):
     defaults: dict[str, Any] = {
-        "id": "test", "name": "Test", "hull_size": HullSize.CRUISER, "designation": "Cruiser",
-        "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
-        "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": 100,
-        "fighter_bays": 0, "max_speed": 60, "shield_type": ShieldType.FRONT, "shield_arc": 270,
-        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0, "phase_upkeep": 0,
-        "peak_cr_sec": 480, "cr_loss_per_sec": 0.25, "weapon_slots": [], "built_in_mods": [],
-        "built_in_weapons": {}, "hints": [], "tags": [],
+        "id": "test",
+        "name": "Test",
+        "hull_size": HullSize.CRUISER,
+        "designation": "Cruiser",
+        "tech_manufacturer": "",
+        "system_id": "",
+        "fleet_pts": 10,
+        "hitpoints": 5000,
+        "armor_rating": 500,
+        "max_flux": 5000,
+        "flux_dissipation": 300,
+        "ordnance_points": 100,
+        "fighter_bays": 0,
+        "max_speed": 60,
+        "shield_type": ShieldType.FRONT,
+        "shield_arc": 270,
+        "shield_upkeep": 0.4,
+        "shield_efficiency": 0.8,
+        "phase_cost": 0,
+        "phase_upkeep": 0,
+        "peak_cr_sec": 480,
+        "cr_loss_per_sec": 0.25,
+        "weapon_slots": [],
+        "built_in_mods": [],
+        "built_in_weapons": {},
+        "hints": [],
+        "tags": [],
     }
     defaults.update(kw)
     return ShipHull(**defaults)
@@ -120,6 +176,7 @@ class TestGetEligibleHullmods:
     def test_excludes_hidden(self, manifest):
         """Schema v2: hidden filter runs on top of manifest applicable set."""
         from tests.conftest import attach_synthetic_hull
+
         mods = {"m1": _hullmod("m1", is_hidden=False), "m2": _hullmod("m2", is_hidden=True)}
         hull = _hull()
         # Synthetic hull claims both mods are applicable; the is_hidden
@@ -133,6 +190,7 @@ class TestGetEligibleHullmods:
         manifest's applicable_hullmods set is authoritative; what isn't
         in that set doesn't come out of get_eligible_hullmods."""
         from tests.conftest import attach_synthetic_hull
+
         mods = {"m1": _hullmod("m1"), "m2": _hullmod("m2")}
         hull = _hull(built_in_mods=["m2"])
         # Probe output: m1 applicable, m2 NOT (because engine found it
@@ -171,6 +229,7 @@ class TestBuildSearchSpace:
         from starsector_optimizer.game_manifest import (
             SLOT_WEAPON_COMPATIBILITY as SLOT_COMPATIBILITY,
         )
+
         for slot_id, options in space.weapon_options.items():
             slot = slot_map[slot_id]
             allowed = SLOT_COMPATIBILITY[slot.slot_type]
@@ -218,7 +277,9 @@ def _fixture_game_data_with_tagged_components():
     hull = _hull(
         id="testhull",
         weapon_slots=[
-            WeaponSlot("WS001", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)),
+            WeaponSlot(
+                "WS001", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)
+            ),
         ],
     )
 
@@ -235,9 +296,28 @@ def _fixture_game_data_with_tagged_components():
 
     def _w(wid, tags):
         return Weapon(
-            wid, wid, SlotSize.MEDIUM, WeaponType.BALLISTIC,
-            100, 0, DamageType.KINETIC, 0, 100, 0, 700, 10, 0, 0.5, 1, 0, 0, 0,
-            500, 30, [], tags,
+            wid,
+            wid,
+            SlotSize.MEDIUM,
+            WeaponType.BALLISTIC,
+            100,
+            0,
+            DamageType.KINETIC,
+            0,
+            100,
+            0,
+            700,
+            10,
+            0,
+            0.5,
+            1,
+            0,
+            0,
+            0,
+            500,
+            30,
+            [],
+            tags,
         )
 
     weapons = {
@@ -254,11 +334,11 @@ def _fixture_with_manifest(manifest):
     the synthetic `testhull` must have an applicable_hullmods entry in
     the manifest, or get_eligible_hullmods KeyErrors."""
     from tests.conftest import attach_synthetic_hull
+
     hull, gd = _fixture_game_data_with_tagged_components()
     # All 5 synthetic mods applicable to testhull — regime filters apply on
     # top via tags/tier, not via applicability.
-    m = attach_synthetic_hull(manifest, "testhull",
-                              ["mt0", "mt1", "mt3", "mt_nds", "mt_rare"])
+    m = attach_synthetic_hull(manifest, "testhull", ["mt0", "mt1", "mt3", "mt_nds", "mt_rare"])
     return hull, gd, m
 
 

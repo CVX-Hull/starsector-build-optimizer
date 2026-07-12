@@ -2,6 +2,7 @@
 """Run throughput estimation against real game data."""
 
 import sys
+
 sys.path.insert(0, "src")
 
 from starsector_optimizer.game_manifest import GameManifest
@@ -22,8 +23,10 @@ GAME_DIR = Path("game/starsector")
 print("Loading game data...")
 game_data = load_game_data(GAME_DIR)
 manifest = GameManifest.load()
-print(f"Loaded {len(game_data.hulls)} hulls, {len(game_data.weapons)} weapons, "
-      f"{len(game_data.hullmods)} hullmods\n")
+print(
+    f"Loaded {len(game_data.hulls)} hulls, {len(game_data.weapons)} weapons, "
+    f"{len(game_data.hullmods)} hullmods\n"
+)
 
 # Compute search space stats for all hulls
 all_stats = compute_all_hull_stats(game_data, manifest)

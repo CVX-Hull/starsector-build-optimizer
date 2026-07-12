@@ -205,7 +205,9 @@ def render(
     out: list[str] = []
     out.append("# Wave 1 Honest-Eval Partial Snapshot")
     out.append("")
-    out.append("Read-only preliminary analysis. Rankings below are provisional because the ledger is prefix-ordered by dispatch, not a randomized complete panel.")
+    out.append(
+        "Read-only preliminary analysis. Rankings below are provisional because the ledger is prefix-ordered by dispatch, not a randomized complete panel."
+    )
     out.append("")
     out.append("## Progress")
     out.append("")
@@ -226,7 +228,9 @@ def render(
 
     out.append("## Cell Coverage")
     out.append("")
-    out.append("| cell | builds observed | complete builds | results | coverage | complete-build mean oracle | observed-build mean oracle |")
+    out.append(
+        "| cell | builds observed | complete builds | results | coverage | complete-build mean oracle | observed-build mean oracle |"
+    )
     out.append("|---|---:|---:|---:|---:|---:|---:|")
     cells = sorted({item.key.cell for item in stats})
     for cell in cells:
@@ -235,7 +239,8 @@ def render(
         results = sum(item.n for item in cell_stats)
         complete_mean = (
             sum(item.mean for item in cell_complete) / len(cell_complete)
-            if cell_complete else float("nan")
+            if cell_complete
+            else float("nan")
         )
         observed_mean = sum(item.mean for item in cell_stats) / len(cell_stats)
         complete_s = fmt(complete_mean) if cell_complete else "n/a"
@@ -284,10 +289,16 @@ def render(
     }
     if {"wave1-c0a", "wave1-c0b", "wave1-c2"} <= set(cell_complete_mean):
         c2 = cell_complete_mean["wave1-c2"]
-        out.append(f"- F1c C2 vs C0a complete-panel delta: {fmt(c2 - cell_complete_mean['wave1-c0a'])}")
-        out.append(f"- F1c C2 vs C0b complete-panel delta: {fmt(c2 - cell_complete_mean['wave1-c0b'])}")
+        out.append(
+            f"- F1c C2 vs C0a complete-panel delta: {fmt(c2 - cell_complete_mean['wave1-c0a'])}"
+        )
+        out.append(
+            f"- F1c C2 vs C0b complete-panel delta: {fmt(c2 - cell_complete_mean['wave1-c0b'])}"
+        )
     else:
-        out.append("- F1c C2-vs-baseline gate: not estimable yet; C2 complete panels are not all present.")
+        out.append(
+            "- F1c C2-vs-baseline gate: not estimable yet; C2 complete panels are not all present."
+        )
     if "random-baseline" in cell_complete_mean:
         beats = sum(
             1
@@ -295,9 +306,13 @@ def render(
             if cell in cell_complete_mean
             and cell_complete_mean[cell] > cell_complete_mean["random-baseline"]
         )
-        out.append(f"- Random-baseline existence check: {beats}/5 cells beat the complete-panel random-baseline mean.")
+        out.append(
+            f"- Random-baseline existence check: {beats}/5 cells beat the complete-panel random-baseline mean."
+        )
     else:
-        out.append("- Random-baseline existence check: not estimable yet; random-baseline panels have not completed.")
+        out.append(
+            "- Random-baseline existence check: not estimable yet; random-baseline panels have not completed."
+        )
     out.append("")
 
     if health:

@@ -99,7 +99,6 @@ def _pretend_large_host(monkeypatch):
 
 
 class TestWorkDirCreation:
-
     def test_work_dir_structure(self, pool, config):
         """Verify symlinks + real dirs created correctly."""
         pool.setup()
@@ -174,7 +173,6 @@ class TestWorkDirCreation:
 
 
 class TestFileManagement:
-
     def test_clean_protocol_files(self, pool, config):
         """All protocol + signal files are removed before new batch."""
         pool.setup()
@@ -197,7 +195,16 @@ class TestFileManagement:
         matchups = [
             MatchupConfig(
                 matchup_id="test_001",
-                player_builds=(BuildSpec(variant_id="eagle_test", hull_id="eagle", weapon_assignments={}, hullmods=(), flux_vents=0, flux_capacitors=0),),
+                player_builds=(
+                    BuildSpec(
+                        variant_id="eagle_test",
+                        hull_id="eagle",
+                        weapon_assignments={},
+                        hullmods=(),
+                        flux_vents=0,
+                        flux_capacitors=0,
+                    ),
+                ),
                 enemy_variants=("dominator_Assault",),
             )
         ]
@@ -212,7 +219,6 @@ class TestFileManagement:
 
 
 class TestLocalInstancePoolProperties:
-
     def test_num_workers(self, pool, config):
         """num_workers property (EvaluatorPool ABC) returns instance count."""
         pool.setup()
@@ -223,7 +229,6 @@ class TestLocalInstancePoolProperties:
 
 
 class TestHealthMonitoring:
-
     def test_heartbeat_fresh(self, pool, config):
         """Recent heartbeat file mtime → instance considered alive."""
         pool.setup()
@@ -278,7 +283,6 @@ class TestHealthMonitoring:
 
 
 class TestProcessManagement:
-
     def test_crash_detection(self, pool, config):
         """Process exited + no done signal → FAILED."""
         pool.setup()
@@ -371,7 +375,6 @@ class TestProcessManagement:
 
 
 class TestDisplayNumbering:
-
     def test_xvfb_display_numbers(self, config):
         """Instances get base+0, base+1, ..."""
         pool = LocalInstancePool(config)
@@ -438,7 +441,6 @@ class TestSetupLoadPreflight:
 
 
 class TestContextManager:
-
     def test_context_manager_calls_teardown(self, config):
         """__exit__ calls teardown."""
         pool = LocalInstancePool(config)
@@ -454,7 +456,6 @@ class TestContextManager:
 
 
 class TestEnrichedHeartbeat:
-
     def test_heartbeat_content_validation_6_field(self, pool, config):
         """Parse 6-field enriched heartbeat content."""
         pool.setup()
@@ -472,9 +473,16 @@ def _make_matchups(n):
     return [
         MatchupConfig(
             matchup_id=f"m{i}",
-            player_builds=(BuildSpec(variant_id="a", hull_id="a",
-                                     weapon_assignments={}, hullmods=(),
-                                     flux_vents=0, flux_capacitors=0),),
+            player_builds=(
+                BuildSpec(
+                    variant_id="a",
+                    hull_id="a",
+                    weapon_assignments={},
+                    hullmods=(),
+                    flux_vents=0,
+                    flux_capacitors=0,
+                ),
+            ),
             enemy_variants=("b",),
         )
         for i in range(n)
@@ -498,7 +506,6 @@ def _make_result(matchup_id: str) -> CombatResult:
 
 
 class TestPersistentSession:
-
     def test_shutdown_signal_path_property(self, pool, config):
         """shutdown_signal_path returns correct saves/common path."""
         pool.setup()
@@ -513,7 +520,9 @@ class TestPersistentSession:
         assert len(PROTOCOL_FILES) == 5
 
     def test_stale_result_mismatch_restarts_and_retries_instance(
-        self, fake_game_dir, tmp_path,
+        self,
+        fake_game_dir,
+        tmp_path,
     ):
         """A reused JVM that reports the previous matchup is out of sync.
 
@@ -565,7 +574,9 @@ class TestPersistentSession:
         mock_xvfb.terminate.assert_called_once()
 
     def test_empty_results_restarts_and_retries_instance(
-        self, fake_game_dir, tmp_path,
+        self,
+        fake_game_dir,
+        tmp_path,
     ):
         """A done signal without parseable results is also instance-fatal,
         but should retry immediately while restart budget remains."""
@@ -641,6 +652,7 @@ class TestPersistentSession:
         old_mtime = inst.heartbeat_path.stat().st_mtime
 
         import time
+
         time.sleep(0.05)  # ensure mtime changes
         pool._assign_next_batch(inst, _make_matchups(1))
 

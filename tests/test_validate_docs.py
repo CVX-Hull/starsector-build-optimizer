@@ -60,26 +60,20 @@ class TestCheckLinks:
         root = _make_tree(tmp_path)
         # ../docs/real.md from .claude/skills/ — valid only if resolved
         # against the containing file's directory.
-        (root / ".claude" / "skills" / "s.md").write_text(
-            "see [real](../../docs/real.md)\n"
-        )
+        (root / ".claude" / "skills" / "s.md").write_text("see [real](../../docs/real.md)\n")
         assert v.check_links(root) == []
 
     def test_link_in_fenced_code_block_ignored(self, tmp_path):
         v = _load_validator()
         root = _make_tree(tmp_path)
-        (root / "docs" / "a.md").write_text(
-            "```markdown\n[example](does/not/exist.md)\n```\n"
-        )
+        (root / "docs" / "a.md").write_text("```markdown\n[example](does/not/exist.md)\n```\n")
         assert v.check_links(root) == []
 
     def test_link_in_inline_code_span_ignored(self, tmp_path):
         v = _load_validator()
         root = _make_tree(tmp_path)
         # The CONVENTIONS.md pattern: link syntax shown in inline backticks.
-        (root / "docs" / "a.md").write_text(
-            "- Use links: `[name](relative/path.md)`.\n"
-        )
+        (root / "docs" / "a.md").write_text("- Use links: `[name](relative/path.md)`.\n")
         assert v.check_links(root) == []
 
     def test_external_and_special_targets_skipped(self, tmp_path):

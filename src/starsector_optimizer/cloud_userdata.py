@@ -88,9 +88,7 @@ def render_user_data(
     env_lines: list[str] = []
     for f in dataclasses.fields(worker_config):
         value = getattr(worker_config, f.name)
-        env_lines.append(
-            f"STARSECTOR_WORKER_{f.name.upper()}={shlex.quote(str(value))}"
-        )
+        env_lines.append(f"STARSECTOR_WORKER_{f.name.upper()}={shlex.quote(str(value))}")
     env_body = "\n".join(env_lines)
 
     if debug_ssh_pubkey.strip():

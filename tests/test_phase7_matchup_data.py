@@ -99,11 +99,40 @@ def _write_fixture_study_db(path: Path, *, unsupported: bool = False) -> None:
         "insert into trial_values (trial_id, objective, value, value_type) values (1, 0, 0.25, 'FINITE')"
     )
     params = [
-        ("weapon_WS 001", 1.0, {"name": "CategoricalDistribution", "attributes": {"choices": ["empty", "heavyac"]}}),
-        ("weapon_WS 002", 1.0, {"name": "CategoricalDistribution", "attributes": {"choices": ["empty", "heavymortar"]}}),
-        ("hullmod_fluxcoil", 0.0, {"name": "CategoricalDistribution", "attributes": {"choices": [True, False]}}),
-        ("flux_vents", 4.0, {"name": "IntDistribution", "attributes": {"low": 0, "high": 30, "step": 1, "log": False}}),
-        ("flux_capacitors", 2.0, {"name": "IntDistribution", "attributes": {"low": 0, "high": 30, "step": 1, "log": False}}),
+        (
+            "weapon_WS 001",
+            1.0,
+            {"name": "CategoricalDistribution", "attributes": {"choices": ["empty", "heavyac"]}},
+        ),
+        (
+            "weapon_WS 002",
+            1.0,
+            {
+                "name": "CategoricalDistribution",
+                "attributes": {"choices": ["empty", "heavymortar"]},
+            },
+        ),
+        (
+            "hullmod_fluxcoil",
+            0.0,
+            {"name": "CategoricalDistribution", "attributes": {"choices": [True, False]}},
+        ),
+        (
+            "flux_vents",
+            4.0,
+            {
+                "name": "IntDistribution",
+                "attributes": {"low": 0, "high": 30, "step": 1, "log": False},
+            },
+        ),
+        (
+            "flux_capacitors",
+            2.0,
+            {
+                "name": "IntDistribution",
+                "attributes": {"low": 0, "high": 30, "step": 1, "log": False},
+            },
+        ),
     ]
     if unsupported:
         params.append(("bad_param", 0.0, {"name": "UnsupportedDistribution", "attributes": {}}))
@@ -142,10 +171,16 @@ class TestCanonicalBuilds:
         assert build.hullmods == frozenset({"fluxcoil", "armoredweapons"})
 
     def test_component_fingerprint_uses_full_canonical_build(self):
-        a = Build("hammerhead", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 4, 2)
-        b = Build("hammerhead", {"WS 001": None, "WS 002": "heavyac"}, frozenset({"fluxcoil"}), 4, 2)
+        a = Build(
+            "hammerhead", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 4, 2
+        )
+        b = Build(
+            "hammerhead", {"WS 001": None, "WS 002": "heavyac"}, frozenset({"fluxcoil"}), 4, 2
+        )
         c = Build("enforcer", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 4, 2)
-        d = Build("hammerhead", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 5, 2)
+        d = Build(
+            "hammerhead", {"WS 001": "heavyac", "WS 002": None}, frozenset({"fluxcoil"}), 5, 2
+        )
 
         assert component_fingerprint_json(a) != component_fingerprint_json(b)
         assert component_fingerprint_json(a) != component_fingerprint_json(c)
@@ -217,9 +252,7 @@ class TestDbRecovery:
         _write_fixture_study_db(db_path, unsupported=True)
 
         with pytest.raises(ValueError, match="unsupported Optuna distribution"):
-            recover_study_db_builds(
-                db_path, game_data.hulls["hammerhead"], game_data, manifest
-            )
+            recover_study_db_builds(db_path, game_data.hulls["hammerhead"], game_data, manifest)
 
 
 class TestHonestEvalRecovery:
@@ -244,19 +277,22 @@ class TestHonestEvalRecovery:
 
     def test_iter_honest_eval_matchups_joins_build_key(self, tmp_path):
         path = tmp_path / "results.jsonl"
-        path.write_text(json.dumps({
-            "schema_version": 1,
-            "matchup_id": "m",
-            "build_id": "honest__wave1-c0a__s0__seed0__rank1",
-            "opponent_variant_id": "enforcer_Balanced",
-            "replicate_idx": 2,
-            "fitness": 0.75,
-            "completed_at": "2026-05-11T00:00:00+00:00",
-        }) + "\n")
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "matchup_id": "m",
+                    "build_id": "honest__wave1-c0a__s0__seed0__rank1",
+                    "opponent_variant_id": "enforcer_Balanced",
+                    "replicate_idx": 2,
+                    "fitness": 0.75,
+                    "completed_at": "2026-05-11T00:00:00+00:00",
+                }
+            )
+            + "\n"
+        )
 
-        rows = list(iter_honest_eval_matchups(
-            path, {"honest__wave1-c0a__s0__seed0__rank1": "abc"}
-        ))
+        rows = list(iter_honest_eval_matchups(path, {"honest__wave1-c0a__s0__seed0__rank1": "abc"}))
 
         assert rows == [
             HonestEvalMatchupRow(
@@ -271,23 +307,27 @@ class TestHonestEvalRecovery:
 
     def test_recover_honest_eval_output_builds_maps_random_baseline(self, tmp_path):
         path = tmp_path / "honest_eval.json"
-        path.write_text(json.dumps({
-            "schema_version": 1,
-            "campaign": "random-baseline",
-            "evaluated_builds": [
+        path.write_text(
+            json.dumps(
                 {
-                    "build": _sample_log_row()["build"],
-                    "source_campaign": "random-baseline",
-                    "source_study_idx": 0,
-                    "source_seed_idx": 0,
-                    "source_rank": 7,
-                    "source_value": None,
-                    "oracle_score": -0.25,
-                    "oracle_se": 0.01,
-                    "n_matchups_succeeded": 1620,
+                    "schema_version": 1,
+                    "campaign": "random-baseline",
+                    "evaluated_builds": [
+                        {
+                            "build": _sample_log_row()["build"],
+                            "source_campaign": "random-baseline",
+                            "source_study_idx": 0,
+                            "source_seed_idx": 0,
+                            "source_rank": 7,
+                            "source_value": None,
+                            "oracle_score": -0.25,
+                            "oracle_se": 0.01,
+                            "n_matchups_succeeded": 1620,
+                        }
+                    ],
                 }
-            ],
-        }))
+            )
+        )
 
         recovered = recover_honest_eval_output_builds([path])
         mapping = honest_build_id_to_key(recovered)
@@ -296,9 +336,7 @@ class TestHonestEvalRecovery:
         assert recovered[0].source_kind == BuildSourceKind.HONEST_EVAL_OUTPUT_BUILD
         assert recovered[0].campaign == "random-baseline"
         assert recovered[0].study == "s0"
-        assert mapping == {
-            "honest__random-baseline__s0__seed0__rank7": recovered[0].build_key
-        }
+        assert mapping == {"honest__random-baseline__s0__seed0__rank7": recovered[0].build_key}
 
 
 class TestSqliteMaterialization:
@@ -348,7 +386,10 @@ class TestSqliteMaterialization:
         assert con.execute("select count(*) from recovered_builds").fetchone()[0] == 1
         assert con.execute("select count(*) from training_matchups").fetchone()[0] == 1
         assert con.execute("select count(*) from honest_eval_matchups").fetchone()[0] == 1
-        assert con.execute("select source_kind from recovered_builds").fetchone()[0] == "exact_logged_build"
+        assert (
+            con.execute("select source_kind from recovered_builds").fetchone()[0]
+            == "exact_logged_build"
+        )
 
 
 def _split_rows() -> list[TrainingMatchupRow]:
@@ -382,9 +423,7 @@ class TestSplitBuilders:
     def test_held_out_opponent_hull_split_keeps_hulls_disjoint(self):
         mapping = {"opp0": "enforcer", "opp1": "sunder", "opp2": "wolf"}
 
-        split = held_out_opponent_hull_split(
-            _split_rows(), mapping, holdout_fraction=0.34, seed=1
-        )
+        split = held_out_opponent_hull_split(_split_rows(), mapping, holdout_fraction=0.34, seed=1)
 
         train_hulls = {mapping[row.opponent_variant_id] for row in split.train}
         test_hulls = {mapping[row.opponent_variant_id] for row in split.test}
@@ -418,14 +457,8 @@ class TestSplitBuilders:
             for i in range(12)
         ]
         split = held_out_replicate_split(rows, holdout_fraction=0.25, seed=1)
-        train_groups = {
-            (row.build_key, row.opponent_variant_id)
-            for row in split.train
-        }
-        test_groups = {
-            (row.build_key, row.opponent_variant_id)
-            for row in split.test
-        }
+        train_groups = {(row.build_key, row.opponent_variant_id) for row in split.train}
+        test_groups = {(row.build_key, row.opponent_variant_id) for row in split.test}
         assert train_groups.isdisjoint(test_groups)
 
     def test_burned_split_seeds_names_seed_seventeen(self):
@@ -525,8 +558,7 @@ class TestSplitBuilders:
     def test_component_vocabulary_split_empty_train_raises(self):
         rows = _split_rows()
         build_lookup = {
-            f"b{i}": Build("hammerhead", {"WS 001": "common"}, frozenset(), 0, 0)
-            for i in range(4)
+            f"b{i}": Build("hammerhead", {"WS 001": "common"}, frozenset(), 0, 0) for i in range(4)
         }
         with pytest.raises(ValueError, match="empty"):
             held_out_component_vocabulary_split(
@@ -535,7 +567,9 @@ class TestSplitBuilders:
 
     def test_held_out_seed_cell_split_keeps_cell_seed_groups_disjoint(self):
         rows = [
-            TrainingMatchupRow("p", f"c{i % 2}", i % 3, i, f"b{i % 4}", f"opp{i % 3}", i, float(i), "finalized")
+            TrainingMatchupRow(
+                "p", f"c{i % 2}", i % 3, i, f"b{i % 4}", f"opp{i % 3}", i, float(i), "finalized"
+            )
             for i in range(12)
         ]
         split = held_out_seed_cell_split(rows, holdout_fraction=0.25, seed=1)
@@ -595,8 +629,7 @@ class TestComponentVocabularyError:
 
         rows = _split_rows()
         build_lookup = {
-            f"b{i}": Build("hammerhead", {"WS 001": "common"}, frozenset(), 0, 0)
-            for i in range(4)
+            f"b{i}": Build("hammerhead", {"WS 001": "common"}, frozenset(), 0, 0) for i in range(4)
         }
         with pytest.raises(ComponentVocabularyError):
             held_out_component_vocabulary_split(
@@ -616,9 +649,7 @@ class TestComponentVocabularyError:
             for i in range(4)
         }
         # An extra lookup-only build must not contribute vocabulary.
-        build_lookup["orphan"] = Build(
-            "hammerhead", {"WS 001": "orphan_weapon"}, frozenset(), 0, 0
-        )
+        build_lookup["orphan"] = Build("hammerhead", {"WS 001": "orphan_weapon"}, frozenset(), 0, 0)
         result = held_out_component_vocabulary_split(
             rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.5, seed=1
         )

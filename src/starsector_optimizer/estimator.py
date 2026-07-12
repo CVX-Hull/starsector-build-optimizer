@@ -71,7 +71,9 @@ class ThroughputEstimate:
 
 
 def compute_hull_space_stats(
-    hull: ShipHull, game_data: GameData, manifest: GameManifest,
+    hull: ShipHull,
+    game_data: GameData,
+    manifest: GameManifest,
 ) -> HullSpaceStats:
     """Compute search space statistics for a single hull.
 
@@ -80,6 +82,7 @@ def compute_hull_space_stats(
     maximum, not a regime-masked subset.
     """
     from .models import REGIME_ENDGAME
+
     space = build_search_space(hull, game_data, REGIME_ENDGAME, manifest)
 
     options_per_slot = [len(opts) for opts in space.weapon_options.values()]
@@ -99,11 +102,11 @@ def compute_hull_space_stats(
 
 
 def compute_all_hull_stats(
-    game_data: GameData, manifest: GameManifest,
+    game_data: GameData,
+    manifest: GameManifest,
 ) -> list[HullSpaceStats]:
     """Compute search space statistics for all hulls, sorted by weapon_combinations descending."""
-    stats = [compute_hull_space_stats(h, game_data, manifest)
-             for h in game_data.hulls.values()]
+    stats = [compute_hull_space_stats(h, game_data, manifest) for h in game_data.hulls.values()]
     stats.sort(key=lambda s: s.weapon_combinations, reverse=True)
     return stats
 
@@ -146,7 +149,7 @@ def _fmt_combinations(n: int) -> str:
     if n < 1_000_000:
         return f"{n:,}"
     exp = math.floor(math.log10(n))
-    mantissa = n / (10 ** exp)
+    mantissa = n / (10**exp)
     return f"{mantissa:.1f}e{exp}"
 
 
@@ -221,14 +224,38 @@ def print_scenario_comparison(num_hulls: int = 50) -> str:
     lines.append("-" * 90)
 
     scenarios: list[tuple[str, dict[str, Any]]] = [
-        ("3x speed, 180s limit, 1 inst", {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 1}),
-        ("3x speed, 180s limit, 8 inst", {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 8}),
-        ("5x speed, 180s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 8}),
-        ("5x speed, 180s limit, 16 inst", {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 16}),
-        ("5x speed, 120s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 120, "num_instances": 8}),
-        ("5x speed, 120s limit, 16 inst", {"time_mult": 5.0, "game_time_limit_seconds": 120, "num_instances": 16}),
-        ("5x speed, 60s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 60, "num_instances": 8}),
-        ("5x speed, 60s limit, 16 inst", {"time_mult": 5.0, "game_time_limit_seconds": 60, "num_instances": 16}),
+        (
+            "3x speed, 180s limit, 1 inst",
+            {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 1},
+        ),
+        (
+            "3x speed, 180s limit, 8 inst",
+            {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 8},
+        ),
+        (
+            "5x speed, 180s limit, 8 inst",
+            {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 8},
+        ),
+        (
+            "5x speed, 180s limit, 16 inst",
+            {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 16},
+        ),
+        (
+            "5x speed, 120s limit, 8 inst",
+            {"time_mult": 5.0, "game_time_limit_seconds": 120, "num_instances": 8},
+        ),
+        (
+            "5x speed, 120s limit, 16 inst",
+            {"time_mult": 5.0, "game_time_limit_seconds": 120, "num_instances": 16},
+        ),
+        (
+            "5x speed, 60s limit, 8 inst",
+            {"time_mult": 5.0, "game_time_limit_seconds": 60, "num_instances": 8},
+        ),
+        (
+            "5x speed, 60s limit, 16 inst",
+            {"time_mult": 5.0, "game_time_limit_seconds": 60, "num_instances": 16},
+        ),
     ]
 
     providers = [
@@ -238,7 +265,10 @@ def print_scenario_comparison(num_hulls: int = 50) -> str:
 
     for label, overrides in scenarios:
         p = SimulationParams(
-            sims_per_hull=1000, num_hulls=num_hulls, providers=providers, **overrides,
+            sims_per_hull=1000,
+            num_hulls=num_hulls,
+            providers=providers,
+            **overrides,
         )
         e = estimate_throughput(p)
         h43 = e.cost_estimates.get("Hetzner CCX43", 0)
@@ -251,7 +281,9 @@ def print_scenario_comparison(num_hulls: int = 50) -> str:
         )
 
     lines.append("")
-    lines.append(f"All scenarios: {num_hulls} hulls x 1000 sims/hull = {num_hulls * 1000:,} total sims")
+    lines.append(
+        f"All scenarios: {num_hulls} hulls x 1000 sims/hull = {num_hulls * 1000:,} total sims"
+    )
     lines.append("Startup: 35s per instance launch, batch size 50")
     lines.append("")
     return "\n".join(lines)
@@ -269,8 +301,10 @@ def budget_optimizer(
     """
     lines: list[str] = []
     lines.append("=" * 95)
-    lines.append(f"Budget Optimization: ${budget_usd:.0f} for {num_hulls} hulls x {sims_per_hull} sims/hull"
-                 f" = {num_hulls * sims_per_hull:,} sims")
+    lines.append(
+        f"Budget Optimization: ${budget_usd:.0f} for {num_hulls} hulls x {sims_per_hull} sims/hull"
+        f" = {num_hulls * sims_per_hull:,} sims"
+    )
     lines.append("=" * 95)
 
     providers = [
@@ -345,4 +379,3 @@ def budget_optimizer(
 
     lines.append("")
     return "\n".join(lines)
-

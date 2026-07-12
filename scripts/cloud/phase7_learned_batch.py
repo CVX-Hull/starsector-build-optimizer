@@ -102,9 +102,7 @@ def current_source_version() -> str:
         text=True,
     ).stdout.strip()
     if status:
-        raise RuntimeError(
-            "refusing to create publishable Phase 7 bundle from a dirty worktree"
-        )
+        raise RuntimeError("refusing to create publishable Phase 7 bundle from a dirty worktree")
     return head
 
 
@@ -152,21 +150,16 @@ def check_split_feasibility(cfg) -> None:
         # (split, seed) cell covers all models. progress/allow-missing are
         # display / model-availability knobs with no effect on splits.
         command = build_job_command(cfg, job)
-        script_index = next(
-            index for index, token in enumerate(command) if token.endswith(".py")
-        )
+        script_index = next(index for index, token in enumerate(command) if token.endswith(".py"))
         args = parser.parse_args(command[script_index + 1 :])
         config = experiment.config_from_args(args)
         configs.append(
-            dataclasses.replace(
-                config, progress=False, allow_missing_optional_models=True
-            )
+            dataclasses.replace(config, progress=False, allow_missing_optional_models=True)
         )
     infeasible = experiment.split_feasibility_report(configs)
     if infeasible:
         details = ", ".join(
-            f"{cell['split']}(seed {cell['split_seed']}): {cell['status']}"
-            for cell in infeasible
+            f"{cell['split']}(seed {cell['split_seed']}): {cell['status']}" for cell in infeasible
         )
         raise RuntimeError(
             f"{len(infeasible)} structurally infeasible split cell(s); "
@@ -197,9 +190,7 @@ def check_key_pairs_available(provider, cfg) -> None:
             Filters=[{"Name": "key-name", "Values": [cfg.ssh_key_name]}],
         )
         if not response.get("KeyPairs"):
-            raise RuntimeError(
-                f"EC2 key pair {cfg.ssh_key_name!r} does not exist in {region}"
-            )
+            raise RuntimeError(f"EC2 key pair {cfg.ssh_key_name!r} does not exist in {region}")
 
 
 def dry_run(config_path: Path) -> int:
@@ -228,12 +219,18 @@ def local_smoke(config_path: Path, max_jobs: int) -> int:
     jobs = generate_jobs(cfg)[:max_jobs]
     for job in jobs:
         command = build_job_command(cfg, job)
-        command.extend([
-            "--max-rows", str(SMOKE_MAX_ROWS),
-            "--hpo-trials", str(SMOKE_HPO_TRIALS),
-            "--inner-cv-folds", str(SMOKE_INNER_CV_FOLDS),
-            "--bootstrap-resamples", str(SMOKE_BOOTSTRAP_RESAMPLES),
-        ])
+        command.extend(
+            [
+                "--max-rows",
+                str(SMOKE_MAX_ROWS),
+                "--hpo-trials",
+                str(SMOKE_HPO_TRIALS),
+                "--inner-cv-folds",
+                str(SMOKE_INNER_CV_FOLDS),
+                "--bootstrap-resamples",
+                str(SMOKE_BOOTSTRAP_RESAMPLES),
+            ]
+        )
         print(" ".join(command), flush=True)
         subprocess.run(command, check=True)
     return 0
@@ -242,15 +239,19 @@ def local_smoke(config_path: Path, max_jobs: int) -> int:
 def merge(config_path: Path) -> int:
     cfg = load_batch_config(config_path)
     payload = merge_job_artifacts(cfg)
-    canonical_output_path = (
-        str(cfg.canonical_output_path) if cfg.publish_canonical else None
+    canonical_output_path = str(cfg.canonical_output_path) if cfg.publish_canonical else None
+    print(
+        json.dumps(
+            {
+                "status": "merged",
+                "result_count": payload["result_count"],
+                "canonical_output_path": canonical_output_path,
+                "batch_output_path": str(cfg.output_dir / "merged.json"),
+            },
+            indent=2,
+            sort_keys=True,
+        )
     )
-    print(json.dumps({
-        "status": "merged",
-        "result_count": payload["result_count"],
-        "canonical_output_path": canonical_output_path,
-        "batch_output_path": str(cfg.output_dir / "merged.json"),
-    }, indent=2, sort_keys=True))
     return 0
 
 

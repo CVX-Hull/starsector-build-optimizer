@@ -18,6 +18,7 @@ Prerequisites:
 Usage:
     uv run python scripts/update_manifest.py [--game-dir PATH] [--timeout SECS]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,8 +47,8 @@ REQUEST_FILE = "combat_harness_manifest_request.data"
 DONE_FILE = "combat_harness_manifest_done.data"
 MANIFEST_SINGLE_PARTS = {
     "constants": "combat_harness_manifest_constants.json.data",
-    "weapons":   "combat_harness_manifest_weapons.json.data",
-    "hullmods":  "combat_harness_manifest_hullmods.json.data",
+    "weapons": "combat_harness_manifest_weapons.json.data",
+    "hullmods": "combat_harness_manifest_hullmods.json.data",
 }
 MANIFEST_HULLS_GLOB = "combat_harness_manifest_hulls_*.json.data"
 
@@ -56,11 +57,11 @@ MANIFEST_HULLS_GLOB = "combat_harness_manifest_hulls_*.json.data"
 DEFAULT_DISPLAY = 150  # out-of-range of LocalInstancePool's :100–:103
 DEFAULT_SCREEN = "1920x1080x24"
 DEFAULT_TIMEOUT_SECONDS = 600  # Commit G R4: was 180; too tight for JVM boot
-                               # + menu nav + probe-iterate ~8s of actual work
-                               # + dump-write on slow dev hardware. Probe is
-                               # one-shot + operator-observed; over-budget
-                               # strictly beats flaky under-budget when each
-                               # flake burns a game boot.
+# + menu nav + probe-iterate ~8s of actual work
+# + dump-write on slow dev hardware. Probe is
+# one-shot + operator-observed; over-budget
+# strictly beats flaky under-budget when each
+# flake burns a game boot.
 POLL_INTERVAL_SECONDS = 1.0
 PROCESS_KILL_TIMEOUT_SECONDS = 5.0
 
@@ -139,7 +140,8 @@ def _start_xvfb(display_num: int) -> subprocess.Popen:
 
     proc = subprocess.Popen(
         ["Xvfb", f":{display_num}", "-screen", "0", DEFAULT_SCREEN, "-nolisten", "tcp"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     for _ in range(50):  # 5-second timeout
         if socket_file.exists() and proc.poll() is None:
@@ -152,8 +154,10 @@ def _start_xvfb(display_num: int) -> subprocess.Popen:
     subprocess.run(
         ["xrandr", "--query"],
         env={**os.environ, "DISPLAY": f":{display_num}"},
-        check=False, timeout=5,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=5,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
     return proc
 
@@ -190,12 +194,8 @@ def _instance_config_default(field_name: str) -> float:
 # Single-source the Play-button position fractions from the production
 # InstanceConfig defaults — keeps the manifest dump and the production
 # launcher dispatch in lockstep across version updates.
-_LAUNCHER_PLAY_X_FRACTION: float = _instance_config_default(
-    "launcher_play_button_x_fraction"
-)
-_LAUNCHER_PLAY_Y_FRACTION: float = _instance_config_default(
-    "launcher_play_button_y_fraction"
-)
+_LAUNCHER_PLAY_X_FRACTION: float = _instance_config_default("launcher_play_button_x_fraction")
+_LAUNCHER_PLAY_Y_FRACTION: float = _instance_config_default("launcher_play_button_y_fraction")
 
 
 def _click_launcher(
@@ -227,7 +227,11 @@ def _click_launcher(
     def _xdotool(*args: str, label: str) -> subprocess.CompletedProcess:
         cp = subprocess.run(
             ["xdotool", *args],
-            env=env, capture_output=True, text=True, timeout=5, check=False,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
         )
         _trace(
             f"{label}: xdotool {' '.join(args)} → exit={cp.returncode} "
@@ -303,9 +307,13 @@ def _kill_process(proc: subprocess.Popen | None, label: str) -> None:
         logger.warning("%s required SIGKILL", label)
 
 
-def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
-                      work_dir: Path, display_num: int,
-                      timeout_seconds: float) -> None:
+def run_manifest_dump(
+    game_dir: Path,
+    repo_manifest_path: Path,
+    work_dir: Path,
+    display_num: int,
+    timeout_seconds: float,
+) -> None:
     logger.info("Using work_dir=%s display=:%d", work_dir, display_num)
     _create_work_dir(game_dir, work_dir)
 
@@ -353,15 +361,14 @@ def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
             time.sleep(POLL_INTERVAL_SECONDS)
         else:
             raise TimeoutError(
-                f"Manifest not produced within {timeout_seconds}s. "
-                f"Check {log_path}."
+                f"Manifest not produced within {timeout_seconds}s. Check {log_path}."
             )
 
         # Merge parts into a single repo artifact.
         import json as _json
+
         merged = {
-            part_name: _json.loads(path.read_text())
-            for part_name, path in single_paths.items()
+            part_name: _json.loads(path.read_text()) for part_name, path in single_paths.items()
         }
         # Hulls: merge every numbered part file into one dict.
         hulls_parts = sorted(saves_common.glob(MANIFEST_HULLS_GLOB))
@@ -383,21 +390,20 @@ def run_manifest_dump(game_dir: Path, repo_manifest_path: Path,
                 )
             hulls_merged.update(part_content)
         merged["hulls"] = hulls_merged
-        logger.info("Merged %d hulls across %d part file(s)",
-                    len(hulls_merged), len(hulls_parts))
+        logger.info("Merged %d hulls across %d part file(s)", len(hulls_merged), len(hulls_parts))
 
         repo_manifest_path.parent.mkdir(parents=True, exist_ok=True)
         # Indented on disk — the repo copy is for human review + tooling,
         # not size-constrained; indent=2 makes git diff readable.
-        repo_manifest_path.write_text(
-            _json.dumps(merged, indent=2, sort_keys=True) + "\n"
+        repo_manifest_path.write_text(_json.dumps(merged, indent=2, sort_keys=True) + "\n")
+        logger.info(
+            "Manifest merged to %s (%.1f KB; %d weapons, %d hullmods, %d hulls)",
+            repo_manifest_path,
+            repo_manifest_path.stat().st_size / 1024.0,
+            len(merged.get("weapons", {})),
+            len(merged.get("hullmods", {})),
+            len(merged.get("hulls", {})),
         )
-        logger.info("Manifest merged to %s (%.1f KB; %d weapons, %d hullmods, %d hulls)",
-                    repo_manifest_path,
-                    repo_manifest_path.stat().st_size / 1024.0,
-                    len(merged.get("weapons", {})),
-                    len(merged.get("hullmods", {})),
-                    len(merged.get("hulls", {})))
     finally:
         _kill_process(game, "game")
         _kill_process(xvfb, "xvfb")
@@ -411,19 +417,36 @@ def main() -> int:
     )
 
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--game-dir", type=Path,
-                        default=Path("game/starsector"),
-                        help="Path to the Starsector install (default: game/starsector)")
-    parser.add_argument("--manifest-out", type=Path,
-                        default=Path("game/starsector/manifest.json"),
-                        help="Where to write the regenerated manifest in the repo")
-    parser.add_argument("--work-dir", type=Path,
-                        default=Path("/tmp/starsector-manifest-dump"),
-                        help="Throwaway per-run work directory")
-    parser.add_argument("--display", type=int, default=DEFAULT_DISPLAY,
-                        help=f"Xvfb display number (default: :{DEFAULT_DISPLAY})")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS,
-                        help=f"Overall timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS})")
+    parser.add_argument(
+        "--game-dir",
+        type=Path,
+        default=Path("game/starsector"),
+        help="Path to the Starsector install (default: game/starsector)",
+    )
+    parser.add_argument(
+        "--manifest-out",
+        type=Path,
+        default=Path("game/starsector/manifest.json"),
+        help="Where to write the regenerated manifest in the repo",
+    )
+    parser.add_argument(
+        "--work-dir",
+        type=Path,
+        default=Path("/tmp/starsector-manifest-dump"),
+        help="Throwaway per-run work directory",
+    )
+    parser.add_argument(
+        "--display",
+        type=int,
+        default=DEFAULT_DISPLAY,
+        help=f"Xvfb display number (default: :{DEFAULT_DISPLAY})",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help=f"Overall timeout in seconds (default: {DEFAULT_TIMEOUT_SECONDS})",
+    )
     args = parser.parse_args()
 
     game_dir = args.game_dir.resolve()

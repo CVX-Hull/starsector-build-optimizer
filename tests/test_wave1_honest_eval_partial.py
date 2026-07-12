@@ -9,8 +9,7 @@ import pytest
 # see tests/test_validate_docs.py) rather than a namespace-package
 # import, which collides with mypy's file-based module naming.
 _SCRIPT = (
-    Path(__file__).resolve().parent.parent
-    / "scripts" / "analysis" / "wave1_honest_eval_partial.py"
+    Path(__file__).resolve().parent.parent / "scripts" / "analysis" / "wave1_honest_eval_partial.py"
 )
 _spec = importlib.util.spec_from_file_location("wave1_honest_eval_partial", _SCRIPT)
 assert _spec is not None and _spec.loader is not None

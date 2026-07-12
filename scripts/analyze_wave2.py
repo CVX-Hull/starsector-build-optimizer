@@ -7,6 +7,7 @@ Validates the cross-regime warm-start (mechanism 13b) + frigate gradient
 Usage:
     uv run python scripts/analyze_wave2.py [--out data/wave2-gates.json]
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,9 +23,9 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # Wave 2 thresholds (validation plan §3 Wave 2 gate)
-CROSS_REGIME_OVERLAP_MIN = 0.80          # mech 13b: ≥80% match
-WOLF_FINALIZED_MIN = 150                  # ≥150/200 = 75% completion
-WOLF_TAU_SQ_MIN = 1e-3                   # mech 4: τ̂² > 1e-3 (frigate gradient non-degenerate)
+CROSS_REGIME_OVERLAP_MIN = 0.80  # mech 13b: ≥80% match
+WOLF_FINALIZED_MIN = 150  # ≥150/200 = 75% completion
+WOLF_TAU_SQ_MIN = 1e-3  # mech 4: τ̂² > 1e-3 (frigate gradient non-degenerate)
 
 
 def _build_hash(params: dict[str, Any]) -> str:
@@ -35,7 +36,9 @@ def _build_hash(params: dict[str, Any]) -> str:
     return "|".join(parts)
 
 
-def load_study_trial_params(db_path: Path, study_name: str, top_n: int | None = None) -> list[dict[str, Any]]:
+def load_study_trial_params(
+    db_path: Path, study_name: str, top_n: int | None = None
+) -> list[dict[str, Any]]:
     """Read trial.params from an Optuna SQLite — sorted by value desc if top_n,
     else by trial number ascending."""
     conn = sqlite3.connect(str(db_path))
@@ -92,7 +95,9 @@ def load_study_trial_params(db_path: Path, study_name: str, top_n: int | None = 
 def cross_regime_overlap_gate() -> dict[str, Any]:
     """Mechanism 13b: hammerhead-mid first-M trials should match
     hammerhead-early top-M with ≥80% Jaccard."""
-    db_path = REPO_ROOT / "data" / "study_dbs" / "wave2-mid-warmstart" / "hammerhead__mid__tpe__seed0.db"
+    db_path = (
+        REPO_ROOT / "data" / "study_dbs" / "wave2-mid-warmstart" / "hammerhead__mid__tpe__seed0.db"
+    )
     if not db_path.exists():
         return {"passes": False, "reason": f"DB not found: {db_path}"}
     early_top = load_study_trial_params(db_path, "hammerhead__early", top_n=50)
@@ -103,10 +108,11 @@ def cross_regime_overlap_gate() -> dict[str, Any]:
         return {
             "passes": False,
             "reason": f"mid study has only {len(mid_all)} trials; need at least {len(early_top)} to compare",
-            "n_early": len(early_top), "n_mid": len(mid_all),
+            "n_early": len(early_top),
+            "n_mid": len(mid_all),
         }
     early_hashes = {_build_hash(t["params"]) for t in early_top}
-    mid_first = mid_all[:len(early_top)]
+    mid_first = mid_all[: len(early_top)]
     mid_hashes = {_build_hash(t["params"]) for t in mid_first}
     overlap = early_hashes & mid_hashes
     union = early_hashes | mid_hashes
@@ -135,7 +141,14 @@ def regime_tier_gate() -> dict[str, Any]:
     tier_by_id = {hm_id: hm.get("tier", 0) for hm_id, hm in hullmods.items()}
 
     # Wave 2 writes under the campaign-prefixed path (task #90).
-    log_path = REPO_ROOT / "data" / "logs" / "wave2-mid-warmstart" / "hammerhead__mid__tpe__seed0" / "evaluation_log.jsonl"
+    log_path = (
+        REPO_ROOT
+        / "data"
+        / "logs"
+        / "wave2-mid-warmstart"
+        / "hammerhead__mid__tpe__seed0"
+        / "evaluation_log.jsonl"
+    )
     if not log_path.exists():
         return {"passes": False, "reason": f"mid log not found: {log_path}"}
 
@@ -146,7 +159,9 @@ def regime_tier_gate() -> dict[str, Any]:
     # data so it lives at the legacy path. Wave 1 historical paths are
     # frozen (analyzer side) — they cannot be migrated because the JSONL
     # interleaves data from multiple cells.
-    early_log = REPO_ROOT / "data" / "logs" / "hammerhead__early__tpe__seed0" / "evaluation_log.jsonl"
+    early_log = (
+        REPO_ROOT / "data" / "logs" / "hammerhead__early__tpe__seed0" / "evaluation_log.jsonl"
+    )
     if early_log.exists():
         with early_log.open() as f:
             for line in f:
@@ -186,12 +201,21 @@ def wolf_frigate_gates() -> dict[str, Any]:
     AND finalized count ≥ 150 (drop-out < 25%)."""
     db_path = REPO_ROOT / "data" / "study_dbs" / "wave2-wolf-early" / "wolf__early__tpe__seed0.db"
     # Wave 2 writes under the campaign-prefixed path (task #90).
-    log_path = REPO_ROOT / "data" / "logs" / "wave2-wolf-early" / "wolf__early__tpe__seed0" / "evaluation_log.jsonl"
+    log_path = (
+        REPO_ROOT
+        / "data"
+        / "logs"
+        / "wave2-wolf-early"
+        / "wolf__early__tpe__seed0"
+        / "evaluation_log.jsonl"
+    )
     if not db_path.exists():
         return {"passes": False, "reason": f"wolf DB not found: {db_path}"}
     conn = sqlite3.connect(str(db_path))
     try:
-        n_complete = conn.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'").fetchone()[0]
+        n_complete = conn.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'").fetchone()[
+            0
+        ]
     finally:
         conn.close()
     finalized_pass = n_complete >= WOLF_FINALIZED_MIN
@@ -238,7 +262,9 @@ def wolf_frigate_gates() -> dict[str, Any]:
         "twfe_var_threshold": WOLF_TAU_SQ_MIN,
         "n_twfe_samples": len(twfe_values),
         "player_win_rate": player_win_rate,
-        "f4a_decision_tree_branch": "F4a (player wins > 80%, opponent pool too easy)" if (player_win_rate > 0.80) else None,
+        "f4a_decision_tree_branch": "F4a (player wins > 80%, opponent pool too easy)"
+        if (player_win_rate > 0.80)
+        else None,
     }
 
 
@@ -267,10 +293,16 @@ def main() -> int:
                 print(f"   {k}: {val}")
     out_path = REPO_ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps({
-        "generated_at": datetime.now(UTC).isoformat(),
-        "gates": gates,
-    }, indent=2, default=str))
+    out_path.write_text(
+        json.dumps(
+            {
+                "generated_at": datetime.now(UTC).isoformat(),
+                "gates": gates,
+            },
+            indent=2,
+            default=str,
+        )
+    )
     print(f"\nWrote {out_path}")
     n_pass = sum(1 for v in gates.values() if v.get("passes"))
     n_total = len(gates)

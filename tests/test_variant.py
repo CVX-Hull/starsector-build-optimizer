@@ -8,8 +8,18 @@ from typing import Any
 import pytest
 
 from starsector_optimizer.models import (
-    Build, HullSize, ShieldType, SlotSize, SlotType, MountType,
-    WeaponSlot, ShipHull, Weapon, DamageType, GameData, WeaponType,
+    Build,
+    HullSize,
+    ShieldType,
+    SlotSize,
+    SlotType,
+    MountType,
+    WeaponSlot,
+    ShipHull,
+    Weapon,
+    DamageType,
+    GameData,
+    WeaponType,
 )
 from starsector_optimizer.variant import (
     build_to_build_spec,
@@ -21,17 +31,38 @@ from starsector_optimizer.variant import (
 
 def _hull(**kw):
     defaults: dict[str, Any] = {
-        "id": "eagle", "name": "Eagle", "hull_size": HullSize.CRUISER, "designation": "Cruiser",
-        "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
-        "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": 100,
-        "fighter_bays": 0, "max_speed": 60, "shield_type": ShieldType.FRONT, "shield_arc": 270,
-        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0, "phase_upkeep": 0,
-        "peak_cr_sec": 480, "cr_loss_per_sec": 0.25,
+        "id": "eagle",
+        "name": "Eagle",
+        "hull_size": HullSize.CRUISER,
+        "designation": "Cruiser",
+        "tech_manufacturer": "",
+        "system_id": "",
+        "fleet_pts": 10,
+        "hitpoints": 5000,
+        "armor_rating": 500,
+        "max_flux": 5000,
+        "flux_dissipation": 300,
+        "ordnance_points": 100,
+        "fighter_bays": 0,
+        "max_speed": 60,
+        "shield_type": ShieldType.FRONT,
+        "shield_arc": 270,
+        "shield_upkeep": 0.4,
+        "shield_efficiency": 0.8,
+        "phase_cost": 0,
+        "phase_upkeep": 0,
+        "peak_cr_sec": 480,
+        "cr_loss_per_sec": 0.25,
         "weapon_slots": [
-            WeaponSlot("WS1", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)),
+            WeaponSlot(
+                "WS1", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)
+            ),
             WeaponSlot("WS2", SlotType.ENERGY, SlotSize.SMALL, MountType.TURRET, 0, 150, (0, 0)),
         ],
-        "built_in_mods": [], "built_in_weapons": {"WS3": "builtin_weapon"}, "hints": [], "tags": [],
+        "built_in_mods": [],
+        "built_in_weapons": {"WS3": "builtin_weapon"},
+        "hints": [],
+        "tags": [],
     }
     defaults.update(kw)
     return ShipHull(**defaults)
@@ -39,12 +70,54 @@ def _hull(**kw):
 
 def _game_data():
     weapons = {
-        "heavymauler": Weapon("heavymauler", "Heavy Mauler", SlotSize.MEDIUM,
-                              WeaponType.BALLISTIC, 200, 0, DamageType.KINETIC, 0,
-                              200, 0, 700, 10, 0, 0.5, 1, 0, 0, 0, 500, 30, [], []),
-        "pdlaser": Weapon("pdlaser", "PD Laser", SlotSize.SMALL,
-                          WeaponType.ENERGY, 0, 100, DamageType.ENERGY, 0,
-                          0, 80, 500, 3, 0, 0, 1, 0, 0, 0, 0, 30, ["PD"], []),
+        "heavymauler": Weapon(
+            "heavymauler",
+            "Heavy Mauler",
+            SlotSize.MEDIUM,
+            WeaponType.BALLISTIC,
+            200,
+            0,
+            DamageType.KINETIC,
+            0,
+            200,
+            0,
+            700,
+            10,
+            0,
+            0.5,
+            1,
+            0,
+            0,
+            0,
+            500,
+            30,
+            [],
+            [],
+        ),
+        "pdlaser": Weapon(
+            "pdlaser",
+            "PD Laser",
+            SlotSize.SMALL,
+            WeaponType.ENERGY,
+            0,
+            100,
+            DamageType.ENERGY,
+            0,
+            0,
+            80,
+            500,
+            3,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            30,
+            ["PD"],
+            [],
+        ),
     }
     return GameData(hulls={}, weapons=weapons, hullmods={})
 
@@ -53,8 +126,14 @@ class TestGenerateVariant:
     def test_has_required_keys(self):
         build = Build("eagle", {"WS1": "heavymauler"}, frozenset(["heavyarmor"]), 15, 10)
         variant = generate_variant(build, _hull(), _game_data())
-        for key in ["variantId", "hullId", "fluxVents", "fluxCapacitors",
-                     "hullMods", "weaponGroups"]:
+        for key in [
+            "variantId",
+            "hullId",
+            "fluxVents",
+            "fluxCapacitors",
+            "hullMods",
+            "weaponGroups",
+        ]:
             assert key in variant
 
     def test_hull_id_matches(self):
@@ -109,9 +188,10 @@ class TestGenerateVariant:
 
 
 class TestBuildToBuildSpec:
-
     def test_basic_conversion(self):
-        build = Build("eagle", {"WS1": "heavymauler", "WS2": "pdlaser"}, frozenset(["heavyarmor"]), 15, 10)
+        build = Build(
+            "eagle", {"WS1": "heavymauler", "WS2": "pdlaser"}, frozenset(["heavyarmor"]), 15, 10
+        )
         spec = build_to_build_spec(build, _hull(), _game_data(), "eagle_opt_001")
         assert spec.variant_id == "eagle_opt_001"
         assert spec.hull_id == "eagle"
@@ -139,7 +219,9 @@ class TestBuildToBuildSpec:
         assert "WS2" in spec.weapon_assignments
 
     def test_hullmods_sorted(self):
-        build = Build("eagle", {}, frozenset(["targetingunit", "heavyarmor", "advancedoptics"]), 0, 0)
+        build = Build(
+            "eagle", {}, frozenset(["targetingunit", "heavyarmor", "advancedoptics"]), 0, 0
+        )
         spec = build_to_build_spec(build, _hull(), _game_data(), "test")
         assert spec.hullmods == ("advancedoptics", "heavyarmor", "targetingunit")
 
@@ -178,11 +260,11 @@ class TestLoadExistingVariant:
 
 
 class TestVariantToBuild:
-
     def test_round_trip(self, game_data, game_dir, manifest):
         """Build → variant → variant_to_build preserves key fields."""
         from starsector_optimizer.variant import variant_to_build
         from starsector_optimizer.calibration import generate_random_build
+
         hull = game_data.hulls["wolf"]
         build = generate_random_build(hull, game_data, manifest)
         variant = generate_variant(build, hull, game_data)
@@ -195,26 +277,38 @@ class TestVariantToBuild:
     def test_empty_weapon_groups(self):
         """Variant with no weaponGroups produces all-None weapons."""
         from starsector_optimizer.variant import variant_to_build
-        variant = {"hullId": "wolf", "hullMods": [], "weaponGroups": [],
-                   "fluxVents": 5, "fluxCapacitors": 3}
+
+        variant = {
+            "hullId": "wolf",
+            "hullMods": [],
+            "weaponGroups": [],
+            "fluxVents": 5,
+            "fluxCapacitors": 3,
+        }
         build = variant_to_build(variant, "wolf")
         assert all(v is None for v in build.weapon_assignments.values())
 
     def test_hullmods_as_frozenset(self):
         """hullMods list becomes frozenset."""
         from starsector_optimizer.variant import variant_to_build
-        variant = {"hullId": "wolf", "hullMods": ["heavyarmor", "hardenedshieldemitter"],
-                   "weaponGroups": [], "fluxVents": 0, "fluxCapacitors": 0}
+
+        variant = {
+            "hullId": "wolf",
+            "hullMods": ["heavyarmor", "hardenedshieldemitter"],
+            "weaponGroups": [],
+            "fluxVents": 0,
+            "fluxCapacitors": 0,
+        }
         build = variant_to_build(variant, "wolf")
         assert isinstance(build.hullmods, frozenset)
         assert build.hullmods == frozenset(["heavyarmor", "hardenedshieldemitter"])
 
 
 class TestLoadStockBuilds:
-
     def test_loads_eagle_variants(self, game_data, game_dir):
         """Finds eagle_Assault, eagle_Balanced, etc."""
         from starsector_optimizer.variant import load_stock_builds
+
         builds = load_stock_builds(game_dir, "eagle")
         assert len(builds) >= 5  # eagle_Assault, Balanced, Support, d_Assault, xiv_Elite, LG_*
         assert all(b.hull_id == "eagle" for b in builds)
@@ -222,6 +316,7 @@ class TestLoadStockBuilds:
     def test_stock_builds_have_weapons(self, game_data, game_dir):
         """Stock builds have at least some weapons equipped."""
         from starsector_optimizer.variant import load_stock_builds
+
         builds = load_stock_builds(game_dir, "eagle")
         for build in builds:
             equipped = sum(1 for v in build.weapon_assignments.values() if v is not None)
@@ -230,5 +325,6 @@ class TestLoadStockBuilds:
     def test_nonexistent_hull_returns_empty(self, game_dir):
         """Hull with no stock variants returns empty list."""
         from starsector_optimizer.variant import load_stock_builds
+
         builds = load_stock_builds(game_dir, "nonexistent_hull_xyz")
         assert builds == []

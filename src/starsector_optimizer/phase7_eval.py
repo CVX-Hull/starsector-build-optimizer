@@ -111,18 +111,14 @@ def resolve_noise_floor(
     """
     if config.noise_floor_override is not None:
         if config.noise_floor_override <= 0.0:
-            raise ValueError(
-                f"noise_floor_override must be > 0, got {config.noise_floor_override}"
-            )
+            raise ValueError(f"noise_floor_override must be > 0, got {config.noise_floor_override}")
         return {"noise_floor": float(config.noise_floor_override), "source": "override"}
     derived = noise_floor_from_replicates(honest_eval_rows)
     floor = derived["noise_floor"]
     if isinstance(floor, float) and floor > 0.0:
         return derived
     if config.noise_floor_fallback <= 0.0:
-        raise ValueError(
-            f"noise_floor_fallback must be > 0, got {config.noise_floor_fallback}"
-        )
+        raise ValueError(f"noise_floor_fallback must be > 0, got {config.noise_floor_fallback}")
     return {"noise_floor": float(config.noise_floor_fallback), "source": "fallback"}
 
 
@@ -215,12 +211,8 @@ def per_opponent_rank_metrics(
         if metrics["spearman"] is None and np.ptp(preds) < config.degenerate_denominator_epsilon:
             null_prediction_degenerate += 1
         per_opponent[opponent] = metrics
-    mean_spearman, median_spearman = _aggregate(
-        row["spearman"] for row in per_opponent.values()
-    )
-    mean_kendall, median_kendall = _aggregate(
-        row["kendall"] for row in per_opponent.values()
-    )
+    mean_spearman, median_spearman = _aggregate(row["spearman"] for row in per_opponent.values())
+    mean_kendall, median_kendall = _aggregate(row["kendall"] for row in per_opponent.values())
     mean_sparse_kendall, median_sparse_kendall = _aggregate(
         row["sparse_kendall"] for row in per_opponent.values()
     )
@@ -331,8 +323,12 @@ def build_aggregate_rank_metrics(
     """
     builds, opponents, y_true, y_pred = _collapse_cells(builds, opponents, y_true, y_pred)
     true_agg, pred_agg, panels, excluded_small_panel = _build_aggregates(
-        builds, opponents, y_true, y_pred,
-        degenerate_opponents, config.min_opponents_per_build,
+        builds,
+        opponents,
+        y_true,
+        y_pred,
+        degenerate_opponents,
+        config.min_opponents_per_build,
     )
     out: dict[str, object] = {
         "n_builds": len(true_agg),
@@ -410,9 +406,7 @@ def panel_target_stats(y_true: np.ndarray) -> dict[str, object]:
     }
 
 
-def _percentile_ci(
-    values: list[float], ci_level: float
-) -> dict[str, object]:
+def _percentile_ci(values: list[float], ci_level: float) -> dict[str, object]:
     if not values:
         return {"ci_low": None, "ci_high": None, "n_finite": 0}
     tail = (1.0 - ci_level) / 2.0
@@ -470,11 +464,7 @@ def two_way_cluster_bootstrap(
         for opponent, weight in opponent_draw.items():
             if opponent in degenerate_opponents:
                 continue
-            rows = [
-                idx
-                for idx in opponent_indices[opponent]
-                if build_array[idx] in drawn_builds
-            ]
+            rows = [idx for idx in opponent_indices[opponent] if build_array[idx] in drawn_builds]
             if len(rows) < config.min_builds_per_opponent:
                 continue
             truths = y_true[rows]
@@ -489,9 +479,14 @@ def two_way_cluster_bootstrap(
             samples["mean_per_opponent_spearman"].append(weighted_sum / weight_total)
         # Build aggregates: opponent multiplicity weights the aggregate.
         true_agg, pred_agg, _, _ = _build_aggregates(
-            builds, opponents, y_true, y_pred,
-            degenerate_opponents, config.min_opponents_per_build,
-            build_subset=drawn_builds, opponent_weights=opponent_draw,
+            builds,
+            opponents,
+            y_true,
+            y_pred,
+            degenerate_opponents,
+            config.min_opponents_per_build,
+            build_subset=drawn_builds,
+            opponent_weights=opponent_draw,
         )
         if true_agg:
             ordered = sorted(true_agg)
@@ -535,8 +530,12 @@ def honest_eval_build_metrics(
     builds, opponents, y_true, y_pred = _collapse_cells(builds, opponents, y_true, y_pred)
     epsilon = config.degenerate_denominator_epsilon
     true_agg, pred_agg, _, excluded_small_panel = _build_aggregates(
-        builds, opponents, y_true, y_pred,
-        degenerate_opponents, config.min_opponents_per_build,
+        builds,
+        opponents,
+        y_true,
+        y_pred,
+        degenerate_opponents,
+        config.min_opponents_per_build,
     )
     n_builds = len(true_agg)
     precision_at_k: dict[str, float | None] = {}
@@ -571,8 +570,7 @@ def honest_eval_build_metrics(
     true_order = _top_k_order(true_agg)
     pred_order = _top_k_order(pred_agg)
     out["overlap_curve"] = [
-        len(set(true_order[:k]) & set(pred_order[:k])) / k
-        for k in range(1, n_builds + 1)
+        len(set(true_order[:k]) & set(pred_order[:k])) / k for k in range(1, n_builds + 1)
     ]
     # Build-level bootstrap: honest-eval panels are opponent-balanced, so the
     # build axis carries the sampling variance of interest here.

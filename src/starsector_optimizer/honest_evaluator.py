@@ -22,8 +22,11 @@ from pathlib import Path
 from collections.abc import Sequence
 
 from .campaign import (
-    check_ami_tags_against_manifest, check_authkey_syntax,
-    check_aws_credentials, load_campaign_config, _flush_stale_campaign_keys,
+    check_ami_tags_against_manifest,
+    check_authkey_syntax,
+    check_aws_credentials,
+    load_campaign_config,
+    _flush_stale_campaign_keys,
 )
 from .cloud_provider import AWSProvider
 from .cloud_runner import prepare_cloud_pool
@@ -64,6 +67,7 @@ class LedgerEntry:
     the in-memory `scores_per_build` dict without needing the worker
     fleet again.
     """
+
     schema_version: int
     matchup_id: str
     build_id: str
@@ -111,14 +115,16 @@ def read_ledger(ledger_path: Path) -> dict[tuple[str, str, int], float]:
                 ) from exc
             if data.get("schema_version") != LEDGER_SCHEMA_VERSION:
                 logger.warning(
-                    "ledger %s line %d: schema_version=%s (expected %d) — "
-                    "skipping",
-                    ledger_path, lineno,
-                    data.get("schema_version"), LEDGER_SCHEMA_VERSION,
+                    "ledger %s line %d: schema_version=%s (expected %d) — skipping",
+                    ledger_path,
+                    lineno,
+                    data.get("schema_version"),
+                    LEDGER_SCHEMA_VERSION,
                 )
                 continue
             key = _resume_key(
-                data["build_id"], data["opponent_variant_id"],
+                data["build_id"],
+                data["opponent_variant_id"],
                 int(data["replicate_idx"]),
             )
             completed[key] = float(data["fitness"])
@@ -147,6 +153,7 @@ class _LedgerWriter:
 @dataclass(frozen=True)
 class _BuildWithProvenance:
     """Internal — pairs a Build with the source-DB metadata."""
+
     build: Build
     source_campaign: str
     source_study_idx: int
@@ -184,21 +191,28 @@ def synthesize_random_baseline_builds(
     import numpy as np
     from .calibration import generate_random_build
     from .models import REGIME_PRESETS
+
     rng = np.random.default_rng(seed)
     regime_cfg = REGIME_PRESETS[regime]
     out: list[_BuildWithProvenance] = []
     for i in range(n):
         b = generate_random_build(
-            hull, game_data, manifest, rng=rng, regime=regime_cfg,
+            hull,
+            game_data,
+            manifest,
+            rng=rng,
+            regime=regime_cfg,
         )
-        out.append(_BuildWithProvenance(
-            build=b,
-            source_campaign=RANDOM_BASELINE_SOURCE_CAMPAIGN,
-            source_study_idx=0,
-            source_seed_idx=seed,
-            source_rank=i + 1,
-            source_value=float("nan"),  # no within-cell scoring exists
-        ))
+        out.append(
+            _BuildWithProvenance(
+                build=b,
+                source_campaign=RANDOM_BASELINE_SOURCE_CAMPAIGN,
+                source_study_idx=0,
+                source_seed_idx=seed,
+                source_rank=i + 1,
+                source_value=float("nan"),  # no within-cell scoring exists
+            )
+        )
     return tuple(out)
 
 
@@ -247,12 +261,16 @@ def _build_rankers():
     lazily to avoid pulling scipy at module-load time for callers that
     only use evaluate_builds / summarize_by_cell."""
     from .posthoc_ranker import (
-        rank_bradley_terry, rank_raw_mean, rank_twfe, rank_twfe_eb,
+        rank_bradley_terry,
+        rank_raw_mean,
+        rank_twfe,
+        rank_twfe_eb,
     )
+
     return {
-        "raw_mean":      rank_raw_mean,
-        "twfe":          rank_twfe,
-        "twfe_eb":       rank_twfe_eb,
+        "raw_mean": rank_raw_mean,
+        "twfe": rank_twfe,
+        "twfe_eb": rank_twfe_eb,
         "bradley_terry": rank_bradley_terry,
     }
 
@@ -303,9 +321,7 @@ def extract_top_builds(
     if top_k < 1:
         raise ValueError(f"top_k must be >= 1, got {top_k}")
     if method not in RANKING_METHODS:
-        raise ValueError(
-            f"unknown ranking method {method!r}; pick one of {RANKING_METHODS}"
-        )
+        raise ValueError(f"unknown ranking method {method!r}; pick one of {RANKING_METHODS}")
     if not eval_log_path.exists():
         raise FileNotFoundError(
             f"no evaluation_log.jsonl at {eval_log_path}. "
@@ -315,11 +331,11 @@ def extract_top_builds(
         )
 
     from .posthoc_ranker import load_records
+
     records = load_records([eval_log_path])
     if len(records) < top_k:
         raise ValueError(
-            f"{eval_log_path.name}: only {len(records)} completed trial(s); "
-            f"top_k={top_k}"
+            f"{eval_log_path.name}: only {len(records)} completed trial(s); top_k={top_k}"
         )
     ranked = _build_rankers()[method](records, k=top_k)
 
@@ -365,6 +381,7 @@ def report_method_disagreement(
     method, easy to diff visually in logs.
     """
     from .posthoc_ranker import load_records
+
     rankers = _build_rankers()
     records = load_records([eval_log_path])
     out = {}
@@ -453,9 +470,7 @@ def evaluate_builds(
                 f"unique enough to resume or score safely"
             )
         build_id_to_idx[bid] = bi
-    scores_per_build: dict[int, list[float]] = {
-        i: [] for i in range(len(builds_with_provenance))
-    }
+    scores_per_build: dict[int, list[float]] = {i: [] for i in range(len(builds_with_provenance))}
     for (bid, _opp, _rep), fit in completed_from_ledger.items():
         if bid not in build_id_to_idx:
             raise RuntimeError(
@@ -481,12 +496,12 @@ def evaluate_builds(
         logger.info(
             "honest_eval: replaying %d completed matchups from ledger %s; "
             "%d new matchups to dispatch",
-            skipped_from_ledger, ledger_path, len(jobs),
+            skipped_from_ledger,
+            ledger_path,
+            len(jobs),
         )
 
-    ledger_writer = (
-        _LedgerWriter(ledger_path) if ledger_path is not None else None
-    )
+    ledger_writer = _LedgerWriter(ledger_path) if ledger_path is not None else None
 
     def _make_matchup(job: _Job) -> MatchupConfig:
         bp = builds_with_provenance[job.build_idx]
@@ -496,17 +511,14 @@ def evaluate_builds(
             variant_id=f"{_build_id(job.build_idx)}__variant",
             hull_id=hull.id,
             weapon_assignments={
-                slot: wid for slot, wid in b.weapon_assignments.items()
-                if wid is not None
+                slot: wid for slot, wid in b.weapon_assignments.items() if wid is not None
             },
             hullmods=tuple(sorted(b.hullmods)),
             flux_vents=b.flux_vents,
             flux_capacitors=b.flux_capacitors,
             # cr defaults to 0.7 in BuildSpec (the harness CR convention).
         )
-        matchup_id = (
-            f"{_build_id(job.build_idx)}_vs_{job.opp}_rep{job.rep}"
-        )
+        matchup_id = f"{_build_id(job.build_idx)}_vs_{job.opp}_rep{job.rep}"
         return MatchupConfig(
             matchup_id=matchup_id,
             player_builds=(spec,),
@@ -516,14 +528,15 @@ def evaluate_builds(
 
     num_workers = pool.num_workers
     if num_workers < 1:
-        raise ValueError(
-            f"EvaluatorPool.num_workers={num_workers} — refusing to dispatch"
-        )
+        raise ValueError(f"EvaluatorPool.num_workers={num_workers} — refusing to dispatch")
     logger.info(
         "honest_eval: %d builds × %d opponents × %d replicates = %d matchups, "
         "concurrency=%d, max_retries=%d",
-        len(builds_with_provenance), len(eval_pool),
-        config.replicates_per_matchup, len(jobs), num_workers,
+        len(builds_with_provenance),
+        len(eval_pool),
+        config.replicates_per_matchup,
+        len(jobs),
+        num_workers,
         config.max_retries_per_matchup,
     )
 
@@ -562,32 +575,43 @@ def evaluate_builds(
                         ) from exc
                     logger.warning(
                         "matchup %s rep%d attempt %d/%d failed: %s — retrying",
-                        _build_id(job.build_idx), job.rep, next_attempt,
-                        config.max_retries_per_matchup, exc,
+                        _build_id(job.build_idx),
+                        job.rep,
+                        next_attempt,
+                        config.max_retries_per_matchup,
+                        exc,
                     )
-                    queue.append(_Job(
-                        build_idx=job.build_idx, opp=job.opp,
-                        rep=job.rep, attempt=next_attempt,
-                    ))
+                    queue.append(
+                        _Job(
+                            build_idx=job.build_idx,
+                            opp=job.opp,
+                            rep=job.rep,
+                            attempt=next_attempt,
+                        )
+                    )
                     continue
                 fitness = combat_fitness(result, config=config.fitness_config)
                 if ledger_writer is not None:
-                    ledger_writer.append(LedgerEntry(
-                        schema_version=LEDGER_SCHEMA_VERSION,
-                        matchup_id=result.matchup_id,
-                        build_id=_build_id(job.build_idx),
-                        opponent_variant_id=job.opp,
-                        replicate_idx=job.rep,
-                        fitness=fitness,
-                        completed_at=datetime.now(UTC).isoformat(),
-                    ))
+                    ledger_writer.append(
+                        LedgerEntry(
+                            schema_version=LEDGER_SCHEMA_VERSION,
+                            matchup_id=result.matchup_id,
+                            build_id=_build_id(job.build_idx),
+                            opponent_variant_id=job.opp,
+                            replicate_idx=job.rep,
+                            fitness=fitness,
+                            completed_at=datetime.now(UTC).isoformat(),
+                        )
+                    )
                 scores_per_build[job.build_idx].append(fitness)
                 completed += 1
                 log_every = max(1, total // config.progress_log_buckets)
                 if completed % log_every == 0:
                     logger.info(
                         "honest_eval: %d/%d matchups complete (%.0f%%)",
-                        completed, total, 100.0 * completed / total,
+                        completed,
+                        total,
+                        100.0 * completed / total,
                     )
     except BaseException:
         for fut in pending:
@@ -616,17 +640,19 @@ def evaluate_builds(
             sem = math.sqrt(var / len(scores))
         else:
             sem = 0.0
-        out.append(EvaluatedBuild(
-            build=bp.build,
-            source_campaign=bp.source_campaign,
-            source_study_idx=bp.source_study_idx,
-            source_seed_idx=bp.source_seed_idx,
-            source_rank=bp.source_rank,
-            source_value=bp.source_value,
-            oracle_score=mean,
-            oracle_se=sem,
-            n_matchups_succeeded=len(scores),
-        ))
+        out.append(
+            EvaluatedBuild(
+                build=bp.build,
+                source_campaign=bp.source_campaign,
+                source_study_idx=bp.source_study_idx,
+                source_seed_idx=bp.source_seed_idx,
+                source_rank=bp.source_rank,
+                source_value=bp.source_value,
+                oracle_score=mean,
+                oracle_se=sem,
+                n_matchups_succeeded=len(scores),
+            )
+        )
     return tuple(out)
 
 
@@ -646,13 +672,15 @@ def summarize_by_cell(
         oracle_scores = [b.oracle_score for b in builds]
         mean_top_k = sum(oracle_scores) / len(oracle_scores)
         best = max(builds, key=lambda b: b.oracle_score)
-        summaries.append(CellSummary(
-            cell_name=cell,
-            n_builds_evaluated=len(builds),
-            mean_top_k_oracle=mean_top_k,
-            best_build_oracle=best.oracle_score,
-            best_build_se=best.oracle_se,
-        ))
+        summaries.append(
+            CellSummary(
+                cell_name=cell,
+                n_builds_evaluated=len(builds),
+                mean_top_k_oracle=mean_top_k,
+                best_build_oracle=best.oracle_score,
+                best_build_se=best.oracle_se,
+            )
+        )
     summaries.sort(key=lambda s: s.mean_top_k_oracle, reverse=True)
     return tuple(summaries)
 
@@ -696,30 +724,40 @@ def write_outputs(
         cell_dir = out_root / "campaigns" / cell
         cell_dir.mkdir(parents=True, exist_ok=True)
         out_path = cell_dir / "honest_eval.json"
-        out_path.write_text(json.dumps({
-            "schema_version": result.schema_version,
-            "campaign": cell,
-            "config": cfg_dict,
-            "pool_variant_ids": list(result.pool_variant_ids),
-            "pool_size": result.pool_size,
-            "evaluated_builds": [_serialize_evaluated_build(b) for b in builds],
-            "started_at": result.started_at,
-            "finished_at": result.finished_at,
-        }, indent=2))
+        out_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": result.schema_version,
+                    "campaign": cell,
+                    "config": cfg_dict,
+                    "pool_variant_ids": list(result.pool_variant_ids),
+                    "pool_size": result.pool_size,
+                    "evaluated_builds": [_serialize_evaluated_build(b) for b in builds],
+                    "started_at": result.started_at,
+                    "finished_at": result.finished_at,
+                },
+                indent=2,
+            )
+        )
         logger.info("wrote %s", out_path)
 
     summary_dir = out_root / "campaigns"
     summary_dir.mkdir(parents=True, exist_ok=True)
     today = datetime.now(UTC).date().isoformat()
     summary_path = summary_dir / f"honest_eval_summary_{today}.json"
-    summary_path.write_text(json.dumps({
-        "schema_version": result.schema_version,
-        "cells": [asdict(s) for s in result.cell_summaries],
-        "pool_size": result.pool_size,
-        "config": cfg_dict,
-        "started_at": result.started_at,
-        "finished_at": result.finished_at,
-    }, indent=2))
+    summary_path.write_text(
+        json.dumps(
+            {
+                "schema_version": result.schema_version,
+                "cells": [asdict(s) for s in result.cell_summaries],
+                "pool_size": result.pool_size,
+                "config": cfg_dict,
+                "started_at": result.started_at,
+                "finished_at": result.finished_at,
+            },
+            indent=2,
+        )
+    )
     logger.info("wrote %s", summary_path)
 
 
@@ -771,8 +809,7 @@ def _install_signal_handlers() -> None:
     def handler(signum, _frame):
         if _shutdown_signal_seen.is_set():
             logger.warning(
-                "received signal %s while shutdown is already in progress; "
-                "continuing cleanup",
+                "received signal %s while shutdown is already in progress; continuing cleanup",
                 signum,
             )
             return
@@ -792,7 +829,7 @@ def _teardown_arg_for_eval_tag(eval_tag: str) -> str:
     """
     prefix = "starsector-"
     if eval_tag.startswith(prefix):
-        return eval_tag[len(prefix):]
+        return eval_tag[len(prefix) :]
     return eval_tag
 
 
@@ -813,8 +850,7 @@ def _adjust_campaign_for_honest_eval(
     """
     if total_matchup_slots < 1:
         raise ValueError(
-            f"total_matchup_slots={total_matchup_slots}; cannot size "
-            f"honest-eval worker lifetime"
+            f"total_matchup_slots={total_matchup_slots}; cannot size honest-eval worker lifetime"
         )
     full_timeout_wall_hours = (
         total_matchups
@@ -834,7 +870,8 @@ def _adjust_campaign_for_honest_eval(
         campaign,
         max_lifetime_hours=max(campaign.max_lifetime_hours, required_lifetime),
         visibility_timeout_seconds=max(
-            campaign.visibility_timeout_seconds, required_visibility,
+            campaign.visibility_timeout_seconds,
+            required_visibility,
         ),
     )
     if adjusted != campaign:
@@ -843,10 +880,12 @@ def _adjust_campaign_for_honest_eval(
             "max_lifetime_hours %.2f -> %.2f, "
             "visibility_timeout_seconds %.1f -> %.1f "
             "(total_matchups=%d, slots=%d)",
-            campaign.max_lifetime_hours, adjusted.max_lifetime_hours,
+            campaign.max_lifetime_hours,
+            adjusted.max_lifetime_hours,
             campaign.visibility_timeout_seconds,
             adjusted.visibility_timeout_seconds,
-            total_matchups, total_matchup_slots,
+            total_matchups,
+            total_matchup_slots,
         )
     return adjusted
 
@@ -904,6 +943,7 @@ def main(argv: list[str] | None = None) -> int:
     §CLI entry point and methodology §Replication count.
     """
     import argparse
+
     defaults = HonestEvaluationConfig()
     parser = argparse.ArgumentParser(
         description="Honest evaluator — re-score campaign top builds.",
@@ -911,73 +951,93 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--campaign-name", nargs="+", required=True)
     parser.add_argument("--top-k", type=int, default=defaults.top_k_per_seed)
     parser.add_argument(
-        "--replicates", type=int, default=defaults.replicates_per_matchup,
+        "--replicates",
+        type=int,
+        default=defaults.replicates_per_matchup,
     )
     parser.add_argument(
-        "--max-retries", type=int, default=defaults.max_retries_per_matchup,
+        "--max-retries",
+        type=int,
+        default=defaults.max_retries_per_matchup,
     )
     parser.add_argument("--game-dir", type=Path, default=Path("game/starsector"))
     parser.add_argument("--hull", required=True)
     parser.add_argument("--out-root", type=Path, default=Path("data"))
     parser.add_argument(
-        "--campaign-config", type=Path, default=None,
+        "--campaign-config",
+        type=Path,
+        default=None,
         help="Path to source-campaign YAML for inheriting fleet config "
-             "(regions, AMIs, instance types). Defaults to "
-             "examples/{first-campaign-name}.yaml.",
+        "(regions, AMIs, instance types). Defaults to "
+        "examples/{first-campaign-name}.yaml.",
     )
     parser.add_argument(
-        "--workers", type=int, default=None,
+        "--workers",
+        type=int,
+        default=None,
         help="Override fleet size for honest-eval. Default = max "
-             "workers_per_study across the source campaign's studies.",
+        "workers_per_study across the source campaign's studies.",
     )
     parser.add_argument(
-        "--flask-port", type=int, default=None,
+        "--flask-port",
+        type=int,
+        default=None,
         help="Flask port for honest-eval listener. Default = top of the "
-             "tailnet-ACL range "
-             "(campaign.base_flask_port + flask_ports_per_study - 1, e.g. "
-             "9099). Must be in [base_flask_port, base + flask_ports_per_study) "
-             "or workers cannot POST results.",
+        "tailnet-ACL range "
+        "(campaign.base_flask_port + flask_ports_per_study - 1, e.g. "
+        "9099). Must be in [base_flask_port, base + flask_ports_per_study) "
+        "or workers cannot POST results.",
     )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Extract top builds + enumerate pool + load "
-                             "campaign config + run lightweight preflight "
-                             "(authkey + STS), then exit without "
-                             "provisioning any AWS resources. Useful for "
-                             "validating inputs before paying.")
     parser.add_argument(
-        "--resume-from", default=None,
+        "--dry-run",
+        action="store_true",
+        help="Extract top builds + enumerate pool + load "
+        "campaign config + run lightweight preflight "
+        "(authkey + STS), then exit without "
+        "provisioning any AWS resources. Useful for "
+        "validating inputs before paying.",
+    )
+    parser.add_argument(
+        "--resume-from",
+        default=None,
         help="Reuse a prior eval_tag and resume from its ledger. The "
-             "ledger lives at `{out_root}/honest_eval/{eval_tag}/results.jsonl`; "
-             "matchups already present skip dispatch and their fitness "
-             "folds into the in-memory aggregation. Use this to recover "
-             "from a SIGTERM / OOM / network partition mid-run. Reuses "
-             "the eval_tag for AWS resource naming, so any prior fleet "
-             "must be torn down first (run scripts/cloud/teardown.sh).",
+        "ledger lives at `{out_root}/honest_eval/{eval_tag}/results.jsonl`; "
+        "matchups already present skip dispatch and their fitness "
+        "folds into the in-memory aggregation. Use this to recover "
+        "from a SIGTERM / OOM / network partition mid-run. Reuses "
+        "the eval_tag for AWS resource naming, so any prior fleet "
+        "must be torn down first (run scripts/cloud/teardown.sh).",
     )
     parser.add_argument(
-        "--random-baseline-n", type=int, default=0,
+        "--random-baseline-n",
+        type=int,
+        default=0,
         help="Number of random-feasible builds to add as a baseline cell "
-             "(source_campaign='random-baseline'). Without this, the "
-             "honest-eval can rank cells against each other but cannot "
-             "answer 'does any optimization machinery beat random "
-             "sampling?'. Recommended: same as top_k×n_seeds (= 9 for "
-             "Wave 1 with --top-k 3 × 3 seeds). Adds ~$0.001×n×pool×reps "
-             "to the run.",
+        "(source_campaign='random-baseline'). Without this, the "
+        "honest-eval can rank cells against each other but cannot "
+        "answer 'does any optimization machinery beat random "
+        "sampling?'. Recommended: same as top_k×n_seeds (= 9 for "
+        "Wave 1 with --top-k 3 × 3 seeds). Adds ~$0.001×n×pool×reps "
+        "to the run.",
     )
     parser.add_argument(
-        "--random-baseline-seed", type=int, default=0,
+        "--random-baseline-seed",
+        type=int,
+        default=0,
         help="RNG seed for synthesize_random_baseline_builds. Deterministic: "
-             "re-running with the same seed re-generates the same baseline "
-             "builds, so --resume-from still works.",
+        "re-running with the same seed re-generates the same baseline "
+        "builds, so --resume-from still works.",
     )
     parser.add_argument(
-        "--ranking-method", default="twfe_eb", choices=list(RANKING_METHODS),
+        "--ranking-method",
+        default="twfe_eb",
+        choices=list(RANKING_METHODS),
         help="Estimator used to pick top-K candidates from each study's "
-             "evaluation_log.jsonl. Default `twfe_eb` (TWFE + EB shrinkage; "
-             "phase5a + phase5d-without-X). `raw_mean` was the pre-2026-05-10 "
-             "default but has 0/5 top-5 overlap with principled methods on "
-             "Wave 1 — kept here only for ablation. See "
-             "docs/reports/2026-05-10-posthoc-ranker-research.md.",
+        "evaluation_log.jsonl. Default `twfe_eb` (TWFE + EB shrinkage; "
+        "phase5a + phase5d-without-X). `raw_mean` was the pre-2026-05-10 "
+        "default but has 0/5 top-5 overlap with principled methods on "
+        "Wave 1 — kept here only for ablation. See "
+        "docs/reports/2026-05-10-posthoc-ranker-research.md.",
     )
     args = parser.parse_args(argv)
 
@@ -1032,20 +1092,23 @@ def main(argv: list[str] | None = None) -> int:
                     f"re-running."
                 ) from exc
             disagreement = report_method_disagreement(
-                jsonl_path, top_k=config.top_k_per_seed,
+                jsonl_path,
+                top_k=config.top_k_per_seed,
             )
             primary = disagreement[args.ranking_method]
-            others = {m: picks for m, picks in disagreement.items()
-                      if m != args.ranking_method}
+            others = {m: picks for m, picks in disagreement.items() if m != args.ranking_method}
             consensus_count = max(
                 (sum(1 for m in others.values() if h in m) for h in primary),
                 default=0,
             )
             logger.info(
-                "honest_eval ranking [%s/%s]: method=%s top-%d=%s; "
-                "other-method picks: %s",
-                name, stem, args.ranking_method, config.top_k_per_seed,
-                primary, others,
+                "honest_eval ranking [%s/%s]: method=%s top-%d=%s; other-method picks: %s",
+                name,
+                stem,
+                args.ranking_method,
+                config.top_k_per_seed,
+                primary,
+                others,
             )
             if consensus_count == 0 and len(primary) > 0:
                 logger.warning(
@@ -1054,34 +1117,47 @@ def main(argv: list[str] | None = None) -> int:
                     "Likely cause: heavy opponent confounding or a "
                     "near-tied top region. Inspect the JSONL before "
                     "spending budget.",
-                    name, stem, args.ranking_method, config.top_k_per_seed,
+                    name,
+                    stem,
+                    args.ranking_method,
+                    config.top_k_per_seed,
                 )
             tops = extract_top_builds(
-                jsonl_path, hull, game_data, manifest,
-                config.top_k_per_seed, method=args.ranking_method,
+                jsonl_path,
+                hull,
+                game_data,
+                manifest,
+                config.top_k_per_seed,
+                method=args.ranking_method,
             )
             for rank, value, build in tops:
-                builds_with_provenance.append(_BuildWithProvenance(
-                    build=build, source_campaign=name,
-                    source_study_idx=0,
-                    source_seed_idx=seed_idx, source_rank=rank,
-                    source_value=value,
-                ))
+                builds_with_provenance.append(
+                    _BuildWithProvenance(
+                        build=build,
+                        source_campaign=name,
+                        source_study_idx=0,
+                        source_seed_idx=seed_idx,
+                        source_rank=rank,
+                        source_value=value,
+                    )
+                )
 
     # Random-feasible baseline cell — answers the existence question
     # "does any of our optimization machinery beat random sampling?".
     # Without it, all-cells-tied on the oracle is uninterpretable.
     if args.random_baseline_n > 0:
         baseline = synthesize_random_baseline_builds(
-            hull, game_data, manifest,
+            hull,
+            game_data,
+            manifest,
             n=args.random_baseline_n,
             seed=args.random_baseline_seed,
         )
         builds_with_provenance.extend(baseline)
         logger.info(
-            "honest_eval: added %d random-feasible baseline builds "
-            "(source_campaign=%s, seed=%d)",
-            len(baseline), RANDOM_BASELINE_SOURCE_CAMPAIGN,
+            "honest_eval: added %d random-feasible baseline builds (source_campaign=%s, seed=%d)",
+            len(baseline),
+            RANDOM_BASELINE_SOURCE_CAMPAIGN,
             args.random_baseline_seed,
         )
 
@@ -1098,9 +1174,9 @@ def main(argv: list[str] | None = None) -> int:
     if len(eval_pool) > 5:
         pool_preview.append("...")
     logger.info(
-        "honest_eval prepared: %d builds × %d opponents × %d replicates "
-        "= %d matchups; pool=%s",
-        len(builds_with_provenance), len(eval_pool),
+        "honest_eval prepared: %d builds × %d opponents × %d replicates = %d matchups; pool=%s",
+        len(builds_with_provenance),
+        len(eval_pool),
         config.replicates_per_matchup,
         len(builds_with_provenance) * len(eval_pool) * config.replicates_per_matchup,
         pool_preview,
@@ -1108,26 +1184,16 @@ def main(argv: list[str] | None = None) -> int:
 
     # Source campaign's YAML provides fleet config (regions, AMIs, instance
     # types). Default convention: examples/{first-campaign-name}.yaml.
-    campaign_yaml = (
-        args.campaign_config
-        or Path("examples") / f"{args.campaign_name[0]}.yaml"
-    )
+    campaign_yaml = args.campaign_config or Path("examples") / f"{args.campaign_name[0]}.yaml"
     if not campaign_yaml.exists():
         raise ValueError(
-            f"campaign config not found: {campaign_yaml} "
-            f"(use --campaign-config to override)"
+            f"campaign config not found: {campaign_yaml} (use --campaign-config to override)"
         )
     campaign = load_campaign_config(campaign_yaml)
 
-    target_workers = args.workers or max(
-        s.workers_per_study for s in campaign.studies
-    )
+    target_workers = args.workers or max(s.workers_per_study for s in campaign.studies)
     total_matchup_slots = target_workers * campaign.matchup_slots_per_worker
-    total_matchups = (
-        len(builds_with_provenance)
-        * len(eval_pool)
-        * config.replicates_per_matchup
-    )
+    total_matchups = len(builds_with_provenance) * len(eval_pool) * config.replicates_per_matchup
     campaign = _adjust_campaign_for_honest_eval(
         campaign,
         total_matchups=total_matchups,
@@ -1172,9 +1238,7 @@ def main(argv: list[str] | None = None) -> int:
         provider_for_preflight = AWSProvider(regions=campaign.regions)
         active = provider_for_preflight.list_active(eval_tag)
         if active:
-            sample = ", ".join(
-                f"{a['id']}@{a['region']}({a['state']})" for a in active[:5]
-            )
+            sample = ", ".join(f"{a['id']}@{a['region']}({a['state']})" for a in active[:5])
             raise ValueError(
                 f"--resume-from {eval_tag!r}: {len(active)} instance(s) "
                 f"still tagged Project={eval_tag} are pending/running "
@@ -1205,14 +1269,11 @@ def main(argv: list[str] | None = None) -> int:
     # Operator-supplied values still win — env vars are checked first.
     from .campaign import _resolve_tailnet_ip
     import uuid
+
     tailnet_ip = (
-        os.environ.get("STARSECTOR_WORKSTATION_TAILNET_IP", "").strip()
-        or _resolve_tailnet_ip()
+        os.environ.get("STARSECTOR_WORKSTATION_TAILNET_IP", "").strip() or _resolve_tailnet_ip()
     )
-    bearer_token = (
-        os.environ.get("STARSECTOR_BEARER_TOKEN", "").strip()
-        or uuid.uuid4().hex
-    )
+    bearer_token = os.environ.get("STARSECTOR_BEARER_TOKEN", "").strip() or uuid.uuid4().hex
     tailscale_authkey = (
         os.environ.get("STARSECTOR_TAILSCALE_AUTHKEY", "").strip()
         or os.environ.get("TAILSCALE_AUTHKEY", "").strip()
@@ -1224,10 +1285,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     debug_ssh_pubkey = os.environ.get("STARSECTOR_DEBUG_SSH_PUBKEY", "").strip()
     mod_jar_override_url = os.environ.get(
-        "STARSECTOR_MOD_JAR_OVERRIDE_URL", "",
+        "STARSECTOR_MOD_JAR_OVERRIDE_URL",
+        "",
     ).strip()
     mod_jar_override_sha256 = os.environ.get(
-        "STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "",
+        "STARSECTOR_MOD_JAR_OVERRIDE_SHA256",
+        "",
     ).strip()
 
     # Preflight — authkey syntax + AWS STS + manifest+AMI tag drift.
@@ -1239,7 +1302,10 @@ def main(argv: list[str] | None = None) -> int:
             "dry-run: would provision %d workers (=%d matchup slots) on "
             "flask_port=%d using campaign config %s. Preflight passed. "
             "Skipping provision.",
-            target_workers, total_matchup_slots, flask_port, campaign_yaml,
+            target_workers,
+            total_matchup_slots,
+            flask_port,
+            campaign_yaml,
         )
         return 0
 
@@ -1248,7 +1314,9 @@ def main(argv: list[str] | None = None) -> int:
     # items behind under the same eval_tag; the ledger replay below is what
     # decides which matchups are complete.
     _flush_stale_campaign_keys(
-        eval_tag, campaign.redis_port, campaign.redis_preflight_timeout_seconds,
+        eval_tag,
+        campaign.redis_port,
+        campaign.redis_preflight_timeout_seconds,
     )
 
     # Cloud orchestration. honest-eval namespaces are SEPARATE from the
@@ -1258,7 +1326,10 @@ def main(argv: list[str] | None = None) -> int:
     # sweep the wrong fleet.
     logger.info(
         "honest_eval cloud-pool: tag=%s workers=%d slots=%d port=%d",
-        eval_tag, target_workers, total_matchup_slots, flask_port,
+        eval_tag,
+        target_workers,
+        total_matchup_slots,
+        flask_port,
     )
 
     try:
@@ -1279,7 +1350,11 @@ def main(argv: list[str] | None = None) -> int:
             sweep_project_on_exit=True,
         ) as pool:
             evaluated = evaluate_builds(
-                builds_with_provenance, eval_pool, pool, config, hull,
+                builds_with_provenance,
+                eval_pool,
+                pool,
+                config,
+                hull,
                 ledger_path=ledger_path,
             )
     except KeyboardInterrupt:
@@ -1299,11 +1374,11 @@ def main(argv: list[str] | None = None) -> int:
         finished_at=finished_at.isoformat(),
     )
     write_outputs(result, args.out_root)
-    logger.info("honest_eval complete: %d builds × %d cells",
-                len(evaluated), len(summaries))
+    logger.info("honest_eval complete: %d builds × %d cells", len(evaluated), len(summaries))
     return 0
 
 
 if __name__ == "__main__":
     import sys
+
     sys.exit(main())

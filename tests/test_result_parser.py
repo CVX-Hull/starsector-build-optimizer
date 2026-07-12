@@ -70,7 +70,12 @@ SAMPLE_RESULT = {
             "flameouts": 0,
             "damage_dealt": {"shield": 0.0, "armor": 5098.0, "hull": 24588.0, "emp": 0.0},
             "damage_taken": {"shield": 4300.0, "armor": 0.0, "hull": 0.0, "emp": 0.0},
-            "flux_stats": {"curr_flux": 0.0, "hard_flux": 0.0, "max_flux": 13000.0, "overload_count": 0},
+            "flux_stats": {
+                "curr_flux": 0.0,
+                "hard_flux": 0.0,
+                "max_flux": 13000.0,
+                "overload_count": 0,
+            },
         }
     ],
     "aggregate": {
@@ -88,7 +93,6 @@ SAMPLE_RESULT = {
 
 
 class TestParseCombatResult:
-
     def test_basic_fields(self):
         result = parse_combat_result(SAMPLE_RESULT)
         assert isinstance(result, CombatResult)
@@ -147,7 +151,6 @@ class TestParseCombatResult:
 
 
 class TestParseResultsFile:
-
     def test_single_result(self, tmp_path):
         path = tmp_path / "combat_harness_results.json.data"
         path.write_text(json.dumps([SAMPLE_RESULT], indent=2))
@@ -175,7 +178,6 @@ class TestParseResultsFile:
 
 
 class TestWriteQueueFile:
-
     @staticmethod
     def _build_spec(variant_id="eagle_test", hull_id="eagle"):
         return BuildSpec(
@@ -378,13 +380,15 @@ class TestParseLoadoutDiagnostic:
         """When the swap drops weapons but flux took, we get false/false/true/true."""
         data = dict(SAMPLE_RESULT)
         data["loadout_diagnostic"] = {
-            "player": [{
-                **SAMPLE_LOADOUT_DIAGNOSTIC_PLAYER0,
-                "live_weapons": {},
-                "live_hullmods": [],
-                "weapons_match": False,
-                "hullmods_match": False,
-            }],
+            "player": [
+                {
+                    **SAMPLE_LOADOUT_DIAGNOSTIC_PLAYER0,
+                    "live_weapons": {},
+                    "live_hullmods": [],
+                    "weapons_match": False,
+                    "hullmods_match": False,
+                }
+            ],
         }
         result = parse_combat_result(data)
         d = result.player_loadout_diagnostics[0]

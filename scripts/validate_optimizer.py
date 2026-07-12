@@ -19,11 +19,18 @@ from starsector_optimizer.scorer import heuristic_score
 from starsector_optimizer.variant import build_to_build_spec
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 from starsector_optimizer.opponent_pool import (
-    OpponentPool, generate_matchups, hp_differential, get_opponents,
+    OpponentPool,
+    generate_matchups,
+    hp_differential,
+    get_opponents,
 )
 from starsector_optimizer.optimizer import (
-    OptimizerConfig, BuildCache, _CachedTrialResult, define_distributions,
-    trial_params_to_build, warm_start,
+    OptimizerConfig,
+    BuildCache,
+    _CachedTrialResult,
+    define_distributions,
+    trial_params_to_build,
+    warm_start,
 )
 from starsector_optimizer.models import CombatResult, HullSize, REGIME_ENDGAME
 
@@ -33,13 +40,18 @@ SIM_BUDGET = 24  # total builds to evaluate
 BUILDS_PER_BATCH = 4  # 4 builds × 2 opponents = 8 matchups → 8 instances
 
 # Reduced opponent pool (2 opponents for speed)
-TEST_POOL = OpponentPool(pools={
-    HullSize.CRUISER: ("dominator_Assault", "eagle_Assault"),
-})
+TEST_POOL = OpponentPool(
+    pools={
+        HullSize.CRUISER: ("dominator_Assault", "eagle_Assault"),
+    }
+)
 
 print("=" * 70, flush=True)
-print(f"Eagle Optimization: {NUM_INSTANCES} instances, {SIM_BUDGET} builds, "
-      f"{BUILDS_PER_BATCH} per batch", flush=True)
+print(
+    f"Eagle Optimization: {NUM_INSTANCES} instances, {SIM_BUDGET} builds, "
+    f"{BUILDS_PER_BATCH} per batch",
+    flush=True,
+)
 print("=" * 70, flush=True)
 
 # Load
@@ -67,8 +79,10 @@ try:
     print("\n3. Creating Optuna study with warm-start...", flush=True)
     optuna.logging.set_verbosity(optuna.logging.WARNING)
     sampler = optuna.samplers.TPESampler(
-        multivariate=True, constant_liar=True,
-        n_ei_candidates=256, n_startup_trials=20,
+        multivariate=True,
+        constant_liar=True,
+        n_ei_candidates=256,
+        n_startup_trials=20,
     )
     study = optuna.create_study(sampler=sampler, direction="maximize")
     opt_config = OptimizerConfig(warm_start_n=200, warm_start_sample_n=20000, warm_start_scale=0.1)
@@ -103,8 +117,13 @@ try:
             build_idx = batch_idx * BUILDS_PER_BATCH + j
             vid = f"eagle_val_{build_idx:03d}"
             build_spec = build_to_build_spec(build, hull, gd, vid)
-            matchups = generate_matchups(build_spec, opponents, f"val_{build_idx:03d}",
-                                         time_mult=5.0, time_limit_seconds=180.0)
+            matchups = generate_matchups(
+                build_spec,
+                opponents,
+                f"val_{build_idx:03d}",
+                time_mult=5.0,
+                time_limit_seconds=180.0,
+            )
             all_matchups.extend(matchups)
             variant_ids.append(vid)
 
@@ -131,15 +150,19 @@ try:
                 continue
 
             from starsector_optimizer.combat_fitness import aggregate_combat_fitness
+
             fitness = aggregate_combat_fitness(build_results, mode="mean")
             # This validation script has no EB/TWFE pipeline; the raw mean
             # fitness stands in for all three cached fitness fields.
-            cache.put(build, _CachedTrialResult(
-                shaped_fitness=fitness,
-                eb_fitness=fitness,
-                twfe_fitness=fitness,
-                origin_trial_number=trial.number,
-            ))
+            cache.put(
+                build,
+                _CachedTrialResult(
+                    shaped_fitness=fitness,
+                    eb_fitness=fitness,
+                    twfe_fitness=fitness,
+                    origin_trial_number=trial.number,
+                ),
+            )
             study.tell(trial, fitness)
             best_fitness = max(best_fitness, fitness)
 
@@ -151,29 +174,39 @@ try:
                 opp_details.append(f"{opp}:{r.winner[:1]}{hp_differential(r):+.2f}")
 
             n_w = sum(1 for v in build.weapon_assignments.values() if v is not None)
-            print(f"   [{build_idx+1:>2}/{SIM_BUDGET}] fit={fitness:+.3f} best={best_fitness:+.3f} "
-                  f"h={heur:.2f} w={n_w} [{', '.join(opp_details)}]", flush=True)
+            print(
+                f"   [{build_idx + 1:>2}/{SIM_BUDGET}] fit={fitness:+.3f} best={best_fitness:+.3f} "
+                f"h={heur:.2f} w={n_w} [{', '.join(opp_details)}]",
+                flush=True,
+            )
 
             results_log.append((build_idx, fitness, heur, build))
 
-        print(f"   --- batch {batch_idx+1}/{num_batches} in {batch_elapsed:.0f}s ---", flush=True)
+        print(f"   --- batch {batch_idx + 1}/{num_batches} in {batch_elapsed:.0f}s ---", flush=True)
 
     total = time.monotonic() - t_start
 
     # Summary
-    print(f"\n{'='*70}", flush=True)
+    print(f"\n{'=' * 70}", flush=True)
     print("SUMMARY", flush=True)
-    print(f"{'='*70}", flush=True)
+    print(f"{'=' * 70}", flush=True)
     fitnesses = [f for _, f, _, _ in results_log]
     heurs = [h for _, _, h, _ in results_log]
-    print(f"Total: {len(results_log)} builds in {total:.0f}s ({total/60:.1f}min)", flush=True)
-    print(f"Per build: {total/len(results_log):.1f}s", flush=True)
-    print(f"Fitness: [{min(fitnesses):+.3f}, {max(fitnesses):+.3f}], mean={sum(fitnesses)/len(fitnesses):+.3f}", flush=True)
+    print(f"Total: {len(results_log)} builds in {total:.0f}s ({total / 60:.1f}min)", flush=True)
+    print(f"Per build: {total / len(results_log):.1f}s", flush=True)
+    print(
+        f"Fitness: [{min(fitnesses):+.3f}, {max(fitnesses):+.3f}], mean={sum(fitnesses) / len(fitnesses):+.3f}",
+        flush=True,
+    )
     winners = sum(1 for f in fitnesses if f > 0)
-    print(f"Winning builds: {winners}/{len(fitnesses)} ({winners/len(fitnesses)*100:.0f}%)", flush=True)
+    print(
+        f"Winning builds: {winners}/{len(fitnesses)} ({winners / len(fitnesses) * 100:.0f}%)",
+        flush=True,
+    )
 
     if len(fitnesses) >= 5:
         from scipy.stats import spearmanr
+
         rho, p = spearmanr(heurs, fitnesses)
         print(f"Heuristic-sim correlation: rho={rho:.3f} (p={p:.3f})", flush=True)
 
@@ -182,9 +215,11 @@ try:
     print("\nTop-3 builds:", flush=True)
     for rank, (_idx, fit, heur, build) in enumerate(results_log[:3]):
         weapons = {s: w for s, w in build.weapon_assignments.items() if w is not None}
-        logistics = [m for m in build.hullmods if gd.hullmods.get(m) and gd.hullmods[m].is_logistics]
+        logistics = [
+            m for m in build.hullmods if gd.hullmods.get(m) and gd.hullmods[m].is_logistics
+        ]
         combat = [m for m in build.hullmods if m not in logistics]
-        print(f"  #{rank+1} fitness={fit:+.3f} heuristic={heur:.3f}", flush=True)
+        print(f"  #{rank + 1} fitness={fit:+.3f} heuristic={heur:.3f}", flush=True)
         print(f"     Weapons ({len(weapons)}): {', '.join(sorted(weapons.values()))}", flush=True)
         print(f"     Combat: {', '.join(sorted(combat)) or 'none'}", flush=True)
         print(f"     Logistics: {', '.join(sorted(logistics)) or 'none'}", flush=True)

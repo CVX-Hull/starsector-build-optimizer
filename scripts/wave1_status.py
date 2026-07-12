@@ -2,6 +2,7 @@
 
 Reads SQLite + ledger directly — no AWS calls, no provider creds needed.
 """
+
 from __future__ import annotations
 
 import json
@@ -44,15 +45,23 @@ def cell_status(cell: str) -> CellStatus:
             continue
         conn = sqlite3.connect(str(db))
         try:
-            n_complete = conn.execute("SELECT COUNT(*) FROM trials WHERE state='COMPLETE'").fetchone()[0]
-            n_pruned = conn.execute("SELECT COUNT(*) FROM trials WHERE state='PRUNED'").fetchone()[0]
-            n_running = conn.execute("SELECT COUNT(*) FROM trials WHERE state='RUNNING'").fetchone()[0]
+            n_complete = conn.execute(
+                "SELECT COUNT(*) FROM trials WHERE state='COMPLETE'"
+            ).fetchone()[0]
+            n_pruned = conn.execute("SELECT COUNT(*) FROM trials WHERE state='PRUNED'").fetchone()[
+                0
+            ]
+            n_running = conn.execute(
+                "SELECT COUNT(*) FROM trials WHERE state='RUNNING'"
+            ).fetchone()[0]
             n_fail = conn.execute("SELECT COUNT(*) FROM trials WHERE state='FAIL'").fetchone()[0]
         finally:
             conn.close()
         seeds[seed] = {
-            "complete": n_complete, "pruned": n_pruned,
-            "running": n_running, "fail": n_fail,
+            "complete": n_complete,
+            "pruned": n_pruned,
+            "running": n_running,
+            "fail": n_fail,
         }
     # Cost
     ledger = REPO_ROOT / "data" / "campaigns" / f"wave1-{cell}" / "ledger.jsonl"
@@ -115,7 +124,7 @@ def main() -> int:
         mr = s["mismatch_rate"] * 100
         print(
             f"  {cell}: ${cost:.2f}  {' | '.join(seeds_str_parts)}  "
-            f"loadout mismatch {s['loadout_mismatch']}/{s['loadout_ok']+s['loadout_mismatch']} ({mr:.2f}%)"
+            f"loadout mismatch {s['loadout_mismatch']}/{s['loadout_ok'] + s['loadout_mismatch']} ({mr:.2f}%)"
         )
         total_cost += cost
         total_mismatch += s["loadout_mismatch"]
@@ -124,7 +133,7 @@ def main() -> int:
     overall_mr = total_mismatch / max(1, total_ok + total_mismatch) * 100
     print(
         f"  TOTAL: ${total_cost:.2f}  "
-        f"loadout mismatch {total_mismatch}/{total_ok+total_mismatch} ({overall_mr:.2f}%)"
+        f"loadout mismatch {total_mismatch}/{total_ok + total_mismatch} ({overall_mr:.2f}%)"
     )
     return 0
 

@@ -114,7 +114,9 @@ class FakeServer:
 
 
 class FakeProvider:
-    def __init__(self, *, instance_count: int = CANONICAL_JOB_COUNT, active=None, price: float = 0.01) -> None:
+    def __init__(
+        self, *, instance_count: int = CANONICAL_JOB_COUNT, active=None, price: float = 0.01
+    ) -> None:
         self.instance_count = instance_count
         self.active = active
         self.price = price
@@ -239,9 +241,7 @@ def test_generate_jobs_has_canonical_matrix(tmp_path):
             if split in SEEDLESS_SPLITS:
                 expected.add(f"{split}__{model}")
             else:
-                expected.update(
-                    f"{split}__{model}__s{seed}" for seed in CANONICAL_SPLIT_SEED_BANK
-                )
+                expected.update(f"{split}__{model}__s{seed}" for seed in CANONICAL_SPLIT_SEED_BANK)
     assert {job.job_id for job in jobs} == expected
     seedless = [job for job in jobs if job.split in SEEDLESS_SPLITS]
     assert {job.split_seed for job in seedless} == {CANONICAL_SPLIT_SEED_BANK[0]}
@@ -322,9 +322,7 @@ def test_user_data_experiment_flags_match_build_job_command(tmp_path, with_optio
     must never drift."""
     cfg = make_config(tmp_path)
     if with_optional_flags:
-        cfg = replace(
-            cfg, noise_floor_override=0.5, fresh_honest_eval_ledger_id="ledger-1"
-        )
+        cfg = replace(cfg, noise_floor_override=0.5, fresh_honest_eval_ledger_id="ledger-1")
     job = generate_jobs(cfg)[0]
     command_flags = {token for token in build_job_command(cfg, job) if token.startswith("--")}
 
@@ -354,7 +352,9 @@ def test_check_split_feasibility_refuses_infeasible_cells(tmp_path, monkeypatch)
         ],
     )
 
-    with pytest.raises(RuntimeError, match=r"component-vocab\(seed 109\): degenerate_component_vocab_split"):
+    with pytest.raises(
+        RuntimeError, match=r"component-vocab\(seed 109\): degenerate_component_vocab_split"
+    ):
         cli.check_split_feasibility(cfg)
 
 
@@ -440,6 +440,7 @@ def test_create_bundle_contains_runtime_inputs(tmp_path, monkeypatch):
     assert len(digest) == 64
     assert bundle.is_absolute()
     import tarfile
+
     with tarfile.open(bundle, "r:gz") as tar:
         names = set(tar.getnames())
     assert str(cfg.source_db_path) in names
@@ -543,27 +544,33 @@ def test_control_plane_requires_bearer_token_for_all_routes(tmp_path):
     )
     assert leased.status_code == 200
     lease_payload = leased.get_json()
-    assert client.post(
-        f"/lease/{lease_payload['job_id']}/renew",
-        headers={
-            "Authorization": "Bearer secret",
-            "X-Worker-Id": "i-1",
-            "X-Lease-Attempt": str(lease_payload["attempt"]),
-        },
-        json={"worker_id": "i-1", "attempt": lease_payload["attempt"]},
-    ).status_code == 200
-    assert client.post(
-        f"/result/{lease_payload['job_id']}",
-        headers={
-            "Authorization": "Bearer secret",
-            "X-Worker-Id": "i-1",
-            "X-Lease-Attempt": str(lease_payload["attempt"]),
-        },
-        json={
-            "result_count": 1,
-            "results": [{"split": lease_payload["split"], "model": lease_payload["model"]}],
-        },
-    ).status_code == 200
+    assert (
+        client.post(
+            f"/lease/{lease_payload['job_id']}/renew",
+            headers={
+                "Authorization": "Bearer secret",
+                "X-Worker-Id": "i-1",
+                "X-Lease-Attempt": str(lease_payload["attempt"]),
+            },
+            json={"worker_id": "i-1", "attempt": lease_payload["attempt"]},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/result/{lease_payload['job_id']}",
+            headers={
+                "Authorization": "Bearer secret",
+                "X-Worker-Id": "i-1",
+                "X-Lease-Attempt": str(lease_payload["attempt"]),
+            },
+            json={
+                "result_count": 1,
+                "results": [{"split": lease_payload["split"], "model": lease_payload["model"]}],
+            },
+        ).status_code
+        == 200
+    )
 
 
 def test_control_plane_persists_events_and_status_counts_events(tmp_path):
@@ -607,20 +614,26 @@ def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
     assert lease is not None
     payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
 
-    assert state.record_result(
-        lease.job_id,
-        payload,
-        worker_id="i-1",
-        attempt=1,
-        now=110.0,
-    )["status"] == "accepted"
-    assert state.record_result(
-        lease.job_id,
-        payload,
-        worker_id="i-1",
-        attempt=1,
-        now=111.0,
-    )["status"] == "duplicate"
+    assert (
+        state.record_result(
+            lease.job_id,
+            payload,
+            worker_id="i-1",
+            attempt=1,
+            now=110.0,
+        )["status"]
+        == "accepted"
+    )
+    assert (
+        state.record_result(
+            lease.job_id,
+            payload,
+            worker_id="i-1",
+            attempt=1,
+            now=111.0,
+        )["status"]
+        == "duplicate"
+    )
 
     other = next(job for job in generate_jobs(cfg) if job.job_id != lease.job_id)
     with pytest.raises(ValueError, match="not leased"):
@@ -665,13 +678,16 @@ def test_lease_renewal_extends_long_running_job_ownership(tmp_path):
     rows = {row["job_id"]: row for row in state.status()["jobs"]}
     assert rows[lease.job_id]["lease_expires_at"] == 210.0
     payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
-    assert state.record_result(
-        lease.job_id,
-        payload,
-        worker_id="i-1",
-        attempt=lease.attempt,
-        now=205.0,
-    )["status"] == "accepted"
+    assert (
+        state.record_result(
+            lease.job_id,
+            payload,
+            worker_id="i-1",
+            attempt=lease.attempt,
+            now=205.0,
+        )["status"]
+        == "accepted"
+    )
 
 
 def test_lease_does_not_steal_unrenewed_job_without_controller_requeue(tmp_path):
@@ -724,17 +740,17 @@ def test_user_data_preserves_security_invariants(tmp_path):
     assert 'UV_BIN="/home/ubuntu/.local/bin/uv"' in out
     assert '"$UV_BIN" sync --frozen --extra surrogate' in out
     assert "JOB_ID=$(python3 -c" in out
-    assert 'worker_failed_before_lease_${BOOTSTRAP_STEP}' in out
+    assert "worker_failed_before_lease_${BOOTSTRAP_STEP}" in out
     assert "trap on_failure ERR" in out
-    assert "post_event \"lease_acquired\"" in out
-    assert "post_event \"worker_failed\"" in out
-    assert "post_event_with_log \"experiment_failed\"" in out
+    assert 'post_event "lease_acquired"' in out
+    assert 'post_event "worker_failed"' in out
+    assert 'post_event_with_log "experiment_failed"' in out
     assert "lease_renewal_lost" in out
     assert "RUN_PID=$!" in out
-    assert "/lease/\"$JOB_ID\"/renew" in out
+    assert '/lease/"$JOB_ID"/renew' in out
     assert "shutdown -h +" in out
     assert "log_tail" in out
-    assert "post_worker_event \"bootstrap_start\"" in out
+    assert 'post_worker_event "bootstrap_start"' in out
     assert "/worker-event" in out
 
 
@@ -773,7 +789,7 @@ def test_user_data_retries_result_upload_before_declaring_failure(tmp_path):
     )
 
     assert f"seq 1 {cfg.result_upload_attempts}" in out
-    assert '&& { UPLOAD_CODE=0; break; } || UPLOAD_CODE=$?' in out
+    assert "&& { UPLOAD_CODE=0; break; } || UPLOAD_CODE=$?" in out
     assert f"sleep {cfg.result_upload_retry_seconds}" in out
     assert 'post_event_with_log "result_upload_failed" "$LOG" "$UPLOAD_CODE"' in out
     # The retry loop owns the upload failure path; the success event must be
@@ -812,7 +828,10 @@ set -e
 echo "trapped=$trapped code=$CODE"
 """
     proc = subprocess.run(
-        ["bash", "-c", script], capture_output=True, text=True, timeout=30,
+        ["bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
         check=False,
     )
     assert proc.returncode == 0, proc.stderr
@@ -874,11 +893,7 @@ def one_job_payload(
 ) -> dict:
     if split_seed is None:
         split_seed = cfg.split_seeds[0]
-    job_id = (
-        f"{split}__{model}"
-        if split in SEEDLESS_SPLITS
-        else f"{split}__{model}__s{split_seed}"
-    )
+    job_id = f"{split}__{model}" if split in SEEDLESS_SPLITS else f"{split}__{model}__s{split_seed}"
     registry = {
         "a_x": {"family": "a", "template": "a_x", "parents": [], "leakage_risk": "low"},
     }
@@ -1017,13 +1032,27 @@ def one_job_payload(
                         "regret_at_k": {"1": {"raw": 0.0, "normalized": 0.0}},
                     },
                     "bootstrap": {
-                        "mean_per_opponent_spearman": {"ci_low": 0.3, "ci_high": 0.5, "n_finite": 20},
+                        "mean_per_opponent_spearman": {
+                            "ci_low": 0.3,
+                            "ci_high": 0.5,
+                            "n_finite": 20,
+                        },
                     },
                 },
                 "skill_scores": {"mse_model": 0.04, "mse_train_mean": 0.5, "skill": 0.92},
-                "panel_target_stats": {"n": 25, "mean": 0.0, "sd": 0.7, "endpoint_mass_low": 0.4, "endpoint_mass_high": 0.1},
+                "panel_target_stats": {
+                    "n": 25,
+                    "mean": 0.0,
+                    "sd": 0.7,
+                    "endpoint_mass_low": 0.4,
+                    "endpoint_mass_high": 0.1,
+                },
                 "noise_floor": {"noise_floor": 0.05, "source": "fallback"},
-                "inner_cv": {"fold_count": cfg.inner_cv_folds, "fold_construction": "grouped_kfold", "fold_sizes": []},
+                "inner_cv": {
+                    "fold_count": cfg.inner_cv_folds,
+                    "fold_construction": "grouped_kfold",
+                    "fold_sizes": [],
+                },
                 "outer_split_lineage": {
                     "split_seed": split_seed,
                     "seed_bank_label": "2026-07-bank-a",
@@ -1515,9 +1544,7 @@ def test_run_live_batch_treats_initial_instances_as_pending_until_visible(tmp_pa
         server_factory=lambda *args, **kwargs: server,
         sleep_fn=clock.sleep,
         now_fn=clock.time,
-        on_poll=lambda state: (
-            complete_all_jobs(cfg, state) if provider.list_calls else None
-        ),
+        on_poll=lambda state: complete_all_jobs(cfg, state) if provider.list_calls else None,
     )
 
     assert merged["result_count"] == CANONICAL_JOB_COUNT
@@ -1584,11 +1611,13 @@ def test_run_live_batch_replaces_missing_worker_and_completes(tmp_path):
                 {"id": "i-live", "region": "us-east-2", "instance_type": "c7i.4xlarge"},
             ]
             if self.replacement_launched:
-                active.append({
-                    "id": "i-replacement",
-                    "region": "us-east-2",
-                    "instance_type": "c7i.4xlarge",
-                })
+                active.append(
+                    {
+                        "id": "i-replacement",
+                        "region": "us-east-2",
+                        "instance_type": "c7i.4xlarge",
+                    }
+                )
             return active
 
     provider = ReplacementProvider()
@@ -1714,25 +1743,39 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
 
     monkeypatch.setattr(cli, "load_batch_config", lambda path: cfg)
     monkeypatch.setattr(cli, "check_aws_credentials", lambda: calls.append("aws"))
-    monkeypatch.setattr(cli, "check_authkey_syntax", lambda authkey: calls.append(("auth", authkey)))
+    monkeypatch.setattr(
+        cli, "check_authkey_syntax", lambda authkey: calls.append(("auth", authkey))
+    )
     monkeypatch.setattr(
         cli,
         "check_ami_tags_against_manifest",
-        lambda provider, amis, manifest, required_regions: calls.append(("ami", tuple(required_regions))),
+        lambda provider, amis, manifest, required_regions: calls.append(
+            ("ami", tuple(required_regions))
+        ),
     )
-    monkeypatch.setattr(cli, "check_amis_available", lambda provider, config: calls.append("ami-available"))
-    monkeypatch.setattr(cli, "check_key_pairs_available", lambda provider, config: calls.append("keypair"))
-    monkeypatch.setattr(cli, "check_split_feasibility", lambda config: calls.append("split-feasibility"))
+    monkeypatch.setattr(
+        cli, "check_amis_available", lambda provider, config: calls.append("ami-available")
+    )
+    monkeypatch.setattr(
+        cli, "check_key_pairs_available", lambda provider, config: calls.append("keypair")
+    )
+    monkeypatch.setattr(
+        cli, "check_split_feasibility", lambda config: calls.append("split-feasibility")
+    )
     monkeypatch.setattr(cli, "GameManifest", type("GM", (), {"load": staticmethod(object)}))
     monkeypatch.setattr(cli, "AWSProvider", lambda regions: FakeProvider())
     monkeypatch.setattr(cli, "create_bundle", lambda path, out: (tmp_path / "bundle.tgz", "b" * 64))
     monkeypatch.setattr(cli.secrets, "token_urlsafe", lambda n: "token")
     monkeypatch.setattr(cli.atexit, "register", lambda fn: calls.append("atexit"))
-    monkeypatch.setattr(cli.signal, "signal", lambda signum, handler: calls.append(("signal", signum)))
+    monkeypatch.setattr(
+        cli.signal, "signal", lambda signum, handler: calls.append(("signal", signum))
+    )
     monkeypatch.setattr(
         cli,
         "run_live_batch",
-        lambda config, **kwargs: calls.append(("live", kwargs["bundle_sha256"], kwargs["bearer_token"])),
+        lambda config, **kwargs: calls.append(
+            ("live", kwargs["bundle_sha256"], kwargs["bearer_token"])
+        ),
     )
 
     assert cli.launch(tmp_path / "config.yaml", execute=True) == 0
@@ -1799,7 +1842,13 @@ def test_config_validation_rejects_burned_and_reserved_seeds(tmp_path):
 
     with pytest.raises(ValueError, match="C4"):
         validate_batch_config(
-            replace(cfg, split_seeds=(17, 101), publish_canonical=False, target_workers=1, min_workers_to_start=1)
+            replace(
+                cfg,
+                split_seeds=(17, 101),
+                publish_canonical=False,
+                target_workers=1,
+                min_workers_to_start=1,
+            )
         )
     with pytest.raises(ValueError, match="reserved confirmatory seed"):
         validate_batch_config(
@@ -1813,7 +1862,13 @@ def test_config_validation_rejects_burned_and_reserved_seeds(tmp_path):
         )
     with pytest.raises(ValueError, match="non-empty"):
         validate_batch_config(
-            replace(cfg, split_seeds=(), publish_canonical=False, target_workers=1, min_workers_to_start=1)
+            replace(
+                cfg,
+                split_seeds=(),
+                publish_canonical=False,
+                target_workers=1,
+                min_workers_to_start=1,
+            )
         )
 
 
@@ -1902,9 +1957,7 @@ def test_canonical_publish_refuses_to_overwrite_other_batch(tmp_path):
 def test_validate_job_payload_rejects_seed_outside_config_list(tmp_path):
     cfg = make_config(tmp_path)
     job = generate_jobs(cfg)[0]
-    rogue_job = replace(
-        job, split_seed=997, job_id=f"{job.split}__{job.model}__s997"
-    )
+    rogue_job = replace(job, split_seed=997, job_id=f"{job.split}__{job.model}__s997")
     payload = one_job_payload(cfg, job.split, job.model, 997)
 
     with pytest.raises(ValueError, match="not in the config seed list"):
@@ -1927,9 +1980,20 @@ def insufficiency_payload(cfg: LearnedBatchConfig, job) -> dict:
     result = payload["results"][0]
     result["status"] = "degenerate_component_vocab_split"
     for key in (
-        "mae", "rmse", "spearman_rho", "rank_metrics", "skill_scores",
-        "panel_target_stats", "noise_floor", "inner_cv", "comparator_inline",
-        "comparator_delta", "hpo", "timing", "n_train", "n_test",
+        "mae",
+        "rmse",
+        "spearman_rho",
+        "rank_metrics",
+        "skill_scores",
+        "panel_target_stats",
+        "noise_floor",
+        "inner_cv",
+        "comparator_inline",
+        "comparator_delta",
+        "hpo",
+        "timing",
+        "n_train",
+        "n_test",
     ):
         result.pop(key, None)
     return payload

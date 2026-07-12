@@ -128,18 +128,20 @@ def test_parsed_enum_types_are_enums(manifest: GameManifest) -> None:
 def test_unknown_enum_value_skipped_with_warning(caplog) -> None:
     """Forward-compat: an unknown enum member logs WARN and skips the field."""
     caplog.set_level(logging.WARNING, logger="starsector_optimizer.game_manifest")
-    result = _parse_hullmod({
-        "id": "future_mod",
-        "tier": 0,
-        "hidden": False,
-        "hidden_everywhere": False,
-        "tags": [],
-        "ui_tags": [],
-        "op_cost_by_size": {
-            "FRIGATE": 5,
-            "FUTURE_SIZE": 99,  # unknown — future Starsector version
-        },
-    })
+    result = _parse_hullmod(
+        {
+            "id": "future_mod",
+            "tier": 0,
+            "hidden": False,
+            "hidden_everywhere": False,
+            "tags": [],
+            "ui_tags": [],
+            "op_cost_by_size": {
+                "FRIGATE": 5,
+                "FUTURE_SIZE": 99,  # unknown — future Starsector version
+            },
+        }
+    )
     assert result is not None
     assert HullSize.FRIGATE in result.op_cost_by_size
     assert any("FUTURE_SIZE" in r.message for r in caplog.records)
@@ -230,15 +232,11 @@ def test_applicable_hullmods_reference_real_mods(manifest: GameManifest) -> None
     known = set(manifest.hullmods.keys())
     for hid, hull in manifest.hulls.items():
         dangling_app = hull.applicable_hullmods - known
-        assert not dangling_app, (
-            f"hull {hid} applicable_hullmods refs unknown mods: {dangling_app}"
-        )
+        assert not dangling_app, f"hull {hid} applicable_hullmods refs unknown mods: {dangling_app}"
         for a, blocked in hull.conditional_exclusions.items():
             assert a in known, f"hull {hid} cond_excl key {a!r} unknown"
             dangling_b = blocked - known
-            assert not dangling_b, (
-                f"hull {hid} cond_excl[{a}] refs unknown mods: {dangling_b}"
-            )
+            assert not dangling_b, f"hull {hid} cond_excl[{a}] refs unknown mods: {dangling_b}"
 
 
 def test_built_in_mods_reference_real_hullmods(manifest: GameManifest) -> None:
@@ -251,8 +249,12 @@ def test_built_in_mods_reference_real_hullmods(manifest: GameManifest) -> None:
 
 def test_built_in_weapons_reference_real_weapons(manifest: GameManifest) -> None:
     assignable_slot_types = {
-        SlotType.BALLISTIC, SlotType.ENERGY, SlotType.MISSILE,
-        SlotType.HYBRID, SlotType.COMPOSITE, SlotType.SYNERGY,
+        SlotType.BALLISTIC,
+        SlotType.ENERGY,
+        SlotType.MISSILE,
+        SlotType.HYBRID,
+        SlotType.COMPOSITE,
+        SlotType.SYNERGY,
         SlotType.UNIVERSAL,
     }
     for hull in manifest.hulls.values():
@@ -262,8 +264,7 @@ def test_built_in_weapons_reference_real_weapons(manifest: GameManifest) -> None
             if slot is None or slot.type not in assignable_slot_types:
                 continue
             assert weapon_id in manifest.weapons, (
-                f"hull {hull.id} slot {slot_id} built-in weapon "
-                f"{weapon_id!r} absent from manifest"
+                f"hull {hull.id} slot {slot_id} built-in weapon {weapon_id!r} absent from manifest"
             )
 
 
@@ -299,8 +300,7 @@ def test_canary_afflictor_phase_excludes_shield_mods(manifest: GameManifest) -> 
     4 FRONT-shield rep probes; v2 captures this per-hull."""
     afflictor = manifest.hulls["afflictor"]
     assert afflictor.shield_type == ShieldType.PHASE
-    for mod in ("hardenedshieldemitter", "stabilizedshieldemitter",
-                "extendedshieldemitter"):
+    for mod in ("hardenedshieldemitter", "stabilizedshieldemitter", "extendedshieldemitter"):
         assert mod not in afflictor.applicable_hullmods, (
             f"phase ship afflictor should reject shield mod {mod}"
         )
@@ -347,19 +347,16 @@ def test_canary_14_previously_broken_mods_have_applicable_hulls(manifest: GameMa
     now reach at least one hull. If this fails, the probe is still
     mis-classifying some subset of mods."""
     previously_broken = {
-        "frontemitter",           # OMNI-shield only
-        "frontshield",            # no-shield only
-        "militarized_subsystems", # civilian only
-        "converted_hangar",       # non-carrier-to-have-bay
-        "converted_bay",          # wide
-        "converted_fighterbay",   # carrier
-        "expanded_deck_crew",     # carrier
-        "phase_anchor",           # phase only
-        "neural_integrator",      # AI core path
+        "frontemitter",  # OMNI-shield only
+        "frontshield",  # no-shield only
+        "militarized_subsystems",  # civilian only
+        "converted_hangar",  # non-carrier-to-have-bay
+        "converted_bay",  # wide
+        "converted_fighterbay",  # carrier
+        "expanded_deck_crew",  # carrier
+        "phase_anchor",  # phase only
+        "neural_integrator",  # AI core path
     }
     for mod in previously_broken:
-        hulls = [hid for hid, h in manifest.hulls.items()
-                 if mod in h.applicable_hullmods]
-        assert hulls, (
-            f"mod {mod!r} applicable to zero hulls — probe still mis-classifies it"
-        )
+        hulls = [hid for hid, h in manifest.hulls.items() if mod in h.applicable_hullmods]
+        assert hulls, f"mod {mod!r} applicable to zero hulls — probe still mis-classifies it"

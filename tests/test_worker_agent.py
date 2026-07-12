@@ -19,10 +19,13 @@ PROJECT_TAG = "starsector-test"
 @pytest.fixture
 def worker_config():
     from starsector_optimizer.models import WorkerConfig
+
     return WorkerConfig(
-        campaign_id="c1", study_id="wolf__early__seed0",
+        campaign_id="c1",
+        study_id="wolf__early__seed0",
         project_tag=PROJECT_TAG,
-        redis_host="127.0.0.1", redis_port=6379,
+        redis_host="127.0.0.1",
+        redis_port=6379,
         http_endpoint="http://127.0.0.1:9000/result",
         bearer_token=BEARER,
         max_lifetime_hours=0.0001,
@@ -36,6 +39,7 @@ def worker_config():
 class TestWorkerAgentQueue:
     def test_worker_pulls_from_source_queue(self, worker_config, fake_redis):
         from starsector_optimizer.worker_agent import claim_matchup
+
         source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
         processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
         fake_redis.lpush(source, json.dumps({"matchup_id": "m1"}))
@@ -46,6 +50,7 @@ class TestWorkerAgentQueue:
 
     def test_claim_returns_none_on_timeout(self, worker_config, fake_redis):
         from starsector_optimizer.worker_agent import claim_matchup
+
         source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
         processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
         item = claim_matchup(fake_redis, source, processing, timeout=1)
@@ -55,6 +60,7 @@ class TestWorkerAgentQueue:
 class TestWorkerAgentPost:
     def test_post_includes_bearer_token(self, worker_config):
         from starsector_optimizer.worker_agent import post_result
+
         with patch("requests.post") as mock_post:
             mock_post.return_value.status_code = 200
             post_result(worker_config, matchup_id="m1", result={"foo": "bar"})
@@ -65,6 +71,7 @@ class TestWorkerAgentPost:
 
     def test_post_retries_on_transient_failure(self, worker_config):
         from starsector_optimizer.worker_agent import post_result
+
         with patch("requests.post") as mock_post:
             mock_post.side_effect = [
                 MagicMock(status_code=500),
@@ -77,6 +84,7 @@ class TestWorkerAgentPost:
 
     def test_post_422_loadout_mismatch_is_terminal(self, worker_config):
         from starsector_optimizer.worker_agent import post_result
+
         with patch("requests.post") as mock_post:
             mock_post.return_value.status_code = 422
             with patch("time.sleep") as sleep:
@@ -92,6 +100,7 @@ class TestWorkerAgentPost:
 
     def test_post_401_hard_fails(self, worker_config):
         from starsector_optimizer.worker_agent import post_result, AuthError
+
         with patch("requests.post") as mock_post:
             mock_post.return_value.status_code = 401
             with pytest.raises(AuthError):
@@ -101,21 +110,27 @@ class TestWorkerAgentPost:
 class TestJanitor:
     def test_janitor_requeues_stuck(self, fake_redis):
         from starsector_optimizer.campaign import run_janitor_pass
+
         source = "queue:s:source"
         processing = "queue:s:processing"
         stuck = json.dumps({"matchup_id": "m1", "enqueued_at": time.time() - 9999})
         fake_redis.lpush(processing, stuck)
-        run_janitor_pass(fake_redis, source, processing, visibility_timeout_seconds=120.0, max_requeues=5)
+        run_janitor_pass(
+            fake_redis, source, processing, visibility_timeout_seconds=120.0, max_requeues=5
+        )
         assert fake_redis.llen(source) == 1
         assert fake_redis.llen(processing) == 0
 
     def test_janitor_leaves_fresh_alone(self, fake_redis):
         from starsector_optimizer.campaign import run_janitor_pass
+
         source = "queue:s:source"
         processing = "queue:s:processing"
         fresh = json.dumps({"matchup_id": "m1", "enqueued_at": time.time()})
         fake_redis.lpush(processing, fresh)
-        run_janitor_pass(fake_redis, source, processing, visibility_timeout_seconds=120.0, max_requeues=5)
+        run_janitor_pass(
+            fake_redis, source, processing, visibility_timeout_seconds=120.0, max_requeues=5
+        )
         assert fake_redis.llen(source) == 0
         assert fake_redis.llen(processing) == 1
 
@@ -123,6 +138,7 @@ class TestJanitor:
 class TestWorkerLifetime:
     def test_self_terminates_on_lifetime_cap(self, worker_config, fake_redis):
         from starsector_optimizer.worker_agent import should_exit
+
         # max_lifetime_hours=0.0001 (~0.36 seconds)
         started_at = time.monotonic() - 1.0
         assert should_exit(worker_config, started_at) is True
@@ -199,20 +215,26 @@ class TestLoadWorkerConfigFromEnv:
 
     def test_applies_defaults_when_optional_env_missing(self, monkeypatch):
         from starsector_optimizer.worker_agent import load_worker_config_from_env
+
         for k, v in self._REQUIRED_ENV.items():
             monkeypatch.setenv(k, v)
         # Ensure optional vars are NOT set.
-        for f in ("MAX_LIFETIME_HOURS", "HTTP_RETRY_COUNT",
-                  "MATCHUP_SLOTS_PER_WORKER", "WORKER_ID"):
+        for f in (
+            "MAX_LIFETIME_HOURS",
+            "HTTP_RETRY_COUNT",
+            "MATCHUP_SLOTS_PER_WORKER",
+            "WORKER_ID",
+        ):
             monkeypatch.delenv(f"STARSECTOR_WORKER_{f}", raising=False)
         cfg = load_worker_config_from_env()
-        assert cfg.max_lifetime_hours == 6.0          # WorkerConfig default
-        assert cfg.http_retry_count == 3              # WorkerConfig default
-        assert cfg.matchup_slots_per_worker == 2      # WorkerConfig default
-        assert cfg.worker_id == ""                    # placeholder default
+        assert cfg.max_lifetime_hours == 6.0  # WorkerConfig default
+        assert cfg.http_retry_count == 3  # WorkerConfig default
+        assert cfg.matchup_slots_per_worker == 2  # WorkerConfig default
+        assert cfg.worker_id == ""  # placeholder default
 
     def test_raises_value_error_on_missing_required(self, monkeypatch):
         from starsector_optimizer.worker_agent import load_worker_config_from_env
+
         for k, v in self._REQUIRED_ENV.items():
             monkeypatch.setenv(k, v)
         monkeypatch.delenv("STARSECTOR_WORKER_CAMPAIGN_ID", raising=False)
@@ -221,6 +243,7 @@ class TestLoadWorkerConfigFromEnv:
 
     def test_coerces_int_and_float_types(self, monkeypatch):
         from starsector_optimizer.worker_agent import load_worker_config_from_env
+
         for k, v in self._REQUIRED_ENV.items():
             monkeypatch.setenv(k, v)
         monkeypatch.setenv("STARSECTOR_WORKER_MATCHUP_SLOTS_PER_WORKER", "5")
@@ -238,14 +261,14 @@ class TestHeartbeat:
 
     def test_heartbeat_writes_load_avg_and_cpu_count(self, worker_config, fake_redis, tmp_path):
         from starsector_optimizer.worker_agent import heartbeat
+
         heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path)
         key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
         hb = fake_redis.hgetall(key)
         # fake_redis returns bytes by default; decode_responses may or may not
         # be set, so compare after normalization.
         normalized = {
-            (k.decode() if isinstance(k, bytes) else k):
-            (v.decode() if isinstance(v, bytes) else v)
+            (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
             for k, v in hb.items()
         }
         assert "timestamp" in normalized
@@ -260,13 +283,18 @@ class TestHeartbeat:
     def test_heartbeat_key_is_scoped_by_project_tag(self, worker_config, fake_redis, tmp_path):
         """Two campaigns with the same worker_id must not collide."""
         from starsector_optimizer.worker_agent import heartbeat
+
         heartbeat(fake_redis, "starsector-smokeA", worker_config.worker_id, game_dir=tmp_path)
         heartbeat(fake_redis, "starsector-smokeB", worker_config.worker_id, game_dir=tmp_path)
         assert fake_redis.exists(f"worker:starsector-smokeA:{worker_config.worker_id}:heartbeat")
         assert fake_redis.exists(f"worker:starsector-smokeB:{worker_config.worker_id}:heartbeat")
 
     def test_heartbeat_includes_game_log_tail(
-        self, worker_config, fake_redis, tmp_path, monkeypatch,
+        self,
+        worker_config,
+        fake_redis,
+        tmp_path,
+        monkeypatch,
     ):
         """game_log_tail is the only orchestrator-visible window into a hung
         worker JVM (smoke worker SGs grant zero ingress; tailscale ssh is
@@ -274,21 +302,21 @@ class TestHeartbeat:
         carries it and that it tails the actual on-disk file.
         """
         import starsector_optimizer.worker_agent as wa
+
         # Synthesize a fake instance-root layout matching the production
         # /tmp/starsector-instances/instance_NNN/game_stdout.log path.
         inst_dir = tmp_path / "instance_000"
         inst_dir.mkdir()
         log = inst_dir / "game_stdout.log"
         log.write_text("INFO marker line A\nINFO marker line B\n")
-        monkeypatch.setattr(
-            wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log")
+        monkeypatch.setattr(wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log"))
+        wa.heartbeat(
+            fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path
         )
-        wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path)
         key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
         hb = fake_redis.hgetall(key)
         normalized = {
-            (k.decode() if isinstance(k, bytes) else k):
-            (v.decode() if isinstance(v, bytes) else v)
+            (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
             for k, v in hb.items()
         }
         assert "game_log_tail" in normalized
@@ -300,14 +328,13 @@ class TestHeartbeat:
         heartbeat hash. The function caps each instance's tail at
         _GAME_LOG_TAIL_BYTES_PER_INSTANCE bytes."""
         import starsector_optimizer.worker_agent as wa
+
         inst_dir = tmp_path / "instance_000"
         inst_dir.mkdir()
         log = inst_dir / "game_stdout.log"
         # 200 KB of a junk pattern + one tail-only marker the test asserts on.
         log.write_text("X" * (200 * 1024) + "\nTAIL_MARKER\n")
-        monkeypatch.setattr(
-            wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log")
-        )
+        monkeypatch.setattr(wa, "_GAME_LOG_GLOB", str(tmp_path / "instance_*" / "game_stdout.log"))
         result = wa._read_game_log_tails()
         assert "TAIL_MARKER" in result
         # The full log was 200 KB; the per-instance cap is 32 KB plus the
@@ -318,14 +345,16 @@ class TestHeartbeat:
         """No instance dirs at all is a valid early-boot state — function
         must return a sentinel string, not raise."""
         import starsector_optimizer.worker_agent as wa
-        monkeypatch.setattr(
-            wa, "_GAME_LOG_GLOB", str(tmp_path / "no_match_*" / "game_stdout.log")
-        )
+
+        monkeypatch.setattr(wa, "_GAME_LOG_GLOB", str(tmp_path / "no_match_*" / "game_stdout.log"))
         result = wa._read_game_log_tails()
         assert "no logs at glob" in result
 
     def test_heartbeat_payload_includes_region_and_instance_type(
-        self, worker_config, fake_redis, tmp_path,
+        self,
+        worker_config,
+        fake_redis,
+        tmp_path,
     ):
         """Phase-7-prep: heartbeat carries IMDSv2-derived region + instance_type
         so the orchestrator's _tick_ledger can attribute cost per (region,
@@ -333,17 +362,24 @@ class TestHeartbeat:
         the real IMDS endpoint during the unit test.
         """
         import starsector_optimizer.worker_agent as wa
+
         wa._WORKER_VM_METADATA.clear()
-        wa._WORKER_VM_METADATA.update({
-            "region": "us-east-1", "instance_type": "c7a.2xlarge",
-        })
+        wa._WORKER_VM_METADATA.update(
+            {
+                "region": "us-east-1",
+                "instance_type": "c7a.2xlarge",
+            }
+        )
         try:
-            wa.heartbeat(fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path)
+            wa.heartbeat(
+                fake_redis, worker_config.project_tag, worker_config.worker_id, game_dir=tmp_path
+            )
             key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
             hb = fake_redis.hgetall(key)
             normalized = {
-                (k.decode() if isinstance(k, bytes) else k):
-                (v.decode() if isinstance(v, bytes) else v)
+                (k.decode() if isinstance(k, bytes) else k): (
+                    v.decode() if isinstance(v, bytes) else v
+                )
                 for k, v in hb.items()
             }
             assert normalized["region"] == "us-east-1"
@@ -359,11 +395,12 @@ class TestHeartbeat:
         """
         import logging
         import starsector_optimizer.worker_agent as wa
+
         wa._WORKER_VM_METADATA.clear()
-        with patch("urllib.request.urlopen",
-                   side_effect=Exception("IMDS unreachable")):
+        with patch("urllib.request.urlopen", side_effect=Exception("IMDS unreachable")):
             with caplog.at_level(
-                logging.ERROR, logger="starsector_optimizer.worker_agent",
+                logging.ERROR,
+                logger="starsector_optimizer.worker_agent",
             ):
                 result = wa._fetch_vm_metadata()
         assert result == {"region": "unknown", "instance_type": "unknown"}
@@ -382,6 +419,7 @@ class TestConsumerConcurrency:
         single-threaded main()."""
         from starsector_optimizer.worker_agent import _consumer_loop
         import inspect
+
         sig = inspect.signature(_consumer_loop)
         # Must accept a shared pool + per-thread slot_idx.
         assert "pool" in sig.parameters
@@ -389,7 +427,9 @@ class TestConsumerConcurrency:
         assert "stop_event" in sig.parameters
 
     def test_multiple_consumers_drain_queue_concurrently(
-        self, worker_config, fake_redis,
+        self,
+        worker_config,
+        fake_redis,
     ):
         """Two consumer threads sharing a pool both pick up items from Redis."""
         import threading
@@ -403,34 +443,49 @@ class TestConsumerConcurrency:
         source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
         processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
         for i in range(4):
-            fake_redis.lpush(source, json.dumps({
-                "matchup_id": f"m{i}",
-                "enqueued_at": time.time(),
-                "matchup": {
-                    "matchup_id": f"m{i}",
-                    "player_builds": [{
-                        "variant_id": "v", "hull_id": "wolf",
-                        "weapon_assignments": {}, "hullmods": [],
-                        "flux_vents": 0, "flux_capacitors": 0,
-                    }],
-                    "enemy_variants": ["dominator_Assault"],
-                    "time_limit_seconds": 90.0,
-                    "time_mult": 1.0,
-                },
-            }))
+            fake_redis.lpush(
+                source,
+                json.dumps(
+                    {
+                        "matchup_id": f"m{i}",
+                        "enqueued_at": time.time(),
+                        "matchup": {
+                            "matchup_id": f"m{i}",
+                            "player_builds": [
+                                {
+                                    "variant_id": "v",
+                                    "hull_id": "wolf",
+                                    "weapon_assignments": {},
+                                    "hullmods": [],
+                                    "flux_vents": 0,
+                                    "flux_capacitors": 0,
+                                }
+                            ],
+                            "enemy_variants": ["dominator_Assault"],
+                            "time_limit_seconds": 90.0,
+                            "time_mult": 1.0,
+                        },
+                    }
+                ),
+            )
 
         # Pool.run_matchup returns a dummy result after a tiny sleep.
         def _fake_run(matchup):
             time.sleep(0.05)
             return CombatResult(
-                matchup_id=matchup.matchup_id, winner="player",
+                matchup_id=matchup.matchup_id,
+                winner="player",
                 duration_seconds=1.0,
-                player_ships=(), enemy_ships=(),
-                player_ships_destroyed=0, enemy_ships_destroyed=1,
-                player_ships_retreated=0, enemy_ships_retreated=0,
+                player_ships=(),
+                enemy_ships=(),
+                player_ships_destroyed=0,
+                enemy_ships_destroyed=1,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
                 player_loadout_diagnostics=(),
                 engine_stats=None,
             )
+
         pool = MagicMock()
         pool.run_matchup.side_effect = _fake_run
 
@@ -447,18 +502,21 @@ class TestConsumerConcurrency:
 
         with patch("starsector_optimizer.worker_agent.post_result", side_effect=_fake_post):
             threads = [
-                threading.Thread(target=_consumer_loop, kwargs={
-                    "slot_idx": i,
-                    "config": worker_config,
-                    "pool": pool,
-                    "redis_client": fake_redis,
-                    "source": source,
-                    "processing": processing,
-                    "started_at": started_at,
-                    "stop_event": stop_event,
-                    "auth_failure_event": auth_failure_event,
-                    "poll_timeout": 1,
-                })
+                threading.Thread(
+                    target=_consumer_loop,
+                    kwargs={
+                        "slot_idx": i,
+                        "config": worker_config,
+                        "pool": pool,
+                        "redis_client": fake_redis,
+                        "source": source,
+                        "processing": processing,
+                        "started_at": started_at,
+                        "stop_event": stop_event,
+                        "auth_failure_event": auth_failure_event,
+                        "poll_timeout": 1,
+                    },
+                )
                 for i in range(2)
             ]
             for t in threads:
@@ -480,7 +538,9 @@ class TestConsumerConcurrency:
         assert pool.run_matchup.call_count == 4
 
     def test_consumer_acks_after_terminal_422(
-        self, worker_config, fake_redis,
+        self,
+        worker_config,
+        fake_redis,
     ):
         import threading
         from unittest.mock import MagicMock
@@ -489,29 +549,43 @@ class TestConsumerConcurrency:
 
         source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
         processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
-        fake_redis.lpush(source, json.dumps({
-            "matchup_id": "m422",
-            "enqueued_at": time.time(),
-            "matchup": {
-                "matchup_id": "m422",
-                "player_builds": [{
-                    "variant_id": "v", "hull_id": "wolf",
-                    "weapon_assignments": {}, "hullmods": [],
-                    "flux_vents": 0, "flux_capacitors": 0,
-                }],
-                "enemy_variants": ["dominator_Assault"],
-                "time_limit_seconds": 90.0,
-                "time_mult": 1.0,
-            },
-        }))
+        fake_redis.lpush(
+            source,
+            json.dumps(
+                {
+                    "matchup_id": "m422",
+                    "enqueued_at": time.time(),
+                    "matchup": {
+                        "matchup_id": "m422",
+                        "player_builds": [
+                            {
+                                "variant_id": "v",
+                                "hull_id": "wolf",
+                                "weapon_assignments": {},
+                                "hullmods": [],
+                                "flux_vents": 0,
+                                "flux_capacitors": 0,
+                            }
+                        ],
+                        "enemy_variants": ["dominator_Assault"],
+                        "time_limit_seconds": 90.0,
+                        "time_mult": 1.0,
+                    },
+                }
+            ),
+        )
 
         pool = MagicMock()
         pool.run_matchup.return_value = CombatResult(
-            matchup_id="m422", winner="player",
+            matchup_id="m422",
+            winner="player",
             duration_seconds=1.0,
-            player_ships=(), enemy_ships=(),
-            player_ships_destroyed=0, enemy_ships_destroyed=1,
-            player_ships_retreated=0, enemy_ships_retreated=0,
+            player_ships=(),
+            enemy_ships=(),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=1,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
             player_loadout_diagnostics=(),
             engine_stats=None,
         )
@@ -522,26 +596,28 @@ class TestConsumerConcurrency:
 
         with patch("requests.post") as mock_post:
             mock_post.return_value.status_code = 422
-            thread = threading.Thread(target=_consumer_loop, kwargs={
-                "slot_idx": 0,
-                "config": worker_config,
-                "pool": pool,
-                "redis_client": fake_redis,
-                "source": source,
-                "processing": processing,
-                "started_at": started_at,
-                "stop_event": stop_event,
-                "auth_failure_event": auth_failure_event,
-                "poll_timeout": 1,
-            })
+            thread = threading.Thread(
+                target=_consumer_loop,
+                kwargs={
+                    "slot_idx": 0,
+                    "config": worker_config,
+                    "pool": pool,
+                    "redis_client": fake_redis,
+                    "source": source,
+                    "processing": processing,
+                    "started_at": started_at,
+                    "stop_event": stop_event,
+                    "auth_failure_event": auth_failure_event,
+                    "poll_timeout": 1,
+                },
+            )
             thread.start()
             deadline = time.monotonic() + 5.0
             while (
-                (fake_redis.llen(source) != 0
-                 or fake_redis.llen(processing) != 0
-                 or mock_post.call_count == 0)
-                and time.monotonic() < deadline
-            ):
+                fake_redis.llen(source) != 0
+                or fake_redis.llen(processing) != 0
+                or mock_post.call_count == 0
+            ) and time.monotonic() < deadline:
                 time.sleep(0.05)
             stop_event.set()
             thread.join(timeout=3.0)
@@ -551,7 +627,9 @@ class TestConsumerConcurrency:
         assert mock_post.call_count == 1
 
     def test_consumer_rejects_result_matchup_id_mismatch(
-        self, worker_config, fake_redis,
+        self,
+        worker_config,
+        fake_redis,
     ):
         import threading
         from unittest.mock import MagicMock
@@ -560,29 +638,43 @@ class TestConsumerConcurrency:
 
         source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
         processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
-        fake_redis.lpush(source, json.dumps({
-            "matchup_id": "envelope-id",
-            "enqueued_at": time.time(),
-            "matchup": {
-                "matchup_id": "envelope-id",
-                "player_builds": [{
-                    "variant_id": "v", "hull_id": "wolf",
-                    "weapon_assignments": {}, "hullmods": [],
-                    "flux_vents": 0, "flux_capacitors": 0,
-                }],
-                "enemy_variants": ["dominator_Assault"],
-                "time_limit_seconds": 90.0,
-                "time_mult": 1.0,
-            },
-        }))
+        fake_redis.lpush(
+            source,
+            json.dumps(
+                {
+                    "matchup_id": "envelope-id",
+                    "enqueued_at": time.time(),
+                    "matchup": {
+                        "matchup_id": "envelope-id",
+                        "player_builds": [
+                            {
+                                "variant_id": "v",
+                                "hull_id": "wolf",
+                                "weapon_assignments": {},
+                                "hullmods": [],
+                                "flux_vents": 0,
+                                "flux_capacitors": 0,
+                            }
+                        ],
+                        "enemy_variants": ["dominator_Assault"],
+                        "time_limit_seconds": 90.0,
+                        "time_mult": 1.0,
+                    },
+                }
+            ),
+        )
 
         pool = MagicMock()
         pool.run_matchup.return_value = CombatResult(
-            matchup_id="result-id", winner="player",
+            matchup_id="result-id",
+            winner="player",
             duration_seconds=1.0,
-            player_ships=(), enemy_ships=(),
-            player_ships_destroyed=0, enemy_ships_destroyed=1,
-            player_ships_retreated=0, enemy_ships_retreated=0,
+            player_ships=(),
+            enemy_ships=(),
+            player_ships_destroyed=0,
+            enemy_ships_destroyed=1,
+            player_ships_retreated=0,
+            enemy_ships_retreated=0,
             player_loadout_diagnostics=(),
             engine_stats=None,
         )
@@ -592,18 +684,21 @@ class TestConsumerConcurrency:
         started_at = time.monotonic()
 
         with patch("starsector_optimizer.worker_agent.post_result") as mock_post:
-            thread = threading.Thread(target=_consumer_loop, kwargs={
-                "slot_idx": 0,
-                "config": worker_config,
-                "pool": pool,
-                "redis_client": fake_redis,
-                "source": source,
-                "processing": processing,
-                "started_at": started_at,
-                "stop_event": stop_event,
-                "auth_failure_event": auth_failure_event,
-                "poll_timeout": 1,
-            })
+            thread = threading.Thread(
+                target=_consumer_loop,
+                kwargs={
+                    "slot_idx": 0,
+                    "config": worker_config,
+                    "pool": pool,
+                    "redis_client": fake_redis,
+                    "source": source,
+                    "processing": processing,
+                    "started_at": started_at,
+                    "stop_event": stop_event,
+                    "auth_failure_event": auth_failure_event,
+                    "poll_timeout": 1,
+                },
+            )
             thread.start()
             deadline = time.monotonic() + 5.0
             while pool.run_matchup.call_count == 0 and time.monotonic() < deadline:

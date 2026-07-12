@@ -1,6 +1,5 @@
 """Tests for the EvaluatorPool ABC + subclass conformance."""
 
-
 from typing import Any, cast
 
 import pytest
@@ -12,11 +11,16 @@ from starsector_optimizer.models import BuildSpec, MatchupConfig
 def _dummy_matchup() -> MatchupConfig:
     return MatchupConfig(
         matchup_id="m1",
-        player_builds=(BuildSpec(
-            variant_id="v", hull_id="wolf",
-            weapon_assignments={}, hullmods=(),
-            flux_vents=0, flux_capacitors=0,
-        ),),
+        player_builds=(
+            BuildSpec(
+                variant_id="v",
+                hull_id="wolf",
+                weapon_assignments={},
+                hullmods=(),
+                flux_vents=0,
+                flux_capacitors=0,
+            ),
+        ),
         enemy_variants=("dominator_Assault",),
     )
 
@@ -32,6 +36,7 @@ class TestEvaluatorPoolABC:
 
     def test_subclass_missing_run_matchup_fails(self):
         """Subclass that omits run_matchup cannot be instantiated."""
+
         class Incomplete(EvaluatorPool):
             def setup(self) -> None:
                 pass
@@ -49,6 +54,7 @@ class TestEvaluatorPoolABC:
 
     def test_subclass_missing_num_workers_fails(self):
         """Subclass that omits num_workers cannot be instantiated."""
+
         class Incomplete(EvaluatorPool):
             def setup(self) -> None:
                 pass
@@ -65,6 +71,7 @@ class TestEvaluatorPoolABC:
 
     def test_complete_subclass_instantiates(self):
         """A subclass with every abstract method implemented works."""
+
         class Complete(EvaluatorPool):
             def setup(self) -> None:
                 self.ready = True
@@ -88,6 +95,7 @@ class TestLocalPoolConformance:
 
     def test_local_pool_is_subclass(self):
         from starsector_optimizer.instance_manager import LocalInstancePool
+
         assert issubclass(LocalInstancePool, EvaluatorPool)
 
 
@@ -96,6 +104,7 @@ class TestCloudPoolConformance:
 
     def test_cloud_pool_is_subclass(self):
         from starsector_optimizer.cloud_worker_pool import CloudWorkerPool
+
         assert issubclass(CloudWorkerPool, EvaluatorPool)
 
 
@@ -128,6 +137,7 @@ class TestContextManager:
 
     def test_context_manager_teardown_on_exception(self):
         """teardown runs even if the with-block raises."""
+
         class Recorder(EvaluatorPool):
             def __init__(self):
                 self.events = []

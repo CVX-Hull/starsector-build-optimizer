@@ -113,9 +113,7 @@ def render_md(rows: list[CellRow]) -> str:
     out.append("")
     out.append(
         "Cell ranking by mean honest fitness "
-        "(production-relevant headline): "
-        + " > ".join(r.cell for r in sorted_rows)
-        + "."
+        "(production-relevant headline): " + " > ".join(r.cell for r in sorted_rows) + "."
     )
     out.append("")
     out.append("### F1c gate — does the prod config (C2) beat A0/A baselines?")
@@ -138,19 +136,20 @@ def render_md(rows: list[CellRow]) -> str:
             f"this scaffold; add via downstream analyzer if Δ is small.)"
         )
     else:
-        out.append("- One or more required cells (wave1-c0a, wave1-c0b, wave1-c2) missing — F1c gate not evaluated.")
+        out.append(
+            "- One or more required cells (wave1-c0a, wave1-c0b, wave1-c2) missing — F1c gate not evaluated."
+        )
     out.append("")
     out.append("### Random-baseline existence check")
     out.append("")
     base = by_cell.get("random-baseline")
     if base is not None:
         beats = sum(
-            1 for c in ("wave1-c0a", "wave1-c0b", "wave1-c1", "wave1-c2", "wave1-c3")
+            1
+            for c in ("wave1-c0a", "wave1-c0b", "wave1-c1", "wave1-c2", "wave1-c3")
             if c in by_cell and by_cell[c].mean_top_k_oracle > base.mean_top_k_oracle
         )
-        out.append(
-            f"- Random-baseline mean top-K oracle: {base.mean_top_k_oracle:+.4f}"
-        )
+        out.append(f"- Random-baseline mean top-K oracle: {base.mean_top_k_oracle:+.4f}")
         out.append(
             f"- {beats}/5 optimization cells beat the random-feasible baseline. "
             f"If 0/5, the optimization machinery is not extracting signal "
@@ -176,12 +175,13 @@ def main() -> int:
         else:
             rows.append(row)
     if not rows:
-        print(f"ERROR: no honest_eval.json found under {args.root} for any of "
-              f"{args.cells}", file=sys.stderr)
+        print(
+            f"ERROR: no honest_eval.json found under {args.root} for any of {args.cells}",
+            file=sys.stderr,
+        )
         return 1
     if missing:
-        print(f"# Note: {len(missing)} cell(s) missing honest_eval.json: "
-              f"{', '.join(missing)}\n")
+        print(f"# Note: {len(missing)} cell(s) missing honest_eval.json: {', '.join(missing)}\n")
     print(render_md(rows))
     return 0
 

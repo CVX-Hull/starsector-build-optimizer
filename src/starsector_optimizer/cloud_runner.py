@@ -64,10 +64,7 @@ def resolve_study_id(campaign, study_idx: int, seed_idx: int) -> str:
     """
     study_cfg = campaign.studies[study_idx]
     seed = study_cfg.seeds[seed_idx]
-    return (
-        f"{study_cfg.hull}__{study_cfg.regime}"
-        f"__{study_cfg.sampler}__seed{seed}"
-    )
+    return f"{study_cfg.hull}__{study_cfg.regime}__{study_cfg.sampler}__seed{seed}"
 
 
 @contextmanager
@@ -156,18 +153,20 @@ def prepare_cloud_pool(
             user_data=user_data,
         )
         if not instance_ids:
-            raise RuntimeError(
-                f"provision_fleet returned no instances for fleet_name={fleet_name}"
-            )
+            raise RuntimeError(f"provision_fleet returned no instances for fleet_name={fleet_name}")
         actual_matchup_slots = len(instance_ids) * campaign.matchup_slots_per_worker
         if actual_matchup_slots != total_matchup_slots:
             logger.warning(
                 "cloud pool capacity adjusted from requested slots=%d to "
                 "actual slots=%d based on %d provisioned worker(s)",
-                total_matchup_slots, actual_matchup_slots, len(instance_ids),
+                total_matchup_slots,
+                actual_matchup_slots,
+                len(instance_ids),
             )
         redis_client = redis.Redis(
-            host="localhost", port=campaign.redis_port, decode_responses=True,
+            host="localhost",
+            port=campaign.redis_port,
+            decode_responses=True,
         )
         pool = CloudWorkerPool(
             study_id=study_id,
@@ -191,14 +190,16 @@ def prepare_cloud_pool(
             except Exception as e:
                 logger.error(
                     "project sweep: terminate_all_tagged(%s) raised: %s",
-                    project_tag, e,
+                    project_tag,
+                    e,
                 )
             try:
                 active = provider.list_active(project_tag)
             except Exception as e:
                 logger.error(
                     "project sweep: list_active(%s) raised: %s",
-                    project_tag, e,
+                    project_tag,
+                    e,
                 )
                 active = []
             if active:
@@ -207,23 +208,25 @@ def prepare_cloud_pool(
                     provider.terminate_all_tagged(project_tag)
                 except Exception as e:
                     logger.error(
-                        "project sweep retry: terminate_all_tagged(%s) "
-                        "raised: %s",
-                        project_tag, e,
+                        "project sweep retry: terminate_all_tagged(%s) raised: %s",
+                        project_tag,
+                        e,
                     )
                 try:
                     active = provider.list_active(project_tag)
                 except Exception as e:
                     logger.error(
                         "project sweep retry: list_active(%s) raised: %s",
-                        project_tag, e,
+                        project_tag,
+                        e,
                     )
                     active = []
                 if active:
                     logger.error(
-                        "project sweep: %d worker(s) still active for "
-                        "Project=%s after retry: %s",
-                        len(active), project_tag, active[:5],
+                        "project sweep: %d worker(s) still active for Project=%s after retry: %s",
+                        len(active),
+                        project_tag,
+                        active[:5],
                     )
 
 
@@ -267,17 +270,11 @@ def run_cloud_study(
     # Flask port: one per (study_idx, seed_idx) pair. Ceiling per study is
     # `CampaignConfig.flask_ports_per_study` so the port budget matches the
     # ACL range (`tcp:9000-9099`) documented in cloud-worker-ops.md.
-    flask_port = (
-        campaign.base_flask_port
-        + study_idx * campaign.flask_ports_per_study
-        + seed_idx
-    )
+    flask_port = campaign.base_flask_port + study_idx * campaign.flask_ports_per_study + seed_idx
 
     # Pool concurrency == total JVM slots across the fleet. The pool doesn't
     # distinguish VMs from JVMs — it only holds N free slots.
-    total_matchup_slots = (
-        study_cfg.workers_per_study * campaign.matchup_slots_per_worker
-    )
+    total_matchup_slots = study_cfg.workers_per_study * campaign.matchup_slots_per_worker
 
     # Optional debug SSH access. Operator generates an ED25519 keypair on
     # the workstation, exports the pubkey here, and SSHes into a hung worker
@@ -296,10 +293,12 @@ def run_cloud_study(
     # Both must be set together; `_validate_jar_override` raises ValueError
     # on a half-set pair.
     mod_jar_override_url = os.environ.get(
-        "STARSECTOR_MOD_JAR_OVERRIDE_URL", "",
+        "STARSECTOR_MOD_JAR_OVERRIDE_URL",
+        "",
     ).strip()
     mod_jar_override_sha256 = os.environ.get(
-        "STARSECTOR_MOD_JAR_OVERRIDE_SHA256", "",
+        "STARSECTOR_MOD_JAR_OVERRIDE_SHA256",
+        "",
     ).strip()
 
     with prepare_cloud_pool(
@@ -318,6 +317,11 @@ def run_cloud_study(
         mod_jar_override_sha256=mod_jar_override_sha256,
     ) as pool:
         return optimize_hull(
-            hull_id, game_data, pool, opponent_pool, optimizer_config,
-            manifest, game_dir=game_dir,
+            hull_id,
+            game_data,
+            pool,
+            opponent_pool,
+            optimizer_config,
+            manifest,
+            game_dir=game_dir,
         )

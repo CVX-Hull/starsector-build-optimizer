@@ -225,8 +225,7 @@ class LocalInstancePool(EvaluatorPool):
             self._assign_and_launch(inst, [matchup])
 
         # Poll for completion
-        _ACTIVE_STATES = (InstanceState.PREPARING, InstanceState.STARTING,
-                          InstanceState.RUNNING)
+        _ACTIVE_STATES = (InstanceState.PREPARING, InstanceState.STARTING, InstanceState.RUNNING)
         while True:
             time.sleep(self._config.poll_interval_seconds)
 
@@ -237,8 +236,7 @@ class LocalInstancePool(EvaluatorPool):
                 try:
                     results = parse_results_file(inst.results_path)
                 except Exception as e:
-                    logger.error("Instance %d: failed to parse results: %s",
-                                 inst.instance_id, e)
+                    logger.error("Instance %d: failed to parse results: %s", inst.instance_id, e)
                     results = []
                 inst.total_matchups_processed += 1
                 if not results:
@@ -247,7 +245,8 @@ class LocalInstancePool(EvaluatorPool):
                         "Instance %d: done signal produced no parseable "
                         "results. Restarting the persistent JVM before "
                         "retrying matchup_id=%s.",
-                        inst.instance_id, matchup.matchup_id,
+                        inst.instance_id,
+                        matchup.matchup_id,
                     )
                     self._restart_or_raise(inst, matchup)
                     continue
@@ -258,7 +257,9 @@ class LocalInstancePool(EvaluatorPool):
                         "Instance %d: stale result mismatch; expected "
                         "matchup_id=%s got matchup_id=%s. Restarting the "
                         "persistent JVM before reuse.",
-                        inst.instance_id, matchup.matchup_id, result.matchup_id,
+                        inst.instance_id,
+                        matchup.matchup_id,
+                        result.matchup_id,
                     )
                     self._restart_or_raise(inst, matchup)
                     continue
@@ -276,24 +277,23 @@ class LocalInstancePool(EvaluatorPool):
                     inst.state = InstanceState.RUNNING
                     inst.last_heartbeat_time = time.monotonic()
                 elif self._is_startup_timed_out(inst):
-                    logger.warning("Instance %d startup timed out",
-                                   inst.instance_id)
+                    logger.warning("Instance %d startup timed out", inst.instance_id)
                     inst.state = InstanceState.FAILED
                     self._restart_or_raise(inst, matchup)
                     continue
             elif inst.state == InstanceState.RUNNING:
                 if self._is_heartbeat_fresh(inst):
                     inst.last_heartbeat_time = time.monotonic()
-                elif (time.monotonic() - inst.last_heartbeat_time
-                      > self._config.heartbeat_timeout_seconds):
-                    logger.warning("Instance %d heartbeat timed out",
-                                   inst.instance_id)
+                elif (
+                    time.monotonic() - inst.last_heartbeat_time
+                    > self._config.heartbeat_timeout_seconds
+                ):
+                    logger.warning("Instance %d heartbeat timed out", inst.instance_id)
                     inst.state = InstanceState.FAILED
                     self._restart_or_raise(inst, matchup)
                     continue
 
-        raise InstanceError(
-            f"Instance {inst.instance_id} in unexpected state: {inst.state}")
+        raise InstanceError(f"Instance {inst.instance_id} in unexpected state: {inst.state}")
 
     # --- Work directory creation ---
 
@@ -370,10 +370,12 @@ class LocalInstancePool(EvaluatorPool):
 
     def _is_instance_reusable(self, inst: GameInstance) -> bool:
         """Check if instance has running game+Xvfb processes for persistent reuse."""
-        return (inst.game_process is not None
-                and inst.game_process.poll() is None
-                and inst.xvfb_process is not None
-                and inst.xvfb_process.poll() is None)
+        return (
+            inst.game_process is not None
+            and inst.game_process.poll() is None
+            and inst.xvfb_process is not None
+            and inst.xvfb_process.poll() is None
+        )
 
     def _assign_next_batch(self, inst: GameInstance, chunk: list[MatchupConfig]) -> None:
         """Send a new batch to an already-running persistent instance."""
@@ -395,8 +397,9 @@ class LocalInstancePool(EvaluatorPool):
 
         inst.state = InstanceState.RUNNING
         inst.last_heartbeat_time = time.monotonic()
-        logger.info("Instance %d: queued %d matchup(s) for mission restart",
-                    inst.instance_id, len(chunk))
+        logger.info(
+            "Instance %d: queued %d matchup(s) for mission restart", inst.instance_id, len(chunk)
+        )
 
     def _write_shutdown_signal(self, inst: GameInstance) -> None:
         """Write shutdown signal to request clean game exit."""
@@ -446,9 +449,17 @@ class LocalInstancePool(EvaluatorPool):
         socket_file.unlink(missing_ok=True)
 
         inst.xvfb_process = subprocess.Popen(
-            ["Xvfb", f":{inst.display_num}", "-screen", "0",
-             self._config.xvfb_screen, "-nolisten", "tcp"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            [
+                "Xvfb",
+                f":{inst.display_num}",
+                "-screen",
+                "0",
+                self._config.xvfb_screen,
+                "-nolisten",
+                "tcp",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
         )
         # Wait for socket file (what clients actually connect to)
         poll_interval = self._config.xvfb_poll_interval_seconds
@@ -468,8 +479,10 @@ class LocalInstancePool(EvaluatorPool):
             subprocess.run(
                 ["xrandr", "--query"],
                 env={**os.environ, "DISPLAY": f":{inst.display_num}"},
-                check=False, timeout=5,
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as e:
             logger.warning("xrandr warmup skipped on :%d (%s)", inst.display_num, e)
@@ -559,8 +572,10 @@ class LocalInstancePool(EvaluatorPool):
             try:
                 cp = subprocess.run(
                     ["xdotool", *args],
-                    env=env, timeout=kill_timeout,
-                    capture_output=True, text=True,
+                    env=env,
+                    timeout=kill_timeout,
+                    capture_output=True,
+                    text=True,
                     check=False,
                 )
             except Exception as exc:
@@ -583,7 +598,9 @@ class LocalInstancePool(EvaluatorPool):
         for poll_idx in range(max_polls):
             try:
                 cp = _xdotool(
-                    "search", "--name", "Starsector",
+                    "search",
+                    "--name",
+                    "Starsector",
                     label=f"poll[{poll_idx}] search",
                 )
                 first_line = cp.stdout.strip().splitlines()[:1]
@@ -598,7 +615,8 @@ class LocalInstancePool(EvaluatorPool):
             _trace(f"FAILED: launcher window did not appear within {launcher_timeout}s")
             logger.warning(
                 "Instance %d: launcher window did not appear within %.1fs",
-                inst.instance_id, launcher_timeout,
+                inst.instance_id,
+                launcher_timeout,
             )
             return
 
@@ -621,7 +639,10 @@ class LocalInstancePool(EvaluatorPool):
         # cleanly so we don't rely on stale captured output.
         try:
             geom_cp = _xdotool(
-                "getwindowgeometry", "--shell", wid, label="geom_for_click",
+                "getwindowgeometry",
+                "--shell",
+                wid,
+                label="geom_for_click",
             )
         except Exception as e:
             _trace(f"FAILED: geom probe raised: {e!r}")
@@ -653,7 +674,9 @@ class LocalInstancePool(EvaluatorPool):
             _xdotool("windowfocus", wid, label="windowfocus")
             time.sleep(self._config.launcher_click_settle_seconds)
             _xdotool(
-                "mousemove", str(click_x), str(click_y),
+                "mousemove",
+                str(click_x),
+                str(click_y),
                 label="mousemove_play",
             )
             _xdotool("click", "1", label="click_play")
@@ -668,13 +691,17 @@ class LocalInstancePool(EvaluatorPool):
                 pass
             logger.info(
                 "Instance %d: clicked launcher window %s at (%d, %d)",
-                inst.instance_id, wid, click_x, click_y,
+                inst.instance_id,
+                wid,
+                click_x,
+                click_y,
             )
         except Exception as e:
             _trace(f"FAILED: dispatch raised: {e!r}")
             logger.warning(
                 "Instance %d: failed to dispatch launcher click: %s",
-                inst.instance_id, e,
+                inst.instance_id,
+                e,
             )
 
     def _kill_instance(self, inst: GameInstance) -> None:
@@ -728,17 +755,21 @@ class LocalInstancePool(EvaluatorPool):
     # --- Failure handling ---
 
     def _restart_or_raise(
-        self, inst: GameInstance, matchup: MatchupConfig,
+        self,
+        inst: GameInstance,
+        matchup: MatchupConfig,
     ) -> None:
         """Restart instance or raise InstanceError if max restarts exceeded."""
         self._kill_instance(inst)
         if not self._can_restart(inst):
             raise InstanceError(
-                f"Instance {inst.instance_id} failed after "
-                f"{inst.restart_count} restarts"
+                f"Instance {inst.instance_id} failed after {inst.restart_count} restarts"
             )
         inst.restart_count += 1
-        logger.info("Instance %d: restarting (attempt %d/%d)",
-                    inst.instance_id, inst.restart_count,
-                    self._config.max_restarts)
+        logger.info(
+            "Instance %d: restarting (attempt %d/%d)",
+            inst.instance_id,
+            inst.restart_count,
+            self._config.max_restarts,
+        )
         self._assign_and_launch(inst, [matchup], reset_restart_count=False)

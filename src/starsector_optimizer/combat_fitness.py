@@ -44,14 +44,12 @@ def combat_fitness(
     """
     # Game ground truth: how close to winning, how far from losing
     kill = (
-        sum(1.0 - s.hull_fraction for s in result.enemy_ships)
-        / len(result.enemy_ships)
+        sum(1.0 - s.hull_fraction for s in result.enemy_ships) / len(result.enemy_ships)
         if result.enemy_ships
         else 0.0
     )
     surv = (
-        sum(s.hull_fraction for s in result.player_ships)
-        / len(result.player_ships)
+        sum(s.hull_fraction for s in result.player_ships) / len(result.player_ships)
         if result.player_ships
         else 0.0
     )

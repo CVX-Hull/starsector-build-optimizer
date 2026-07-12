@@ -37,9 +37,7 @@ def _expand_patterns(patterns: list[str]) -> list[Path]:
 def _parse_db_spec(value: str) -> tuple[Path, str, str | None, str | None, int | None]:
     parts = value.split(":")
     if len(parts) < 2:
-        raise argparse.ArgumentTypeError(
-            "DB spec must be path:hull_id[:campaign[:study[:seed]]]"
-        )
+        raise argparse.ArgumentTypeError("DB spec must be path:hull_id[:campaign[:study[:seed]]]")
     seed = int(parts[4]) if len(parts) > 4 and parts[4] else None
     return (
         Path(parts[0]),
@@ -158,9 +156,7 @@ def main() -> None:
             honest_outputs = recover_honest_eval_output_builds(honest_eval_json_paths)
             recovered.extend(honest_outputs)
             build_id_to_key.update(honest_build_id_to_key(honest_outputs))
-        honest_matchups = list(
-            iter_honest_eval_matchups(args.honest_ledger, build_id_to_key)
-        )
+        honest_matchups = list(iter_honest_eval_matchups(args.honest_ledger, build_id_to_key))
         unresolved_honest_build_ids = sorted(
             {row.build_id for row in honest_matchups if row.build_key is None}
         )
@@ -171,19 +167,21 @@ def main() -> None:
         training_matchups=training_matchups,
         honest_eval_matchups=honest_matchups,
     )
-    print(json.dumps(
-        {
-            "output": str(args.output),
-            "recovered_builds": len(recovered),
-            "training_matchups": len(training_matchups),
-            "honest_eval_matchups": len(honest_matchups),
-            "unresolved_honest_build_ids": (
-                len(unresolved_honest_build_ids) if args.honest_ledger else 0
-            ),
-        },
-        indent=2,
-        sort_keys=True,
-    ))
+    print(
+        json.dumps(
+            {
+                "output": str(args.output),
+                "recovered_builds": len(recovered),
+                "training_matchups": len(training_matchups),
+                "honest_eval_matchups": len(honest_matchups),
+                "unresolved_honest_build_ids": (
+                    len(unresolved_honest_build_ids) if args.honest_ledger else 0
+                ),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
 
 
 if __name__ == "__main__":

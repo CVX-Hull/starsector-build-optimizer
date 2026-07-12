@@ -9,6 +9,7 @@ Usage:
     uv run python scripts/analysis/posthoc_rank_wave1.py --k 5
     uv run python scripts/analysis/posthoc_rank_wave1.py --k 5 --pool-all
 """
+
 from __future__ import annotations
 
 import argparse
@@ -31,10 +32,10 @@ from starsector_optimizer.posthoc_ranker import (
 
 
 METHODS = {
-    "raw_mean":       rank_raw_mean,
-    "twfe":           rank_twfe,
-    "twfe_eb":        rank_twfe_eb,
-    "bradley_terry":  rank_bradley_terry,
+    "raw_mean": rank_raw_mean,
+    "twfe": rank_twfe,
+    "twfe_eb": rank_twfe_eb,
+    "bradley_terry": rank_bradley_terry,
 }
 
 
@@ -78,16 +79,17 @@ def _agreement_table(rankings: dict[str, list[RankedBuild]], k: int) -> None:
 
 
 def _all_logs() -> list[Path]:
-    return sorted(REPO_ROOT.glob(
-        "data/logs/wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl"
-    ))
+    return sorted(
+        REPO_ROOT.glob("data/logs/wave1-*/hammerhead__early__tpe__seed*/evaluation_log.jsonl")
+    )
 
 
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--k", type=int, default=5, help="top-K to report")
-    p.add_argument("--pool-all", action="store_true",
-                   help="pool across all 15 studies (default: per-cell)")
+    p.add_argument(
+        "--pool-all", action="store_true", help="pool across all 15 studies (default: per-cell)"
+    )
     p.add_argument("--cells", nargs="+", default=["c0a", "c0b", "c1", "c2", "c3"])
     args = p.parse_args()
 
@@ -99,20 +101,22 @@ def main() -> int:
     if args.pool_all:
         print(f"Loading {len(logs)} JSONL files (pooled across all studies)...")
         records = load_records(logs)
-        print(f"  -> {len(records)} completed trials, "
-              f"{sum(len(r.matches) for r in records)} matchups")
+        print(
+            f"  -> {len(records)} completed trials, {sum(len(r.matches) for r in records)} matchups"
+        )
         rankings = {}
         for name, fn in METHODS.items():
             rankings[name] = fn(records, k=max(args.k, 25))
-            _print_ranked(name, rankings[name][:args.k], args.k)
+            _print_ranked(name, rankings[name][: args.k], args.k)
         _agreement_table(
-            {n: r[:args.k] for n, r in rankings.items()}, args.k,
+            {n: r[: args.k] for n, r in rankings.items()},
+            args.k,
         )
         # Detailed dump of top-K from each method for review.
         print(f"\n=== Build details for top-{args.k} of each method ===")
         for name, ranked in rankings.items():
             print(f"\n--- {name} ---")
-            for i, r in enumerate(ranked[:args.k], 1):
+            for i, r in enumerate(ranked[: args.k], 1):
                 print(f"\n#{i} build={r.build_id.short} score={r.score:+.3f}")
                 print(_format_build(r))
         return 0
@@ -126,17 +130,18 @@ def main() -> int:
     for cell in args.cells:
         if cell not in by_cell:
             continue
-        print(f"\n{'='*70}")
+        print(f"\n{'=' * 70}")
         print(f"=== Cell {cell} ===")
-        print('='*70)
+        print("=" * 70)
         records = load_records(by_cell[cell])
         print(f"  {len(records)} trials, {sum(len(r.matches) for r in records)} matchups")
         rankings = {}
         for name, fn in METHODS.items():
             rankings[name] = fn(records, k=max(args.k, 25))
-            _print_ranked(name, rankings[name][:args.k], args.k)
+            _print_ranked(name, rankings[name][: args.k], args.k)
         _agreement_table(
-            {n: r[:args.k] for n, r in rankings.items()}, args.k,
+            {n: r[: args.k] for n, r in rankings.items()},
+            args.k,
         )
 
     return 0

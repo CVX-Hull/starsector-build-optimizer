@@ -181,7 +181,11 @@ def test_final_claim_requires_fresh_honest_eval_ledger():
 
 
 def test_artifact_contract_helpers_emit_registry_and_policies():
-    cfg = _config(split="component-vocab", model="random_forest_tuned", honest_eval_usage="exploratory_selection")
+    cfg = _config(
+        split="component-vocab",
+        model="random_forest_tuned",
+        honest_eval_usage="exploratory_selection",
+    )
     records = [{"weapon_range": 700.0, "slot_arc": 90.0, "build_hullmod__heavyarmor": 1}]
     protocol = learned.feature_selection_protocol(records, "all")
     claim = learned.claim_boundary(
@@ -205,8 +209,13 @@ def test_artifact_contract_helpers_emit_registry_and_policies():
     assert protocol["feature_family_registry"]["weapon_range"]["template"] == "raw_descriptor"
     assert protocol["feature_family_registry"]["weapon_range"]["parents"] == []
     assert protocol["feature_family_registry"]["weapon_range"]["leakage_risk"] == "low"
-    assert protocol["feature_family_registry"]["build_hullmod__heavyarmor"]["template"] == "sparse_indicator"
-    assert protocol["feature_family_registry"]["build_hullmod__heavyarmor"]["leakage_risk"] == "medium"
+    assert (
+        protocol["feature_family_registry"]["build_hullmod__heavyarmor"]["template"]
+        == "sparse_indicator"
+    )
+    assert (
+        protocol["feature_family_registry"]["build_hullmod__heavyarmor"]["leakage_risk"] == "medium"
+    )
     assert learned.model_family_policy(cfg)["policy_type"] == "fixed_matrix"
     assert learned.deployment_policy(cfg)["candidate_universe"] == "source_db_builds"
     leakage = learned.leakage_diagnostics()
@@ -250,14 +259,18 @@ def test_leakage_diagnostics_uses_split_forbidden_key_only():
 
 
 def test_leakage_diagnostics_supports_opponent_hierarchy_splits():
-    hull_leakage = learned.leakage_diagnostics({
-        "split_level": "opponent-hull",
-        "overlap_counts": {"exact_opponent": 0, "opponent_hull": 1},
-    })
-    family_leakage = learned.leakage_diagnostics({
-        "split_level": "opponent-family",
-        "overlap_counts": {"opponent_hull": 2, "opponent_family": 0},
-    })
+    hull_leakage = learned.leakage_diagnostics(
+        {
+            "split_level": "opponent-hull",
+            "overlap_counts": {"exact_opponent": 0, "opponent_hull": 1},
+        }
+    )
+    family_leakage = learned.leakage_diagnostics(
+        {
+            "split_level": "opponent-family",
+            "overlap_counts": {"opponent_hull": 2, "opponent_family": 0},
+        }
+    )
 
     assert hull_leakage["forbidden_key_overlap"] == {"status": "fail", "value": 1}
     assert family_leakage["forbidden_key_overlap"] == {"status": "pass", "value": 0}
@@ -315,21 +328,27 @@ def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations(monk
 
 
 def test_leakage_diagnostics_component_vocab_uses_vocabulary_overlap():
-    leakage = learned.leakage_diagnostics({
-        "split_level": "component-vocab",
-        "overlap_counts": {"component_vocabulary": 0, "component_combination": 4},
-    })
+    leakage = learned.leakage_diagnostics(
+        {
+            "split_level": "component-vocab",
+            "overlap_counts": {"component_vocabulary": 0, "component_combination": 4},
+        }
+    )
 
     assert leakage["forbidden_key_overlap"] == {"status": "pass", "value": 0}
 
-    failing = learned.leakage_diagnostics({
-        "split_level": "component-vocab",
-        "overlap_counts": {"component_vocabulary": 2},
-    })
+    failing = learned.leakage_diagnostics(
+        {
+            "split_level": "component-vocab",
+            "overlap_counts": {"component_vocabulary": 2},
+        }
+    )
     assert failing["forbidden_key_overlap"] == {"status": "fail", "value": 2}
 
 
-def test_hierarchy_scorecard_reports_opponent_hierarchy_overlap_for_exact_opponent_split(monkeypatch):
+def test_hierarchy_scorecard_reports_opponent_hierarchy_overlap_for_exact_opponent_split(
+    monkeypatch,
+):
     split = SplitIds(
         train=(TrainingMatchupRow("p", "c0", 0, 0, "b0", "opp0_a", 0, 1.0, "finalized"),),
         test=(TrainingMatchupRow("p", "c0", 0, 1, "b1", "opp0_b", 0, 0.5, "finalized"),),
@@ -378,9 +397,7 @@ def test_hierarchy_scorecard_names_opponent_family_fields(monkeypatch):
         ),
     )
 
-    scorecard = learned.hierarchy_scorecard(
-        _config(split="opponent-family"), split, build_lookup
-    )
+    scorecard = learned.hierarchy_scorecard(_config(split="opponent-family"), split, build_lookup)
 
     assert scorecard["group_key_function"] == "held_out_opponent_family_split"
     assert scorecard["forbidden_cross_split_keys"] == [
@@ -519,9 +536,16 @@ def test_run_one_converts_degenerate_vocab_draw_to_insufficiency(monkeypatch):
         raise ComponentVocabularyError("component vocabulary holdout overshoot")
 
     monkeypatch.setattr(learned.baseline, "_split_rows", broken_split_rows)
-    monkeypatch.setattr(learned, "_honest_eval_lineage", lambda db_path: {
-        "status": "not_applicable", "source_paths": [], "ledger_id": None, "run_lineage": [],
-    })
+    monkeypatch.setattr(
+        learned,
+        "_honest_eval_lineage",
+        lambda db_path: {
+            "status": "not_applicable",
+            "source_paths": [],
+            "ledger_id": None,
+            "run_lineage": [],
+        },
+    )
 
     result = learned.run_one(_config(split="component-vocab"))
 
@@ -547,9 +571,7 @@ def test_split_feasibility_report_names_infeasible_cells(monkeypatch):
 
     monkeypatch.setattr(learned.baseline, "_split_rows", broken_split_rows)
 
-    report = learned.split_feasibility_report(
-        [_config(split="component-vocab", split_seed=109)]
-    )
+    report = learned.split_feasibility_report([_config(split="component-vocab", split_seed=109)])
 
     assert report == [
         {
@@ -628,7 +650,9 @@ def test_catboost_missing_requires_explicit_skip(monkeypatch):
     monkeypatch.setattr(learned, "CatBoostRegressor", None)
 
     with pytest.raises(RuntimeError, match="uv sync --extra surrogate"):
-        learned.make_model("catboost_regressor", learned.DEFAULT_HYPERPARAMETERS["catboost_regressor"], 23)
+        learned.make_model(
+            "catboost_regressor", learned.DEFAULT_HYPERPARAMETERS["catboost_regressor"], 23
+        )
 
     skipped = learned.missing_optional_model_result(_config(model="catboost_regressor"))
     assert skipped["status"] == "skipped"

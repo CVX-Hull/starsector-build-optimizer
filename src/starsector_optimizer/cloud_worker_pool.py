@@ -19,10 +19,16 @@ from werkzeug.serving import BaseWSGIServer, make_server
 
 from .campaign import run_janitor_pass
 from .evaluator_pool import (
-    EvaluatorPool, LOADOUT_MISMATCH_HTTP_STATUS, RetryableMatchupError,
+    EvaluatorPool,
+    LOADOUT_MISMATCH_HTTP_STATUS,
+    RetryableMatchupError,
 )
 from .models import (
-    CombatResult, DamageBreakdown, EngineStats, LoadoutDiagnostic, MatchupConfig,
+    CombatResult,
+    DamageBreakdown,
+    EngineStats,
+    LoadoutDiagnostic,
+    MatchupConfig,
     ShipCombatResult,
 )
 
@@ -106,6 +112,7 @@ def _processing_key(project_tag: str, study_id: str) -> str:
 def _matchup_to_dict(matchup: MatchupConfig) -> dict[str, Any]:
     """Serialize MatchupConfig → dict that JSON-round-trips back."""
     from .result_parser import _matchup_to_dict as rp_serialize
+
     return rp_serialize(matchup)
 
 
@@ -146,8 +153,9 @@ def _all_loadouts_match(result: CombatResult) -> bool:
     C1 cross-trial loadout bleed, ~0.6 % rate, 2026-05-10).
     """
     for d in result.player_loadout_diagnostics:
-        if not (d.weapons_match and d.hullmods_match
-                and d.flux_vents_match and d.flux_capacitors_match):
+        if not (
+            d.weapons_match and d.hullmods_match and d.flux_vents_match and d.flux_capacitors_match
+        ):
             return False
     return True
 
@@ -165,18 +173,17 @@ def _log_loadout_diagnostics(matchup_id: str, result: CombatResult) -> None:
     """
     for d in result.player_loadout_diagnostics:
         all_match = (
-            d.weapons_match
-            and d.hullmods_match
-            and d.flux_vents_match
-            and d.flux_capacitors_match
+            d.weapons_match and d.hullmods_match and d.flux_vents_match and d.flux_capacitors_match
         )
         if all_match:
             logger.info(
-                "LOADOUT_OK matchup=%s ship=%s weapons=%d hullmods=%d "
-                "flux=(%d,%d)",
-                matchup_id, d.fleet_member_id,
-                len(d.live_weapons), len(d.live_hullmods),
-                d.live_flux_vents, d.live_flux_capacitors,
+                "LOADOUT_OK matchup=%s ship=%s weapons=%d hullmods=%d flux=(%d,%d)",
+                matchup_id,
+                d.fleet_member_id,
+                len(d.live_weapons),
+                len(d.live_hullmods),
+                d.live_flux_vents,
+                d.live_flux_capacitors,
             )
             continue
         logger.warning(
@@ -186,13 +193,20 @@ def _log_loadout_diagnostics(matchup_id: str, result: CombatResult) -> None:
             "spec_weapons=%s live_weapons=%s "
             "spec_hullmods=%s live_hullmods=%s "
             "spec_flux=(%d,%d) live_flux=(%d,%d)",
-            matchup_id, d.fleet_member_id,
-            d.weapons_match, d.hullmods_match,
-            d.flux_vents_match, d.flux_capacitors_match,
-            d.spec_weapons, d.live_weapons,
-            d.spec_hullmods, d.live_hullmods,
-            d.spec_flux_vents, d.spec_flux_capacitors,
-            d.live_flux_vents, d.live_flux_capacitors,
+            matchup_id,
+            d.fleet_member_id,
+            d.weapons_match,
+            d.hullmods_match,
+            d.flux_vents_match,
+            d.flux_capacitors_match,
+            d.spec_weapons,
+            d.live_weapons,
+            d.spec_hullmods,
+            d.live_hullmods,
+            d.spec_flux_vents,
+            d.spec_flux_capacitors,
+            d.live_flux_vents,
+            d.live_flux_capacitors,
         )
 
 
@@ -237,9 +251,7 @@ def _dict_to_combat_result(data: dict[str, Any]) -> CombatResult:
         player_loadout_diagnostics=tuple(
             _dict_to_loadout_diagnostic(d) for d in data["player_loadout_diagnostics"]
         ),
-        engine_stats=(
-            EngineStats(**engine_stats_raw) if engine_stats_raw is not None else None
-        ),
+        engine_stats=(EngineStats(**engine_stats_raw) if engine_stats_raw is not None else None),
         debug_dumps=tuple(data.get("debug_dumps") or ()),
     )
 
@@ -287,7 +299,7 @@ class CloudWorkerPool(EvaluatorPool):
         self._failures: dict[str, Exception] = {}
         self._mismatch_signatures: dict[str, set[str]] = {}
         self._envelope_mismatch_signatures: dict[str, set[str]] = {}
-        self._seen: set[str] = set()                     # matchup_ids that have been POSTed
+        self._seen: set[str] = set()  # matchup_ids that have been POSTed
         self._results_lock = threading.Lock()
         self._result_events: dict[str, threading.Event] = {}
 
@@ -360,31 +372,33 @@ class CloudWorkerPool(EvaluatorPool):
                     # worker acks instead of replaying the same bad POST.
                     logger.error(
                         "result matchup_id mismatch: envelope=%s parsed=%s",
-                        matchup_id, parsed.matchup_id,
+                        matchup_id,
+                        parsed.matchup_id,
                     )
                     self._last_post_at = time.time()
                     self._stalled_warn_emitted = False
                     signature = json.dumps(
-                        body.get("result", {}), sort_keys=True, default=str,
+                        body.get("result", {}),
+                        sort_keys=True,
+                        default=str,
                     )
                     signatures = self._envelope_mismatch_signatures.setdefault(
-                        matchup_id, set(),
+                        matchup_id,
+                        set(),
                     )
                     if signature in signatures:
                         logger.info(
-                            "dedup result matchup_id mismatch retry "
-                            "envelope=%s parsed=%s",
-                            matchup_id, parsed.matchup_id,
+                            "dedup result matchup_id mismatch retry envelope=%s parsed=%s",
+                            matchup_id,
+                            parsed.matchup_id,
                         )
                         event = self._result_events.get(matchup_id)
                         if event is not None:
-                            self._failures[matchup_id] = (
-                                ResultEnvelopeMismatchRejected(
-                                    f"matchup_id={matchup_id} received "
-                                    f"duplicate stale result for "
-                                    f"{parsed.matchup_id}; retrying with a "
-                                    "fresh combat"
-                                )
+                            self._failures[matchup_id] = ResultEnvelopeMismatchRejected(
+                                f"matchup_id={matchup_id} received "
+                                f"duplicate stale result for "
+                                f"{parsed.matchup_id}; retrying with a "
+                                "fresh combat"
                             )
                             event.set()
                         return jsonify({"status": "duplicate"}), 409
@@ -399,11 +413,13 @@ class CloudWorkerPool(EvaluatorPool):
                     if event is not None:
                         self._failures[matchup_id] = failure
                         event.set()
-                    return jsonify({
-                        "error": "matchup_id_mismatch",
-                        "envelope_matchup_id": matchup_id,
-                        "result_matchup_id": parsed.matchup_id,
-                    }), LOADOUT_MISMATCH_HTTP_STATUS
+                    return jsonify(
+                        {
+                            "error": "matchup_id_mismatch",
+                            "envelope_matchup_id": matchup_id,
+                            "result_matchup_id": parsed.matchup_id,
+                        }
+                    ), LOADOUT_MISMATCH_HTTP_STATUS
                 _log_loadout_diagnostics(matchup_id, parsed)
                 # Pass-through harness debug dumps regardless of loadout
                 # outcome — they're useful for diagnosing the mismatch
@@ -428,10 +444,13 @@ class CloudWorkerPool(EvaluatorPool):
                     # and acks the Redis item; retrying the same POST only
                     # replays the same corrupt result.
                     signature = json.dumps(
-                        body.get("result", {}), sort_keys=True, default=str,
+                        body.get("result", {}),
+                        sort_keys=True,
+                        default=str,
                     )
                     signatures = self._mismatch_signatures.setdefault(
-                        matchup_id, set(),
+                        matchup_id,
+                        set(),
                     )
                     if signature in signatures:
                         logger.info(
@@ -440,12 +459,10 @@ class CloudWorkerPool(EvaluatorPool):
                         )
                         event = self._result_events.get(matchup_id)
                         if event is not None:
-                            self._failures[matchup_id] = (
-                                LoadoutMismatchRejected(
-                                    f"matchup_id={matchup_id} had duplicate "
-                                    "LOADOUT_MISMATCH; discarded result and "
-                                    "retrying with a fresh combat"
-                                )
+                            self._failures[matchup_id] = LoadoutMismatchRejected(
+                                f"matchup_id={matchup_id} had duplicate "
+                                "LOADOUT_MISMATCH; discarded result and "
+                                "retrying with a fresh combat"
                             )
                             event.set()
                         return jsonify({"status": "duplicate"}), 409
@@ -462,14 +479,18 @@ class CloudWorkerPool(EvaluatorPool):
                         "discarding LOADOUT_MISMATCH matchup=%s "
                         "(running discards=%d, accepted=%d) — dispatcher "
                         "will retry with a fresh combat",
-                        matchup_id, self._mismatch_discard_count, len(self._seen),
+                        matchup_id,
+                        self._mismatch_discard_count,
+                        len(self._seen),
                     )
                     if event is not None:
                         event.set()
-                    return jsonify({
-                        "error": "loadout_mismatch",
-                        "matchup_id": matchup_id,
-                    }), LOADOUT_MISMATCH_HTTP_STATUS
+                    return jsonify(
+                        {
+                            "error": "loadout_mismatch",
+                            "matchup_id": matchup_id,
+                        }
+                    ), LOADOUT_MISMATCH_HTTP_STATUS
                 self._results[matchup_id] = parsed
                 self._seen.add(matchup_id)
                 self._mismatch_signatures.pop(matchup_id, None)
@@ -488,11 +509,15 @@ class CloudWorkerPool(EvaluatorPool):
         self._stop_event.clear()
         self._server = make_server("0.0.0.0", self._flask_port, self.app, threaded=True)
         self._server_thread = threading.Thread(
-            target=self._server.serve_forever, name="cloud-worker-flask", daemon=True,
+            target=self._server.serve_forever,
+            name="cloud-worker-flask",
+            daemon=True,
         )
         self._server_thread.start()
         self._janitor_thread = threading.Thread(
-            target=self._janitor_loop, name="cloud-worker-janitor", daemon=True,
+            target=self._janitor_loop,
+            name="cloud-worker-janitor",
+            daemon=True,
         )
         self._janitor_thread.start()
         # Publish endpoint for workers to discover.
@@ -504,14 +529,15 @@ class CloudWorkerPool(EvaluatorPool):
                 "processing_queue": self._processing,
             },
         )
-        logger.info("CloudWorkerPool up: study=%s port=%d",
-                    self._study_id, self._server.server_port)
+        logger.info(
+            "CloudWorkerPool up: study=%s port=%d", self._study_id, self._server.server_port
+        )
 
     def teardown(self) -> None:
         self._stop_event.set()
-        self._fail_pending_matchups(PoolShuttingDown(
-            f"CloudWorkerPool study={self._study_id} is shutting down"
-        ))
+        self._fail_pending_matchups(
+            PoolShuttingDown(f"CloudWorkerPool study={self._study_id} is shutting down")
+        )
         if self._server is not None:
             self._server.shutdown()
         if self._janitor_thread is not None:
@@ -613,9 +639,7 @@ class CloudWorkerPool(EvaluatorPool):
                 f"matchup_id={matchup_id} did not receive result "
                 f"within {self._result_timeout_seconds}s"
             )
-        raise WorkerTimeout(
-            f"matchup_id={matchup_id} result event fired without a result"
-        )
+        raise WorkerTimeout(f"matchup_id={matchup_id} result event fired without a result")
 
     # ---- Janitor ----
 
@@ -687,7 +711,9 @@ class CloudWorkerPool(EvaluatorPool):
             "SHAs across %d workers — sha_counts=%s. Workers ran from "
             "different combat-harness jars; results may be inconsistent. "
             "Investigate before publishing findings.",
-            self._project_tag, len(shas), sum(sha_summary.values()),
+            self._project_tag,
+            len(shas),
+            sum(sha_summary.values()),
             sha_summary,
         )
         self._last_jar_warn_at = time.time()
@@ -714,7 +740,9 @@ class CloudWorkerPool(EvaluatorPool):
             source_len = self._redis.llen(self._source)
             processing_len = self._redis.llen(self._processing)
             sample = self._redis.lrange(
-                self._processing, 0, STALLED_PROGRESS_INFLIGHT_SAMPLE_COUNT - 1,
+                self._processing,
+                0,
+                STALLED_PROGRESS_INFLIGHT_SAMPLE_COUNT - 1,
             )
         except Exception:
             logger.exception(
@@ -734,7 +762,11 @@ class CloudWorkerPool(EvaluatorPool):
         logger.warning(
             "stalled progress: no /result POST for %.0fs (threshold=%ds) "
             "study=%s source_queue=%d processing=%d in_flight_sample=%s",
-            idle_seconds, STALLED_PROGRESS_WARN_SECONDS,
-            self._study_id, source_len, processing_len, in_flight,
+            idle_seconds,
+            STALLED_PROGRESS_WARN_SECONDS,
+            self._study_id,
+            source_len,
+            processing_len,
+            in_flight,
         )
         self._stalled_warn_emitted = True

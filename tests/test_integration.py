@@ -71,8 +71,7 @@ class TestEndToEndPipeline:
 
     def test_diversity_across_builds(self, eagle_builds):
         weapon_sets = {
-            frozenset((k, v) for k, v in b.weapon_assignments.items() if v)
-            for b in eagle_builds
+            frozenset((k, v) for k, v in b.weapon_assignments.items() if v) for b in eagle_builds
         }
         hullmod_sets = {b.hullmods for b in eagle_builds}
         assert len(weapon_sets) > 50, f"Only {len(weapon_sets)} unique weapon configs"

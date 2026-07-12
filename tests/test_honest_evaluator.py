@@ -58,6 +58,7 @@ def study_jsonl_with_n_completed(tmp_path, hammerhead_hull, game_data, manifest)
     omitted, defaults to a descending sequence so the highest-ranked
     trial is index 0.
     """
+
     def _make(
         n: int,
         log_subdir: str = "test_campaign/hammerhead__early__tpe__seed0",
@@ -70,17 +71,20 @@ def study_jsonl_with_n_completed(tmp_path, hammerhead_hull, game_data, manifest)
         from starsector_optimizer.models import REGIME_PRESETS
         from starsector_optimizer.repair import repair_build
         import numpy as np
+
         rng = np.random.default_rng(42)
         with log_path.open("w") as f:
             for i in range(n):
                 build = generate_random_build(
-                    hammerhead_hull, game_data, manifest,
-                    rng=rng, regime=REGIME_PRESETS["early"],
+                    hammerhead_hull,
+                    game_data,
+                    manifest,
+                    rng=rng,
+                    regime=REGIME_PRESETS["early"],
                 )
                 repaired = repair_build(build, hammerhead_hull, game_data, manifest)
                 mean = (
-                    float(intermediate_means[i])
-                    if intermediate_means is not None else float(n - i)
+                    float(intermediate_means[i]) if intermediate_means is not None else float(n - i)
                 )
                 # Synthesize n_opps_per_trial opponents, each with the same
                 # hp_differential = mean. Ranking by per-build mean ⇒ exactly
@@ -118,6 +122,7 @@ def study_jsonl_with_n_completed(tmp_path, hammerhead_hull, game_data, manifest)
                 }
                 f.write(json.dumps(row) + "\n")
         return log_path
+
     return _make
 
 
@@ -155,13 +160,22 @@ class TestHonestEvaluationConfigValidation:
 
 class TestExtractTopBuilds:
     def test_returns_top_k_in_descending_score_order(
-        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+        self,
+        study_jsonl_with_n_completed,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         log = study_jsonl_with_n_completed(
-            n=5, intermediate_means=[0.1, 0.9, 0.5, 0.3, 0.7],
+            n=5,
+            intermediate_means=[0.1, 0.9, 0.5, 0.3, 0.7],
         )
         tops = extract_top_builds(
-            log, hammerhead_hull, game_data, manifest, top_k=3,
+            log,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            top_k=3,
             method="raw_mean",
         )
         assert len(tops) == 3
@@ -174,17 +188,26 @@ class TestExtractTopBuilds:
         assert scores[2] == pytest.approx(0.5)
 
     def test_twfe_eb_default_orders_by_residual(
-        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+        self,
+        study_jsonl_with_n_completed,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """With identical opponents per build (no confounding), TWFE+EB
         recovers the same ordering as raw mean — the regression to the
         mean is a magnitude rescale, not a re-rank. Verifies the default
         `method` works end-to-end on a JSONL fixture."""
         log = study_jsonl_with_n_completed(
-            n=5, intermediate_means=[0.1, 0.9, 0.5, 0.3, 0.7],
+            n=5,
+            intermediate_means=[0.1, 0.9, 0.5, 0.3, 0.7],
         )
         tops = extract_top_builds(
-            log, hammerhead_hull, game_data, manifest, top_k=3,
+            log,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            top_k=3,
         )  # method='twfe_eb' default
         assert len(tops) == 3
         # Same trial-index ordering as raw mean (build i=1 with mean=0.9 first).
@@ -193,63 +216,108 @@ class TestExtractTopBuilds:
         assert scores == sorted(scores, reverse=True)
 
     def test_raises_when_log_path_missing(
-        self, tmp_path, hammerhead_hull, game_data, manifest,
+        self,
+        tmp_path,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         with pytest.raises(FileNotFoundError, match=r"no evaluation_log\.jsonl"):
             extract_top_builds(
                 tmp_path / "nonexistent.jsonl",
-                hammerhead_hull, game_data, manifest, top_k=1,
+                hammerhead_hull,
+                game_data,
+                manifest,
+                top_k=1,
             )
 
     def test_raises_when_fewer_than_top_k_completed(
-        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+        self,
+        study_jsonl_with_n_completed,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         log = study_jsonl_with_n_completed(n=2)
         with pytest.raises(ValueError, match="only 2 completed"):
             extract_top_builds(
-                log, hammerhead_hull, game_data, manifest, top_k=3,
+                log,
+                hammerhead_hull,
+                game_data,
+                manifest,
+                top_k=3,
             )
 
     def test_rejects_zero_top_k(
-        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+        self,
+        study_jsonl_with_n_completed,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         log = study_jsonl_with_n_completed(n=1)
         with pytest.raises(ValueError, match="top_k must be >= 1"):
             extract_top_builds(
-                log, hammerhead_hull, game_data, manifest, top_k=0,
+                log,
+                hammerhead_hull,
+                game_data,
+                manifest,
+                top_k=0,
             )
 
     def test_rejects_unknown_method(
-        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+        self,
+        study_jsonl_with_n_completed,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         log = study_jsonl_with_n_completed(n=3)
         with pytest.raises(ValueError, match="unknown ranking method"):
             extract_top_builds(
-                log, hammerhead_hull, game_data, manifest, top_k=1,
+                log,
+                hammerhead_hull,
+                game_data,
+                manifest,
+                top_k=1,
                 method="bogus",
             )
 
     def test_raises_loud_on_repair_failure(
-        self, study_jsonl_with_n_completed, hammerhead_hull, game_data, manifest,
+        self,
+        study_jsonl_with_n_completed,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """Stale build spec (e.g. a hullmod that no longer exists in the
         current manifest) is a data-corruption signal. Must raise
         RuntimeError, not silently skip."""
         log = study_jsonl_with_n_completed(n=3)
         with pytest.MonkeyPatch.context() as mp:
+
             def fail_repair(*a, **kw):
                 raise ValueError("synthetic repair failure")
+
             mp.setattr(
                 "starsector_optimizer.honest_evaluator.repair_build",
                 fail_repair,
             )
             with pytest.raises(RuntimeError, match="failed repair_build"):
                 extract_top_builds(
-                    log, hammerhead_hull, game_data, manifest, top_k=1,
+                    log,
+                    hammerhead_hull,
+                    game_data,
+                    manifest,
+                    top_k=1,
                 )
 
     def test_skips_pruned_and_invalid_rows(
-        self, tmp_path, hammerhead_hull, game_data, manifest,
+        self,
+        tmp_path,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """Pruned, cache-hit, and invalid-spec rows must not count toward
         top_k. Only completed rows (with non-empty opponent_results) are
@@ -258,16 +326,23 @@ class TestExtractTopBuilds:
         from starsector_optimizer.models import REGIME_PRESETS
         from starsector_optimizer.repair import repair_build
         import numpy as np
+
         log_path = tmp_path / "evaluation_log.jsonl"
         rng = np.random.default_rng(11)
 
         def _row(i, **flags):
             build = generate_random_build(
-                hammerhead_hull, game_data, manifest,
-                rng=rng, regime=REGIME_PRESETS["early"],
+                hammerhead_hull,
+                game_data,
+                manifest,
+                rng=rng,
+                regime=REGIME_PRESETS["early"],
             )
             repaired = repair_build(
-                build, hammerhead_hull, game_data, manifest,
+                build,
+                hammerhead_hull,
+                game_data,
+                manifest,
             )
             base = {
                 "trial_number": i,
@@ -278,25 +353,32 @@ class TestExtractTopBuilds:
                     "flux_vents": repaired.flux_vents,
                     "flux_capacitors": repaired.flux_capacitors,
                 },
-                "opponent_results": [{
-                    "opponent": "opp_0", "winner": "PLAYER",
-                    "duration_seconds": 30.0, "hp_differential": 0.5,
-                }],
-                "pruned": False, "cache_hit": False, "invalid_spec": False,
+                "opponent_results": [
+                    {
+                        "opponent": "opp_0",
+                        "winner": "PLAYER",
+                        "duration_seconds": 30.0,
+                        "hp_differential": 0.5,
+                    }
+                ],
+                "pruned": False,
+                "cache_hit": False,
+                "invalid_spec": False,
             }
             base.update(flags)
             return json.dumps(base) + "\n"
 
         log_path.write_text(
-            _row(0)
-            + _row(1, pruned=True)
-            + _row(2, cache_hit=True)
-            + _row(3, invalid_spec=True),
+            _row(0) + _row(1, pruned=True) + _row(2, cache_hit=True) + _row(3, invalid_spec=True),
         )
         # Only 1 completed row — top_k=2 must raise.
         with pytest.raises(ValueError, match="only 1 completed"):
             extract_top_builds(
-                log_path, hammerhead_hull, game_data, manifest, top_k=2,
+                log_path,
+                hammerhead_hull,
+                game_data,
+                manifest,
+                top_k=2,
             )
 
 
@@ -305,12 +387,16 @@ class TestExtractTopBuilds:
 
 class TestDiscoverEvaluationPool:
     def test_returns_same_size_opponents_no_active_cap(
-        self, game_dir, game_data, hammerhead_hull,
+        self,
+        game_dir,
+        game_data,
+        hammerhead_hull,
     ):
         pool = discover_evaluation_pool(game_dir, game_data, hammerhead_hull)
         # Hammerhead is DESTROYER; pool returns DESTROYER-keyed bucket.
         # Cap MUST NOT be applied — full population, no `active_opponents`.
         from starsector_optimizer.opponent_pool import discover_opponent_pool, get_opponents
+
         full = get_opponents(
             discover_opponent_pool(game_dir, game_data),
             hammerhead_hull.hull_size,
@@ -322,36 +408,58 @@ class TestDiscoverEvaluationPool:
 # ---- evaluate_builds ---------------------------------------------------------
 
 
-def _make_combat_result(matchup_id: str, winner: str = "PLAYER",
-                       duration: float = 60.0) -> CombatResult:
+def _make_combat_result(
+    matchup_id: str, winner: str = "PLAYER", duration: float = 60.0
+) -> CombatResult:
     from starsector_optimizer.models import DamageBreakdown
+
     p = ShipCombatResult(
-        fleet_member_id="p", variant_id="v_p", hull_id="hammerhead",
-        destroyed=False, hull_fraction=1.0, armor_fraction=1.0,
-        cr_remaining=0.7, peak_time_remaining=60.0,
-        disabled_weapons=0, flameouts=0,
-        damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+        fleet_member_id="p",
+        variant_id="v_p",
+        hull_id="hammerhead",
+        destroyed=False,
+        hull_fraction=1.0,
+        armor_fraction=1.0,
+        cr_remaining=0.7,
+        peak_time_remaining=60.0,
+        disabled_weapons=0,
+        flameouts=0,
+        damage_dealt=DamageBreakdown(),
+        damage_taken=DamageBreakdown(),
         overload_count=0,
     )
     e = ShipCombatResult(
-        fleet_member_id="e", variant_id="v_e", hull_id="wolf",
-        destroyed=True, hull_fraction=0.0, armor_fraction=0.0,
-        cr_remaining=0.0, peak_time_remaining=0.0,
-        disabled_weapons=0, flameouts=0,
-        damage_dealt=DamageBreakdown(), damage_taken=DamageBreakdown(),
+        fleet_member_id="e",
+        variant_id="v_e",
+        hull_id="wolf",
+        destroyed=True,
+        hull_fraction=0.0,
+        armor_fraction=0.0,
+        cr_remaining=0.0,
+        peak_time_remaining=0.0,
+        disabled_weapons=0,
+        flameouts=0,
+        damage_dealt=DamageBreakdown(),
+        damage_taken=DamageBreakdown(),
         overload_count=0,
     )
     return CombatResult(
-        matchup_id=matchup_id, winner=winner, duration_seconds=duration,
-        player_ships=(p,), enemy_ships=(e,),
-        player_ships_destroyed=0, enemy_ships_destroyed=1,
-        player_ships_retreated=0, enemy_ships_retreated=0,
+        matchup_id=matchup_id,
+        winner=winner,
+        duration_seconds=duration,
+        player_ships=(p,),
+        enemy_ships=(e,),
+        player_ships_destroyed=0,
+        enemy_ships_destroyed=1,
+        player_ships_retreated=0,
+        enemy_ships_retreated=0,
         player_loadout_diagnostics=(),
     )
 
 
 class _MockPool(EvaluatorPool):
     """Synchronous mock; records every dispatched matchup_id."""
+
     def __init__(self, num_workers: int = 4):
         self._num_workers = num_workers
         self.dispatched: list[str] = []
@@ -370,6 +478,7 @@ class _MockPool(EvaluatorPool):
 
 class _FlakyPool(EvaluatorPool):
     """Fails the first N total dispatches, succeeds after."""
+
     def __init__(self, fail_first: int):
         self._fail = fail_first
         self._count = 0
@@ -404,6 +513,7 @@ class _AlwaysFailPool(EvaluatorPool):
 
 class _TimeoutThenLateResultPool(EvaluatorPool):
     """First dispatch times out; retry returns the retained late result."""
+
     def __init__(self):
         self.attempts = 0
         self.dispatched: list[str] = []
@@ -417,25 +527,31 @@ class _TimeoutThenLateResultPool(EvaluatorPool):
 
     def run_matchup(self, matchup):
         from starsector_optimizer.cloud_worker_pool import WorkerTimeout
+
         self.attempts += 1
         self.dispatched.append(matchup.matchup_id)
         if self.attempts == 1:
-            raise WorkerTimeout(
-                f"matchup_id={matchup.matchup_id} did not receive result"
-            )
+            raise WorkerTimeout(f"matchup_id={matchup.matchup_id} did not receive result")
         return _make_combat_result(matchup.matchup_id, winner="PLAYER")
 
 
 def _bp(build: Build, campaign: str = "test", rank: int = 1) -> _BuildWithProvenance:
     return _BuildWithProvenance(
-        build=build, source_campaign=campaign, source_study_idx=0,
-        source_seed_idx=0, source_rank=rank, source_value=0.5,
+        build=build,
+        source_campaign=campaign,
+        source_study_idx=0,
+        source_seed_idx=0,
+        source_rank=rank,
+        source_value=0.5,
     )
 
 
 class TestEvaluateBuilds:
     def test_uniqueness_of_dispatched_matchup_ids_across_replicates(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """Critical: matchup_id must include rep-index so CloudWorkerPool's
         _seen dedupe doesn't silently drop replicate dispatches."""
@@ -443,10 +559,15 @@ class TestEvaluateBuilds:
         from starsector_optimizer.repair import repair_build
         from starsector_optimizer.models import REGIME_PRESETS
         import numpy as np
+
         rng = np.random.default_rng(1)
         b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
         )
         pool = _MockPool()
         eval_pool = ("opp_a", "opp_b")
@@ -454,15 +575,16 @@ class TestEvaluateBuilds:
         evaluate_builds([_bp(b)], eval_pool, pool, cfg, hammerhead_hull)
         # 1 build × 2 opponents × 4 replicates = 8 unique IDs
         assert len(pool.dispatched) == 8
-        assert len(set(pool.dispatched)) == 8, (
-            f"replicate IDs collided: {list(pool.dispatched)}"
-        )
+        assert len(set(pool.dispatched)) == 8, f"replicate IDs collided: {list(pool.dispatched)}"
         # Verify the pattern includes _rep{N}
         for mid in pool.dispatched:
             assert "_rep" in mid, f"missing _rep suffix in {mid}"
 
     def test_aggregates_mean_fitness_across_pool_and_replicates(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """oracle_score = mean of combat_fitness across all matchups."""
         from starsector_optimizer.calibration import generate_random_build
@@ -470,10 +592,15 @@ class TestEvaluateBuilds:
         from starsector_optimizer.models import REGIME_PRESETS
         from starsector_optimizer.combat_fitness import combat_fitness
         import numpy as np
+
         rng = np.random.default_rng(2)
         b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
         )
         pool = _MockPool()
         eval_pool = ("opp_x", "opp_y", "opp_z")
@@ -488,7 +615,10 @@ class TestEvaluateBuilds:
         assert eb.n_matchups_succeeded == 6  # 3 opps × 2 reps
 
     def test_retries_failed_matchups_then_succeeds(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """Transient failures retry up to max_retries; if eventually
         succeed, oracle counts the success result."""
@@ -496,10 +626,15 @@ class TestEvaluateBuilds:
         from starsector_optimizer.repair import repair_build
         from starsector_optimizer.models import REGIME_PRESETS
         import numpy as np
+
         rng = np.random.default_rng(3)
         b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
         )
         pool = _FlakyPool(fail_first=2)
         eval_pool = ("opp_a",)
@@ -510,7 +645,11 @@ class TestEvaluateBuilds:
         assert result[0].n_matchups_succeeded == 3
 
     def test_retry_returned_late_result_is_appended_to_ledger(
-        self, hammerhead_hull, game_data, manifest, tmp_path,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
+        tmp_path,
     ):
         """Regression for the c1 partial-panel race: if a pool retry returns
         a retained late result after the first attempt timed out,
@@ -520,10 +659,15 @@ class TestEvaluateBuilds:
         from starsector_optimizer.repair import repair_build
         from starsector_optimizer.models import REGIME_PRESETS
         import numpy as np
+
         rng = np.random.default_rng(30)
         b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
         )
         pool = _TimeoutThenLateResultPool()
         ledger_path = tmp_path / "results.jsonl"
@@ -533,7 +677,11 @@ class TestEvaluateBuilds:
         )
 
         result = evaluate_builds(
-            [_bp(b)], ("opp_a",), pool, cfg, hammerhead_hull,
+            [_bp(b)],
+            ("opp_a",),
+            pool,
+            cfg,
+            hammerhead_hull,
             ledger_path=ledger_path,
         )
 
@@ -551,7 +699,10 @@ class TestEvaluateBuilds:
         assert rows[0]["replicate_idx"] == 0
 
     def test_raises_when_matchup_fails_all_retries(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """Persistent failures must raise — silent exclusion would break
         the balanced-design guarantee underlying the oracle."""
@@ -559,10 +710,15 @@ class TestEvaluateBuilds:
         from starsector_optimizer.repair import repair_build
         from starsector_optimizer.models import REGIME_PRESETS
         import numpy as np
+
         rng = np.random.default_rng(4)
         b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
         )
         pool = _AlwaysFailPool()
         eval_pool = ("opp_a",)
@@ -571,16 +727,24 @@ class TestEvaluateBuilds:
             evaluate_builds([_bp(b)], eval_pool, pool, cfg, hammerhead_hull)
 
     def test_empty_eval_pool_raises(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         from starsector_optimizer.calibration import generate_random_build
         from starsector_optimizer.repair import repair_build
         from starsector_optimizer.models import REGIME_PRESETS
         import numpy as np
+
         rng = np.random.default_rng(5)
         b = repair_build(
-            generate_random_build(hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]),
-            hammerhead_hull, game_data, manifest,
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
         )
         cfg = HonestEvaluationConfig()
         with pytest.raises(ValueError, match="eval_pool is empty"):
@@ -599,14 +763,23 @@ class TestRandomBaseline:
     cross-cell ranking an existence check."""
 
     def test_synthesizes_n_distinct_feasible_builds(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         from starsector_optimizer.honest_evaluator import (
-            RANDOM_BASELINE_SOURCE_CAMPAIGN, synthesize_random_baseline_builds,
+            RANDOM_BASELINE_SOURCE_CAMPAIGN,
+            synthesize_random_baseline_builds,
         )
         from starsector_optimizer.repair import is_feasible
+
         builds = synthesize_random_baseline_builds(
-            hammerhead_hull, game_data, manifest, n=5, seed=42,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            n=5,
+            seed=42,
         )
         assert len(builds) == 5
         for bp in builds:
@@ -616,7 +789,10 @@ class TestRandomBaseline:
         assert [bp.source_rank for bp in builds] == [1, 2, 3, 4, 5]
 
     def test_deterministic_in_seed(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         """Resume contract: re-running with the same seed produces the
         same baseline builds, so the ledger's (build_id, opp, rep) keys
@@ -624,26 +800,47 @@ class TestRandomBaseline:
         from starsector_optimizer.honest_evaluator import (
             synthesize_random_baseline_builds,
         )
+
         a = synthesize_random_baseline_builds(
-            hammerhead_hull, game_data, manifest, n=3, seed=7,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            n=3,
+            seed=7,
         )
         b = synthesize_random_baseline_builds(
-            hammerhead_hull, game_data, manifest, n=3, seed=7,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            n=3,
+            seed=7,
         )
         for bp_a, bp_b in zip(a, b, strict=True):
             assert bp_a.build == bp_b.build
 
     def test_different_seeds_produce_different_builds(
-        self, hammerhead_hull, game_data, manifest,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
     ):
         from starsector_optimizer.honest_evaluator import (
             synthesize_random_baseline_builds,
         )
+
         a = synthesize_random_baseline_builds(
-            hammerhead_hull, game_data, manifest, n=3, seed=0,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            n=3,
+            seed=0,
         )
         b = synthesize_random_baseline_builds(
-            hammerhead_hull, game_data, manifest, n=3, seed=1,
+            hammerhead_hull,
+            game_data,
+            manifest,
+            n=3,
+            seed=1,
         )
         # Should not all be the same.
         assert any(bp_a.build != bp_b.build for bp_a, bp_b in zip(a, b, strict=True))
@@ -661,28 +858,43 @@ class TestLedgerResume:
         from starsector_optimizer.repair import repair_build
         from starsector_optimizer.models import REGIME_PRESETS
         import numpy as np
+
         rng = np.random.default_rng(seed)
         return repair_build(
-            generate_random_build(hull, game_data, manifest, rng=rng,
-                                  regime=REGIME_PRESETS["early"]),
-            hull, game_data, manifest,
+            generate_random_build(
+                hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hull,
+            game_data,
+            manifest,
         )
 
     def test_writes_ledger_line_per_successful_matchup(
-        self, hammerhead_hull, game_data, manifest, tmp_path,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
+        tmp_path,
     ):
         from starsector_optimizer.honest_evaluator import (
-            LEDGER_SCHEMA_VERSION, evaluate_builds,
+            LEDGER_SCHEMA_VERSION,
+            evaluate_builds,
         )
+
         b = self._make_build(hammerhead_hull, game_data, manifest, seed=10)
         pool = _MockPool()
         eval_pool = ("opp_a", "opp_b")
         cfg = HonestEvaluationConfig(
-            replicates_per_matchup=2, max_retries_per_matchup=0,
+            replicates_per_matchup=2,
+            max_retries_per_matchup=0,
         )
         ledger_path = tmp_path / "results.jsonl"
         evaluate_builds(
-            [_bp(b)], eval_pool, pool, cfg, hammerhead_hull,
+            [_bp(b)],
+            eval_pool,
+            pool,
+            cfg,
+            hammerhead_hull,
             ledger_path=ledger_path,
         )
         # 1 build × 2 opps × 2 reps = 4 dispatched ⇒ 4 ledger lines
@@ -699,23 +911,33 @@ class TestLedgerResume:
             assert "completed_at" in data
 
     def test_resume_skips_completed_and_dispatches_only_remaining(
-        self, hammerhead_hull, game_data, manifest, tmp_path,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
+        tmp_path,
     ):
         """Ledger replay: first run writes 4 entries, then a fresh pool
         with the same ledger should dispatch ZERO matchups (all already
         completed) and still return aggregated results."""
         from starsector_optimizer.honest_evaluator import evaluate_builds
+
         b = self._make_build(hammerhead_hull, game_data, manifest, seed=11)
         eval_pool = ("opp_a", "opp_b")
         cfg = HonestEvaluationConfig(
-            replicates_per_matchup=2, max_retries_per_matchup=0,
+            replicates_per_matchup=2,
+            max_retries_per_matchup=0,
         )
         ledger_path = tmp_path / "results.jsonl"
 
         # First run — writes ledger.
         pool1 = _MockPool()
         evaluate_builds(
-            [_bp(b)], eval_pool, pool1, cfg, hammerhead_hull,
+            [_bp(b)],
+            eval_pool,
+            pool1,
+            cfg,
+            hammerhead_hull,
             ledger_path=ledger_path,
         )
         assert len(pool1.dispatched) == 4
@@ -723,7 +945,11 @@ class TestLedgerResume:
         # Second run with same ledger — must skip everything.
         pool2 = _MockPool()
         result = evaluate_builds(
-            [_bp(b)], eval_pool, pool2, cfg, hammerhead_hull,
+            [_bp(b)],
+            eval_pool,
+            pool2,
+            cfg,
+            hammerhead_hull,
             ledger_path=ledger_path,
         )
         assert pool2.dispatched == [], (
@@ -733,18 +959,27 @@ class TestLedgerResume:
         assert result[0].n_matchups_succeeded == 4
 
     def test_resume_dispatches_only_missing_matchups(
-        self, hammerhead_hull, game_data, manifest, tmp_path,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
+        tmp_path,
     ):
         """Partial ledger: pre-seed 2 entries, then run; expect only the
         OTHER 2 matchups (4 total - 2 seeded) to be dispatched."""
         from starsector_optimizer.honest_evaluator import (
-            LEDGER_SCHEMA_VERSION, _LedgerWriter, LedgerEntry, evaluate_builds,
+            LEDGER_SCHEMA_VERSION,
+            _LedgerWriter,
+            LedgerEntry,
+            evaluate_builds,
         )
+
         b = self._make_build(hammerhead_hull, game_data, manifest, seed=12)
         bp = _bp(b)
         eval_pool = ("opp_a", "opp_b")
         cfg = HonestEvaluationConfig(
-            replicates_per_matchup=2, max_retries_per_matchup=0,
+            replicates_per_matchup=2,
+            max_retries_per_matchup=0,
         )
         ledger_path = tmp_path / "results.jsonl"
         # Pre-seed: opp_a × rep0 + opp_a × rep1.
@@ -754,19 +989,25 @@ class TestLedgerResume:
         )
         writer = _LedgerWriter(ledger_path)
         for rep in range(2):
-            writer.append(LedgerEntry(
-                schema_version=LEDGER_SCHEMA_VERSION,
-                matchup_id=f"{bid}_vs_opp_a_rep{rep}",
-                build_id=bid,
-                opponent_variant_id="opp_a",
-                replicate_idx=rep,
-                fitness=0.5,
-                completed_at="2026-05-10T00:00:00+00:00",
-            ))
+            writer.append(
+                LedgerEntry(
+                    schema_version=LEDGER_SCHEMA_VERSION,
+                    matchup_id=f"{bid}_vs_opp_a_rep{rep}",
+                    build_id=bid,
+                    opponent_variant_id="opp_a",
+                    replicate_idx=rep,
+                    fitness=0.5,
+                    completed_at="2026-05-10T00:00:00+00:00",
+                )
+            )
 
         pool = _MockPool()
         result = evaluate_builds(
-            [bp], eval_pool, pool, cfg, hammerhead_hull,
+            [bp],
+            eval_pool,
+            pool,
+            cfg,
+            hammerhead_hull,
             ledger_path=ledger_path,
         )
         # Only opp_b × {rep0, rep1} should dispatch.
@@ -777,50 +1018,67 @@ class TestLedgerResume:
         assert result[0].n_matchups_succeeded == 4
 
     def test_unknown_build_id_in_ledger_raises(
-        self, hammerhead_hull, game_data, manifest, tmp_path,
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
+        tmp_path,
     ):
         """A ledger entry whose build_id no longer maps to any current
         build means --top-k or campaign DBs changed. Refuse to mix old
         and new scores silently."""
         from starsector_optimizer.honest_evaluator import (
-            LEDGER_SCHEMA_VERSION, _LedgerWriter, LedgerEntry, evaluate_builds,
+            LEDGER_SCHEMA_VERSION,
+            _LedgerWriter,
+            LedgerEntry,
+            evaluate_builds,
         )
+
         b = self._make_build(hammerhead_hull, game_data, manifest, seed=13)
         ledger_path = tmp_path / "results.jsonl"
         writer = _LedgerWriter(ledger_path)
-        writer.append(LedgerEntry(
-            schema_version=LEDGER_SCHEMA_VERSION,
-            matchup_id="ghost__vs_opp_a_rep0",
-            build_id="ghost__c_z__s9__seed9__rank9",
-            opponent_variant_id="opp_a",
-            replicate_idx=0,
-            fitness=0.1,
-            completed_at="2026-05-10T00:00:00+00:00",
-        ))
+        writer.append(
+            LedgerEntry(
+                schema_version=LEDGER_SCHEMA_VERSION,
+                matchup_id="ghost__vs_opp_a_rep0",
+                build_id="ghost__c_z__s9__seed9__rank9",
+                opponent_variant_id="opp_a",
+                replicate_idx=0,
+                fitness=0.1,
+                completed_at="2026-05-10T00:00:00+00:00",
+            )
+        )
         cfg = HonestEvaluationConfig(
-            replicates_per_matchup=1, max_retries_per_matchup=0,
+            replicates_per_matchup=1,
+            max_retries_per_matchup=0,
         )
         with pytest.raises(RuntimeError, match="unknown build_id"):
             evaluate_builds(
-                [_bp(b)], ("opp_a",), _MockPool(), cfg, hammerhead_hull,
+                [_bp(b)],
+                ("opp_a",),
+                _MockPool(),
+                cfg,
+                hammerhead_hull,
                 ledger_path=ledger_path,
             )
 
     def test_corrupt_ledger_line_raises(self, tmp_path):
         from starsector_optimizer.honest_evaluator import read_ledger
+
         ledger_path = tmp_path / "results.jsonl"
         # Valid first line, garbage second.
         ledger_path.write_text(
             '{"schema_version": 1, "matchup_id": "m1", "build_id": "ok", '
             '"opponent_variant_id": "o", "replicate_idx": 0, '
             '"fitness": 0.1, "completed_at": "2026-05-10T00:00:00+00:00"}\n'
-            'not-json garbage\n'
+            "not-json garbage\n"
         )
         with pytest.raises(RuntimeError, match="corrupt ledger line"):
             read_ledger(ledger_path)
 
     def test_old_schema_version_skipped_with_warning(self, tmp_path, caplog):
         from starsector_optimizer.honest_evaluator import read_ledger
+
         ledger_path = tmp_path / "results.jsonl"
         ledger_path.write_text(
             '{"schema_version": 999, "build_id": "x", '
@@ -837,15 +1095,23 @@ class TestLedgerResume:
 
 
 class TestSummarizeByCell:
-    def _eb(self, campaign: str, score: float, se: float = 0.01,
-            rank: int = 1) -> EvaluatedBuild:
+    def _eb(self, campaign: str, score: float, se: float = 0.01, rank: int = 1) -> EvaluatedBuild:
         return EvaluatedBuild(
-            build=Build(hull_id="hammerhead", weapon_assignments={},
-                        hullmods=frozenset(),
-                        flux_vents=0, flux_capacitors=0),
-            source_campaign=campaign, source_study_idx=0, source_seed_idx=0,
-            source_rank=rank, source_value=0.5,
-            oracle_score=score, oracle_se=se, n_matchups_succeeded=10,
+            build=Build(
+                hull_id="hammerhead",
+                weapon_assignments={},
+                hullmods=frozenset(),
+                flux_vents=0,
+                flux_capacitors=0,
+            ),
+            source_campaign=campaign,
+            source_study_idx=0,
+            source_seed_idx=0,
+            source_rank=rank,
+            source_value=0.5,
+            oracle_score=score,
+            oracle_se=se,
+            n_matchups_succeeded=10,
         )
 
     def test_orders_cells_by_descending_mean_top_k(self):
@@ -893,6 +1159,7 @@ class TestSchemaVersion:
 def _write_smoke_campaign_yaml(tmp_path, **overrides):
     """Minimal campaign YAML for honest-eval-main tests."""
     import yaml
+
     cfg = {
         "name": "ut-honest-eval-source",
         "budget_usd": 5.0,
@@ -907,10 +1174,16 @@ def _write_smoke_campaign_yaml(tmp_path, **overrides):
         "ami_ids_by_region": {"us-east-1": "ami-abc"},
         "ssh_key_name": "starsector-probe",
         "tailscale_authkey_secret": "tskey-auth-SMOKE-44e7f9b3",
-        "studies": [{
-            "hull": "hammerhead", "regime": "early", "seeds": [0],
-            "budget_per_study": 50, "workers_per_study": 6, "sampler": "tpe",
-        }],
+        "studies": [
+            {
+                "hull": "hammerhead",
+                "regime": "early",
+                "seeds": [0],
+                "budget_per_study": 50,
+                "workers_per_study": 6,
+                "sampler": "tpe",
+            }
+        ],
         "max_lifetime_hours": 0.5,
     }
     cfg.update(overrides)
@@ -931,8 +1204,12 @@ class TestMainCLIWiring:
     """
 
     def _seed_campaign_logs(
-        self, log_root, campaign_name, study_jsonl_factory,
-        n_seeds=1, n_trials=3,
+        self,
+        log_root,
+        campaign_name,
+        study_jsonl_factory,
+        n_seeds=1,
+        n_trials=3,
     ):
         """Seed `data/logs/<campaign>/<study-stem>/evaluation_log.jsonl`
         for each seed. Mirrors the path layout main() globs.
@@ -944,7 +1221,8 @@ class TestMainCLIWiring:
         for seed_idx in range(n_seeds):
             stem = f"hammerhead__early__tpe__seed{seed_idx}"
             log = study_jsonl_factory(
-                n=n_trials, log_subdir=f"{campaign_name}/{stem}",
+                n=n_trials,
+                log_subdir=f"{campaign_name}/{stem}",
             )
             # study_jsonl_factory writes under tmp_path/data/logs/...; copy
             # to the test's chosen log_root if different.
@@ -978,15 +1256,23 @@ class TestMainCLIWiring:
         )
 
     def test_dry_run_skips_provisioning(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """--dry-run exits 0 without touching AWSProvider / CloudWorkerPool."""
         from starsector_optimizer import honest_evaluator
+
         # Seed a per-study evaluation_log.jsonl under data/logs/<name>/<study-stem>/
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         # honest_evaluator.main hardcodes Path("data/logs") — chdir +
         # patch GameManifest.load (relative path won't resolve under tmp).
@@ -996,43 +1282,54 @@ class TestMainCLIWiring:
         # Move YAML into examples/ at the new CWD.
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         # Sentinel: prepare_cloud_pool must NOT be called.
         sentinel = MagicMock(side_effect=AssertionError("provisioned in dry-run"))
         monkeypatch.setattr(
-            "starsector_optimizer.honest_evaluator.prepare_cloud_pool", sentinel,
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            sentinel,
         )
 
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead",
-            "--game-dir", str(game_dir),
-            "--top-k", "1",
-            "--dry-run",
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--dry-run",
+            ]
+        )
         assert rc == 0
         sentinel.assert_not_called()
 
     def test_dry_run_does_not_flush_redis_keys(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         flush = MagicMock(side_effect=AssertionError("flushed during dry-run"))
         monkeypatch.setattr(
@@ -1040,19 +1337,30 @@ class TestMainCLIWiring:
             flush,
         )
 
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead",
-            "--game-dir", str(game_dir),
-            "--top-k", "1",
-            "--dry-run",
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--dry-run",
+            ]
+        )
         assert rc == 0
         flush.assert_not_called()
 
     def test_full_run_uses_honest_eval_namespace(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """The honest-eval fleet is tagged starsector-honest-eval-* —
         distinct from any source-campaign fleet's project_tag/study_id/
@@ -1060,19 +1368,20 @@ class TestMainCLIWiring:
         teardown.sh; the `honest-eval-` segment prevents
         `terminate_all_tagged` from reaching the wrong fleet."""
         from starsector_optimizer import honest_evaluator
+
         # Seed dbs.
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         # Capture the kwargs that flow into prepare_cloud_pool, then return
         # a fake context manager that yields a mock pool.
@@ -1096,21 +1405,26 @@ class TestMainCLIWiring:
         )
         # write_outputs writes to disk under tmp_path — fine.
 
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead",
-            "--game-dir", str(game_dir),
-            "--top-k", "1",
-            "--out-root", str(tmp_path / "out"),
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(tmp_path / "out"),
+            ]
+        )
         assert rc == 0
         # Honest-eval namespace: all four naming fields must be the same
         # starsector-honest-eval-{name}-{stamp} string and must NOT match
         # the source campaign's project_tag. The `starsector-` prefix is
         # required for teardown.sh to find the fleet.
-        assert captured["study_id"].startswith(
-            "starsector-honest-eval-ut-honest-eval-source-"
-        )
+        assert captured["study_id"].startswith("starsector-honest-eval-ut-honest-eval-source-")
         assert captured["project_tag"] == captured["study_id"]
         assert captured["fleet_name"] == captured["study_id"]
         assert captured["project_tag"] != smoke_env["STARSECTOR_PROJECT_TAG"]
@@ -1122,22 +1436,28 @@ class TestMainCLIWiring:
         )
 
     def test_full_run_flushes_redis_before_prepare_cloud_pool(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         events: list[tuple[str, tuple]] = []
         captured: dict = {}
@@ -1166,13 +1486,20 @@ class TestMainCLIWiring:
             lambda *a, **kw: (),
         )
 
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead",
-            "--game-dir", str(game_dir),
-            "--top-k", "1",
-            "--out-root", str(tmp_path / "out"),
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(tmp_path / "out"),
+            ]
+        )
         assert rc == 0
         assert [event for event, _ in events] == ["flush", "prepare"]
         flush_args = events[0][1]
@@ -1183,7 +1510,8 @@ class TestMainCLIWiring:
         )
 
     def test_honest_eval_cloud_timing_adjustment_raises_short_training_limits(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Honest eval must not inherit short source-campaign cloud timing.
 
@@ -1213,7 +1541,8 @@ class TestMainCLIWiring:
         assert adjusted.visibility_timeout_seconds == 3660.0
 
     def test_signal_handlers_route_sigterm_and_sighup_to_keyboard_interrupt(
-        self, monkeypatch,
+        self,
+        monkeypatch,
     ):
         """`kill <pid>` must unwind Python context managers instead of using
         the process-default SIGTERM action."""
@@ -1225,7 +1554,8 @@ class TestMainCLIWiring:
 
         installed: dict[int, Callable[[int, Any], Any]] = {}
         monkeypatch.setattr(
-            signal, "signal",
+            signal,
+            "signal",
             installed.setdefault,
         )
 
@@ -1239,25 +1569,31 @@ class TestMainCLIWiring:
         installed[signal.SIGTERM](signal.SIGTERM, None)
 
     def test_keyboard_interrupt_returns_130_after_cloud_context_unwinds(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """If SIGTERM/SIGHUP maps to KeyboardInterrupt inside the cloud
         context, `prepare_cloud_pool.__exit__` must run before main returns
         130."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         events: list[str] = []
 
@@ -1278,33 +1614,46 @@ class TestMainCLIWiring:
             lambda *a, **kw: (_ for _ in ()).throw(KeyboardInterrupt()),
         )
 
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead",
-            "--game-dir", str(game_dir),
-            "--top-k", "1",
-            "--out-root", str(tmp_path / "out"),
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(tmp_path / "out"),
+            ]
+        )
         assert rc == 130
         assert events == ["enter", "exit"]
 
     def test_workers_override_changes_target(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         captured: dict = {}
         from contextlib import contextmanager
@@ -1323,38 +1672,54 @@ class TestMainCLIWiring:
             lambda *a, **kw: (),
         )
         # Default would be max(workers_per_study) == 6; override to 3.
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead", "--game-dir", str(game_dir),
-            "--top-k", "1", "--workers", "3",
-            "--out-root", str(tmp_path / "out"),
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--workers",
+                "3",
+                "--out-root",
+                str(tmp_path / "out"),
+            ]
+        )
         assert rc == 0
         assert captured["target_workers"] == 3
         # total_matchup_slots = workers * matchup_slots_per_worker (default 2)
         assert captured["total_matchup_slots"] == 6
 
     def test_default_flask_port_is_inside_acl_range(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """V1 regression — earlier default `base_flask_port - 1` (= 8999)
         was OUTSIDE the tailnet ACL `tcp:9000-9099`, causing every worker
         POST to silently time out while the fleet billed. The default must
         be in [base, base + flask_ports_per_study)."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         captured: dict = {}
         from contextlib import contextmanager
@@ -1373,11 +1738,20 @@ class TestMainCLIWiring:
             lambda *a, **kw: (),
         )
 
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead", "--game-dir", str(game_dir),
-            "--top-k", "1", "--out-root", str(tmp_path / "out"),
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(tmp_path / "out"),
+            ]
+        )
         assert rc == 0
         # Default = base_flask_port + flask_ports_per_study - 1 = 9000 + 100 - 1
         assert captured["flask_port"] == 9099
@@ -1385,51 +1759,76 @@ class TestMainCLIWiring:
         assert 9000 <= captured["flask_port"] <= 9099
 
     def test_out_of_range_flask_port_raises_pre_provision(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """Operator-supplied --flask-port outside [base, base + ports_per_study)
         must fail BEFORE provisioning any AWS resources — workers can't
         POST through the ACL otherwise."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         sentinel = MagicMock(side_effect=AssertionError("provisioned despite bad port"))
         monkeypatch.setattr(
-            "starsector_optimizer.honest_evaluator.prepare_cloud_pool", sentinel,
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            sentinel,
         )
 
         with pytest.raises(ValueError, match="outside the tailnet-ACL range"):
-            honest_evaluator.main([
-                "--campaign-name", "ut-honest-eval-source",
-                "--hull", "hammerhead", "--game-dir", str(game_dir),
-                "--top-k", "1", "--flask-port", "8999",
-                "--out-root", str(tmp_path / "out"),
-            ])
+            honest_evaluator.main(
+                [
+                    "--campaign-name",
+                    "ut-honest-eval-source",
+                    "--hull",
+                    "hammerhead",
+                    "--game-dir",
+                    str(game_dir),
+                    "--top-k",
+                    "1",
+                    "--flask-port",
+                    "8999",
+                    "--out-root",
+                    str(tmp_path / "out"),
+                ]
+            )
         sentinel.assert_not_called()
 
     def test_unrecognized_log_dir_raises_loud(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """IG3 — unrecognized study-dir name in `data/logs/<campaign>/`
         is a data-integrity signal (drift from the per-study layout).
         Must raise, not warn-and-skip."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         cdir = self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         # Drop a misnamed study dir (no `__seedN` suffix) alongside the
         # valid one. The glob `*/evaluation_log.jsonl` will match it; the
@@ -1437,32 +1836,46 @@ class TestMainCLIWiring:
         stray = cdir / "stray__no_seed_suffix"
         stray.mkdir()
         (stray / "evaluation_log.jsonl").write_bytes(
-            (cdir / "hammerhead__early__tpe__seed0" /
-             "evaluation_log.jsonl").read_bytes()
+            (cdir / "hammerhead__early__tpe__seed0" / "evaluation_log.jsonl").read_bytes()
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
         self._patch_preflight(monkeypatch)
 
         with pytest.raises(RuntimeError, match="unrecognized log dir"):
-            honest_evaluator.main([
-                "--campaign-name", "ut-honest-eval-source",
-                "--hull", "hammerhead", "--game-dir", str(game_dir),
-                "--top-k", "1",
-            ])
+            honest_evaluator.main(
+                [
+                    "--campaign-name",
+                    "ut-honest-eval-source",
+                    "--hull",
+                    "hammerhead",
+                    "--game-dir",
+                    str(game_dir),
+                    "--top-k",
+                    "1",
+                ]
+            )
 
     def test_preflight_rejects_stale_ami_tag(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """Manifest+AMI tag drift = silent oracle corruption (workers run
         pre-G probe code against v2 manifest). Must raise BEFORE
         provisioning. Tests the real `_preflight_for_honest_eval`'s AMI
         check via injected fake provider."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -1477,13 +1890,20 @@ class TestMainCLIWiring:
         # NOT patching preflight — testing the real one. STS still needs
         # to be mocked since CI has no AWS creds.
         import boto3
-        monkeypatch.setattr(boto3, "client", lambda *a, **kw: MagicMock(
-            get_caller_identity=lambda: {"UserId": "ut"},
-        ))
+
+        monkeypatch.setattr(
+            boto3,
+            "client",
+            lambda *a, **kw: MagicMock(
+                get_caller_identity=lambda: {"UserId": "ut"},
+            ),
+        )
+
         # Provider returns a stale ModCommitSha so the gate trips.
         class FakeProvider:
             def __init__(self, *, regions):
                 self.regions = regions
+
             def describe_ami_tag(self, *, ami_id, region, tag_key):
                 if tag_key == "GameVersion":
                     return manifest.constants.game_version
@@ -1494,37 +1914,54 @@ class TestMainCLIWiring:
                 if tag_key == "WorkerSourceSha":
                     return "worker-sha"
                 raise KeyError(tag_key)
+
         monkeypatch.setattr(
-            honest_evaluator, "AWSProvider", FakeProvider,
+            honest_evaluator,
+            "AWSProvider",
+            FakeProvider,
         )
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         sentinel = MagicMock(side_effect=AssertionError("provisioned despite stale AMI"))
         monkeypatch.setattr(
-            "starsector_optimizer.honest_evaluator.prepare_cloud_pool", sentinel,
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            sentinel,
         )
 
         with pytest.raises(ValueError, match="ModCommitSha"):
-            honest_evaluator.main([
-                "--campaign-name", "ut-honest-eval-source",
-                "--hull", "hammerhead", "--game-dir", str(game_dir),
-                "--top-k", "1",
-            ])
+            honest_evaluator.main(
+                [
+                    "--campaign-name",
+                    "ut-honest-eval-source",
+                    "--hull",
+                    "hammerhead",
+                    "--game-dir",
+                    str(game_dir),
+                    "--top-k",
+                    "1",
+                ]
+            )
         sentinel.assert_not_called()
 
     def test_preflight_passes_when_ami_tags_match(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """Sanity: the AMI gate doesn't false-positive when tags match."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -1537,12 +1974,19 @@ class TestMainCLIWiring:
             lambda: "manifest-sha",
         )
         import boto3
-        monkeypatch.setattr(boto3, "client", lambda *a, **kw: MagicMock(
-            get_caller_identity=lambda: {"UserId": "ut"},
-        ))
+
+        monkeypatch.setattr(
+            boto3,
+            "client",
+            lambda *a, **kw: MagicMock(
+                get_caller_identity=lambda: {"UserId": "ut"},
+            ),
+        )
+
         class FakeProvider:
             def __init__(self, *, regions):
                 self.regions = regions
+
             def describe_ami_tag(self, *, ami_id, region, tag_key):
                 if tag_key == "GameVersion":
                     return manifest.constants.game_version
@@ -1553,21 +1997,24 @@ class TestMainCLIWiring:
                 if tag_key == "WorkerSourceSha":
                     return "worker-sha"
                 raise KeyError(tag_key)
+
         monkeypatch.setattr(
-            honest_evaluator, "AWSProvider", FakeProvider,
+            honest_evaluator,
+            "AWSProvider",
+            FakeProvider,
         )
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         captured: dict = {}
         from contextlib import contextmanager
+
         @contextmanager
         def fake_prepare(**kwargs):
             captured.update(kwargs)
             yield MagicMock(num_workers=2)
+
         monkeypatch.setattr(
             "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
             fake_prepare,
@@ -1576,25 +2023,42 @@ class TestMainCLIWiring:
             "starsector_optimizer.honest_evaluator.evaluate_builds",
             lambda *a, **kw: (),
         )
-        rc = honest_evaluator.main([
-            "--campaign-name", "ut-honest-eval-source",
-            "--hull", "hammerhead", "--game-dir", str(game_dir),
-            "--top-k", "1", "--out-root", str(tmp_path / "out"),
-        ])
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(tmp_path / "out"),
+            ]
+        )
         assert rc == 0
         # Provisioning was reached, meaning preflight passed.
         assert "study_id" in captured
 
     def test_preflight_rejects_bad_authkey(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """IG1 — malformed authkey should fail BEFORE provisioning. Tests
         the real `_preflight_for_honest_eval` (not the patched stub)."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -1603,35 +2067,45 @@ class TestMainCLIWiring:
         monkeypatch.setenv("STARSECTOR_TAILSCALE_AUTHKEY", "tskey-WRONG-PREFIX")
         (tmp_path / "examples").mkdir()
         yaml_src = _write_smoke_campaign_yaml(tmp_path)
-        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(
-            yaml_src.read_bytes()
-        )
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
 
         sentinel = MagicMock(side_effect=AssertionError("provisioned despite bad authkey"))
         monkeypatch.setattr(
-            "starsector_optimizer.honest_evaluator.prepare_cloud_pool", sentinel,
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            sentinel,
         )
 
         # Helper raises PreflightFailure (a ValueError subclass) with
         # message wording owned by `campaign.check_authkey_syntax`.
         with pytest.raises(ValueError, match=r"must start with .tskey-auth-"):
-            honest_evaluator.main([
-                "--campaign-name", "ut-honest-eval-source",
-                "--hull", "hammerhead", "--game-dir", str(game_dir),
-                "--top-k", "1",
-            ])
+            honest_evaluator.main(
+                [
+                    "--campaign-name",
+                    "ut-honest-eval-source",
+                    "--hull",
+                    "hammerhead",
+                    "--game-dir",
+                    str(game_dir),
+                    "--top-k",
+                    "1",
+                ]
+            )
         sentinel.assert_not_called()
 
     def test_eval_tag_length_guard_rejects_overlong_name(
-        self, monkeypatch, tmp_path,
+        self,
+        monkeypatch,
+        tmp_path,
     ):
         """M2 — eval_tag = starsector-honest-eval-{name}-{16-char-stamp};
         AWS Launch Template names cap at 128 chars after AWSProvider
         doubles `{project_tag}__{fleet_name}` (= 2 × eval_tag + 2).
         Boundary is `MAX_EVAL_TAG_LEN`."""
         from starsector_optimizer.honest_evaluator import (
-            MAX_EVAL_TAG_LEN, _validate_eval_tag_length,
+            MAX_EVAL_TAG_LEN,
+            _validate_eval_tag_length,
         )
+
         ok = "x" * MAX_EVAL_TAG_LEN
         _validate_eval_tag_length(ok)
         bad = "x" * (MAX_EVAL_TAG_LEN + 1)
@@ -1639,16 +2113,24 @@ class TestMainCLIWiring:
             _validate_eval_tag_length(bad)
 
     def test_empty_eval_pool_raises_pre_provision(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         """An empty eval pool would otherwise be discovered AFTER fleet
         boot (when evaluate_builds runs inside the `with` block); the
         pre-provision check saves ~30s of fleet-boot cost."""
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -1661,24 +2143,40 @@ class TestMainCLIWiring:
         )
         sentinel = MagicMock(side_effect=AssertionError("provisioned with empty pool"))
         monkeypatch.setattr(
-            "starsector_optimizer.honest_evaluator.prepare_cloud_pool", sentinel,
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool",
+            sentinel,
         )
         with pytest.raises(ValueError, match="no compatible opponents"):
-            honest_evaluator.main([
-                "--campaign-name", "ut-honest-eval-source",
-                "--hull", "hammerhead", "--game-dir", str(game_dir),
-                "--top-k", "1",
-            ])
+            honest_evaluator.main(
+                [
+                    "--campaign-name",
+                    "ut-honest-eval-source",
+                    "--hull",
+                    "hammerhead",
+                    "--game-dir",
+                    str(game_dir),
+                    "--top-k",
+                    "1",
+                ]
+            )
         sentinel.assert_not_called()
 
     def test_missing_campaign_yaml_raises_clear_error(
-        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed,
-        game_dir, manifest,
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
     ):
         from starsector_optimizer import honest_evaluator
+
         log_root = tmp_path / "data" / "logs"
         self._seed_campaign_logs(
-            log_root, "ut-honest-eval-source", study_jsonl_with_n_completed,
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
         )
         monkeypatch.chdir(tmp_path)
         self._patch_manifest_load(monkeypatch, manifest)
@@ -1686,8 +2184,15 @@ class TestMainCLIWiring:
         # Don't create examples/ut-honest-eval-source.yaml — main() must raise.
 
         with pytest.raises(ValueError, match="campaign config not found"):
-            honest_evaluator.main([
-                "--campaign-name", "ut-honest-eval-source",
-                "--hull", "hammerhead", "--game-dir", str(game_dir),
-                "--top-k", "1",
-            ])
+            honest_evaluator.main(
+                [
+                    "--campaign-name",
+                    "ut-honest-eval-source",
+                    "--hull",
+                    "hammerhead",
+                    "--game-dir",
+                    str(game_dir),
+                    "--top-k",
+                    "1",
+                ]
+            )

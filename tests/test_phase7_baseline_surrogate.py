@@ -232,7 +232,10 @@ def test_split_overlap_counts_reports_stricter_hierarchy_counts():
         test,
         build_lookup,
         opponent_hull_by_variant={"opp0": "wolf", "opp1": "wolf"},
-        opponent_family_by_variant={"opp0": "FRIGATE:Frigate:High Tech", "opp1": "FRIGATE:Frigate:High Tech"},
+        opponent_family_by_variant={
+            "opp0": "FRIGATE:Frigate:High Tech",
+            "opp1": "FRIGATE:Frigate:High Tech",
+        },
         held_out_components=["weapon:lightdualmg", "weapon:railgun"],
     )
 

@@ -33,9 +33,7 @@ def analyze_importance(
     """
     completed = [t for t in study.trials if t.state == TrialState.COMPLETE]
     if len(completed) < min_trials:
-        raise ValueError(
-            f"Need >= {min_trials} completed trials, got {len(completed)}"
-        )
+        raise ValueError(f"Need >= {min_trials} completed trials, got {len(completed)}")
     raw = optuna.importance.get_param_importances(study)
     return ImportanceResult(importances=raw)
 
@@ -45,9 +43,7 @@ def print_importance_report(
     top_n: int = 20,
 ) -> str:
     """Format importance results as a readable table string."""
-    sorted_params = sorted(
-        result.importances.items(), key=lambda x: x[1], reverse=True
-    )[:top_n]
+    sorted_params = sorted(result.importances.items(), key=lambda x: x[1], reverse=True)[:top_n]
     col_name = 40
     col_val = 10
     lines = [f"{'Parameter':<{col_name}} {'Importance':>{col_val}}"]

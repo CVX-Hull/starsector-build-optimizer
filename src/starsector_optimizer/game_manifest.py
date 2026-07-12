@@ -75,14 +75,18 @@ _DEFAULT_MANIFEST_PATH: Path = Path("game/starsector/manifest.json")
 # repair.py for is_feasible() violation detection.
 SLOT_WEAPON_COMPATIBILITY: dict[SlotType, frozenset[WeaponType]] = {
     SlotType.BALLISTIC: frozenset({WeaponType.BALLISTIC}),
-    SlotType.ENERGY:    frozenset({WeaponType.ENERGY}),
-    SlotType.MISSILE:   frozenset({WeaponType.MISSILE}),
-    SlotType.HYBRID:    frozenset({WeaponType.BALLISTIC, WeaponType.ENERGY}),
+    SlotType.ENERGY: frozenset({WeaponType.ENERGY}),
+    SlotType.MISSILE: frozenset({WeaponType.MISSILE}),
+    SlotType.HYBRID: frozenset({WeaponType.BALLISTIC, WeaponType.ENERGY}),
     SlotType.COMPOSITE: frozenset({WeaponType.BALLISTIC, WeaponType.MISSILE}),
-    SlotType.SYNERGY:   frozenset({WeaponType.ENERGY, WeaponType.MISSILE}),
-    SlotType.UNIVERSAL: frozenset({
-        WeaponType.BALLISTIC, WeaponType.ENERGY, WeaponType.MISSILE,
-    }),
+    SlotType.SYNERGY: frozenset({WeaponType.ENERGY, WeaponType.MISSILE}),
+    SlotType.UNIVERSAL: frozenset(
+        {
+            WeaponType.BALLISTIC,
+            WeaponType.ENERGY,
+            WeaponType.MISSILE,
+        }
+    ),
 }
 
 _ParseT = TypeVar("_ParseT", bound=Enum)
@@ -97,6 +101,7 @@ class WeaponMountType(StrEnum):
     Distinct from the weapon's damage/ammo `type` — a weapon with
     `type=MISSILE` can have `mount_type=SYNERGY` if it fits synergy slots.
     """
+
     BALLISTIC = "BALLISTIC"
     ENERGY = "ENERGY"
     MISSILE = "MISSILE"
@@ -112,6 +117,7 @@ class SlotMountType(StrEnum):
     Engine emits TURRET / HARDPOINT for assignable slots and OTHER for
     everything else (built-ins, decoratives, system slots).
     """
+
     TURRET = "TURRET"
     HARDPOINT = "HARDPOINT"
     OTHER = "OTHER"
@@ -140,6 +146,7 @@ class HullmodSpec:
     applicability is per-hull (see `HullManifestEntry.applicable_hullmods`)
     and conditional conflicts are per-hull (see
     `HullManifestEntry.conditional_exclusions`). Single source of truth."""
+
     id: str
     tier: int
     hidden: bool
@@ -167,6 +174,7 @@ class HullManifestEntry:
     """Schema v2: `applicable_hullmods` + `conditional_exclusions` hold
     the authoritative per-hull applicability answer (engine-probed by
     PROBE_ITERATE). Python consumers NEVER re-derive applicability."""
+
     id: str
     size: HullSize
     ordnance_points: int
@@ -264,7 +272,8 @@ class GameManifest:
         # set means the probe crashed mid-iteration or the ship wasn't
         # live — either way the manifest is not safe to optimize against.
         empty_hulls = [
-            hid for hid, h in hulls.items()
+            hid
+            for hid, h in hulls.items()
             if len(h.applicable_hullmods) < MIN_APPLICABLE_HULLMODS_PER_HULL
         ]
         if empty_hulls:
@@ -284,9 +293,7 @@ class GameManifest:
 # --- Parsing helpers ---------------------------------------------------------
 
 
-def _parse_enum(
-    cls: type[_ParseT], raw: Any, *, field_name: str, spec_id: str
-) -> _ParseT | None:
+def _parse_enum(cls: type[_ParseT], raw: Any, *, field_name: str, spec_id: str) -> _ParseT | None:
     """Parse an enum value, logging WARN on unknown members.
 
     Returns None when the raw value is absent from the enum. Callers skip
@@ -295,16 +302,16 @@ def _parse_enum(
     care about (CLAUDE.md Principle #5).
     """
     if raw is None:
-        logger.warning(
-            "manifest: missing %s on spec %r; skipping", field_name, spec_id
-        )
+        logger.warning("manifest: missing %s on spec %r; skipping", field_name, spec_id)
         return None
     try:
         return cls(raw)
     except ValueError:
         logger.warning(
             "manifest: unknown %s=%r on spec %r; skipping spec",
-            field_name, raw, spec_id,
+            field_name,
+            raw,
+            spec_id,
         )
         return None
 
@@ -316,9 +323,7 @@ def _parse_weapon(raw: dict[str, Any]) -> WeaponSpec | None:
     wmount = _parse_enum(
         WeaponMountType, raw.get("mount_type"), field_name="mount_type", spec_id=wid
     )
-    wdamage = _parse_enum(
-        DamageType, raw.get("damage_type"), field_name="damage_type", spec_id=wid
-    )
+    wdamage = _parse_enum(DamageType, raw.get("damage_type"), field_name="damage_type", spec_id=wid)
     # Explicit per-variable checks (not `None in tuple`) so the type
     # checker narrows each; skip semantics identical (Principle #5).
     if wtype is None or wsize is None or wmount is None or wdamage is None:
@@ -392,9 +397,7 @@ def _parse_hull(
     if raw_size in _IGNORED_HULL_SIZES:
         return None
     hsize = _parse_enum(HullSize, raw_size, field_name="size", spec_id=hid)
-    shield = _parse_enum(
-        ShieldType, raw.get("shield_type"), field_name="shield_type", spec_id=hid
-    )
+    shield = _parse_enum(ShieldType, raw.get("shield_type"), field_name="shield_type", spec_id=hid)
     if hsize is None or shield is None:
         return None
     slots: list[HullSlot] = []
@@ -420,7 +423,8 @@ def _parse_hull(
         else:
             logger.warning(
                 "manifest: hull %r applicable_hullmods references unknown mod %r; skipping",
-                hid, m,
+                hid,
+                m,
             )
 
     cond_raw = raw.get("conditional_exclusions") or {}
@@ -429,7 +433,8 @@ def _parse_hull(
         if a not in known_hullmod_ids:
             logger.warning(
                 "manifest: hull %r conditional_exclusions key %r not in known hullmods; skipping",
-                hid, a,
+                hid,
+                a,
             )
             continue
         filtered_b: set[str] = set()
@@ -439,7 +444,9 @@ def _parse_hull(
             else:
                 logger.warning(
                     "manifest: hull %r conditional_exclusions[%r] lists unknown mod %r; skipping",
-                    hid, a, b,
+                    hid,
+                    a,
+                    b,
                 )
         if filtered_b:
             cond_filtered[a] = frozenset(filtered_b)
@@ -465,9 +472,7 @@ def _parse_hull(
     )
 
 
-def _parse_damage_mult(
-    raw: dict[str, Any] | None, *, field_name: str
-) -> dict[DamageType, float]:
+def _parse_damage_mult(raw: dict[str, Any] | None, *, field_name: str) -> dict[DamageType, float]:
     """Parse a {DamageType_name: multiplier} block.
 
     Unknown damage-type keys WARN and skip (forward-compat per

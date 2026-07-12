@@ -1,37 +1,90 @@
 """Tests for repair operator."""
 
-
 from starsector_optimizer.models import (
-    Build, HullSize, ShieldType, SlotSize, SlotType, MountType,
-    WeaponSlot, ShipHull, Weapon, HullMod, DamageType, GameData, WeaponType,
+    Build,
+    HullSize,
+    ShieldType,
+    SlotSize,
+    SlotType,
+    MountType,
+    WeaponSlot,
+    ShipHull,
+    Weapon,
+    HullMod,
+    DamageType,
+    GameData,
+    WeaponType,
 )
 from starsector_optimizer.repair import compute_op_cost, repair_build, is_feasible
 
 
 # --- Helpers ---
 
+
 def _hull(op=100, hull_size=HullSize.CRUISER, shield_type=ShieldType.FRONT, **kw):
     defaults = {
-        "id": "test", "name": "Test", "hull_size": hull_size, "designation": "Cruiser",
-        "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
-        "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": op,
-        "fighter_bays": 0, "max_speed": 60, "shield_type": shield_type, "shield_arc": 270,
-        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0, "phase_upkeep": 0,
-        "peak_cr_sec": 480, "cr_loss_per_sec": 0.25,
+        "id": "test",
+        "name": "Test",
+        "hull_size": hull_size,
+        "designation": "Cruiser",
+        "tech_manufacturer": "",
+        "system_id": "",
+        "fleet_pts": 10,
+        "hitpoints": 5000,
+        "armor_rating": 500,
+        "max_flux": 5000,
+        "flux_dissipation": 300,
+        "ordnance_points": op,
+        "fighter_bays": 0,
+        "max_speed": 60,
+        "shield_type": shield_type,
+        "shield_arc": 270,
+        "shield_upkeep": 0.4,
+        "shield_efficiency": 0.8,
+        "phase_cost": 0,
+        "phase_upkeep": 0,
+        "peak_cr_sec": 480,
+        "cr_loss_per_sec": 0.25,
         "weapon_slots": [
-            WeaponSlot("WS1", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)),
+            WeaponSlot(
+                "WS1", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)
+            ),
             WeaponSlot("WS2", SlotType.ENERGY, SlotSize.SMALL, MountType.TURRET, 0, 150, (0, 0)),
         ],
-        "built_in_mods": [], "built_in_weapons": {}, "hints": [], "tags": [],
+        "built_in_mods": [],
+        "built_in_weapons": {},
+        "hints": [],
+        "tags": [],
     }
     defaults.update(kw)
     return ShipHull(**defaults)
 
 
 def _weapon(wid, op_cost=10, dps=100):
-    return Weapon(wid, wid, SlotSize.MEDIUM, WeaponType.BALLISTIC, dps, 0,
-                  DamageType.KINETIC, 0, 100, 0, 700, op_cost, 0, 0.5, 1, 0,
-                  0, 0, 500, 30, [], [])
+    return Weapon(
+        wid,
+        wid,
+        SlotSize.MEDIUM,
+        WeaponType.BALLISTIC,
+        dps,
+        0,
+        DamageType.KINETIC,
+        0,
+        100,
+        0,
+        700,
+        op_cost,
+        0,
+        0.5,
+        1,
+        0,
+        0,
+        0,
+        500,
+        30,
+        [],
+        [],
+    )
 
 
 def _hullmod(mid, cost=10, is_logistics=False):
@@ -47,6 +100,7 @@ def _game_data(weapons=None, hullmods=None):
 
 
 # --- compute_op_cost tests ---
+
 
 class TestComputeOpCost:
     def test_empty_build(self):
@@ -69,6 +123,7 @@ class TestComputeOpCost:
 
 
 # --- repair_build tests ---
+
 
 class TestRepairBuild:
     def test_over_budget_drops_weapons(self, manifest):
@@ -96,10 +151,12 @@ class TestRepairBuild:
         `hullmods.shield_shunt.incompatible_with`. If the manifest probe is
         stale, this test surfaces that drift.
         """
-        gd = _game_data(hullmods={
-            "shield_shunt": _hullmod("shield_shunt", cost=10),
-            "frontshield": _hullmod("frontshield", cost=5),
-        })
+        gd = _game_data(
+            hullmods={
+                "shield_shunt": _hullmod("shield_shunt", cost=10),
+                "frontshield": _hullmod("frontshield", cost=5),
+            }
+        )
         hull = _hull(op=100)
         build = Build("test", {}, frozenset(["shield_shunt", "frontshield"]), 0, 0)
         repaired = repair_build(build, hull, gd, manifest)
@@ -114,6 +171,7 @@ class TestRepairBuild:
         applicable_hullmods must exclude it. Repair drops it."""
         from tests.conftest import attach_synthetic_hull
         from starsector_optimizer.models import HullSize as HS
+
         gd = _game_data(hullmods={"safetyoverrides": _hullmod("safetyoverrides", cost=15)})
         hull = _hull(op=100, hull_size=HullSize.CAPITAL_SHIP)
         # Synthetic CAPITAL hull does NOT list safetyoverrides as applicable —
@@ -124,11 +182,13 @@ class TestRepairBuild:
         assert "safetyoverrides" not in repaired.hullmods
 
     def test_logistics_limit(self, manifest):
-        gd = _game_data(hullmods={
-            "l1": _hullmod("l1", cost=5, is_logistics=True),
-            "l2": _hullmod("l2", cost=10, is_logistics=True),
-            "l3": _hullmod("l3", cost=3, is_logistics=True),
-        })
+        gd = _game_data(
+            hullmods={
+                "l1": _hullmod("l1", cost=5, is_logistics=True),
+                "l2": _hullmod("l2", cost=10, is_logistics=True),
+                "l3": _hullmod("l3", cost=3, is_logistics=True),
+            }
+        )
         hull = _hull(op=100)
         build = Build("test", {}, frozenset(["l1", "l2", "l3"]), 0, 0)
         repaired = repair_build(build, hull, gd, manifest)
@@ -178,10 +238,14 @@ class TestRepairBuild:
 
 # --- is_feasible tests ---
 
+
 class TestIsFeasible:
     def test_empty_build_feasible(self, manifest):
         ok, violations = is_feasible(
-            Build("test", {}, frozenset(), 0, 0), _hull(), _game_data(), manifest,
+            Build("test", {}, frozenset(), 0, 0),
+            _hull(),
+            _game_data(),
+            manifest,
         )
         assert ok
         assert violations == []
@@ -213,9 +277,30 @@ class TestIsFeasible:
 
     def test_wrong_weapon_type_infeasible(self, manifest):
         """MISSILE weapon in BALLISTIC slot should be infeasible."""
-        missile = Weapon("missile1", "Missile", SlotSize.MEDIUM, WeaponType.MISSILE,
-                         100, 0, DamageType.HIGH_EXPLOSIVE, 0, 50, 0, 700, 10,
-                         0, 1.0, 1, 0, 5, 0, 300, 0, [], [])
+        missile = Weapon(
+            "missile1",
+            "Missile",
+            SlotSize.MEDIUM,
+            WeaponType.MISSILE,
+            100,
+            0,
+            DamageType.HIGH_EXPLOSIVE,
+            0,
+            50,
+            0,
+            700,
+            10,
+            0,
+            1.0,
+            1,
+            0,
+            5,
+            0,
+            300,
+            0,
+            [],
+            [],
+        )
         gd = _game_data(weapons={"missile1": missile})
         hull = _hull(op=100)
         build = Build("test", {"WS1": "missile1"}, frozenset(), 0, 0)
@@ -225,9 +310,30 @@ class TestIsFeasible:
 
     def test_wrong_weapon_size_infeasible(self, manifest):
         """LARGE weapon in MEDIUM slot should be infeasible."""
-        large_w = Weapon("large1", "Large Gun", SlotSize.LARGE, WeaponType.BALLISTIC,
-                         500, 0, DamageType.KINETIC, 0, 300, 0, 900, 20,
-                         0, 2.0, 1, 0, 0, 0, 500, 20, [], [])
+        large_w = Weapon(
+            "large1",
+            "Large Gun",
+            SlotSize.LARGE,
+            WeaponType.BALLISTIC,
+            500,
+            0,
+            DamageType.KINETIC,
+            0,
+            300,
+            0,
+            900,
+            20,
+            0,
+            2.0,
+            1,
+            0,
+            0,
+            0,
+            500,
+            20,
+            [],
+            [],
+        )
         gd = _game_data(weapons={"large1": large_w})
         hull = _hull(op=100)
         build = Build("test", {"WS1": "large1"}, frozenset(), 0, 0)

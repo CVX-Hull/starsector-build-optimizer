@@ -27,6 +27,7 @@ Usage:
     uv run python scripts/migrate_wave1_eval_logs.py --dry-run
     uv run python scripts/migrate_wave1_eval_logs.py --force  # re-migrate
 """
+
 from __future__ import annotations
 
 import argparse
@@ -46,6 +47,7 @@ class CellMeta(TypedDict):
     ts_lo: datetime
     ts_hi: datetime
     trial_numbers: set[int]
+
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WAVE1_CELLS = ("c0a", "c0b", "c1", "c2", "c3")
@@ -72,17 +74,16 @@ def _parse_jsonl_ts(ts: str | None) -> datetime | None:
 
 def _shared_log_path(seed: int) -> Path:
     return (
-        REPO_ROOT
-        / "data" / "logs"
-        / f"hammerhead__early__tpe__seed{seed}"
-        / "evaluation_log.jsonl"
+        REPO_ROOT / "data" / "logs" / f"hammerhead__early__tpe__seed{seed}" / "evaluation_log.jsonl"
     )
 
 
 def _migrated_log_path(cell: str, seed: int) -> Path:
     return (
         REPO_ROOT
-        / "data" / "logs" / f"wave1-{cell}"
+        / "data"
+        / "logs"
+        / f"wave1-{cell}"
         / f"hammerhead__early__tpe__seed{seed}"
         / "evaluation_log.jsonl"
     )
@@ -91,16 +92,18 @@ def _migrated_log_path(cell: str, seed: int) -> Path:
 def _cell_db_path(cell: str, seed: int) -> Path:
     return (
         REPO_ROOT
-        / "data" / "study_dbs" / f"wave1-{cell}"
+        / "data"
+        / "study_dbs"
+        / f"wave1-{cell}"
         / f"hammerhead__early__tpe__seed{seed}.db"
     )
 
 
 def _load_cell_metadata(seed: int) -> list[CellMeta]:
     """For each cell at this seed, read SQLite and return:
-        - cell name
-        - overall (ts_start, ts_complete) range
-        - set of trial numbers in this study (any state)
+    - cell name
+    - overall (ts_start, ts_complete) range
+    - set of trial numbers in this study (any state)
     """
     out: list[CellMeta] = []
     for cell in WAVE1_CELLS:
@@ -112,21 +115,21 @@ def _load_cell_metadata(seed: int) -> list[CellMeta]:
             rng = conn.execute(
                 "SELECT MIN(datetime_start), MAX(datetime_complete) FROM trials"
             ).fetchone()
-            trial_numbers = {
-                n for (n,) in conn.execute("SELECT number FROM trials")
-            }
+            trial_numbers = {n for (n,) in conn.execute("SELECT number FROM trials")}
         finally:
             conn.close()
         ts_lo = _parse_sqlite_ts(rng[0])
         ts_hi = _parse_sqlite_ts(rng[1])
         if ts_lo is None or ts_hi is None:
             raise RuntimeError(f"{db_path}: missing trial timestamps")
-        out.append({
-            "cell": cell,
-            "ts_lo": ts_lo,
-            "ts_hi": ts_hi,
-            "trial_numbers": trial_numbers,
-        })
+        out.append(
+            {
+                "cell": cell,
+                "ts_lo": ts_lo,
+                "ts_hi": ts_hi,
+                "trial_numbers": trial_numbers,
+            }
+        )
     out.sort(key=lambda r: r["ts_lo"])
     # Sanity: cells must be disjoint with positive gaps. Overlap means
     # the timestamp-slicing approach is invalid for this seed.
@@ -143,7 +146,8 @@ def _load_cell_metadata(seed: int) -> list[CellMeta]:
 
 
 def _classify_line(
-    data: dict, cell_meta: list[CellMeta],
+    data: dict,
+    cell_meta: list[CellMeta],
 ) -> str | None:
     """Return the cell name this JSONL row belongs to, or None if it
     cannot be confidently classified.
@@ -177,7 +181,8 @@ def _classify_line(
         # but trial_number only exists in cell B).
         if trial_n is not None:
             narrowed = [
-                c for c in candidates
+                c
+                for c in candidates
                 if trial_n in next(m["trial_numbers"] for m in cell_meta if m["cell"] == c)
             ]
             if len(narrowed) == 1:
@@ -215,11 +220,13 @@ def migrate_seed(seed: int, dry_run: bool = False, force: bool = False) -> dict:
                 continue
             cell = _classify_line(data, cell_meta)
             if cell is None:
-                unclassified.append((
-                    lineno,
-                    f"timestamp={data.get('timestamp')!r} "
-                    f"trial_number={data.get('trial_number')!r}",
-                ))
+                unclassified.append(
+                    (
+                        lineno,
+                        f"timestamp={data.get('timestamp')!r} "
+                        f"trial_number={data.get('trial_number')!r}",
+                    )
+                )
                 continue
             classified[cell].append(stripped + "\n")
 
@@ -265,9 +272,9 @@ def verify_migration(seed: int) -> dict:
             n_complete = conn.execute(
                 "SELECT COUNT(*) FROM trials WHERE state='COMPLETE'"
             ).fetchone()[0]
-            n_pruned = conn.execute(
-                "SELECT COUNT(*) FROM trials WHERE state='PRUNED'"
-            ).fetchone()[0]
+            n_pruned = conn.execute("SELECT COUNT(*) FROM trials WHERE state='PRUNED'").fetchone()[
+                0
+            ]
         finally:
             conn.close()
         n_log = sum(1 for _ in log_path.open())
@@ -282,17 +289,23 @@ def verify_migration(seed: int) -> dict:
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--dry-run", action="store_true",
-                   help="Compute classification but don't write files.")
-    p.add_argument("--force", action="store_true",
-                   help="Overwrite existing migrated paths.")
-    p.add_argument("--seeds", type=int, nargs="+", default=list(WAVE1_SEEDS),
-                   help="Subset of seeds to migrate (default: all).")
+    p.add_argument(
+        "--dry-run", action="store_true", help="Compute classification but don't write files."
+    )
+    p.add_argument("--force", action="store_true", help="Overwrite existing migrated paths.")
+    p.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=list(WAVE1_SEEDS),
+        help="Subset of seeds to migrate (default: all).",
+    )
     args = p.parse_args()
 
     print("=" * 70)
-    print(f"Wave 1 JSONL migration — seeds {args.seeds}, "
-          f"dry_run={args.dry_run}, force={args.force}")
+    print(
+        f"Wave 1 JSONL migration — seeds {args.seeds}, dry_run={args.dry_run}, force={args.force}"
+    )
     print("=" * 70)
 
     all_ok = True
@@ -307,16 +320,20 @@ def main() -> int:
         for cell, n in summary["per_cell_lines"].items():
             print(f"  {cell}: {n} lines")
         if summary["unclassified"]:
-            print(f"  UNCLASSIFIED: {summary['unclassified']} (first 5: "
-                  f"{summary['unclassified_sample']})")
+            print(
+                f"  UNCLASSIFIED: {summary['unclassified']} (first 5: "
+                f"{summary['unclassified_sample']})"
+            )
         if not args.dry_run:
             print(f"  legacy file moved to: {summary['legacy_path']}")
             v = verify_migration(seed)
             print(f"\n[seed {seed}] verification:")
             for cell, info in v["per_cell"].items():
                 marker = "OK" if info["ok"] else "WARN"
-                print(f"  [{marker}] {cell}: complete={info['complete']} "
-                      f"pruned={info['pruned']} log_lines={info['log_lines']}")
+                print(
+                    f"  [{marker}] {cell}: complete={info['complete']} "
+                    f"pruned={info['pruned']} log_lines={info['log_lines']}"
+                )
                 if not info["ok"]:
                     all_ok = False
 

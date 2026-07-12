@@ -98,9 +98,7 @@ class TestBuildFeatureRow:
 
         row = build_feature_row(build, hull, game_data, manifest)
 
-        assert EMPTY_SENTINEL in {
-            value for key, value in row.items() if key.endswith("_weapon_id")
-        }
+        assert EMPTY_SENTINEL in {value for key, value in row.items() if key.endswith("_weapon_id")}
 
     def test_builtin_weapons_are_included_in_aggregates(self, game_data, manifest):
         hull = game_data.hulls["hammerhead"]
@@ -108,7 +106,9 @@ class TestBuildFeatureRow:
         original_builtins = dict(hull.built_in_weapons)
         try:
             hull.built_in_weapons = {builtin_slot: "heavyac"}
-            build = Build("hammerhead", {slot.id: None for slot in hull.weapon_slots}, frozenset(), 0, 0)
+            build = Build(
+                "hammerhead", {slot.id: None for slot in hull.weapon_slots}, frozenset(), 0, 0
+            )
             row = build_feature_row(build, hull, game_data, manifest)
         finally:
             hull.built_in_weapons = original_builtins
@@ -148,11 +148,15 @@ class TestOpponentFeatureRow:
     def test_unknown_variant_hull_raises(self, tmp_path, game_data):
         variants = tmp_path / "data" / "variants"
         variants.mkdir(parents=True)
-        (variants / "bad.variant").write_text(json.dumps({
-            "variantId": "bad",
-            "hullId": "not_a_real_hull",
-            "weaponGroups": [],
-        }))
+        (variants / "bad.variant").write_text(
+            json.dumps(
+                {
+                    "variantId": "bad",
+                    "hullId": "not_a_real_hull",
+                    "weaponGroups": [],
+                }
+            )
+        )
 
         with pytest.raises(ValueError, match="unknown hull"):
             opponent_feature_row("bad", tmp_path, game_data)
@@ -168,12 +172,16 @@ class TestOpponentFeatureRow:
     def test_malformed_wings_raise(self, tmp_path, game_data):
         variants = tmp_path / "data" / "variants"
         variants.mkdir(parents=True)
-        (variants / "bad_wings.variant").write_text(json.dumps({
-            "variantId": "bad_wings",
-            "hullId": "enforcer",
-            "weaponGroups": [],
-            "wings": "not-a-list",
-        }))
+        (variants / "bad_wings.variant").write_text(
+            json.dumps(
+                {
+                    "variantId": "bad_wings",
+                    "hullId": "enforcer",
+                    "weaponGroups": [],
+                    "wings": "not-a-list",
+                }
+            )
+        )
 
         with pytest.raises(ValueError, match="malformed wings"):
             opponent_feature_row("bad_wings", tmp_path, game_data)
@@ -202,13 +210,19 @@ class TestMatchupFeatureRow:
 
 class TestFeatureProfiles:
     def test_profile_filter_rejects_unknown_profile(self, game_dir, game_data, manifest):
-        row = matchup_feature_row(_hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest)
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
         with pytest.raises(ValueError, match="unknown feature profile"):
             filter_feature_profile(row, "not-a-profile")
         assert "v2-compatible" not in FEATURE_PROFILES
 
-    def test_geometry_profile_keeps_geometry_and_drops_sparse_hullmods(self, game_dir, game_data, manifest):
-        row = matchup_feature_row(_hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest)
+    def test_geometry_profile_keeps_geometry_and_drops_sparse_hullmods(
+        self, game_dir, game_data, manifest
+    ):
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
         filtered = filter_feature_profile(row, "geometry")
 
         assert "build_geometry_collision_radius" in filtered
@@ -216,7 +230,9 @@ class TestFeatureProfiles:
         assert "build_hullmod__armoredweapons" not in filtered
 
     def test_sparse_component_profile_keeps_ids(self, game_dir, game_data, manifest):
-        row = matchup_feature_row(_hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest)
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
         filtered = filter_feature_profile(row, "sparse-component")
 
         assert "build_slot_00_weapon_id" in filtered
@@ -224,8 +240,12 @@ class TestFeatureProfiles:
         assert "build_hull_id" in filtered
         assert "interaction_range_delta" not in filtered
 
-    def test_opponent_parity_profile_drops_sparse_ids_and_interactions(self, game_dir, game_data, manifest):
-        row = matchup_feature_row(_hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest)
+    def test_opponent_parity_profile_drops_sparse_ids_and_interactions(
+        self, game_dir, game_data, manifest
+    ):
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
         filtered = filter_feature_profile(row, "opponent-parity")
 
         assert "opponent_flux_vents" in filtered
@@ -235,8 +255,12 @@ class TestFeatureProfiles:
         assert "build_hullmod__armoredweapons" not in filtered
         assert "interaction_range_delta" not in filtered
 
-    def test_sparse_cross_profile_keeps_components_and_interactions(self, game_dir, game_data, manifest):
-        row = matchup_feature_row(_hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest)
+    def test_sparse_cross_profile_keeps_components_and_interactions(
+        self, game_dir, game_data, manifest
+    ):
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
         filtered = filter_feature_profile(row, "sparse-cross")
 
         assert "build_slot_00_weapon_id" in filtered

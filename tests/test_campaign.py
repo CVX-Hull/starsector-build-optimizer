@@ -48,9 +48,12 @@ def _minimal_campaign_yaml(tmp_path: Path, **overrides) -> Path:
         "tailscale_authkey_secret": TAILSCALE_SECRET_SENTINEL,
         "studies": [
             {
-                "hull": "wolf", "regime": "early",
-                "seeds": [0], "budget_per_study": 200,
-                "workers_per_study": 12, "sampler": "tpe",
+                "hull": "wolf",
+                "regime": "early",
+                "seeds": [0],
+                "budget_per_study": 200,
+                "workers_per_study": 12,
+                "sampler": "tpe",
             },
         ],
     }
@@ -65,6 +68,7 @@ class TestCampaignConfigLoading:
 
     def test_loads_yaml(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path)
         config = load_campaign_config(path)
         assert config.name == "test-campaign"
@@ -76,29 +80,41 @@ class TestCampaignConfigLoading:
 
     def test_round_trip_preserves_fields(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path, max_lifetime_hours=8.0)
         config = load_campaign_config(path)
         assert config.max_lifetime_hours == 8.0
 
     def test_min_workers_not_more_than_max(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path, min_workers_to_start=120)
         with pytest.raises(ValueError, match="min_workers_to_start"):
             load_campaign_config(path)
 
     def test_unknown_provider_rejected(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path, provider="gcp")
         with pytest.raises(ValueError, match="provider"):
             load_campaign_config(path)
 
     def test_unknown_sampler_rejected(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "wolf", "regime": "early", "seeds": [0],
-             "budget_per_study": 200, "workers_per_study": 12,
-             "sampler": "bogus"},
-        ])
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "wolf",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 200,
+                    "workers_per_study": 12,
+                    "sampler": "bogus",
+                },
+            ],
+        )
         with pytest.raises(ValueError, match="sampler"):
             load_campaign_config(path)
 
@@ -107,6 +123,7 @@ class TestCampaignConfigLoading:
         None so the subprocess inherits `OptimizerConfig.active_opponents`
         default (10). Test pins the contract."""
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path)
         config = load_campaign_config(path)
         assert config.studies[0].active_opponents is None
@@ -114,11 +131,21 @@ class TestCampaignConfigLoading:
     def test_active_opponents_loads_from_yaml(self, tmp_path):
         """YAML `active_opponents: 1` (smoke path) → StudyConfig carries 1."""
         from starsector_optimizer.campaign import load_campaign_config
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "wolf", "regime": "early", "seeds": [0],
-             "budget_per_study": 1, "workers_per_study": 1,
-             "sampler": "tpe", "active_opponents": 1},
-        ])
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "wolf",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 1,
+                    "workers_per_study": 1,
+                    "sampler": "tpe",
+                    "active_opponents": 1,
+                },
+            ],
+        )
         config = load_campaign_config(path)
         assert config.studies[0].active_opponents == 1
 
@@ -128,6 +155,7 @@ class TestFrozenDataclasses:
 
     def test_campaign_config_frozen(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         with pytest.raises(dataclasses.FrozenInstanceError):
             # deliberately mutates a frozen dataclass: exercises the error path
@@ -135,9 +163,14 @@ class TestFrozenDataclasses:
 
     def test_study_config_frozen(self):
         from starsector_optimizer.models import StudyConfig
+
         s = StudyConfig(
-            hull="wolf", regime="early", seeds=(0,),
-            budget_per_study=200, workers_per_study=12, sampler="tpe",
+            hull="wolf",
+            regime="early",
+            seeds=(0,),
+            budget_per_study=200,
+            workers_per_study=12,
+            sampler="tpe",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             # deliberately mutates a frozen dataclass: exercises the error path
@@ -145,10 +178,15 @@ class TestFrozenDataclasses:
 
     def test_worker_config_frozen(self):
         from starsector_optimizer.models import WorkerConfig
+
         w = WorkerConfig(
-            campaign_id="c", study_id="s", project_tag="starsector-c",
-            redis_host="h", redis_port=6379,
-            http_endpoint="http://h/result", bearer_token="t",
+            campaign_id="c",
+            study_id="s",
+            project_tag="starsector-c",
+            redis_host="h",
+            redis_port=6379,
+            http_endpoint="http://h/result",
+            bearer_token="t",
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             # deliberately mutates a frozen dataclass: exercises the error path
@@ -156,10 +194,16 @@ class TestFrozenDataclasses:
 
     def test_cost_ledger_entry_frozen(self):
         from starsector_optimizer.models import CostLedgerEntry
+
         e = CostLedgerEntry(
-            timestamp="t", event_type="worker_heartbeat",
-            worker_id="w", region="us-east-1", instance_type="c7a.2xlarge",
-            hours_elapsed=1.0, delta_usd=0.15, cumulative_usd=0.15,
+            timestamp="t",
+            event_type="worker_heartbeat",
+            worker_id="w",
+            region="us-east-1",
+            instance_type="c7a.2xlarge",
+            hours_elapsed=1.0,
+            delta_usd=0.15,
+            cumulative_usd=0.15,
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             # deliberately mutates a frozen dataclass: exercises the error path
@@ -167,6 +211,7 @@ class TestFrozenDataclasses:
 
     def test_global_auto_stop_config_frozen(self):
         from starsector_optimizer.models import GlobalAutoStopConfig
+
         g = GlobalAutoStopConfig()
         with pytest.raises(dataclasses.FrozenInstanceError):
             # deliberately mutates a frozen dataclass: exercises the error path
@@ -178,6 +223,7 @@ class TestSecretRedaction:
 
     def test_campaign_config_repr_redacts_tailscale_secret(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         text = repr(config)
         assert TAILSCALE_SECRET_SENTINEL not in text
@@ -185,9 +231,13 @@ class TestSecretRedaction:
 
     def test_worker_config_repr_redacts_bearer_token(self):
         from starsector_optimizer.models import WorkerConfig
+
         w = WorkerConfig(
-            campaign_id="c", study_id="s", project_tag="starsector-c",
-            redis_host="h", redis_port=6379,
+            campaign_id="c",
+            study_id="s",
+            project_tag="starsector-c",
+            redis_host="h",
+            redis_port=6379,
             http_endpoint="http://h/result",
             bearer_token=BEARER_TOKEN_SENTINEL,
         )
@@ -201,6 +251,7 @@ class TestCostLedger:
 
     def _ledger(self, tmp_path, budget_usd=10.0, warn_thresholds=(0.5, 0.8, 0.95)):
         from starsector_optimizer.campaign import CostLedger
+
         return CostLedger(
             path=tmp_path / "ledger.jsonl",
             budget_usd=budget_usd,
@@ -210,9 +261,11 @@ class TestCostLedger:
     def test_appends_heartbeat(self, tmp_path):
         ledger = self._ledger(tmp_path)
         ledger.record_heartbeat(
-            worker_id="w1", region="us-east-1",
+            worker_id="w1",
+            region="us-east-1",
             instance_type="c7a.2xlarge",
-            hours_elapsed=1 / 60, rate_usd_per_hr=0.15,
+            hours_elapsed=1 / 60,
+            rate_usd_per_hr=0.15,
         )
         lines = (tmp_path / "ledger.jsonl").read_text().splitlines()
         assert len(lines) == 1
@@ -224,9 +277,11 @@ class TestCostLedger:
         ledger = self._ledger(tmp_path)
         for _ in range(5):
             ledger.record_heartbeat(
-                worker_id="w1", region="us-east-1",
+                worker_id="w1",
+                region="us-east-1",
                 instance_type="c7a.2xlarge",
-                hours_elapsed=1 / 60, rate_usd_per_hr=0.15,
+                hours_elapsed=1 / 60,
+                rate_usd_per_hr=0.15,
             )
         values = [
             json.loads(line)["cumulative_usd"]
@@ -238,9 +293,11 @@ class TestCostLedger:
         ledger = self._ledger(tmp_path)
         with patch("os.fsync") as mock_fsync:
             ledger.record_heartbeat(
-                worker_id="w1", region="us-east-1",
+                worker_id="w1",
+                region="us-east-1",
                 instance_type="c7a.2xlarge",
-                hours_elapsed=1 / 60, rate_usd_per_hr=0.15,
+                hours_elapsed=1 / 60,
+                rate_usd_per_hr=0.15,
             )
         mock_fsync.assert_called()
 
@@ -248,9 +305,11 @@ class TestCostLedger:
         ledger = self._ledger(tmp_path, budget_usd=1.0, warn_thresholds=(0.5,))
         with caplog.at_level(logging.WARNING):
             ledger.record_heartbeat(
-                worker_id="w1", region="us-east-1",
+                worker_id="w1",
+                region="us-east-1",
                 instance_type="c7a.2xlarge",
-                hours_elapsed=4.0, rate_usd_per_hr=0.15,
+                hours_elapsed=4.0,
+                rate_usd_per_hr=0.15,
             )
         warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
         assert any("50" in r.getMessage() or "0.5" in r.getMessage() for r in warnings)
@@ -260,9 +319,11 @@ class TestCostLedger:
         with caplog.at_level(logging.WARNING):
             for _ in range(10):
                 ledger.record_heartbeat(
-                    worker_id="w1", region="us-east-1",
+                    worker_id="w1",
+                    region="us-east-1",
                     instance_type="c7a.2xlarge",
-                    hours_elapsed=4.0, rate_usd_per_hr=0.15,
+                    hours_elapsed=4.0,
+                    rate_usd_per_hr=0.15,
                 )
         warning_msgs = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
         threshold_warnings = [m for m in warning_msgs if "0.5" in m or "50" in m]
@@ -270,21 +331,26 @@ class TestCostLedger:
 
     def test_hard_caps_at_budget(self, tmp_path):
         from starsector_optimizer.campaign import BudgetExceeded
+
         ledger = self._ledger(tmp_path, budget_usd=0.01)
         with pytest.raises(BudgetExceeded):
             ledger.record_heartbeat(
-                worker_id="w1", region="us-east-1",
+                worker_id="w1",
+                region="us-east-1",
                 instance_type="c7a.2xlarge",
-                hours_elapsed=10.0, rate_usd_per_hr=0.15,
+                hours_elapsed=10.0,
+                rate_usd_per_hr=0.15,
             )
 
     def test_no_secrets_in_rows(self, tmp_path):
         ledger = self._ledger(tmp_path)
         for _ in range(10):
             ledger.record_heartbeat(
-                worker_id="w1", region="us-east-1",
+                worker_id="w1",
+                region="us-east-1",
                 instance_type="c7a.2xlarge",
-                hours_elapsed=1 / 60, rate_usd_per_hr=0.15,
+                hours_elapsed=1 / 60,
+                rate_usd_per_hr=0.15,
             )
         content = (tmp_path / "ledger.jsonl").read_text()
         assert BEARER_TOKEN_SENTINEL not in content
@@ -298,11 +364,13 @@ class TestCampaignManager:
 
     def _config(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import load_campaign_config
+
         return load_campaign_config(_minimal_campaign_yaml(tmp_path, **overrides))
 
     def test_provision_fleet_method_removed(self, tmp_path):
         """Clean rewrite — provision_fleet no longer exists on CampaignManager."""
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
@@ -316,6 +384,7 @@ class TestCampaignManager:
         """partial_fleet_decide / log_partial_fleet_abort both removed with
         provision_fleet. Per-study subprocess handles its own provisioning."""
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
@@ -327,13 +396,21 @@ class TestCampaignManager:
     def test_partial_fleet_abort_exception_removed(self):
         """PartialFleetAbort exception class also removed (no remaining callers)."""
         import starsector_optimizer.campaign as mod
+
         assert not hasattr(mod, "PartialFleetAbort")
 
     def test_spawns_one_subprocess_per_study_seed(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import CampaignManager
+
         studies = [
-            {"hull": "wolf", "regime": "early", "seeds": [0, 1, 2],
-             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+            {
+                "hull": "wolf",
+                "regime": "early",
+                "seeds": [0, 1, 2],
+                "budget_per_study": 200,
+                "workers_per_study": 12,
+                "sampler": "tpe",
+            },
         ]
         config = self._config(tmp_path, studies=studies)
         monkeypatch.chdir(tmp_path)
@@ -354,11 +431,24 @@ class TestCampaignManager:
         """Flat-idx bug fix: subprocess must receive BOTH indexes so
         campaign.studies[study_idx].seeds[seed_idx] picks the correct seed."""
         from starsector_optimizer.campaign import CampaignManager
+
         studies = [
-            {"hull": "wolf", "regime": "early", "seeds": [0, 1],
-             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
-            {"hull": "eagle", "regime": "early", "seeds": [0],
-             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+            {
+                "hull": "wolf",
+                "regime": "early",
+                "seeds": [0, 1],
+                "budget_per_study": 200,
+                "workers_per_study": 12,
+                "sampler": "tpe",
+            },
+            {
+                "hull": "eagle",
+                "regime": "early",
+                "seeds": [0],
+                "budget_per_study": 200,
+                "workers_per_study": 12,
+                "sampler": "tpe",
+            },
         ]
         config = self._config(tmp_path, studies=studies)
         monkeypatch.chdir(tmp_path)
@@ -382,6 +472,7 @@ class TestCampaignManager:
 
     def test_subprocess_gets_yaml_path_not_pickle(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
@@ -398,12 +489,15 @@ class TestCampaignManager:
         assert not any(b"pickle" in str(arg).encode() for arg in cmd)
 
     def test_subprocess_env_contains_required_secrets_and_ip(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """Every subprocess gets STARSECTOR_WORKSTATION_TAILNET_IP,
         STARSECTOR_BEARER_TOKEN, STARSECTOR_TAILSCALE_AUTHKEY,
         STARSECTOR_PROJECT_TAG — the env plumbing contract."""
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
@@ -426,11 +520,24 @@ class TestCampaignManager:
     def test_each_study_gets_distinct_bearer_token(self, tmp_path, monkeypatch):
         """Per-study secret isolation: N subprocesses → N distinct bearer tokens."""
         from starsector_optimizer.campaign import CampaignManager
+
         studies = [
-            {"hull": "wolf", "regime": "early", "seeds": [0, 1, 2],
-             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
-            {"hull": "eagle", "regime": "early", "seeds": [0],
-             "budget_per_study": 200, "workers_per_study": 12, "sampler": "tpe"},
+            {
+                "hull": "wolf",
+                "regime": "early",
+                "seeds": [0, 1, 2],
+                "budget_per_study": 200,
+                "workers_per_study": 12,
+                "sampler": "tpe",
+            },
+            {
+                "hull": "eagle",
+                "regime": "early",
+                "seeds": [0],
+                "budget_per_study": 200,
+                "workers_per_study": 12,
+                "sampler": "tpe",
+            },
         ]
         config = self._config(tmp_path, studies=studies)
         monkeypatch.chdir(tmp_path)
@@ -444,14 +551,14 @@ class TestCampaignManager:
             mock_popen.return_value.poll.return_value = 0
             manager.spawn_studies()
         tokens = {
-            call.kwargs["env"]["STARSECTOR_BEARER_TOKEN"]
-            for call in mock_popen.call_args_list
+            call.kwargs["env"]["STARSECTOR_BEARER_TOKEN"] for call in mock_popen.call_args_list
         }
         assert len(tokens) == 4  # 3 + 1
 
     def test_teardown_calls_provider_terminate_with_project_tag(self, tmp_path):
         """Campaign-wide sweep backstop reaps by Project tag only."""
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
@@ -462,6 +569,7 @@ class TestCampaignManager:
 
     def test_teardown_retries_then_succeeds(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.side_effect = [[{"id": "i-1"}], []]
@@ -472,6 +580,7 @@ class TestCampaignManager:
 
     def test_teardown_raises_if_leaks_persist(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager, TeardownError
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = [{"id": "i-1"}]
@@ -482,6 +591,7 @@ class TestCampaignManager:
 
     def test_atexit_registered(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
@@ -492,6 +602,7 @@ class TestCampaignManager:
 
     def test_signal_handlers_installed(self, tmp_path):
         from starsector_optimizer.campaign import CampaignManager
+
         config = self._config(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []
@@ -510,20 +621,24 @@ class TestCampaignManagerPreflight:
 
     def _config(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import load_campaign_config
+
         return load_campaign_config(_minimal_campaign_yaml(tmp_path, **overrides))
 
     def _manager_with_mocks(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import CampaignManager
         from starsector_optimizer.game_manifest import GameManifest
+
         config = self._config(tmp_path, **overrides)
         provider = MagicMock()
         provider.list_active.return_value = []
         from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
+
         # Preflight checks GameVersion, ManifestSha256, ModCommitSha, and
         # WorkerSourceSha.
         # Mock to dispatch on tag_key so all succeed; tests that want to
         # verify mismatch paths override side_effect explicitly.
         _m = GameManifest.load()
+
         def _describe_ami_tag(*, ami_id, region, tag_key):
             if tag_key == "GameVersion":
                 return _m.constants.game_version
@@ -534,6 +649,7 @@ class TestCampaignManagerPreflight:
             if tag_key == "WorkerSourceSha":
                 return worker_source_sha256()
             raise KeyError(tag_key)
+
         provider.describe_ami_tag.side_effect = _describe_ami_tag
         ledger = MagicMock()
         return CampaignManager(config, provider, ledger)
@@ -550,9 +666,11 @@ class TestCampaignManagerPreflight:
     def test_requires_redis_reachable_on_tailnet_ip(self, tmp_path, caplog):
         manager = self._manager_with_mocks(tmp_path)
         # tailscale ip -4 returns a value; redis.ping raises.
-        with patch("subprocess.run") as mock_run, \
-             patch("redis.Redis") as mock_redis_ctor, \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("redis.Redis") as mock_redis_ctor,
+            patch("boto3.client") as mock_boto,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
             instance = MagicMock()
             instance.ping.side_effect = Exception("connection refused")
@@ -565,39 +683,50 @@ class TestCampaignManagerPreflight:
 
     def test_requires_aws_credentials(self, tmp_path, caplog):
         manager = self._manager_with_mocks(tmp_path)
-        with patch("subprocess.run") as mock_run, \
-             patch("redis.Redis") as mock_redis_ctor, \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("redis.Redis") as mock_redis_ctor,
+            patch("boto3.client") as mock_boto,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
             mock_redis_ctor.return_value.ping.return_value = True
             mock_boto.return_value.get_caller_identity.side_effect = Exception("creds expired")
             with caplog.at_level(logging.ERROR):
                 with pytest.raises(SystemExit):
                     manager._preflight()
-        assert any("aws" in r.getMessage().lower() or "creden" in r.getMessage().lower()
-                   for r in caplog.records)
+        assert any(
+            "aws" in r.getMessage().lower() or "creden" in r.getMessage().lower()
+            for r in caplog.records
+        )
 
     def test_requires_authkey_syntax(self, tmp_path, caplog):
         manager = self._manager_with_mocks(
-            tmp_path, tailscale_authkey_secret="not-a-valid-key",
+            tmp_path,
+            tailscale_authkey_secret="not-a-valid-key",
         )
-        with patch("subprocess.run") as mock_run, \
-             patch("redis.Redis") as mock_redis_ctor, \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("redis.Redis") as mock_redis_ctor,
+            patch("boto3.client") as mock_boto,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
             mock_redis_ctor.return_value.ping.return_value = True
             mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
             with caplog.at_level(logging.ERROR):
                 with pytest.raises(SystemExit):
                     manager._preflight()
-        assert any("tskey" in r.getMessage().lower() or "authkey" in r.getMessage().lower()
-                   for r in caplog.records)
+        assert any(
+            "tskey" in r.getMessage().lower() or "authkey" in r.getMessage().lower()
+            for r in caplog.records
+        )
 
     def test_preflight_stores_tailnet_ip(self, tmp_path):
         manager = self._manager_with_mocks(tmp_path)
-        with patch("subprocess.run") as mock_run, \
-             patch("redis.Redis") as mock_redis_ctor, \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("redis.Redis") as mock_redis_ctor,
+            patch("boto3.client") as mock_boto,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="100.64.7.7\n", stderr="")
             mock_redis_ctor.return_value.ping.return_value = True
             mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
@@ -605,7 +734,8 @@ class TestCampaignManagerPreflight:
         assert manager._tailnet_ip == "100.64.7.7"
 
     def test_redis_reachable_via_tailscale_serve_when_tailnet_ip_ping_fails(
-        self, tmp_path,
+        self,
+        tmp_path,
     ):
         """Rootless/userspace-mode path: Redis binds to 127.0.0.1 only, and
         `tailscale serve` TCP-proxies it to the tailnet. The preflight must
@@ -625,7 +755,8 @@ class TestCampaignManagerPreflight:
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
         current_git_sha = subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True,
+            ["git", "rev-parse", "HEAD"],
+            text=True,
         )
 
         def subprocess_stub(cmd, *args, **kwargs):
@@ -647,17 +778,16 @@ class TestCampaignManagerPreflight:
             if cleaned[:2] == ["serve", "status"]:
                 return MagicMock(
                     returncode=0,
-                    stdout=(
-                        "TCP State:\n"
-                        "  127.0.0.1:6379  tcp://127.0.0.1:6379  (bg)\n"
-                    ),
+                    stdout=("TCP State:\n  127.0.0.1:6379  tcp://127.0.0.1:6379  (bg)\n"),
                     stderr="",
                 )
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("subprocess.run", side_effect=subprocess_stub), \
-             patch("redis.Redis", side_effect=redis_ctor), \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run", side_effect=subprocess_stub),
+            patch("redis.Redis", side_effect=redis_ctor),
+            patch("boto3.client") as mock_boto,
+        ):
             mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
             manager._preflight()  # must not raise
 
@@ -667,9 +797,11 @@ class TestCampaignManagerPreflight:
         """If redis-server isn't running at all, fail at step 1 with a
         message that points at devenv-up.sh."""
         manager = self._manager_with_mocks(tmp_path)
-        with patch("subprocess.run") as mock_run, \
-             patch("redis.Redis") as mock_redis_ctor, \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("redis.Redis") as mock_redis_ctor,
+            patch("boto3.client") as mock_boto,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
             instance = MagicMock()
             instance.ping.side_effect = Exception("connection refused")
@@ -701,9 +833,11 @@ class TestCampaignManagerPreflight:
             # serve status returns empty → no mapping
             return MagicMock(returncode=0, stdout="", stderr="")
 
-        with patch("subprocess.run", side_effect=subprocess_stub), \
-             patch("redis.Redis", side_effect=redis_ctor), \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run", side_effect=subprocess_stub),
+            patch("redis.Redis", side_effect=redis_ctor),
+            patch("boto3.client") as mock_boto,
+        ):
             mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
             with caplog.at_level(logging.ERROR):
                 with pytest.raises(SystemExit):
@@ -740,9 +874,11 @@ class TestCampaignManagerPreflight:
         def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
-        with patch("subprocess.run", side_effect=subprocess_stub), \
-             patch("redis.Redis", side_effect=redis_ctor), \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run", side_effect=subprocess_stub),
+            patch("redis.Redis", side_effect=redis_ctor),
+            patch("boto3.client") as mock_boto,
+        ):
             mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
             manager._preflight()
 
@@ -779,9 +915,11 @@ class TestCampaignManagerPreflight:
         def redis_ctor(*, host, port, socket_timeout, **kwargs):
             return loopback_client if host == "127.0.0.1" else tailnet_client
 
-        with patch("subprocess.run") as mock_run, \
-             patch("redis.Redis", side_effect=redis_ctor), \
-             patch("boto3.client") as mock_boto:
+        with (
+            patch("subprocess.run") as mock_run,
+            patch("redis.Redis", side_effect=redis_ctor),
+            patch("boto3.client") as mock_boto,
+        ):
             mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
             mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
             manager._preflight()
@@ -799,17 +937,24 @@ class TestCheckAmiTagsAgainstManifest:
 
     def _manifest(self):
         from starsector_optimizer.game_manifest import GameManifest
+
         return GameManifest.load()
 
     def _manifest_sha(self):
         from starsector_optimizer.campaign import manifest_sha256
+
         return manifest_sha256()
 
     def _provider_returning(
-        self, gv, sha, worker_sha="worker-sha", manifest_sha=None,
+        self,
+        gv,
+        sha,
+        worker_sha="worker-sha",
+        manifest_sha=None,
     ):
         provider = MagicMock()
         manifest_sha = manifest_sha or self._manifest_sha()
+
         def _describe(*, ami_id, region, tag_key):
             if tag_key == "GameVersion":
                 return gv
@@ -820,28 +965,35 @@ class TestCheckAmiTagsAgainstManifest:
             if tag_key == "WorkerSourceSha":
                 return worker_sha
             raise KeyError(tag_key)
+
         provider.describe_ami_tag.side_effect = _describe
         return provider
 
     def test_passes_when_all_tags_match(self, monkeypatch):
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
         provider = self._provider_returning(
-            m.constants.game_version, m.constants.mod_commit_sha,
+            m.constants.game_version,
+            m.constants.mod_commit_sha,
         )
         # Should not raise.
         check_ami_tags_against_manifest(
-            provider, {"us-east-1": "ami-1"}, m,
+            provider,
+            {"us-east-1": "ami-1"},
+            m,
         )
 
     def test_raises_on_game_version_mismatch(self, monkeypatch):
         from starsector_optimizer.campaign import (
-            check_ami_tags_against_manifest, PreflightFailure,
+            check_ami_tags_against_manifest,
+            PreflightFailure,
         )
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
@@ -850,30 +1002,39 @@ class TestCheckAmiTagsAgainstManifest:
         provider = self._provider_returning("0.0-stale", m.constants.mod_commit_sha)
         with pytest.raises(PreflightFailure, match="GameVersion"):
             check_ami_tags_against_manifest(
-                provider, {"us-east-1": "ami-1"}, m,
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
             )
 
     def test_raises_on_mod_commit_sha_mismatch(self, monkeypatch):
         from starsector_optimizer.campaign import (
-            check_ami_tags_against_manifest, PreflightFailure,
+            check_ami_tags_against_manifest,
+            PreflightFailure,
         )
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
         )
         m = self._manifest()
         provider = self._provider_returning(
-            m.constants.game_version, "deadbeef0000000",
+            m.constants.game_version,
+            "deadbeef0000000",
         )
         with pytest.raises(PreflightFailure, match="ModCommitSha"):
             check_ami_tags_against_manifest(
-                provider, {"us-east-1": "ami-1"}, m,
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
             )
 
     def test_raises_on_manifest_sha_mismatch(self, monkeypatch):
         from starsector_optimizer.campaign import (
-            check_ami_tags_against_manifest, PreflightFailure,
+            check_ami_tags_against_manifest,
+            PreflightFailure,
         )
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
@@ -886,13 +1047,17 @@ class TestCheckAmiTagsAgainstManifest:
         )
         with pytest.raises(PreflightFailure, match="ManifestSha256"):
             check_ami_tags_against_manifest(
-                provider, {"us-east-1": "ami-1"}, m,
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
             )
 
     def test_raises_on_worker_source_sha_mismatch(self, monkeypatch):
         from starsector_optimizer.campaign import (
-            check_ami_tags_against_manifest, PreflightFailure,
+            check_ami_tags_against_manifest,
+            PreflightFailure,
         )
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "current-worker-sha",
@@ -905,13 +1070,17 @@ class TestCheckAmiTagsAgainstManifest:
         )
         with pytest.raises(PreflightFailure, match="WorkerSourceSha"):
             check_ami_tags_against_manifest(
-                provider, {"us-east-1": "ami-1"}, m,
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
             )
 
     def test_raises_on_dirty_worker_source_checkout(self, monkeypatch):
         from starsector_optimizer.campaign import (
-            check_ami_tags_against_manifest, PreflightFailure,
+            check_ami_tags_against_manifest,
+            PreflightFailure,
         )
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
@@ -922,15 +1091,19 @@ class TestCheckAmiTagsAgainstManifest:
         )
         m = self._manifest()
         provider = self._provider_returning(
-            m.constants.game_version, m.constants.mod_commit_sha,
+            m.constants.game_version,
+            m.constants.mod_commit_sha,
         )
         with pytest.raises(PreflightFailure, match="uncommitted changes"):
             check_ami_tags_against_manifest(
-                provider, {"us-east-1": "ami-1"}, m,
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
             )
 
     def test_dirty_worker_source_debug_launch_expects_dirty_tag(self, monkeypatch):
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
+
         monkeypatch.setenv("STARSECTOR_ALLOW_DIRTY_AMI_LAUNCH", "1")
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
@@ -947,13 +1120,17 @@ class TestCheckAmiTagsAgainstManifest:
             worker_sha="worker-sha-dirty",
         )
         check_ami_tags_against_manifest(
-            provider, {"us-east-1": "ami-1"}, m,
+            provider,
+            {"us-east-1": "ami-1"},
+            m,
         )
 
     def test_raises_when_required_region_missing(self, monkeypatch):
         from starsector_optimizer.campaign import (
-            check_ami_tags_against_manifest, PreflightFailure,
+            check_ami_tags_against_manifest,
+            PreflightFailure,
         )
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
@@ -972,11 +1149,14 @@ class TestCheckAmiTagsAgainstManifest:
             )
 
     def test_skips_silently_when_provider_lacks_describe_ami_tag(
-        self, caplog, monkeypatch,
+        self,
+        caplog,
+        monkeypatch,
     ):
         """Hetzner stub / fake providers that don't implement describe_ami_tag
         must not hard-break the preflight — they log a warning and return."""
         from starsector_optimizer.campaign import check_ami_tags_against_manifest
+
         monkeypatch.setattr(
             "starsector_optimizer.campaign.worker_source_sha256",
             lambda: "worker-sha",
@@ -986,7 +1166,9 @@ class TestCheckAmiTagsAgainstManifest:
         provider.describe_ami_tag.side_effect = AttributeError("no impl")
         with caplog.at_level(logging.WARNING):
             check_ami_tags_against_manifest(
-                provider, {"us-east-1": "ami-1"}, m,
+                provider,
+                {"us-east-1": "ami-1"},
+                m,
             )
         assert any("describe_ami_tag" in r.getMessage() for r in caplog.records)
 
@@ -994,6 +1176,7 @@ class TestCheckAmiTagsAgainstManifest:
         """ValueError subclassing lets honest_evaluator propagate without
         rewrapping its existing ValueError-based contract."""
         from starsector_optimizer.campaign import PreflightFailure
+
         assert issubclass(PreflightFailure, ValueError)
 
 
@@ -1005,13 +1188,16 @@ class TestLedgerTick:
     def _manager(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import CampaignManager, CostLedger
         from starsector_optimizer.game_manifest import GameManifest
+
         config_path = _minimal_campaign_yaml(tmp_path, **overrides)
         from starsector_optimizer.campaign import load_campaign_config
+
         config = load_campaign_config(config_path)
         provider = MagicMock()
         provider.list_active.return_value = []
         _m = GameManifest.load()
         from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
+
         def _describe_ami_tag(*, ami_id, region, tag_key):
             if tag_key == "GameVersion":
                 return _m.constants.game_version
@@ -1022,6 +1208,7 @@ class TestLedgerTick:
             if tag_key == "WorkerSourceSha":
                 return worker_source_sha256()
             raise KeyError(tag_key)
+
         provider.describe_ami_tag.side_effect = _describe_ami_tag
         provider.get_spot_price.return_value = 0.30
         ledger = CostLedger(
@@ -1031,9 +1218,15 @@ class TestLedgerTick:
         mgr = CampaignManager(config, provider, ledger)
         return mgr, provider, ledger
 
-    def _seed_heartbeat(self, redis_client, project_tag, worker_id,
-                         region="us-east-1", instance_type="c7a.2xlarge",
-                         ts_offset=0.0):
+    def _seed_heartbeat(
+        self,
+        redis_client,
+        project_tag,
+        worker_id,
+        region="us-east-1",
+        instance_type="c7a.2xlarge",
+        ts_offset=0.0,
+    ):
         redis_client.hset(
             f"worker:{project_tag}:{worker_id}:heartbeat",
             mapping={
@@ -1054,6 +1247,7 @@ class TestLedgerTick:
         # preflight — this exercises every branch directly.
         from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
         from starsector_optimizer.game_manifest import GameManifest
+
         _mgr, provider, _ledger = self._manager(tmp_path)
         _m = GameManifest.load()
         expected = {
@@ -1064,7 +1258,9 @@ class TestLedgerTick:
         }
         for tag_key, want in expected.items():
             got = provider.describe_ami_tag(
-                ami_id="ami-test", region="us-east-1", tag_key=tag_key,
+                ami_id="ami-test",
+                region="us-east-1",
+                tag_key=tag_key,
             )
             assert got == want, tag_key
 
@@ -1075,8 +1271,7 @@ class TestLedgerTick:
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-b")
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-c")
         mgr._tick_ledger()
-        rows = [json.loads(l) for l in
-                (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text().splitlines()]
         assert len(rows) == 3
         assert all(r["delta_usd"] > 0 for r in rows)
         assert {r["worker_id"] for r in rows} == {"worker-a", "worker-b", "worker-c"}
@@ -1087,6 +1282,7 @@ class TestLedgerTick:
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         provider.get_spot_price.return_value = 5.0  # exceeds 0.001 instantly
         from starsector_optimizer.campaign import BudgetExceeded
+
         with pytest.raises(BudgetExceeded):
             mgr._tick_ledger()
 
@@ -1107,11 +1303,13 @@ class TestLedgerTick:
         mgr, _provider, _ledger = self._manager(tmp_path)
         mgr._redis = fake_redis
         stale_offset = (
-            mgr._config.ledger_heartbeat_interval_seconds
-            * mgr._config.heartbeat_stale_multiplier + 10
+            mgr._config.ledger_heartbeat_interval_seconds * mgr._config.heartbeat_stale_multiplier
+            + 10
         )
         self._seed_heartbeat(
-            fake_redis, "starsector-test-campaign", "worker-a",
+            fake_redis,
+            "starsector-test-campaign",
+            "worker-a",
             ts_offset=stale_offset,
         )
         mgr._tick_ledger()
@@ -1129,8 +1327,7 @@ class TestLedgerTick:
         # Re-seed so live, then tick again.
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         mgr._tick_ledger()
-        rows = [json.loads(l) for l in
-                (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text().splitlines()]
         interval_hours = mgr._config.ledger_heartbeat_interval_seconds / 3600.0
         for r in rows:
             # Allow tiny float slack.
@@ -1141,9 +1338,9 @@ class TestRunJanitorPass:
     """Phase-7-prep: janitor resets enqueued_at on re-queue, tracks
     requeue_count per item, drops + ERROR on max_requeues exceeded."""
 
-    def _seed_stale_item(self, fake_redis, source, processing,
-                         matchup_id, age_seconds=300.0,
-                         requeue_count=0):
+    def _seed_stale_item(
+        self, fake_redis, source, processing, matchup_id, age_seconds=300.0, requeue_count=0
+    ):
         payload = {
             "matchup_id": matchup_id,
             "enqueued_at": time.time() - age_seconds,
@@ -1153,12 +1350,16 @@ class TestRunJanitorPass:
 
     def test_janitor_resets_enqueued_at_on_requeue(self, fake_redis):
         from starsector_optimizer.campaign import run_janitor_pass
+
         source = "q:test:src"
         processing = "q:test:proc"
         self._seed_stale_item(fake_redis, source, processing, "m1", age_seconds=120.0)
         requeued = run_janitor_pass(
-            fake_redis, source, processing,
-            visibility_timeout_seconds=60.0, max_requeues=5,
+            fake_redis,
+            source,
+            processing,
+            visibility_timeout_seconds=60.0,
+            max_requeues=5,
         )
         assert requeued == 1
         raw = fake_redis.lindex(source, 0)
@@ -1169,31 +1370,47 @@ class TestRunJanitorPass:
 
     def test_janitor_increments_requeue_count(self, fake_redis):
         from starsector_optimizer.campaign import run_janitor_pass
+
         source = "q:test:src"
         processing = "q:test:proc"
         self._seed_stale_item(
-            fake_redis, source, processing, "m1", age_seconds=120.0,
+            fake_redis,
+            source,
+            processing,
+            "m1",
+            age_seconds=120.0,
             requeue_count=2,
         )
         run_janitor_pass(
-            fake_redis, source, processing,
-            visibility_timeout_seconds=60.0, max_requeues=5,
+            fake_redis,
+            source,
+            processing,
+            visibility_timeout_seconds=60.0,
+            max_requeues=5,
         )
         item = json.loads(fake_redis.lindex(source, 0))
         assert item["requeue_count"] == 3
 
     def test_janitor_drops_on_max_requeues_exceeded(self, fake_redis, caplog):
         from starsector_optimizer.campaign import run_janitor_pass
+
         source = "q:test:src"
         processing = "q:test:proc"
         self._seed_stale_item(
-            fake_redis, source, processing, "m1", age_seconds=120.0,
+            fake_redis,
+            source,
+            processing,
+            "m1",
+            age_seconds=120.0,
             requeue_count=5,  # equal to max — next bump hits 6 which exceeds
         )
         with caplog.at_level(logging.ERROR, logger="starsector_optimizer.campaign"):
             requeued = run_janitor_pass(
-                fake_redis, source, processing,
-                visibility_timeout_seconds=60.0, max_requeues=5,
+                fake_redis,
+                source,
+                processing,
+                visibility_timeout_seconds=60.0,
+                max_requeues=5,
             )
         assert requeued == 0
         # Item dropped from processing, NOT pushed back to source.
@@ -1211,8 +1428,11 @@ class TestCampaignManagerTerminatesStudyProcs:
 
     def _manager(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import (
-            CampaignManager, CostLedger, load_campaign_config,
+            CampaignManager,
+            CostLedger,
+            load_campaign_config,
         )
+
         config_path = _minimal_campaign_yaml(tmp_path, **overrides)
         config = load_campaign_config(config_path)
         provider = MagicMock()
@@ -1249,8 +1469,7 @@ class TestCampaignManagerTerminatesStudyProcs:
     def test_teardown_sigkills_subprocs_that_dont_exit_in_time(self, tmp_path):
         """Werkzeug + blocking AWS calls can prevent clean SIGTERM exit;
         SIGKILL fallback ensures no orphans regardless."""
-        mgr, _, _ = self._manager(tmp_path,
-                                  study_proc_terminate_timeout_seconds=0.1)
+        mgr, _, _ = self._manager(tmp_path, study_proc_terminate_timeout_seconds=0.1)
         stuck = self._mock_proc(alive=True)
         stuck.wait.side_effect = subprocess.TimeoutExpired(cmd="x", timeout=0.1)
         # Stays alive even after wait() times out, then exits on kill().
@@ -1288,9 +1507,7 @@ class TestCampaignManagerTerminatesStudyProcs:
         mgr._study_procs = [live]
         call_order = []
         live.terminate.side_effect = lambda: call_order.append("sigterm")
-        provider.terminate_all_tagged.side_effect = (
-            lambda tag: call_order.append("sweep")
-        )
+        provider.terminate_all_tagged.side_effect = lambda tag: call_order.append("sweep")
         mgr.teardown()
         assert call_order == ["sigterm", "sweep"]
 
@@ -1303,8 +1520,11 @@ class TestCampaignManagerRunExitCodes:
 
     def _manager(self, tmp_path, **overrides):
         from starsector_optimizer.campaign import (
-            CampaignManager, CostLedger, load_campaign_config,
+            CampaignManager,
+            CostLedger,
+            load_campaign_config,
         )
+
         config_path = _minimal_campaign_yaml(tmp_path, **overrides)
         config = load_campaign_config(config_path)
         provider = MagicMock()
@@ -1318,35 +1538,40 @@ class TestCampaignManagerRunExitCodes:
         """Budget cap is a designed termination — wrappers running multiple
         budget-capped cells back-to-back must see exit 0 to advance."""
         from starsector_optimizer.campaign import BudgetExceeded
+
         mgr, _, _ = self._manager(tmp_path)
-        with patch.object(mgr, "install_signal_handlers"), \
-             patch.object(mgr, "_preflight"), \
-             patch.object(mgr, "spawn_studies", return_value=[]), \
-             patch.object(
-                 mgr, "monitor_loop",
-                 side_effect=BudgetExceeded("cumulative_usd=5.00 >= budget_usd=5.00"),
-             ), \
-             patch.object(mgr, "teardown"):
+        with (
+            patch.object(mgr, "install_signal_handlers"),
+            patch.object(mgr, "_preflight"),
+            patch.object(mgr, "spawn_studies", return_value=[]),
+            patch.object(
+                mgr,
+                "monitor_loop",
+                side_effect=BudgetExceeded("cumulative_usd=5.00 >= budget_usd=5.00"),
+            ),
+            patch.object(mgr, "teardown"),
+        ):
             assert mgr.run() == 0
 
     def test_run_returns_130_on_keyboard_interrupt(self, tmp_path):
         """Ctrl-C / SIGTERM / SIGHUP must keep their distinct exit so the
         wrapper aborts the wave instead of advancing."""
         mgr, _, _ = self._manager(tmp_path)
-        with patch.object(mgr, "install_signal_handlers"), \
-             patch.object(mgr, "_preflight"), \
-             patch.object(mgr, "spawn_studies", return_value=[]), \
-             patch.object(mgr, "monitor_loop", side_effect=KeyboardInterrupt()), \
-             patch.object(mgr, "teardown"):
+        with (
+            patch.object(mgr, "install_signal_handlers"),
+            patch.object(mgr, "_preflight"),
+            patch.object(mgr, "spawn_studies", return_value=[]),
+            patch.object(mgr, "monitor_loop", side_effect=KeyboardInterrupt()),
+            patch.object(mgr, "teardown"),
+        ):
             assert mgr.run() == 130
 
 
 class TestCampaignNameValidation:
     def test_name_regex_accepts_common_names(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
-        for i, name in enumerate(
-            ("smoke", "phase7-prep-2026-04", "test.campaign.1", "a_b_c")
-        ):
+
+        for i, name in enumerate(("smoke", "phase7-prep-2026-04", "test.campaign.1", "a_b_c")):
             subdir = tmp_path / f"case_{i}"
             subdir.mkdir()
             path = _minimal_campaign_yaml(subdir, name=name)
@@ -1354,12 +1579,14 @@ class TestCampaignNameValidation:
 
     def test_name_regex_rejects_whitespace(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path, name="bad name")
         with pytest.raises(ValueError, match=r"name"):
             load_campaign_config(path)
 
     def test_name_regex_rejects_shell_metachars(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         path = _minimal_campaign_yaml(tmp_path, name="bad/name")
         with pytest.raises(ValueError, match=r"name"):
             load_campaign_config(path)
@@ -1370,18 +1597,22 @@ class TestYamlEnvSubstitution:
 
     def test_expands_env_var_in_authkey_field(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import load_campaign_config
+
         monkeypatch.setenv("SMOKE_TEST_TAILSCALE", "tskey-auth-REAL-VALUE-z9z9")
         path = _minimal_campaign_yaml(
-            tmp_path, tailscale_authkey_secret="${SMOKE_TEST_TAILSCALE}",
+            tmp_path,
+            tailscale_authkey_secret="${SMOKE_TEST_TAILSCALE}",
         )
         config = load_campaign_config(path)
         assert config.tailscale_authkey_secret == "tskey-auth-REAL-VALUE-z9z9"
 
     def test_missing_env_var_raises_clear_error(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import load_campaign_config
+
         monkeypatch.delenv("SMOKE_TEST_TAILSCALE_MISSING", raising=False)
         path = _minimal_campaign_yaml(
-            tmp_path, tailscale_authkey_secret="${SMOKE_TEST_TAILSCALE_MISSING}",
+            tmp_path,
+            tailscale_authkey_secret="${SMOKE_TEST_TAILSCALE_MISSING}",
         )
         with pytest.raises(ValueError, match="SMOKE_TEST_TAILSCALE_MISSING"):
             load_campaign_config(path)
@@ -1390,6 +1621,7 @@ class TestYamlEnvSubstitution:
         """Only tailscale_authkey_secret gets substitution; other string
         fields pass through untouched (no global os.path.expandvars)."""
         from starsector_optimizer.campaign import load_campaign_config
+
         monkeypatch.setenv("UNRELATED_VAR", "SHOULD_NOT_APPEAR")
         path = _minimal_campaign_yaml(tmp_path, ssh_key_name="key_${UNRELATED_VAR}")
         config = load_campaign_config(path)
@@ -1404,6 +1636,7 @@ class TestSmokeYamlLoadsAndValidates:
 
     def test_loads_from_repo(self, monkeypatch):
         from starsector_optimizer.campaign import load_campaign_config
+
         monkeypatch.setenv("TAILSCALE_AUTHKEY", "tskey-auth-SMOKE-44e7f9b3")
         repo_root = Path(__file__).parent.parent
         smoke_path = repo_root / "examples" / "smoke-campaign.yaml"
@@ -1434,8 +1667,10 @@ class TestActiveOpponentsPassedToSubprocess:
 
     def test_active_opponents_not_passed_when_none(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import (
-            CampaignManager, load_campaign_config,
+            CampaignManager,
+            load_campaign_config,
         )
+
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
@@ -1450,13 +1685,24 @@ class TestActiveOpponentsPassedToSubprocess:
 
     def test_active_opponents_passed_when_set(self, tmp_path, monkeypatch):
         from starsector_optimizer.campaign import (
-            CampaignManager, load_campaign_config,
+            CampaignManager,
+            load_campaign_config,
         )
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "wolf", "regime": "early", "seeds": [0],
-             "budget_per_study": 1, "workers_per_study": 1,
-             "sampler": "tpe", "active_opponents": 1},
-        ])
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "wolf",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 1,
+                    "workers_per_study": 1,
+                    "sampler": "tpe",
+                    "active_opponents": 1,
+                },
+            ],
+        )
         config = load_campaign_config(path)
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
@@ -1483,40 +1729,74 @@ class TestWarmStartFromRegime:
 
     def test_warm_start_from_regime_defaults_to_none(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
+
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         assert config.studies[0].warm_start_from_regime is None
 
     def test_warm_start_from_regime_loads_from_yaml(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "hammerhead", "regime": "mid", "seeds": [0],
-             "budget_per_study": 250, "workers_per_study": 8,
-             "sampler": "tpe", "warm_start_from_regime": "early"},
-        ])
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "mid",
+                    "seeds": [0],
+                    "budget_per_study": 250,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                    "warm_start_from_regime": "early",
+                },
+            ],
+        )
         config = load_campaign_config(path)
         assert config.studies[0].warm_start_from_regime == "early"
 
     def test_warm_start_from_regime_equal_to_regime_rejected(self, tmp_path):
         from starsector_optimizer.campaign import load_campaign_config
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "hammerhead", "regime": "early", "seeds": [0],
-             "budget_per_study": 250, "workers_per_study": 8,
-             "sampler": "tpe", "warm_start_from_regime": "early"},
-        ])
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 250,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                    "warm_start_from_regime": "early",
+                },
+            ],
+        )
         with pytest.raises(ValueError, match="warm_start_from_regime"):
             load_campaign_config(path)
 
     def test_warm_start_from_regime_passed_to_subprocess(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         from starsector_optimizer.campaign import (
-            CampaignManager, load_campaign_config,
+            CampaignManager,
+            load_campaign_config,
         )
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "hammerhead", "regime": "mid", "seeds": [0],
-             "budget_per_study": 250, "workers_per_study": 8,
-             "sampler": "tpe", "warm_start_from_regime": "early"},
-        ])
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "mid",
+                    "seeds": [0],
+                    "budget_per_study": 250,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                    "warm_start_from_regime": "early",
+                },
+            ],
+        )
         config = load_campaign_config(path)
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
@@ -1532,11 +1812,15 @@ class TestWarmStartFromRegime:
         assert cmd[idx + 1] == "early"
 
     def test_warm_start_from_regime_not_passed_when_none(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         from starsector_optimizer.campaign import (
-            CampaignManager, load_campaign_config,
+            CampaignManager,
+            load_campaign_config,
         )
+
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
@@ -1557,11 +1841,15 @@ class TestSpawnStudiesPersistentDb:
     name collisions across ablation cells and seeds."""
 
     def test_study_db_path_passed_and_directory_created(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         from starsector_optimizer.campaign import (
-            CampaignManager, load_campaign_config,
+            CampaignManager,
+            load_campaign_config,
         )
+
         monkeypatch.chdir(tmp_path)
         yaml_path = tmp_path / "campaign.yaml"
         # Reuse the helper but write into the chdir'd tmp dir so derived
@@ -1581,29 +1869,44 @@ class TestSpawnStudiesPersistentDb:
         idx = cmd.index("--study-db")
         db_path = Path(cmd[idx + 1])
         # study_id derivation: {hull}__{regime}__{sampler}__seed{seed_value}
-        assert db_path == Path(
-            "data/study_dbs/test-campaign/wolf__early__tpe__seed0.db"
-        )
+        assert db_path == Path("data/study_dbs/test-campaign/wolf__early__tpe__seed0.db")
         assert db_path.parent.exists()
 
     def test_study_db_paths_unique_per_seed_and_per_study(
-        self, tmp_path, monkeypatch,
+        self,
+        tmp_path,
+        monkeypatch,
     ):
         """Two seeds of the same study and two studies with different hulls
         each get their own DB file — no collisions on the
         `{hull}__{regime}` Optuna study-name namespace."""
         from starsector_optimizer.campaign import (
-            CampaignManager, load_campaign_config,
+            CampaignManager,
+            load_campaign_config,
         )
+
         monkeypatch.chdir(tmp_path)
-        path = _minimal_campaign_yaml(tmp_path, studies=[
-            {"hull": "wolf", "regime": "early", "seeds": [0, 1],
-             "budget_per_study": 200, "workers_per_study": 8,
-             "sampler": "tpe"},
-            {"hull": "hammerhead", "regime": "early", "seeds": [0],
-             "budget_per_study": 200, "workers_per_study": 8,
-             "sampler": "tpe"},
-        ])
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "wolf",
+                    "regime": "early",
+                    "seeds": [0, 1],
+                    "budget_per_study": 200,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                },
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 200,
+                    "workers_per_study": 8,
+                    "sampler": "tpe",
+                },
+            ],
+        )
         config = load_campaign_config(path)
         provider = MagicMock()
         provider.list_active.return_value = []
@@ -1625,9 +1928,13 @@ class TestEnvDictNotLogged:
     """Secrets in subprocess env must never hit logs."""
 
     def test_spawn_studies_does_not_log_env_dict(
-        self, tmp_path, monkeypatch, caplog,
+        self,
+        tmp_path,
+        monkeypatch,
+        caplog,
     ):
         from starsector_optimizer.campaign import CampaignManager, load_campaign_config
+
         config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()

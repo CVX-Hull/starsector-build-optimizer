@@ -8,7 +8,6 @@ produced shell script:
   - never leaks the bearer token or tailscale authkey into logs / stdout
 """
 
-
 from typing import Any
 
 import pytest
@@ -20,6 +19,7 @@ TAILSCALE_SECRET_SENTINEL = "SENTINEL_TAILSCALE_e1a2f800"
 
 def _make_worker_config(**overrides):
     from starsector_optimizer.models import WorkerConfig
+
     defaults: dict[str, Any] = {
         "campaign_id": "unit-test-campaign",
         "study_id": "hammerhead__early__seed0",
@@ -38,6 +38,7 @@ def _make_worker_config(**overrides):
 class TestRenderUserData:
     def test_returns_str(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert isinstance(out, str)
@@ -45,12 +46,14 @@ class TestRenderUserData:
 
     def test_starts_with_shebang(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert out.startswith("#!/"), "cloud-init expects a shebang-prefixed bash script"
 
     def test_runs_tailscale_up_with_authkey(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert "tailscale up" in out
@@ -73,12 +76,14 @@ class TestRenderUserData:
 
     def test_writes_env_file(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert "/etc/starsector-worker.env" in out
 
     def test_env_file_contains_every_worker_config_field(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # Every STARSECTOR_WORKER_* env var the worker_agent reads must be set.
@@ -96,6 +101,7 @@ class TestRenderUserData:
 
     def test_env_file_has_restrictive_mode(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # Bearer token in plaintext → owner-read-only. Must be set at creation
@@ -106,6 +112,7 @@ class TestRenderUserData:
 
     def test_starts_systemd_service(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert "systemctl" in out
@@ -114,6 +121,7 @@ class TestRenderUserData:
     def test_tailscale_up_runs_before_systemctl_start(self):
         """Worker agent Redis reachability requires the tailnet up first."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         ts_pos = out.find("tailscale up")
@@ -124,6 +132,7 @@ class TestRenderUserData:
     def test_bearer_token_plaintext_in_env_file_only(self):
         """Bearer token must appear only in the env-file context, never echoed."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # At least one occurrence for the env file line.
@@ -138,6 +147,7 @@ class TestRenderUserData:
 
     def test_script_has_set_errexit(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # A failure anywhere in provisioning must not silently continue to
@@ -153,6 +163,7 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
 
     def test_appends_worker_id_via_imdsv2(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # IMDSv2 token fetch (PUT with TTL header).
@@ -167,6 +178,7 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
 
     def test_imdsv2_override_runs_before_systemctl_start(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         imds_pos = out.find("/latest/meta-data/instance-id")
@@ -181,6 +193,7 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
         """curl --fail returns non-zero on HTTP >=400; `set -euo pipefail` then
         halts the script so systemctl start never runs with empty WORKER_ID."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # Both IMDS curl calls must use --fail.
@@ -191,6 +204,7 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
         """Unauthenticated GET /latest/meta-data/instance-id (IMDSv1) is SSRF-
         exploitable. Only the token-header form is permitted."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # Every occurrence of the instance-id path must be accompanied by the
@@ -211,6 +225,7 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
         the IMDS value — guarantees a single STARSECTOR_WORKER_WORKER_ID
         line in the final env file, not two with systemd last-wins ambiguity."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         sed_pos = out.find("sed -i")
@@ -224,6 +239,7 @@ class TestRenderUserDataImdsV2WorkerIdOverride:
     def test_accepts_empty_worker_id_placeholder(self):
         """WorkerConfig.worker_id='' is the render-time default; must not raise."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config(worker_id="")
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert isinstance(out, str) and len(out) > 0
@@ -246,6 +262,7 @@ class TestRenderUserDataSSHAccess:
     def test_tailscale_ssh_NOT_enabled(self):
         """Regression: `--ssh` on `tailscale up` shadowed sshd — keep it off."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # Must not appear as a flag (anywhere) on the `tailscale up` invocation.
@@ -265,6 +282,7 @@ class TestRenderUserDataSSHAccess:
 
     def test_debug_pubkey_omitted_by_default(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         # No authorized_keys WRITE when debug_ssh_pubkey not provided
@@ -275,10 +293,12 @@ class TestRenderUserDataSSHAccess:
 
     def test_debug_pubkey_injected_when_provided(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         pubkey = "ssh-ed25519 AAAAC3SENTINELDEBUG operator@workstation"
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             debug_ssh_pubkey=pubkey,
         )
         assert pubkey in out
@@ -289,9 +309,11 @@ class TestRenderUserDataSSHAccess:
 
     def test_debug_pubkey_empty_string_treated_as_omitted(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             debug_ssh_pubkey="",
         )
         assert "STARSECTOR_DEBUG_PUBKEY_EOF" not in out
@@ -301,9 +323,11 @@ class TestRenderUserDataSSHAccess:
         unset/blank vars, but a defensive callsite might pass `"  \\n"`. The
         renderer must treat whitespace-only as no-op."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             debug_ssh_pubkey="   \n  \t",
         )
         assert "STARSECTOR_DEBUG_PUBKEY_EOF" not in out
@@ -313,9 +337,11 @@ class TestRenderUserDataSSHAccess:
         immediately) but before systemctl (so a worker crash on start
         doesn't preempt operator access)."""
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             debug_ssh_pubkey="ssh-ed25519 AAAA test@dev",
         )
         ts_pos = out.find("tailscale up")
@@ -340,6 +366,7 @@ class TestRenderUserDataJarOverride:
 
     def test_omitted_by_default(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL)
         assert "mod-jar-overlay" not in out
@@ -348,9 +375,11 @@ class TestRenderUserDataJarOverride:
 
     def test_emitted_when_both_provided(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             mod_jar_override_url=_DUMMY_JAR_URL,
             mod_jar_override_sha256=_DUMMY_SHA256,
         )
@@ -362,37 +391,45 @@ class TestRenderUserDataJarOverride:
 
     def test_url_without_sha_raises(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         with pytest.raises(ValueError, match="must be set together"):
             render_user_data(
-                cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+                cfg,
+                tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
                 mod_jar_override_url=_DUMMY_JAR_URL,
             )
 
     def test_sha_without_url_raises(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         with pytest.raises(ValueError, match="must be set together"):
             render_user_data(
-                cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+                cfg,
+                tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
                 mod_jar_override_sha256=_DUMMY_SHA256,
             )
 
     def test_malformed_sha_raises(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         with pytest.raises(ValueError, match="64 hex chars"):
             render_user_data(
-                cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+                cfg,
+                tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
                 mod_jar_override_url=_DUMMY_JAR_URL,
                 mod_jar_override_sha256="abcd",
             )
 
     def test_overlay_runs_after_tailscale_before_systemctl(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             mod_jar_override_url=_DUMMY_JAR_URL,
             mod_jar_override_sha256=_DUMMY_SHA256,
         )
@@ -406,9 +443,11 @@ class TestRenderUserDataJarOverride:
 
     def test_curl_uses_fail_so_pipefail_traps(self):
         from starsector_optimizer.cloud_userdata import render_user_data
+
         cfg = _make_worker_config()
         out = render_user_data(
-            cfg, tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
+            cfg,
+            tailscale_authkey=TAILSCALE_SECRET_SENTINEL,
             mod_jar_override_url=_DUMMY_JAR_URL,
             mod_jar_override_sha256=_DUMMY_SHA256,
         )
@@ -421,18 +460,21 @@ class TestRenderUserDataJarOverride:
 class TestRenderProbeUserData:
     def test_returns_str(self):
         from starsector_optimizer.cloud_userdata import render_probe_user_data
+
         out = render_probe_user_data(campaign_id="probe-20260418")
         assert isinstance(out, str)
         assert len(out) > 0
 
     def test_starts_with_shebang(self):
         from starsector_optimizer.cloud_userdata import render_probe_user_data
+
         out = render_probe_user_data(campaign_id="probe-20260418")
         assert out.startswith("#!/")
 
     def test_writes_probe_log_marker(self):
         """Probe userdata is cheap: just drop a breadcrumb + exit clean."""
         from starsector_optimizer.cloud_userdata import render_probe_user_data
+
         out = render_probe_user_data(campaign_id="probe-20260418")
         assert "probe-boot-ok" in out or "probe_boot_ok" in out
         assert "/var/log/starsector-probe" in out or "/tmp/starsector-probe" in out
@@ -442,12 +484,14 @@ class TestRenderProbeUserData:
         lacks a real WorkerConfig and would crashloop if launched.
         """
         from starsector_optimizer.cloud_userdata import render_probe_user_data
+
         out = render_probe_user_data(campaign_id="probe-20260418")
         assert "systemctl start starsector-worker" not in out
 
     def test_does_not_require_tailscale(self):
         """Tier-1 probe doesn't depend on Tailscale — no authkey to leak."""
         from starsector_optimizer.cloud_userdata import render_probe_user_data
+
         out = render_probe_user_data(campaign_id="probe-20260418")
         # No authkey flag = no secret exposure surface.
         assert "--authkey" not in out

@@ -41,10 +41,20 @@ from .evaluator_pool import EvaluatorPool, RetryableMatchupError
 from .game_manifest import GameManifest
 from .instance_manager import InstanceError
 from .models import (
-    Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig,
-    EngineStats, GameData, MatchupConfig,
-    REGIME_EARLY, RegimeConfig,
-    ScorerResult, ShapeConfig, ShipHull, TWFEConfig,
+    Build,
+    BuildSpec,
+    CombatFitnessConfig,
+    CombatResult,
+    EBShrinkageConfig,
+    EngineStats,
+    GameData,
+    MatchupConfig,
+    REGIME_EARLY,
+    RegimeConfig,
+    ScorerResult,
+    ShapeConfig,
+    ShipHull,
+    TWFEConfig,
 )
 from .combat_fitness import combat_fitness
 from .deconfounding import ScoreMatrix, eb_shrinkage, triple_goal_rank
@@ -56,7 +66,9 @@ from .opponent_pool import (
 from .repair import is_feasible, repair_build
 from .scorer import heuristic_score
 from .search_space import (
-    SearchSpace, _regime_admits_hullmod, _regime_admits_weapon,
+    SearchSpace,
+    _regime_admits_hullmod,
+    _regime_admits_weapon,
     build_search_space,
 )
 from .variant import build_to_build_spec
@@ -116,6 +128,7 @@ class _CachedTrialResult:
     `origin_trial_number` lets analysts trace a cache hit back to the
     trial that actually ran the matchups.
     """
+
     shaped_fitness: float
     eb_fitness: float
     twfe_fitness: float
@@ -166,8 +179,10 @@ def preflight_check(
     """
     # Hull exists
     if hull_id not in game_data.hulls:
-        raise ValueError(f"Hull '{hull_id}' not found in game data. "
-                         f"Available: {sorted(list(game_data.hulls.keys())[:10])}...")
+        raise ValueError(
+            f"Hull '{hull_id}' not found in game data. "
+            f"Available: {sorted(list(game_data.hulls.keys())[:10])}..."
+        )
 
     hull = game_data.hulls[hull_id]
     game_dir = getattr(pool, "game_dir", None)
@@ -320,10 +335,10 @@ def trial_params_to_build(
 
     for key, value in params.items():
         if key.startswith("weapon_"):
-            slot_id = key[len("weapon_"):]
+            slot_id = key[len("weapon_") :]
             weapons[slot_id] = None if value == "empty" else value
         elif key.startswith("hullmod_"):
-            mod_id = key[len("hullmod_"):]
+            mod_id = key[len("hullmod_") :]
             if value is True:
                 hullmods.add(mod_id)
 
@@ -352,6 +367,7 @@ def warm_start(
     # Phase 1: Seed with stock builds (known-good, from game's .variant files)
     if game_dir is not None:
         from .variant import load_stock_builds
+
         stock_builds = load_stock_builds(game_dir, hull.id)
         for build in stock_builds:
             try:
@@ -368,13 +384,13 @@ def warm_start(
 
     # Phase 2: Seed with top heuristic builds (diverse random, regime-masked)
     builds = generate_diverse_builds(
-        hull, game_data, manifest,
-        n=config.warm_start_sample_n, regime=config.regime,
+        hull,
+        game_data,
+        manifest,
+        n=config.warm_start_sample_n,
+        regime=config.regime,
     )
-    scored = [
-        (b, heuristic_score(b, hull, game_data).composite_score)
-        for b in builds
-    ]
+    scored = [(b, heuristic_score(b, hull, game_data).composite_score) for b in builds]
     scored.sort(key=lambda x: -x[1])
     top = scored[: config.warm_start_n]
 
@@ -437,6 +453,7 @@ class _EBRecord:
     can compute `op_used_fraction` from the manifest without needing the
     full `_InFlightBuild` live.
     """
+
     trial_number: int
     scorer_result: ScorerResult
     engine_stats: EngineStats | None
@@ -455,15 +472,18 @@ class _EBDiagnostics:
     optimizer returns `None` for these diagnostics — meaning the run
     used raw α̂ with no shrinkage.
     """
-    sigma_sq_twfe: float           # σ̂_i² from the TWFE decomposition
-    sigma_sq_eb: float             # w_i · σ̂_i² = (τ̂² · σ̂_i²) / (τ̂² + σ̂_i²)
-    tau2: float                    # τ̂² (between-trial prior variance)
-    gamma: tuple[float, ...]       # regression coefficients (intercept first)
+
+    sigma_sq_twfe: float  # σ̂_i² from the TWFE decomposition
+    sigma_sq_eb: float  # w_i · σ̂_i² = (τ̂² · σ̂_i²) / (τ̂² + σ̂_i²)
+    tau2: float  # τ̂² (between-trial prior variance)
+    gamma: tuple[float, ...]  # regression coefficients (intercept first)
     kept_cov_columns: tuple[int, ...]  # X columns surviving zero-std filter
 
 
 def _op_used_fraction(
-    build: Build, hull: ShipHull, manifest: GameManifest,
+    build: Build,
+    hull: ShipHull,
+    manifest: GameManifest,
 ) -> float:
     """Ordnance-point utilization on a pre-matchup build (manifest-driven).
 
@@ -491,7 +511,10 @@ def _op_used_fraction(
 
 
 def _build_covariate_vector(
-    record: _EBRecord, build: Build, hull: ShipHull, manifest: GameManifest,
+    record: _EBRecord,
+    build: Build,
+    hull: ShipHull,
+    manifest: GameManifest,
 ) -> np.ndarray:
     """Assemble the 10-dim covariate vector for EB shrinkage.
 
@@ -533,18 +556,20 @@ def _build_covariate_vector(
     kin_frac = sr.kinetic_dps / max(total_dps, _EPSILON)
     es = record.engine_stats
     op_frac = _op_used_fraction(build, hull, manifest)
-    return np.array([
-        es.eff_max_flux,
-        es.eff_flux_dissipation,
-        es.eff_armor_rating,
-        es.eff_hull_hp_pct,
-        es.ballistic_range_bonus,
-        es.shield_damage_taken_mult,
-        total_dps,
-        sr.engagement_range,
-        kin_frac,
-        op_frac,
-    ])
+    return np.array(
+        [
+            es.eff_max_flux,
+            es.eff_flux_dissipation,
+            es.eff_armor_rating,
+            es.eff_hull_hp_pct,
+            es.ballistic_range_bonus,
+            es.shield_damage_taken_mult,
+            total_dps,
+            sr.engagement_range,
+            kin_frac,
+            op_frac,
+        ]
+    )
 
 
 class StagedEvaluator:
@@ -657,7 +682,8 @@ class StagedEvaluator:
                     except RetryableMatchupError as exc:
                         logger.warning(
                             "Retryable matchup failure for trial %d: %s",
-                            ifb.trial.number, exc,
+                            ifb.trial.number,
+                            exc,
                         )
                         continue
                     except InstanceError:
@@ -675,8 +701,7 @@ class StagedEvaluator:
 
                     self._handle_result(ifb, result)
 
-                    if (self._trials_completed % self._config.log_interval == 0
-                            or not pending):
+                    if self._trials_completed % self._config.log_interval == 0 or not pending:
                         # `best_trial` RAISES ValueError when zero trials have
                         # reached COMPLETE (all pruned / errored / still
                         # in-flight). The pre-fix `if self._study.best_trial
@@ -698,8 +723,12 @@ class StagedEvaluator:
                         logger.info(
                             "Progress: %d finalized + %d pruned + %d errored "
                             "/ %d budget, in-flight=%d, best=%.3f",
-                            finalized, self._trials_pruned, self._trials_errored,
-                            self._config.sim_budget, len(self._queue), best,
+                            finalized,
+                            self._trials_pruned,
+                            self._trials_errored,
+                            self._config.sim_budget,
+                            len(self._queue),
+                            best,
                         )
 
                 # Dispatch new work up to the worker cap
@@ -717,14 +746,22 @@ class StagedEvaluator:
         eb_rate = (self._eb_activated_count / finalized) if finalized else 0.0
         mean_abs = (
             sum(self._eb_shrinkage_magnitudes) / len(self._eb_shrinkage_magnitudes)
-            if self._eb_shrinkage_magnitudes else 0.0
+            if self._eb_shrinkage_magnitudes
+            else 0.0
         )
         logger.info(
             "Run summary: %d finalized + %d pruned + %d errored in %.1fs "
             "(%.1f finalized/hr); EB activated on %d/%d finalized (%.0f%%); "
             "mean |Δ|=%.4f",
-            finalized, self._trials_pruned, self._trials_errored, elapsed, rate,
-            self._eb_activated_count, finalized, eb_rate * 100.0, mean_abs,
+            finalized,
+            self._trials_pruned,
+            self._trials_errored,
+            elapsed,
+            rate,
+            self._eb_activated_count,
+            finalized,
+            eb_rate * 100.0,
+            mean_abs,
         )
         lam_hist = self._shape_lambda_history
         pt_total = sum(self._shape_passthrough_reasons.values())
@@ -734,14 +771,20 @@ class StagedEvaluator:
         else:
             lam_mean = 0.0
             lam_std = 0.0
-        pt_breakdown = ", ".join(
-            f"{reason}={count}"
-            for reason, count in self._shape_passthrough_reasons.most_common()
-        ) or "none"
+        pt_breakdown = (
+            ", ".join(
+                f"{reason}={count}"
+                for reason, count in self._shape_passthrough_reasons.most_common()
+            )
+            or "none"
+        )
         logger.info(
-            "A3 Box-Cox summary: %d Box-Cox trials (λ mean=%.3f, std=%.3f), "
-            "%d passthrough (%s)",
-            len(lam_hist), lam_mean, lam_std, pt_total, pt_breakdown,
+            "A3 Box-Cox summary: %d Box-Cox trials (λ mean=%.3f, std=%.3f), %d passthrough (%s)",
+            len(lam_hist),
+            lam_mean,
+            lam_std,
+            pt_total,
+            pt_breakdown,
         )
 
     def _track_eb_summary(self, twfe: float, eb: float) -> None:
@@ -763,7 +806,9 @@ class StagedEvaluator:
             ifb, matchup = work
             logger.info(
                 "Dispatch trial %d rung %d/%d vs %s",
-                ifb.trial.number, ifb.rung + 1, len(ifb.opponents),
+                ifb.trial.number,
+                ifb.rung + 1,
+                len(ifb.opponents),
                 ifb.opponents[ifb.next_opponent_index],
             )
             future = executor.submit(self._pool.run_matchup, matchup)
@@ -812,8 +857,13 @@ class StagedEvaluator:
 
         logger.info(
             "  Trial %d rung %d/%d vs %s: %s (score=%.3f, mean=%.3f)",
-            ifb.trial.number, ifb.rung, len(ifb.opponents),
-            opp_id, result.winner, raw, raw_mean,
+            ifb.trial.number,
+            ifb.rung,
+            len(ifb.opponents),
+            opp_id,
+            result.winner,
+            raw,
+            raw_mean,
         )
 
         if ifb.is_complete:
@@ -824,8 +874,7 @@ class StagedEvaluator:
             self._prune_build(ifb)
             self._queue.remove(ifb)
             self._trials_completed += 1
-            logger.info("  Trial %d PRUNED at rung %d",
-                        ifb.trial.number, ifb.rung)
+            logger.info("  Trial %d PRUNED at rung %d", ifb.trial.number, ifb.rung)
         # else: stays in queue, _next_matchup will pick it up
 
     def _ask_new_trial(self) -> _InFlightBuild | None:
@@ -839,17 +888,21 @@ class StagedEvaluator:
 
         build = repair_build(
             trial_params_to_build(
-                trial.params, self._hull_id,
+                trial.params,
+                self._hull_id,
                 fixed_params=self._config.fixed_params,
             ),
-            self._hull, self._game_data, self._manifest,
+            self._hull,
+            self._game_data,
+            self._manifest,
         )
 
         cached = self._cache.get(build)
         if cached is not None:
             logger.debug(
                 "Cache hit for trial %d (origin trial %d)",
-                trial.number, cached.origin_trial_number,
+                trial.number,
+                cached.origin_trial_number,
             )
             self._study.tell(trial, cached.shaped_fitness)
             self._trials_completed += 1
@@ -867,8 +920,12 @@ class StagedEvaluator:
             # observations.
             if self._eval_log_path:
                 _append_eval_log(
-                    self._eval_log_path, self._hull_id, trial.number,
-                    build, [], cached.shaped_fitness,
+                    self._eval_log_path,
+                    self._hull_id,
+                    trial.number,
+                    build,
+                    [],
+                    cached.shaped_fitness,
                     raw_fitness=cached.eb_fitness,
                     eb_fitness=cached.eb_fitness,
                     twfe_fitness=cached.twfe_fitness,
@@ -883,7 +940,10 @@ class StagedEvaluator:
 
         variant_id = f"{self._hull_id}_opt_{trial.number:06d}"
         build_spec = build_to_build_spec(
-            build, self._hull, self._game_data, variant_id,
+            build,
+            self._hull,
+            self._game_data,
+            variant_id,
         )
         errors = validate_build_spec(build_spec, self._game_data)
         if errors:
@@ -896,8 +956,12 @@ class StagedEvaluator:
             # `failure_score` sentinel, not a measured value).
             if self._eval_log_path:
                 _append_eval_log(
-                    self._eval_log_path, self._hull_id, trial.number,
-                    build, [], self._config.failure_score,
+                    self._eval_log_path,
+                    self._hull_id,
+                    trial.number,
+                    build,
+                    [],
+                    self._config.failure_score,
                     regime=self._config.regime.name,
                     pruned=False,
                     opponents_total=0,
@@ -922,7 +986,8 @@ class StagedEvaluator:
         """Compute final fitness via A1→A2′→A3 pipeline, tell Optuna, cache, log."""
         # A1: TWFE decomposition — schedule-adjusted build quality
         twfe_fitness = self._score_matrix.build_alpha(
-            ifb.trial.number, self._config.twfe,
+            ifb.trial.number,
+            self._config.twfe,
         )
         self._builds_evaluated += 1
         self._update_incumbent(ifb, twfe_fitness)
@@ -936,38 +1001,55 @@ class StagedEvaluator:
         )
         # A2′: EB shrinkage + optional triple-goal rank correction
         eb_fitness, eb_diag = self._apply_eb_shrinkage(
-            ifb.trial.number, twfe_fitness,
+            ifb.trial.number,
+            twfe_fitness,
         )
         # A3: Box-Cox output warping (falls through to min-max scaling below
         # shape.min_samples or on constant-population edge cases).
         self._completed_fitness_values.append(eb_fitness)
         shaped_fitness, shape_diag = _shape_fitness(
-            eb_fitness, self._completed_fitness_values, self._config.shape,
+            eb_fitness,
+            self._completed_fitness_values,
+            self._config.shape,
         )
         self._track_shape_summary(shape_diag)
 
-        self._cache.put(ifb.build, _CachedTrialResult(
-            shaped_fitness=shaped_fitness,
-            eb_fitness=eb_fitness,
-            twfe_fitness=twfe_fitness,
-            origin_trial_number=ifb.trial.number,
-        ))
+        self._cache.put(
+            ifb.build,
+            _CachedTrialResult(
+                shaped_fitness=shaped_fitness,
+                eb_fitness=eb_fitness,
+                twfe_fitness=twfe_fitness,
+                origin_trial_number=ifb.trial.number,
+            ),
+        )
         self._study.tell(ifb.trial, shaped_fitness)
         logger.info(
             "  Trial %d COMPLETE (twfe=%.3f, eb=%.3f, shaped=%.3f, λ=%s)",
-            ifb.trial.number, twfe_fitness, eb_fitness, shaped_fitness,
-            f"{shape_diag.lam:.2f}" if shape_diag.lam is not None
-                else f"pt:{shape_diag.passthrough_reason}",
+            ifb.trial.number,
+            twfe_fitness,
+            eb_fitness,
+            shaped_fitness,
+            f"{shape_diag.lam:.2f}"
+            if shape_diag.lam is not None
+            else f"pt:{shape_diag.passthrough_reason}",
         )
 
         if self._eval_log_path:
             record = self._completed_records[ifb.trial.number]
             covariate = _build_covariate_vector(
-                record, ifb.build, self._hull, self._manifest,
+                record,
+                ifb.build,
+                self._hull,
+                self._manifest,
             )
             _append_eval_log(
-                self._eval_log_path, self._hull_id, ifb.trial.number,
-                ifb.build, ifb.completed_results, shaped_fitness,
+                self._eval_log_path,
+                self._hull_id,
+                ifb.trial.number,
+                ifb.build,
+                ifb.completed_results,
+                shaped_fitness,
                 raw_fitness=eb_fitness,
                 eb_fitness=eb_fitness,
                 twfe_fitness=twfe_fitness,
@@ -976,14 +1058,17 @@ class StagedEvaluator:
                 shape_lambda=shape_diag.lam,
                 shape_passthrough_reason=shape_diag.passthrough_reason,
                 regime=self._config.regime.name,
-                pruned=False, opponents_total=len(ifb.opponents),
+                pruned=False,
+                opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
                 eb_diagnostics=eb_diag,
             )
             self._track_eb_summary(twfe_fitness, eb_fitness)
 
     def _apply_eb_shrinkage(
-        self, trial_number: int, twfe_fitness: float,
+        self,
+        trial_number: int,
+        twfe_fitness: float,
     ) -> tuple[float, _EBDiagnostics | None]:
         """A2′ — EB shrinkage of TWFE α̂ toward γ̂ᵀX regression prior.
 
@@ -1002,21 +1087,19 @@ class StagedEvaluator:
             return twfe_fitness, None
 
         indices: list[int] = list(self._completed_records.keys())
-        alphas = np.array([
-            self._score_matrix.build_alpha(i, self._config.twfe) for i in indices
-        ])
-        sigma_sqs = np.array(
-            [self._score_matrix.build_sigma_sq(i) for i in indices]
+        alphas = np.array([self._score_matrix.build_alpha(i, self._config.twfe) for i in indices])
+        sigma_sqs = np.array([self._score_matrix.build_sigma_sq(i) for i in indices])
+        X = np.vstack(
+            [
+                _build_covariate_vector(
+                    self._completed_records[i],
+                    self._completed_records[i].build,
+                    self._hull,
+                    self._manifest,
+                )
+                for i in indices
+            ]
         )
-        X = np.vstack([
-            _build_covariate_vector(
-                self._completed_records[i],
-                self._completed_records[i].build,
-                self._hull,
-                self._manifest,
-            )
-            for i in indices
-        ])
         alpha_eb, gamma, tau2, kept = eb_shrinkage(alphas, sigma_sqs, X, eb_cfg)
         if eb_cfg.triple_goal:
             alpha_out = triple_goal_rank(alpha_eb, alphas)
@@ -1049,15 +1132,17 @@ class StagedEvaluator:
         self._trials_pruned += 1
 
         if self._eval_log_path:
-            raw_mean = (
-                sum(ifb.raw_scores) / len(ifb.raw_scores)
-                if ifb.raw_scores else 0.0
-            )
+            raw_mean = sum(ifb.raw_scores) / len(ifb.raw_scores) if ifb.raw_scores else 0.0
             _append_eval_log(
-                self._eval_log_path, self._hull_id, ifb.trial.number,
-                ifb.build, ifb.completed_results, raw_mean,
+                self._eval_log_path,
+                self._hull_id,
+                ifb.trial.number,
+                ifb.build,
+                ifb.completed_results,
+                raw_mean,
                 regime=self._config.regime.name,
-                pruned=True, opponents_total=len(ifb.opponents),
+                pruned=True,
+                opponents_total=len(ifb.opponents),
                 opponent_order=list(ifb.opponents),
             )
 
@@ -1083,17 +1168,16 @@ class StagedEvaluator:
             # 2. Incumbent overlap (SMAC-style direct comparability)
             inc_pool = [o for o in self._incumbent_opponents if o not in forced_set]
             rng.shuffle(inc_pool)
-            n_overlap = min(twfe_cfg.n_incumbent_overlap, len(inc_pool),
-                            active_size - len(forced))
+            n_overlap = min(twfe_cfg.n_incumbent_overlap, len(inc_pool), active_size - len(forced))
             for o in inc_pool[:n_overlap]:
                 forced.append(o)
                 forced_set.add(o)
             # 3. Fill remainder from full pool
             remaining = [o for o in self._opponents if o not in forced_set]
             rng.shuffle(remaining)
-            active = forced + remaining[:active_size - len(forced)]
+            active = forced + remaining[: active_size - len(forced)]
             # Anchors are already at the front; shuffle only the non-anchor tail
-            rest_part = active[len(self._anchors):]
+            rest_part = active[len(self._anchors) :]
             rng.shuffle(rest_part)
             active = list(self._anchors) + rest_part
         else:
@@ -1109,7 +1193,9 @@ class StagedEvaluator:
         return active
 
     def _update_incumbent(
-        self, ifb: _InFlightBuild, twfe_fitness: float,
+        self,
+        ifb: _InFlightBuild,
+        twfe_fitness: float,
     ) -> None:
         """Track the best build's opponents for forced overlap."""
         if twfe_fitness > self._incumbent_fitness:
@@ -1117,7 +1203,9 @@ class StagedEvaluator:
             self._incumbent_opponents = ifb.opponents
 
     def _update_burn_in(
-        self, ifb: _InFlightBuild, twfe_fitness: float,
+        self,
+        ifb: _InFlightBuild,
+        twfe_fitness: float,
     ) -> None:
         """Accumulate burn-in data; lock anchors after threshold."""
         twfe_cfg = self._config.twfe
@@ -1165,10 +1253,12 @@ class StagedEvaluator:
             disc[opp_id] = abs(corr) if not (corr != corr) else 0.0  # NaN check
 
         sorted_opps = sorted(disc.keys(), key=lambda o: disc[o], reverse=True)
-        self._anchors = tuple(sorted_opps[:twfe_cfg.n_anchors])
+        self._anchors = tuple(sorted_opps[: twfe_cfg.n_anchors])
         logger.info(
             "Locked %d anchors after %d builds: %s",
-            len(self._anchors), self._builds_evaluated, self._anchors,
+            len(self._anchors),
+            self._builds_evaluated,
+            self._anchors,
         )
 
     def _make_matchup(self, ifb: _InFlightBuild) -> MatchupConfig:
@@ -1204,7 +1294,8 @@ class StagedEvaluator:
         ):
             logger.info(
                 "A3 Box-Cox activated at n=%d completed builds (first λ=%.3f)",
-                len(self._completed_fitness_values), diag.lam,
+                len(self._completed_fitness_values),
+                diag.lam,
             )
             self._shape_first_activation_logged = True
 
@@ -1216,6 +1307,7 @@ class _ShapeDiag:
     `lam` carries the fitted Box-Cox λ when the transform ran, else None;
     `passthrough_reason` is populated exactly when `lam is None`.
     """
+
     lam: float | None
     passthrough_reason: str | None
 
@@ -1270,9 +1362,13 @@ def _shape_fitness(
     # outside the population range must saturate at the interval boundary
     # anyway. The pre-transform clamp is monotone-equivalent to the post-
     # transform clip and avoids NaN propagation for extreme `eb_fitness`.
-    pos_current = float(np.clip(
-        eb_fitness - shift, positivised.min(), positivised.max(),
-    ))
+    pos_current = float(
+        np.clip(
+            eb_fitness - shift,
+            positivised.min(),
+            positivised.max(),
+        )
+    )
     current = boxcox(np.array([pos_current]), lmbda=lam)
     lo, hi = float(transformed.min()), float(transformed.max())
     if hi - lo < eps:
@@ -1280,11 +1376,16 @@ def _shape_fitness(
         # a distinct reason so the JSONL doesn't show "Box-Cox ran with λ=x"
         # paired with a constant 0.5 output.
         return 0.5, _ShapeDiag(
-            lam=float(lam), passthrough_reason="transformed_constant",
+            lam=float(lam),
+            passthrough_reason="transformed_constant",
         )
-    val = float(np.clip(
-        (float(current[0]) - lo) / (hi - lo), 0.0, 1.0,
-    ))
+    val = float(
+        np.clip(
+            (float(current[0]) - lo) / (hi - lo),
+            0.0,
+            1.0,
+        )
+    )
     return val, _ShapeDiag(lam=float(lam), passthrough_reason=None)
 
 
@@ -1313,7 +1414,8 @@ def _enqueue_warm_start_from_regime(
     """
     try:
         source_study = optuna.load_study(
-            study_name=source_study_name, storage=source_storage,
+            study_name=source_study_name,
+            storage=source_storage,
         )
     except (KeyError, ValueError) as e:
         raise ValueError(
@@ -1322,8 +1424,7 @@ def _enqueue_warm_start_from_regime(
         ) from e
 
     completed = [
-        t for t in source_study.trials
-        if t.state == TrialState.COMPLETE and t.value is not None
+        t for t in source_study.trials if t.state == TrialState.COMPLETE and t.value is not None
     ]
     # t.value is non-None for every element (filtered above).
     completed.sort(key=lambda t: cast(float, t.value), reverse=True)
@@ -1338,7 +1439,8 @@ def _enqueue_warm_start_from_regime(
         except Exception as exc:
             logger.warning(
                 "Warm-start: could not reconstruct build from trial %d: %s",
-                trial.number, exc,
+                trial.number,
+                exc,
             )
             skipped += 1
             continue
@@ -1368,9 +1470,10 @@ def _enqueue_warm_start_from_regime(
                     break
         if not feasible:
             logger.warning(
-                "Warm-start: trial %d (value=%.3f) uses components outside "
-                "regime '%s'; skipping",
-                trial.number, trial.value, target_regime.name,
+                "Warm-start: trial %d (value=%.3f) uses components outside regime '%s'; skipping",
+                trial.number,
+                trial.value,
+                target_regime.name,
             )
             skipped += 1
             continue
@@ -1384,7 +1487,9 @@ def _enqueue_warm_start_from_regime(
                 params = build_to_trial_params(repaired, target_space)
             except (KeyError, ValueError) as exc:
                 logger.warning(
-                    "Warm-start: trial %d re-encode failed: %s", trial.number, exc,
+                    "Warm-start: trial %d re-encode failed: %s",
+                    trial.number,
+                    exc,
                 )
                 skipped += 1
                 continue
@@ -1395,9 +1500,9 @@ def _enqueue_warm_start_from_regime(
 
     logger.info(
         "Warm-start from regime '%s': enqueued %d trials, skipped %d infeasible",
-        source_study_name.split("__")[-1] if "__" in source_study_name
-        else source_study_name,
-        enqueued, skipped,
+        source_study_name.split("__")[-1] if "__" in source_study_name else source_study_name,
+        enqueued,
+        skipped,
     )
     return enqueued, skipped
 
@@ -1475,7 +1580,9 @@ def _append_eval_log(
         },
         "opponent_results": [
             {
-                "opponent": r.matchup_id.split("_vs_")[-1] if "_vs_" in r.matchup_id else r.matchup_id,
+                "opponent": r.matchup_id.split("_vs_")[-1]
+                if "_vs_" in r.matchup_id
+                else r.matchup_id,
                 "winner": r.winner,
                 "duration_seconds": r.duration_seconds,
                 "hp_differential": hp_differential(r),
@@ -1526,9 +1633,7 @@ def _append_eval_log(
             "kept_cov_columns": list(eb_diagnostics.kept_cov_columns),
         }
     if not pruned:
-        record["shape_lambda"] = (
-            float(shape_lambda) if shape_lambda is not None else None
-        )
+        record["shape_lambda"] = float(shape_lambda) if shape_lambda is not None else None
         record["shape_passthrough_reason"] = shape_passthrough_reason
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "a") as f:
