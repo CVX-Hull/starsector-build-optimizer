@@ -13,7 +13,7 @@ must not accumulate their own live next-step lists — when a report's "next
 steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
-Groomed: 2026-07-11 (evening: item 1 implementation shipped). Re-groom whenever a wave completes or a decision changes
+Groomed: 2026-07-12 (seed-151 confirmatory check closed item 1). Re-groom whenever a wave completes or a decision changes
 scope; update `last-validated`.
 
 ## Active workstream — Phase 7 surrogate evidence program
@@ -33,8 +33,11 @@ Compute runs on AWS learned-batch — decision + costs:
    seeds, inline comparators, outer-split lineage. The 183-job canonical
    re-run completed 2026-07-12 (attempt 3); results:
    [2026-07-12 attempt-3 surrogate results](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
-   **Open: confirmatory seed-151 check of CatBoost-over-RF before any
-   default-model change.**
+   The seed-151 confirmatory check ratified CatBoost over tuned RF on the
+   build split (2026-07-12; the reserved seed is now spent and the learned
+   script's default family is `catboost_regressor`):
+   [2026-07-12 seed-151 confirmatory](reports/2026-07-12-phase7-seed151-confirmatory.md).
+   **Item closed — no open sub-items.**
 2. **Feature-profile ablations** on repeated opponent-family/opponent splits,
    under the fixed harness.
 3. **FM / low-rank bilinear interaction features** as a new model family

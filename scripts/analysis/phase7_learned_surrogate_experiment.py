@@ -85,6 +85,10 @@ DEFAULT_HPO_JOBS = 4
 DEFAULT_MODEL_THREAD_COUNT = 4
 SPLIT_CHOICES = baseline.SPLIT_CHOICES
 MODEL_CHOICES = ("random_forest_tuned", "catboost_regressor", "sparse_pairwise_ridge")
+# Ratified on the reserved confirmatory seed (151, build split); evidence:
+# docs/reports/2026-07-12-phase7-seed151-confirmatory.md. Claim boundary is
+# build-like splits only — no model transfers across opponents.
+DEFAULT_MODEL = "catboost_regressor"
 # Matched comparator families exist only where a natural analog does; CatBoost
 # has none and its headline is delta_vs_best_comparator (spec 31 / review C3).
 MATCHED_COMPARATOR_FAMILY: dict[str, str | None] = {
@@ -328,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("db_path", type=Path)
     parser.add_argument("--game-dir", type=Path, default=Path("game/starsector"))
     parser.add_argument("--split", choices=(*SPLIT_CHOICES, "all"), default="build")
-    parser.add_argument("--model", choices=(*MODEL_CHOICES, "all"), default="random_forest_tuned")
+    parser.add_argument("--model", choices=(*MODEL_CHOICES, "all"), default=DEFAULT_MODEL)
     parser.add_argument("--holdout-fraction", type=float, default=DEFAULT_HOLDOUT_FRACTION)
     parser.add_argument("--train-fraction", type=float, default=DEFAULT_TRAIN_FRACTION)
     parser.add_argument("--split-seed", type=int, default=DEFAULT_SPLIT_SEED)
@@ -858,10 +862,15 @@ def comparator_deltas(
 
 def outer_split_lineage(config: LearnedExperimentConfig) -> dict[str, object]:
     """C4 reuse ledger, parallel to honest_eval_usage (spec 31)."""
-    in_bank = config.split_seed in CANONICAL_SPLIT_SEED_BANK
+    if config.split_seed == RESERVED_CONFIRMATORY_SEED:
+        seed_bank_label = "reserved-confirmatory"
+    elif config.split_seed in CANONICAL_SPLIT_SEED_BANK:
+        seed_bank_label = CANONICAL_SPLIT_SEED_BANK_LABEL
+    else:
+        seed_bank_label = "ad-hoc"
     return {
         "split_seed": config.split_seed,
-        "seed_bank_label": CANONICAL_SPLIT_SEED_BANK_LABEL if in_bank else "ad-hoc",
+        "seed_bank_label": seed_bank_label,
         "confirmatory_reserved_seed": RESERVED_CONFIRMATORY_SEED,
         # forward-time's deterministic partition predates the seed bank and
         # absorbed the burned evidence waves; reports must caveat it.

@@ -398,7 +398,14 @@ owner of the shared experiment-contract constants —
 `insufficient_inner_groups`) — so the experiment script and the batch
 validator cannot drift. The reserved seed must not
 appear in any batch seed list; it is spent only on a promotion-grade
-confirmatory claim with a predeclared model family and endpoint.
+confirmatory claim with a predeclared model family and endpoint. It was
+spent once, on 2026-07-12, ratifying CatBoost over tuned random forest on
+the build split
+([evidence](../reports/2026-07-12-phase7-seed151-confirmatory.md)); it
+stays excluded from batch seed lists, and any future confirmatory claim
+needs a fresh reserved seed appended here first. The learned script's
+`--model` default is `catboost_regressor` per that ratification; the claim
+boundary is build-like splits only.
 
 The supported split levels and their claim boundaries are:
 
@@ -904,7 +911,9 @@ The learned experiment JSON output includes:
 
 `outer_split_lineage` is the C4 reuse ledger, parallel to
 `honest_eval_usage`: `{split_seed, seed_bank_label,
-confirmatory_reserved_seed, reused_partition}`. `reused_partition` is `true`
+confirmatory_reserved_seed, reused_partition}`. `seed_bank_label` is the
+bank label for bank seeds, `reserved-confirmatory` for the reserved
+confirmatory seed, and `ad-hoc` otherwise. `reused_partition` is `true`
 for `forward-time` (its deterministic partition predates the seed bank);
 seed history across waves is tracked by `seed_bank_label` plus the
 burned-seed registry, not per-seed ledgers. The promotion

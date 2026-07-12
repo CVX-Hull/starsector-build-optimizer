@@ -167,8 +167,17 @@ def test_outer_split_lineage_marks_bank_and_reused_partition():
     ad_hoc = learned.outer_split_lineage(_config(split_seed=997))
     assert ad_hoc["seed_bank_label"] == "ad-hoc"
 
+    confirmatory = learned.outer_split_lineage(_config(split_seed=151))
+    assert confirmatory["seed_bank_label"] == "reserved-confirmatory"
+
     forward = learned.outer_split_lineage(_config(split="forward-time"))
     assert forward["reused_partition"] is True
+
+
+def test_default_model_is_catboost_after_seed151_ratification():
+    parser = learned.build_parser()
+    args = parser.parse_args(["db.sqlite"])
+    assert args.model == learned.DEFAULT_MODEL == "catboost_regressor"
 
 
 def test_experiment_schema_version_is_two():
