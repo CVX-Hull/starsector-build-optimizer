@@ -206,9 +206,10 @@ existing bank fixes 0.15.
 
 ## Open questions / next steps
 
-- Attempt 3 (launched 2026-07-12 12:31 UTC with the amended cap) must merge
-  cleanly; its results report will carry the surrogate evidence this report
-  deliberately excludes.
+- Attempt 3 (launched 2026-07-12 12:31 UTC with the amended cap) merged
+  cleanly the same day — 183/183, zero insufficiency, $75.50; surrogate
+  evidence:
+  [2026-07-12-phase7-attempt3-surrogate-results.md](2026-07-12-phase7-attempt3-surrogate-results.md).
 - The wave-1 vocabulary (62 items) is the binding constraint. If wave-2 data
   widens the vocabulary substantially, the achievable-fraction quantization
   relaxes and a tighter cap could be re-designed; revisit before reusing the
@@ -226,7 +227,7 @@ existing bank fixes 0.15.
   `…/learned_surrogate_batch_v2_2026-07.overshoot-015/` (ledgers, event
   logs, 183 attempt-2 artifacts; gitignored, local-only).
 - **Charts:** none.
-- **Dependent reports:** forthcoming attempt-3 merge/results report;
+- **Dependent reports:** [2026-07-12-phase7-attempt3-surrogate-results.md](2026-07-12-phase7-attempt3-surrogate-results.md) (the attempt-3 results this report deliberately excludes);
   [2026-07-11-phase7-methodology-review.md](2026-07-11-phase7-methodology-review.md)
   (motivated the re-run);
   [2026-07-11-aws-cost-analysis.md](2026-07-11-aws-cost-analysis.md)

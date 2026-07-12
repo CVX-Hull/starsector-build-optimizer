@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-07-11
+last-validated: 2026-07-12
 ---
 
 # Reports — Index
@@ -25,6 +25,7 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-07-11 | shipped | [Phase 7 methodology review](2026-07-11-phase7-methodology-review.md) | Adversarial review of the seven-split methodology. Evidence stands but readings revised: pooled metrics dominated by opponent difficulty, component split ≡ build split, test-selected family decisions, untracked outer-test reuse. Defines the redesigned next evidence wave. |
 | 2026-07-11 | shipped | [AWS execution shift and cost analysis](2026-07-11-aws-cost-analysis.md) | Records the decision to shift Phase 7 compute to AWS (local box occupied) with per-experiment-class cost model, live-verified prices, and unknowns needing measurement. Flags the stale-AMI leak. |
 | 2026-07-12 | shipped | [Phase 7 batch v2 re-run incidents](2026-07-12-phase7-batch-v2-incidents.md) | Attempts 1–2 of the 183-job canonical re-run: ERR-trap worker loss ($24, 0/183 results) and component-vocab overshoot infeasibility ($92, 24 insufficiency cells). Root causes, feasibility-probe evidence for the 0.35 cap, and the preflight/upload-retry hardening. No surrogate results. |
+| 2026-07-12 | shipped | [Phase 7 attempt-3 surrogate results](2026-07-12-phase7-attempt3-surrogate-results.md) | Canonical 183-job matrix under the v2 harness. CatBoost beats all comparators on build-like splits (10/10 seeds, exploratory); no model transfers across opponents; pooled-metric illusion quantified; ridge retired; CatBoost-vs-RF promotion deferred to confirmatory seed 151. |
 | 2026-07-12 | shipped | [Quality-tooling research](2026-07-12-quality-tooling-research.md) | Empirical tool trials behind the quality-gate adoption: per-tool finding counts and judgments, real defects surfaced, the Error Prone 2.42.0/JDK-17 pin, the shellcheck ERR-trap false negative, and measured rejection evidence for bandit/SpotBugs/PMD/codespell/markdownlint/etc. |
 | 2026-05-09 | shipped | [Wave 0 validation](2026-05-09-wave0-validation.md) | V2 re-validation Wave 0 preflight gate. All gates passed post-fix; multi-worker LOADOUT_MISMATCH root-caused and verified clean. |
 

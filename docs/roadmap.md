@@ -30,9 +30,11 @@ Compute runs on AWS learned-batch — decision + costs:
    Kendall τ, precision@k / regret@k, build-aggregate metrics, skill scores,
    cluster-bootstrap CIs, rotated 10-seed bank (+ reserved confirmatory seed
    151), component-vocabulary split, grouped k-fold inner CV with aligned
-   seeds, inline comparators, outer-split lineage. **Open: the 183-job AWS
-   re-run of the canonical matrix under the fixed harness** (cost-gated
-   launch), then the re-run report.
+   seeds, inline comparators, outer-split lineage. The 183-job canonical
+   re-run completed 2026-07-12 (attempt 3); results:
+   [2026-07-12 attempt-3 surrogate results](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
+   **Open: confirmatory seed-151 check of CatBoost-over-RF before any
+   default-model change.**
 2. **Feature-profile ablations** on repeated opponent-family/opponent splits,
    under the fixed harness.
 3. **FM / low-rank bilinear interaction features** as a new model family
