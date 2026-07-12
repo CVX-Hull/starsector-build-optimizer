@@ -113,7 +113,7 @@ def test_provenance_shape():
     assert provenance["top_k_values"] == [1, 3]
     assert provenance["feature_profile"] == "all"
     assert provenance["bootstrap_resamples"] == 500
-    assert provenance["component_vocab_max_overshoot"] == pytest.approx(0.15)
+    assert provenance["component_vocab_max_overshoot"] == pytest.approx(0.35)
 
 
 def test_split_metadata_names_component_vocab_key_definition():

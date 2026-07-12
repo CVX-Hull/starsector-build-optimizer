@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: 2026-07-11
+last-validated: 2026-07-12
 ---
 
 # Spec 31 — Phase 7 Matchup Data
@@ -453,6 +453,17 @@ rather than crashing, so a deterministic bad draw cannot burn lease retries;
 config errors propagate. Artifacts must name the component key definition
 and record `held_out_components` and `realized_test_fraction`.
 
+The designed overshoot cap is `DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT =
+0.35` (amended 2026-07-12 from 0.15). The component vocabulary is coarse —
+each held-out item can swing the realized test fraction by a large,
+quantized step — so the cap must admit the discrete fractions actually
+achievable; at 0.15 most canonical bank seeds were structurally infeasible
+(outer or inner draws overshoot) and the batch surfaced this as designed
+via structured insufficiency artifacts. Feasibility evidence: the
+2026-07-12 eval-harness re-run report. Consumers of component-vocab
+metrics must read `realized_test_fraction` per cell rather than assuming
+the nominal `holdout_fraction`.
+
 ### Inner validation
 
 Inner validation must use a split compatible with the outer claim, built
@@ -732,7 +743,7 @@ class LearnedExperimentConfig:
     inner_cv_folds: int = 3
     noise_floor_override: float | None = None
     bootstrap_resamples: int = 500
-    component_vocab_max_overshoot: float = 0.15
+    component_vocab_max_overshoot: float = 0.35
     batch_job_id: str | None = None
     batch_name: str | None = None
     batch_fleet_name: str | None = None

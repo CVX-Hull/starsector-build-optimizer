@@ -52,7 +52,7 @@ split_seeds:
 hpo_seed: 23
 inner_cv_folds: 3
 bootstrap_resamples: 500
-component_vocab_max_overshoot: 0.15
+component_vocab_max_overshoot: 0.35
 holdout_fraction: 0.2
 train_fraction: 0.8
 feature_profile: all

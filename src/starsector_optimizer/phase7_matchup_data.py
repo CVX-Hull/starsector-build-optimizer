@@ -34,7 +34,11 @@ RESERVED_CONFIRMATORY_SEED = 151
 # Shared evaluation-procedure and experiment-contract constants (spec 31):
 # single owners referenced by the analysis scripts and batch orchestration so
 # the two layers cannot drift.
-DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT = 0.15
+# 0.35 (amended 2026-07-12 from 0.15): the wave-1 component vocabulary is
+# coarse enough that achievable held-out test fractions are quantized well
+# above the 0.20 target, so 0.15 left most canonical bank seeds structurally
+# infeasible (outer or inner draws overshoot).
+DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT = 0.35
 DEFAULT_INNER_CV_FOLDS = 3
 EXPERIMENT_SCHEMA_VERSION = 2
 DEFAULT_PROMOTION_METRIC = "mean_per_opponent_spearman"
