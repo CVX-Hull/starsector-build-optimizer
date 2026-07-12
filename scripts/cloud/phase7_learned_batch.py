@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import atexit
 import hashlib
+import importlib.util
 import io
 import json
 import secrets
@@ -104,6 +105,72 @@ def current_source_version() -> str:
             "refusing to create publishable Phase 7 bundle from a dirty worktree"
         )
     return head
+
+
+def _load_experiment_module():
+    name = "phase7_learned_surrogate_experiment"
+    if name in sys.modules:
+        return sys.modules[name]
+    script_path = Path(__file__).resolve().parents[1] / "analysis" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(name, script_path)
+    module = importlib.util.module_from_spec(spec)
+    # Dataclass field-type resolution requires the module to be importable
+    # by name (PEP 563 annotations look it up in sys.modules).
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def check_split_feasibility(cfg) -> None:
+    """Dry-run every (split, seed) cell locally before provisioning a fleet.
+
+    Split construction is a pure function of the local source DB, so a
+    structurally infeasible cell (which the workers would report as a
+    structured insufficiency artifact, blocking the merge) is a preflight
+    failure, not a discovery to make with a running fleet.
+    """
+    experiment = _load_experiment_module()
+    seen: set[tuple[str, int]] = set()
+    configs = []
+    for job in generate_jobs(cfg):
+        cell = (job.split, job.split_seed)
+        if cell in seen:
+            continue
+        seen.add(cell)
+        # Split-relevant fields mirror build_job_command; model/HPO fields do
+        # not influence split construction.
+        configs.append(
+            experiment.LearnedExperimentConfig(
+                db_path=cfg.source_db_path,
+                game_dir=cfg.game_dir,
+                split=job.split,
+                model=job.model,
+                holdout_fraction=cfg.holdout_fraction,
+                train_fraction=cfg.train_fraction,
+                split_seed=job.split_seed,
+                hpo_seed=cfg.hpo_seed,
+                hpo_trials=cfg.hpo_trials,
+                hpo_jobs=cfg.hpo_jobs,
+                model_thread_count=cfg.model_thread_count,
+                max_rows=None,
+                top_k_values=tuple(cfg.top_k_values),
+                progress=False,
+                allow_missing_optional_models=True,
+                inner_cv_folds=cfg.inner_cv_folds,
+                component_vocab_max_overshoot=cfg.component_vocab_max_overshoot,
+            )
+        )
+    infeasible = experiment.split_feasibility_report(configs)
+    if infeasible:
+        details = ", ".join(
+            f"{cell['split']}(seed {cell['split_seed']}): {cell['status']}"
+            for cell in infeasible
+        )
+        raise RuntimeError(
+            f"{len(infeasible)} structurally infeasible split cell(s); "
+            f"adjust seeds/config before provisioning: {details}"
+        )
+    print(f"Split feasibility preflight passed ({len(seen)} cells).", flush=True)
 
 
 def check_amis_available(provider, cfg) -> None:
@@ -212,6 +279,7 @@ def launch(config_path: Path, *, execute: bool) -> int:
     )
     check_amis_available(provider, cfg)
     check_key_pairs_available(provider, cfg)
+    check_split_feasibility(cfg)
 
     cleanup = f"scripts/cloud/teardown.sh {cfg.name}"
     print(f"Cleanup command: {cleanup}", flush=True)

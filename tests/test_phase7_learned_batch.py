@@ -306,6 +306,51 @@ def test_user_data_propagates_claim_boundary_flags(tmp_path):
     assert "--deployment-artifact none" in out
 
 
+class _StubExperimentModule:
+    def __init__(self, infeasible):
+        self._infeasible = infeasible
+        self.received_configs = None
+
+    def LearnedExperimentConfig(self, **kwargs):
+        return dict(kwargs)
+
+    def split_feasibility_report(self, configs):
+        self.received_configs = list(configs)
+        return self._infeasible
+
+
+def test_check_split_feasibility_refuses_infeasible_cells(tmp_path, monkeypatch):
+    cfg = make_config(tmp_path)
+    cli = load_batch_cli_module()
+    stub = _StubExperimentModule(
+        [{"split": "component-vocab", "split_seed": 109, "status": "degenerate_component_vocab_split"}]
+    )
+    monkeypatch.setattr(cli, "_load_experiment_module", lambda: stub)
+
+    with pytest.raises(RuntimeError, match=r"component-vocab\(seed 109\): degenerate_component_vocab_split"):
+        cli.check_split_feasibility(cfg)
+
+
+def test_check_split_feasibility_dry_runs_each_unique_cell_once(tmp_path, monkeypatch, capsys):
+    cfg = make_config(tmp_path)
+    cli = load_batch_cli_module()
+    stub = _StubExperimentModule([])
+    monkeypatch.setattr(cli, "_load_experiment_module", lambda: stub)
+
+    cli.check_split_feasibility(cfg)
+
+    jobs = generate_jobs(cfg)
+    unique_cells = {(job.split, job.split_seed) for job in jobs}
+    assert len(stub.received_configs) == len(unique_cells)
+    probed = {(c["split"], c["split_seed"]) for c in stub.received_configs}
+    assert probed == unique_cells
+    for c in stub.received_configs:
+        assert c["component_vocab_max_overshoot"] == cfg.component_vocab_max_overshoot
+        assert c["inner_cv_folds"] == cfg.inner_cv_folds
+        assert c["holdout_fraction"] == cfg.holdout_fraction
+    assert "Split feasibility preflight passed" in capsys.readouterr().out
+
+
 def test_bundle_paths_include_runtime_inputs(tmp_path):
     cfg = make_config(tmp_path)
     cli = load_batch_cli_module()
@@ -1571,6 +1616,7 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
     )
     monkeypatch.setattr(cli, "check_amis_available", lambda provider, config: calls.append("ami-available"))
     monkeypatch.setattr(cli, "check_key_pairs_available", lambda provider, config: calls.append("keypair"))
+    monkeypatch.setattr(cli, "check_split_feasibility", lambda config: calls.append("split-feasibility"))
     monkeypatch.setattr(cli, "GameManifest", type("GM", (), {"load": staticmethod(lambda: object())}))
     monkeypatch.setattr(cli, "AWSProvider", lambda regions: FakeProvider())
     monkeypatch.setattr(cli, "create_bundle", lambda path, out: (tmp_path / "bundle.tgz", "b" * 64))
@@ -1590,6 +1636,7 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
     assert ("ami", cfg.regions) in calls
     assert "ami-available" in calls
     assert "keypair" in calls
+    assert "split-feasibility" in calls
     assert "atexit" in calls
     assert ("live", "b" * 64, "token") in calls
 

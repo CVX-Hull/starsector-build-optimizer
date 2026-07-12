@@ -1107,6 +1107,55 @@ def missing_optional_model_result(config: LearnedExperimentConfig) -> dict[str, 
     }
 
 
+def construct_splits(
+    config: LearnedExperimentConfig,
+) -> tuple[str, None] | tuple[None, tuple]:
+    """Build the outer split and inner folds, or name why the cell cannot.
+
+    Returns ``(insufficiency_status, None)`` for a structurally infeasible
+    cell, else ``(None, (split, build_lookup, split_extras, inner_folds))``.
+    Single owner of the insufficiency decision for both live runs and the
+    launch-time feasibility preflight, so the two cannot drift.
+    """
+    try:
+        split, build_lookup, split_extras = baseline._split_rows(_baseline_config(config))
+    except ComponentVocabularyError:
+        # A deterministic bad vocabulary draw must produce a structured
+        # insufficiency artifact, not a crash that burns batch retries.
+        # Config errors (burned seeds, invalid fractions) raise through.
+        return "degenerate_component_vocab_split", None
+    if not split.train or not split.test:
+        return "empty_outer_split", None
+    inner_folds = inner_cv_splits(config, split.train, build_lookup)
+    if not inner_folds:
+        return "insufficient_inner_groups", None
+    return None, (split, build_lookup, split_extras, inner_folds)
+
+
+def split_feasibility_report(
+    configs: Sequence[LearnedExperimentConfig],
+) -> list[dict[str, object]]:
+    """Dry-run split construction for each config; report infeasible cells.
+
+    Split draws are pure functions of local data, so infeasible cells can be
+    caught in seconds before a fleet is provisioned (the 2026-07-11 batch
+    spent its full runtime discovering 24 structurally infeasible
+    component-vocab cells at merge time).
+    """
+    infeasible: list[dict[str, object]] = []
+    for config in configs:
+        status, _ = construct_splits(config)
+        if status is not None:
+            infeasible.append(
+                {
+                    "split": config.split,
+                    "split_seed": config.split_seed,
+                    "status": status,
+                }
+            )
+    return infeasible
+
+
 def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
     _validate_claim_config(config)
     if config.model == "catboost_regressor" and CatBoostRegressor is None:
@@ -1114,18 +1163,10 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
             return missing_optional_model_result(config)
         raise _missing_catboost_error()
 
-    try:
-        split, build_lookup, split_extras = baseline._split_rows(_baseline_config(config))
-    except ComponentVocabularyError:
-        # A deterministic bad vocabulary draw must produce a structured
-        # insufficiency artifact, not a crash that burns batch retries.
-        # Config errors (burned seeds, invalid fractions) raise through.
-        return _insufficient_result(config, "degenerate_component_vocab_split")
-    if not split.train or not split.test:
-        return _insufficient_result(config, "empty_outer_split")
-    inner_folds = inner_cv_splits(config, split.train, build_lookup)
-    if not inner_folds:
-        return _insufficient_result(config, "insufficient_inner_groups")
+    status, constructed = construct_splits(config)
+    if status is not None:
+        return _insufficient_result(config, status)
+    split, build_lookup, split_extras, inner_folds = constructed
 
     fold_bundles = [
         (

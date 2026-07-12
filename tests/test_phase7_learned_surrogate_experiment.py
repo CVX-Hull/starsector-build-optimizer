@@ -539,6 +539,35 @@ def test_run_one_propagates_config_errors_unconverted(monkeypatch):
         learned.run_one(_config(split="component-vocab"))
 
 
+def test_split_feasibility_report_names_infeasible_cells(monkeypatch):
+    from starsector_optimizer.phase7_matchup_data import ComponentVocabularyError
+
+    def broken_split_rows(config):
+        raise ComponentVocabularyError("component vocabulary holdout overshoot")
+
+    monkeypatch.setattr(learned.baseline, "_split_rows", broken_split_rows)
+
+    report = learned.split_feasibility_report(
+        [_config(split="component-vocab", split_seed=109)]
+    )
+
+    assert report == [
+        {
+            "split": "component-vocab",
+            "split_seed": 109,
+            "status": "degenerate_component_vocab_split",
+        }
+    ]
+
+
+def test_split_feasibility_report_empty_for_feasible_cells(monkeypatch):
+    monkeypatch.setattr(
+        learned, "construct_splits", lambda config: (None, ("split", {}, {}, ("fold",)))
+    )
+
+    assert learned.split_feasibility_report([_config(split="build")]) == []
+
+
 def test_inner_validation_metadata_documents_grouped_outer_training_contract():
     metadata = learned.inner_validation_metadata(_config(split="opponent-family"))
 

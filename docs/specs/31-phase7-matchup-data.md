@@ -974,6 +974,13 @@ baseline experiment. Spec 22 owns the cloud lifecycle, preflight, budget,
 teardown, UserData security, and authenticated control-plane requirements.
 This spec owns the Phase 7 job matrix and artifact semantics.
 
+Launch preflight must dry-run split construction (outer split plus inner
+folds, via the same `construct_splits` path the workers execute) for every
+unique `(split, split_seed)` cell in the job matrix against the local source
+DB, and refuse to provision when any cell is structurally infeasible —
+insufficiency is a preflight failure, not a discovery to make with a running
+fleet (added 2026-07-12 after the overshoot-cap incident).
+
 The canonical full-run batch job matrix is exactly:
 
 - splits: `build`, `opponent`, `opponent-hull`, `opponent-family`,
