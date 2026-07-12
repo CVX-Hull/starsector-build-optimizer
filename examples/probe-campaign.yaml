@@ -33,8 +33,8 @@ partial_fleet_policy: abort
 # WorkerSourceSha / ManifestSha256. Re-bake and update both regions after
 # changing worker Python, Java mod payload, or staged game manifest data.
 ami_ids_by_region:
-  us-east-1: ami-0c5a0a27fc45896d0
-  us-east-2: ami-0bb0a1a055f84411d
+  us-east-1: ami-0d8cc592d90d086d8
+  us-east-2: ami-0725ce0f989986b27
 
 ssh_key_name: starsector-probe
 
