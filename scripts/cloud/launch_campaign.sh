@@ -44,6 +44,8 @@ echo
 #   (3) CampaignManager atexit.register(self.teardown)
 #   (4) THIS trap EXIT: teardown.sh + final_audit.sh + events.log extract
 # Events extraction runs last so it captures every line tee'd during teardown.
+# shellcheck disable=SC2064  # expand-now is intentional: pin the campaign
+# name/paths at trap-definition time so later reassignment can't retarget it.
 trap "scripts/cloud/teardown.sh '$CAMPAIGN_NAME' || true; \
       scripts/cloud/final_audit.sh '$CAMPAIGN_NAME' || true; \
       scripts/cloud/extract_events.sh '$ORCHESTRATOR_LOG' > '$EVENTS_LOG' 2>/dev/null || true" EXIT

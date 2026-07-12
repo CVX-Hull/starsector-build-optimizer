@@ -4,8 +4,6 @@ top builds. Spec: docs/specs/30-honest-evaluator.md."""
 from __future__ import annotations
 
 import json
-import math
-from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -13,7 +11,6 @@ import pytest
 from starsector_optimizer.evaluator_pool import EvaluatorPool
 from starsector_optimizer.honest_evaluator import (
     HONEST_EVAL_SCHEMA_VERSION,
-    CellSummary,
     EvaluatedBuild,
     _BuildWithProvenance,
     discover_evaluation_pool,
@@ -25,7 +22,6 @@ from starsector_optimizer.models import (
     Build,
     CombatResult,
     HonestEvaluationConfig,
-    LoadoutDiagnostic,
     ShipCombatResult,
 )
 
@@ -199,7 +195,7 @@ class TestExtractTopBuilds:
     def test_raises_when_log_path_missing(
         self, tmp_path, hammerhead_hull, game_data, manifest,
     ):
-        with pytest.raises(FileNotFoundError, match="no evaluation_log.jsonl"):
+        with pytest.raises(FileNotFoundError, match=r"no evaluation_log\.jsonl"):
             extract_top_builds(
                 tmp_path / "nonexistent.jsonl",
                 hammerhead_hull, game_data, manifest, top_k=1,
@@ -459,7 +455,7 @@ class TestEvaluateBuilds:
         # 1 build × 2 opponents × 4 replicates = 8 unique IDs
         assert len(pool.dispatched) == 8
         assert len(set(pool.dispatched)) == 8, (
-            f"replicate IDs collided: {[m for m in pool.dispatched]}"
+            f"replicate IDs collided: {list(pool.dispatched)}"
         )
         # Verify the pattern includes _rep{N}
         for mid in pool.dispatched:
@@ -1227,7 +1223,7 @@ class TestMainCLIWiring:
         installed = {}
         monkeypatch.setattr(
             signal, "signal",
-            lambda sig, handler: installed.setdefault(sig, handler),
+            installed.setdefault,
         )
 
         honest_evaluator._install_signal_handlers()

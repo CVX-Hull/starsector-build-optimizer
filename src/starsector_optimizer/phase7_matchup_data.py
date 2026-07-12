@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Iterable, Iterator, Mapping, Sequence
+from typing import Any
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 
 from .game_manifest import GameManifest
 from .honest_evaluator import extract_top_builds
@@ -127,9 +128,7 @@ class SplitIds:
 def _canonical_build_dict(build: Build) -> dict[str, Any]:
     return {
         "hull_id": build.hull_id,
-        "weapon_assignments": {
-            key: value for key, value in sorted(build.weapon_assignments.items())
-        },
+        "weapon_assignments": dict(sorted(build.weapon_assignments.items())),
         "hullmods": sorted(build.hullmods),
         "flux_vents": int(build.flux_vents),
         "flux_capacitors": int(build.flux_capacitors),

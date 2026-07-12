@@ -8,9 +8,8 @@ import pytest
 
 from starsector_optimizer.models import (
     Build, HullSize, ShieldType, SlotSize, SlotType, MountType,
-    WeaponSlot, ShipHull, Weapon, HullMod, DamageType, GameData, WeaponType,
+    WeaponSlot, ShipHull, Weapon, DamageType, GameData, WeaponType,
 )
-from starsector_optimizer.models import BuildSpec
 from starsector_optimizer.variant import (
     build_to_build_spec,
     generate_variant,
@@ -20,19 +19,19 @@ from starsector_optimizer.variant import (
 
 
 def _hull(**kw):
-    defaults = dict(
-        id="eagle", name="Eagle", hull_size=HullSize.CRUISER, designation="Cruiser",
-        tech_manufacturer="", system_id="", fleet_pts=10, hitpoints=5000,
-        armor_rating=500, max_flux=5000, flux_dissipation=300, ordnance_points=100,
-        fighter_bays=0, max_speed=60, shield_type=ShieldType.FRONT, shield_arc=270,
-        shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0, phase_upkeep=0,
-        peak_cr_sec=480, cr_loss_per_sec=0.25,
-        weapon_slots=[
+    defaults = {
+        "id": "eagle", "name": "Eagle", "hull_size": HullSize.CRUISER, "designation": "Cruiser",
+        "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
+        "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": 100,
+        "fighter_bays": 0, "max_speed": 60, "shield_type": ShieldType.FRONT, "shield_arc": 270,
+        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0, "phase_upkeep": 0,
+        "peak_cr_sec": 480, "cr_loss_per_sec": 0.25,
+        "weapon_slots": [
             WeaponSlot("WS1", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)),
             WeaponSlot("WS2", SlotType.ENERGY, SlotSize.SMALL, MountType.TURRET, 0, 150, (0, 0)),
         ],
-        built_in_mods=[], built_in_weapons={"WS3": "builtin_weapon"}, hints=[], tags=[],
-    )
+        "built_in_mods": [], "built_in_weapons": {"WS3": "builtin_weapon"}, "hints": [], "tags": [],
+    }
     defaults.update(kw)
     return ShipHull(**defaults)
 

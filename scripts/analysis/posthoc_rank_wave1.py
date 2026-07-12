@@ -12,14 +12,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from starsector_optimizer.posthoc_ranker import (  # noqa: E402
+from starsector_optimizer.posthoc_ranker import (
     RankedBuild,
     load_records,
     rank_bradley_terry,
@@ -110,7 +109,7 @@ def main() -> int:
             {n: r[:args.k] for n, r in rankings.items()}, args.k,
         )
         # Detailed dump of top-K from each method for review.
-        print("\n=== Build details for top-{} of each method ===".format(args.k))
+        print(f"\n=== Build details for top-{args.k} of each method ===")
         for name, ranked in rankings.items():
             print(f"\n--- {name} ---")
             for i, r in enumerate(ranked[:args.k], 1):

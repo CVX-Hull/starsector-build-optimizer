@@ -76,6 +76,7 @@ echo "[bake_image] $SOURCE_REGION AMI: $AMI_ID"
 # does NOT propagate tags, so we mirror them onto each copy explicitly. A
 # missing ModCommitSha tag on a copied AMI would wedge every cross-region
 # campaign launch.
+# shellcheck disable=SC2016  # backticks are JMESPath literals, not shell
 src_tags_json=$(aws ec2 describe-images \
   --owners self --region "$SOURCE_REGION" --image-ids "$AMI_ID" \
   --query 'Images[0].Tags[?Key==`Project` || Key==`Role` || Key==`GameVersion` || Key==`ManifestSha256` || Key==`ModCommitSha` || Key==`WorkerSourceSha`]' \

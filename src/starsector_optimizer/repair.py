@@ -19,7 +19,7 @@ from .models import (
 def compute_op_cost(build: Build, hull: ShipHull, game_data: GameData) -> int:
     """Compute total OP cost of a build."""
     cost = 0
-    for slot_id, weapon_id in build.weapon_assignments.items():
+    for _slot_id, weapon_id in build.weapon_assignments.items():
         if weapon_id and weapon_id in game_data.weapons:
             cost += game_data.weapons[weapon_id].op_cost
     for mod_id in build.hullmods:

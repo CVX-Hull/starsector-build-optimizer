@@ -20,7 +20,9 @@
 # flags candidates; the operator decides.)
 set -uo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+# No `set -e` above (report-not-gate contract), so guard the cd explicitly:
+# continuing in the wrong directory would source the wrong _env.sh.
+cd "$(git rev-parse --show-toplevel)" || exit 1
 # shellcheck source=scripts/cloud/_env.sh
 source "$(dirname "$0")/_env.sh"
 

@@ -2,15 +2,13 @@
 """Integration test for the instance manager — launches real game instances."""
 
 import logging
-import sys
 import time
-sys.path.insert(0, "src")
-
-logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
-
 from pathlib import Path
+
 from starsector_optimizer.models import MatchupConfig
 from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
+
+logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
 GAME_DIR = Path("game/starsector")
 
@@ -52,7 +50,7 @@ try:
     print(f"Submitting {len(matchups)} matchups...")
     start = time.monotonic()
     results = []
-    for i, m in enumerate(matchups):
+    for _i, m in enumerate(matchups):
         result = pool.run_matchup(m)
         results.append(result)
     elapsed = time.monotonic() - start
@@ -77,7 +75,7 @@ except Exception as e:
         if log_path.exists():
             # Print last 30 lines of game log
             lines = log_path.read_text().splitlines()
-            print(f"  Last 30 lines of starsector.log:")
+            print("  Last 30 lines of starsector.log:")
             for line in lines[-30:]:
                 print(f"    {line}")
     raise

@@ -5,9 +5,14 @@
 # and ensures active plans cannot skip the explicit plan-review gate.
 #
 # Opt-in per clone: `git config core.hooksPath .githooks`.
-# Override: include `MANIFEST_REVIEWED: <reason>` on its own line in the
-# commit message for changes that genuinely don't affect rules (comments,
-# whitespace, test-only code).
+# Override: run the commit with the MANIFEST_REVIEWED environment variable
+# set to a short reason, e.g. `MANIFEST_REVIEWED="type-only change" git
+# commit ...`, for changes that genuinely don't affect rules (comments,
+# whitespace, test-only code) — and ALSO include `MANIFEST_REVIEWED:
+# <reason>` on its own line in the commit message as the durable record.
+# (A pre-commit hook never receives the commit message — it runs before the
+# message exists — so the env var is the enforcement channel and the message
+# line is the audit trail.)
 #
 # Rationale: spec 29 §Invariant — the manifest is the only authoritative
 # source of game rules. Java mod edits OR data file edits can shift the
@@ -67,14 +72,13 @@ manifest_was_regen() {
     staged_files | grep -qx 'game/starsector/manifest.json'
 }
 
-override_in_message() {
-    # Commit message may be in $1 (called by `git commit`) or
-    # reachable via `git log -1`. Guard both paths.
-    if [ $# -ge 1 ] && [ -f "$1" ]; then
-        grep -q '^MANIFEST_REVIEWED:' "$1"
-    else
-        git log -1 --pretty=%B 2>/dev/null | grep -q '^MANIFEST_REVIEWED:'
-    fi
+manifest_override_active() {
+    # Pre-commit hooks run before the commit message exists, so the only
+    # reliable override channel is the environment. (The old code read $1 /
+    # `git log -1`; $1 is never passed to pre-commit hooks and `git log -1`
+    # is the PREVIOUS commit — the override could never fire for the commit
+    # that needed it.)
+    [ -n "${MANIFEST_REVIEWED:-}" ]
 }
 
 validate_agents_symlinks
@@ -83,7 +87,7 @@ uv run python scripts/validate_active_plans.py
 uv run python scripts/validate_docs.py
 
 if needs_manifest_regen && ! manifest_was_regen; then
-    if ! override_in_message "${1:-}"; then
+    if ! manifest_override_active; then
         cat >&2 <<EOF
 pre-commit: Java mod or game data changed without manifest regen.
 
@@ -94,8 +98,9 @@ Manifest untouched: game/starsector/manifest.json
 
 Fix one of:
   - Run \`uv run python scripts/update_manifest.py\` and \`git add\` the regenerated manifest.
-  - Add \`MANIFEST_REVIEWED: <short reason>\` on its own line in the commit message
-    if the change genuinely doesn't shift game rules (docs/comments/test-only code).
+  - Re-run as \`MANIFEST_REVIEWED="<short reason>" git commit ...\` if the change
+    genuinely doesn't shift game rules (docs/comments/test-only code), and keep a
+    \`MANIFEST_REVIEWED: <reason>\` line in the commit message as the record.
 
 See docs/specs/29-game-manifest.md for the manifest-as-oracle invariant.
 EOF

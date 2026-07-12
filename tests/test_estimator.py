@@ -1,15 +1,11 @@
 """Tests for throughput estimator."""
 
-import math
 
 import pytest
 
 from starsector_optimizer.estimator import (
     CloudProvider,
-    HullSpaceStats,
     SimulationParams,
-    ThroughputEstimate,
-    compute_all_hull_stats,
     compute_hull_space_stats,
     estimate_throughput,
     format_estimate_report,

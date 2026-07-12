@@ -5,7 +5,7 @@ import pytest
 from starsector_optimizer.models import (
     HullSize, SlotType, SlotSize, MountType, ShieldType, WeaponType,
     WeaponSlot, ShipHull, Weapon, HullMod, DamageType, GameData,
-    REGIME_EARLY, REGIME_MID, REGIME_LATE, REGIME_ENDGAME, RegimeConfig,
+    REGIME_EARLY, REGIME_MID, REGIME_LATE, REGIME_ENDGAME,
 )
 from starsector_optimizer.search_space import (
     get_compatible_weapons,
@@ -31,15 +31,15 @@ def _hullmod(mid="mod1", is_hidden=False):
 
 
 def _hull(**kw):
-    defaults = dict(
-        id="test", name="Test", hull_size=HullSize.CRUISER, designation="Cruiser",
-        tech_manufacturer="", system_id="", fleet_pts=10, hitpoints=5000,
-        armor_rating=500, max_flux=5000, flux_dissipation=300, ordnance_points=100,
-        fighter_bays=0, max_speed=60, shield_type=ShieldType.FRONT, shield_arc=270,
-        shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0, phase_upkeep=0,
-        peak_cr_sec=480, cr_loss_per_sec=0.25, weapon_slots=[], built_in_mods=[],
-        built_in_weapons={}, hints=[], tags=[],
-    )
+    defaults = {
+        "id": "test", "name": "Test", "hull_size": HullSize.CRUISER, "designation": "Cruiser",
+        "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
+        "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": 100,
+        "fighter_bays": 0, "max_speed": 60, "shield_type": ShieldType.FRONT, "shield_arc": 270,
+        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0, "phase_upkeep": 0,
+        "peak_cr_sec": 480, "cr_loss_per_sec": 0.25, "weapon_slots": [], "built_in_mods": [],
+        "built_in_weapons": {}, "hints": [], "tags": [],
+    }
     defaults.update(kw)
     return ShipHull(**defaults)
 

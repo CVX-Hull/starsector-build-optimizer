@@ -15,7 +15,7 @@ import math
 import sqlite3
 import statistics
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -268,7 +268,7 @@ def main() -> int:
     out_path = REPO_ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "gates": gates,
     }, indent=2, default=str))
     print(f"\nWrote {out_path}")

@@ -5,10 +5,7 @@ Evaluates builds in batches to maximize parallel instance utilization.
 With 8 instances and 2 opponents, evaluates 4 builds per batch (8 matchups).
 """
 
-import sys
 import time
-
-sys.path.insert(0, "src")
 
 from pathlib import Path
 
@@ -26,9 +23,9 @@ from starsector_optimizer.opponent_pool import (
 )
 from starsector_optimizer.optimizer import (
     OptimizerConfig, BuildCache, define_distributions,
-    build_to_trial_params, trial_params_to_build, warm_start,
+    trial_params_to_build, warm_start,
 )
-from starsector_optimizer.models import HullSize
+from starsector_optimizer.models import HullSize, REGIME_ENDGAME
 
 GAME_DIR = Path("game/starsector")
 NUM_INSTANCES = 8
@@ -50,7 +47,6 @@ print("\n1. Loading game data...", flush=True)
 gd = load_game_data(GAME_DIR)
 manifest = GameManifest.load()
 hull = gd.hulls["eagle"]
-from starsector_optimizer.models import REGIME_ENDGAME
 space = build_search_space(hull, gd, REGIME_ENDGAME, manifest)
 distributions = define_distributions(space)
 opponents = get_opponents(TEST_POOL, HullSize.CRUISER)
@@ -114,7 +110,7 @@ try:
 
         # Evaluate matchups across instances
         all_results = []
-        for i, m in enumerate(all_matchups):
+        for _i, m in enumerate(all_matchups):
             all_results.append(pool.run_matchup(m))
 
         # Map results back to each build
@@ -176,8 +172,8 @@ try:
 
     # Top-3
     results_log.sort(key=lambda x: -x[1])
-    print(f"\nTop-3 builds:", flush=True)
-    for rank, (idx, fit, heur, build) in enumerate(results_log[:3]):
+    print("\nTop-3 builds:", flush=True)
+    for rank, (_idx, fit, heur, build) in enumerate(results_log[:3]):
         weapons = {s: w for s, w in build.weapon_assignments.items() if w is not None}
         logistics = [m for m in build.hullmods if gd.hullmods.get(m) and gd.hullmods[m].is_logistics]
         combat = [m for m in build.hullmods if m not in logistics]

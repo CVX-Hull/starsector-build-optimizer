@@ -1,7 +1,6 @@
 """Tests for Phase 7 flat matchup feature extraction."""
 
 import json
-from pathlib import Path
 
 import pytest
 
@@ -9,7 +8,6 @@ from starsector_optimizer.models import Build
 from starsector_optimizer.matchup_features import (
     EMPTY_SENTINEL,
     FEATURE_PROFILES,
-    FEATURE_SCHEMA_VERSION,
     build_feature_row,
     filter_feature_profile,
     matchup_feature_row,

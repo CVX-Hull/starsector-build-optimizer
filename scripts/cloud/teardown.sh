@@ -41,7 +41,9 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
     echo "  $region: no instances tagged $TAG"
   else
     echo "  $region: terminating $(echo "$ids" | wc -w) instance(s): $ids"
-    aws ec2 terminate-instances --region "$region" --instance-ids $ids >/dev/null
+    # --output text separates IDs by tabs/newlines; split into an array.
+    read -r -a id_arr <<< "$(tr '\t\n' '  ' <<< "$ids")"
+    aws ec2 terminate-instances --region "$region" --instance-ids "${id_arr[@]}" >/dev/null
   fi
 done
 
@@ -60,7 +62,7 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
   fi
   for sg in $sgs; do
     deleted=0
-    for attempt in $(seq 1 $SG_DELETE_RETRIES); do
+    for _attempt in $(seq 1 "$SG_DELETE_RETRIES"); do
       if aws ec2 delete-security-group --region "$region" --group-id "$sg" 2>/dev/null; then
         echo "  $region: deleted SG $sg"
         deleted=1

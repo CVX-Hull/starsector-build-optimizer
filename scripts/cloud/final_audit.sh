@@ -35,6 +35,7 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
   fi
   if [[ -n "$instances" ]]; then
     echo "LEAK in $region: instances:"
+    # shellcheck disable=SC2001  # per-line prefix on multi-line text; ${var//} can't
     echo "$instances" | sed 's/^/    /'
     LEAKED=1
   else

@@ -123,7 +123,7 @@ class TestPerOpponentRankMetrics:
 
     def test_small_n_opponents_excluded(self):
         builds, opponents, y_true, y_pred = _ranked_panel(8, 1)
-        builds = list(builds) + ["b00", "b01"]
+        builds = [*list(builds), "b00", "b01"]
         opponents = list(opponents) + ["tiny"] * 2
         y_true = np.concatenate([y_true, [0.0, 1.0]])
         y_pred = np.concatenate([y_pred, [0.0, 1.0]])
@@ -212,8 +212,8 @@ class TestBuildAggregateRankMetrics:
 
     def test_min_opponents_per_build_exclusion(self):
         builds, opponents, y_true, y_pred = _ranked_panel(4, 3)
-        builds = list(builds) + ["lonely"]
-        opponents = list(opponents) + ["opp0"]
+        builds = [*list(builds), "lonely"]
+        opponents = [*list(opponents), "opp0"]
         y_true = np.concatenate([y_true, [9.0]])
         y_pred = np.concatenate([y_pred, [9.0]])
         out = build_aggregate_rank_metrics(

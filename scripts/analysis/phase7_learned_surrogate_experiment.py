@@ -15,7 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from hashlib import sha256
 from pathlib import Path
-from typing import Mapping, Protocol, Sequence
+from typing import Protocol
+from collections.abc import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
@@ -44,7 +45,6 @@ from starsector_optimizer.phase7_matchup_data import (
     ComponentVocabularyError,
     SplitIds,
     TrainingMatchupRow,
-    component_fingerprint_json,
     forward_time_order_key,
     grouped_kfold,
     held_out_component_vocabulary_split,
@@ -1179,7 +1179,7 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
 
     outer_train = baseline._feature_bundle(split.train, build_lookup, _baseline_config(config))
     outer_test = baseline._feature_bundle(split.test, build_lookup, _baseline_config(config))
-    default_model, default_trial, default_prediction = _fit_score(
+    _default_model, default_trial, default_prediction = _fit_score(
         config.model,
         DEFAULT_HYPERPARAMETERS[config.model],
         outer_train,

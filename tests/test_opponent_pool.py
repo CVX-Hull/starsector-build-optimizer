@@ -11,7 +11,6 @@ from starsector_optimizer.models import (
     CombatResult,
     DamageBreakdown,
     HullSize,
-    MatchupConfig,
     ShipCombatResult,
 )
 from starsector_optimizer.opponent_pool import (
@@ -147,7 +146,6 @@ class TestDiscoverOpponentPool:
 
     def test_discover_excludes_unknown_hulls(self, game_data, tmp_path):
         """Variants referencing hulls not in game_data are excluded."""
-        from starsector_optimizer.variant import discover_stock_variant_ids
 
         variants_dir = tmp_path / "data" / "variants"
         variants_dir.mkdir(parents=True)

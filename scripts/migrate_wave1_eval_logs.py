@@ -35,8 +35,9 @@ import shutil
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
+import itertools
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WAVE1_CELLS = ("c0a", "c0b", "c1", "c2", "c3")
@@ -52,7 +53,7 @@ def _parse_sqlite_ts(ts: str | None) -> datetime | None:
     if ts is None:
         return None
     naive = datetime.fromisoformat(ts)
-    return (naive + timedelta(hours=EDT_OFFSET_HOURS)).replace(tzinfo=timezone.utc)
+    return (naive + timedelta(hours=EDT_OFFSET_HOURS)).replace(tzinfo=UTC)
 
 
 def _parse_jsonl_ts(ts: str | None) -> datetime | None:
@@ -121,7 +122,7 @@ def _load_cell_metadata(seed: int) -> list[dict]:
     out.sort(key=lambda r: r["ts_lo"])
     # Sanity: cells must be disjoint with positive gaps. Overlap means
     # the timestamp-slicing approach is invalid for this seed.
-    for prev, curr in zip(out, out[1:]):
+    for prev, curr in itertools.pairwise(out):
         gap = (curr["ts_lo"] - prev["ts_hi"]).total_seconds()
         if gap <= 0:
             raise RuntimeError(

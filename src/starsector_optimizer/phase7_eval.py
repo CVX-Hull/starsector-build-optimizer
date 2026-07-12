@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
 from scipy.stats import kendalltau, spearmanr
@@ -163,7 +163,7 @@ def _opponent_row_metrics(
     if int(top_mask.sum()) >= config.min_top_fraction_rows:
         top_metric = _safe_kendall(y_true[top_mask], y_pred[top_mask], epsilon)
     return {
-        "n": int(len(y_true)),
+        "n": len(y_true),
         "target_sd": sample_sd(y_true),
         "spearman": _safe_spearman(y_true, y_pred, epsilon),
         "kendall": _safe_kendall(y_true, y_pred, epsilon),
@@ -400,7 +400,7 @@ def skill_scores(
 def panel_target_stats(y_true: np.ndarray) -> dict[str, object]:
     """Panel context required whenever raw RMSE is reported (review H2)."""
     y_true = np.asarray(y_true, dtype=float)
-    n = int(len(y_true))
+    n = len(y_true)
     return {
         "n": n,
         "mean": float(np.mean(y_true)) if n else None,

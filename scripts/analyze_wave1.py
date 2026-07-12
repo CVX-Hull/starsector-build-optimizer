@@ -22,7 +22,7 @@ import math
 import sqlite3
 import sys
 from collections import defaultdict
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
 
@@ -52,12 +52,12 @@ def _parse_sqlite_timestamp(s: str) -> datetime:
     """
     naive = datetime.fromisoformat(s)
     # naive.astimezone(target) reads the system local TZ, then converts
-    return naive.astimezone(timezone.utc)
+    return naive.astimezone(UTC)
 
 
 def _parse_jsonl_timestamp(s: str) -> datetime:
     """JSONL writes ISO8601 with timezone."""
-    return datetime.fromisoformat(s).astimezone(timezone.utc)
+    return datetime.fromisoformat(s).astimezone(UTC)
 
 
 def load_cell_seed_window(cell: str, seed: int) -> dict[str, Any] | None:
@@ -93,7 +93,7 @@ def load_cell_seed_window(cell: str, seed: int) -> dict[str, Any] | None:
         "n_running": n_running,
         "t_min": _parse_sqlite_timestamp(t_min_str),
         "t_max": _parse_sqlite_timestamp(t_max_str),
-        "fitness_by_trial": {trial_no: v for trial_no, v in rows},
+        "fitness_by_trial": dict(rows),
         "db_path": str(db_path),
     }
 
@@ -510,7 +510,7 @@ def cell_summary(cell: str) -> dict[str, Any]:
             continue
         rows = load_jsonl_slice(seed, win["t_min"], win["t_max"])
         out["all_jsonl_rows"].extend(rows)
-        pruner_ratio, n_pruned, n_finalized = compute_pruner_ratio(win)
+        pruner_ratio, _n_pruned, n_finalized = compute_pruner_ratio(win)
         out["seeds"][seed] = {
             "n_total": win["n_total"],
             "n_complete": win["n_complete"],
@@ -831,7 +831,7 @@ def main() -> int:
     out_path = REPO_ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps({
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "cells": serialize_for_json(cells),
         "gates": gates,
     }, indent=2, default=str))

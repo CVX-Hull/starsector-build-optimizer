@@ -746,7 +746,7 @@ class TestDictToCombatResultRoundTrip:
         import dataclasses
         from starsector_optimizer.cloud_worker_pool import _dict_to_combat_result
         from starsector_optimizer.models import (
-            CombatResult, DamageBreakdown, EngineStats, ShipCombatResult,
+            DamageBreakdown, EngineStats,
         )
 
         ship = ShipCombatResult(
@@ -780,7 +780,6 @@ class TestDictToCombatResultRoundTrip:
     def test_roundtrip_accepts_none_engine_stats(self):
         import dataclasses
         from starsector_optimizer.cloud_worker_pool import _dict_to_combat_result
-        from starsector_optimizer.models import CombatResult
         original = CombatResult(
             matchup_id="m-no-engine", winner="TIMEOUT",
             duration_seconds=0.0,

@@ -9,11 +9,12 @@ import math
 import sys
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from itertools import combinations
 from pathlib import Path
-from typing import Iterable, Mapping, Protocol, Sequence
+from typing import Protocol
+from collections.abc import Iterable, Mapping, Sequence
 
 import numpy as np
 from scipy.stats import spearmanr
@@ -125,7 +126,7 @@ class BaselineConfig:
     top_k_values: tuple[int, ...]
     progress: bool
     feature_profile: str = DEFAULT_FEATURE_PROFILE
-    eval_metrics: EvalMetricsConfig = EvalMetricsConfig()
+    eval_metrics: EvalMetricsConfig = field(default_factory=EvalMetricsConfig)
     component_vocab_max_overshoot: float = DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT
 
 

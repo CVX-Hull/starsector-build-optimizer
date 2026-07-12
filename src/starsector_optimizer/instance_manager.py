@@ -561,6 +561,7 @@ class LocalInstancePool(EvaluatorPool):
                     ["xdotool", *args],
                     env=env, timeout=kill_timeout,
                     capture_output=True, text=True,
+                    check=False,
                 )
             except Exception as exc:
                 _trace(f"{label}: xdotool {' '.join(args)!r} raised: {exc!r}")
@@ -626,8 +627,8 @@ class LocalInstancePool(EvaluatorPool):
             _trace(f"FAILED: geom probe raised: {e!r}")
             return
         coords: dict[str, int] = {}
-        for line in geom_cp.stdout.splitlines():
-            line = line.strip()
+        for raw_line in geom_cp.stdout.splitlines():
+            line = raw_line.strip()
             if "=" in line:
                 k, _, v = line.partition("=")
                 try:

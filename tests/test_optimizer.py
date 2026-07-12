@@ -25,6 +25,7 @@ from starsector_optimizer.optimizer import (
     warm_start,
 )
 from tests.conftest import make_pass_diagnostic
+import itertools
 
 
 # --- Fixtures ---
@@ -76,7 +77,7 @@ class TestBuildConversion:
 
     def test_empty_weapon_maps_to_empty_string(self, wolf_space):
         """Weapon slot with None maps to 'empty' and back."""
-        weapons = {sid: None for sid in wolf_space.weapon_options}
+        weapons = dict.fromkeys(wolf_space.weapon_options)
         build = Build(
             hull_id="wolf",
             weapon_assignments=weapons,
@@ -635,7 +636,7 @@ class TestPreflightCheck:
     def test_invalid_hull_id_raises(self, game_data):
         """Unknown hull_id raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import LocalInstancePool
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -645,7 +646,7 @@ class TestPreflightCheck:
     def test_missing_mod_raises(self, game_data):
         """Missing combat harness mod raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import LocalInstancePool
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("/tmp/fake_game_dir")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -655,7 +656,7 @@ class TestPreflightCheck:
     def test_enabled_mods_missing_combat_harness(self, game_data, tmp_path):
         """enabled_mods.json without combat_harness raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import LocalInstancePool
         # Set up fake game dir with mod jar but wrong enabled_mods
         mods_dir = tmp_path / "mods" / "combat-harness" / "jars"
         mods_dir.mkdir(parents=True)
@@ -671,7 +672,7 @@ class TestPreflightCheck:
     def test_valid_config_passes(self, game_data):
         """Valid config passes without raising."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import LocalInstancePool
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
@@ -680,7 +681,7 @@ class TestPreflightCheck:
     def test_missing_opponent_variant_raises(self, game_data):
         """Opponent variant not found raises ValueError."""
         from unittest.mock import MagicMock
-        from starsector_optimizer.instance_manager import LocalInstancePool, InstanceConfig
+        from starsector_optimizer.instance_manager import LocalInstancePool
         pool = MagicMock(spec=LocalInstancePool)
         pool.game_dir = Path("game/starsector")
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("nonexistent_variant",)})
@@ -810,9 +811,8 @@ class TestStagedEvaluator:
 
     def test_cached_builds_skip_evaluation(self, wolf_hull, game_data, manifest):
         """Cached builds are told to Optuna immediately without run_matchup()."""
-        from unittest.mock import MagicMock
         from starsector_optimizer.optimizer import (
-            BuildCache, StagedEvaluator, optimize_hull,
+            optimize_hull,
         )
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
@@ -830,7 +830,7 @@ class TestStagedEvaluator:
         # Small budget to keep test fast
         config = OptimizerConfig(sim_budget=2, warm_start_n=3, warm_start_sample_n=20)
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         # With 2 sim trials and 1 opponent, we expect at most 2 run_matchup calls
         # (fewer if cache hits occur — same build proposed twice)
         assert call_count[0] <= config.sim_budget
@@ -866,7 +866,7 @@ class TestStagedEvaluator:
 
     def test_pruned_builds_not_cached(self, wolf_hull, game_data, manifest):
         """Pruned builds should NOT be in the cache."""
-        from starsector_optimizer.optimizer import optimize_hull, BuildCache
+        from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
         from starsector_optimizer.models import HullSize
 
@@ -881,8 +881,6 @@ class TestStagedEvaluator:
         )
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
-        pruned = [t for t in study.trials
-                  if t.state == optuna.trial.TrialState.PRUNED]
         # With all ENEMY wins and wilcoxon_n_startup_steps=0, some should be pruned
         # (WilcoxonPruner compares against best trial via signed-rank test)
         # This test verifies the pipeline runs without error when pruning occurs
@@ -928,7 +926,7 @@ class TestStagedEvaluator:
 
         pool.run_matchup = tracking_run
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         # Find trials that went through simulation (have matchup IDs containing their number)
         # Each such trial should have matchups against both opponents
@@ -989,7 +987,7 @@ class TestStagedEvaluator:
 
         pool.run_matchup = tracking_run
 
-        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
         # All matchup IDs should follow the pattern: {hull}_opt_{trial:06d}_vs_{opponent}
         for mid in all_matchup_ids:
@@ -2038,7 +2036,7 @@ class TestShapeFitness:
 
         cfg = ShapeConfig()
         # n=0 → passthrough (n<=1)
-        val, diag = _shape_fitness(0.5, [], cfg)
+        _val, diag = _shape_fitness(0.5, [], cfg)
         assert isinstance(diag, _ShapeDiag)
         assert diag.lam is None
         assert diag.passthrough_reason == "n<1"
@@ -2046,7 +2044,7 @@ class TestShapeFitness:
         import random
         rng = random.Random(0)
         completed = [rng.gauss(0, 1) for _ in range(20)]
-        val, diag = _shape_fitness(0.3, completed, cfg)
+        _val, diag = _shape_fitness(0.3, completed, cfg)
         assert diag.lam is not None
         assert isinstance(diag.lam, float)
         assert diag.passthrough_reason is None
@@ -2111,7 +2109,7 @@ class TestShapeFitness:
         cfg = ShapeConfig()
         completed = list(range(10))
         for bad in (float("nan"), float("inf"), -math.inf):
-            with pytest.raises(ValueError, match="[Nn]on-finite"):
+            with pytest.raises(ValueError, match=r"[Nn]on-finite"):
                 _shape_fitness(bad, completed, cfg)
 
     def test_shape_fitness_in_unit_interval(self):
@@ -2164,7 +2162,7 @@ class TestShapeFitness:
         shaped = [_shape_fitness(x, population, ShapeConfig())[0]
                   for x in sweep]
         # Strictly non-decreasing
-        for a, b in zip(shaped[:-1], shaped[1:]):
+        for a, b in itertools.pairwise(shaped):
             assert a <= b + 1e-12, f"Monotonicity violated: {a} > {b}"
 
     def test_shape_fitness_clips_outlier_current_trial(self):
@@ -2353,7 +2351,7 @@ class TestRegimeStudyIsolation:
         """Reuse TestShapeFitness/TestStagedEvaluator mock-pool pattern (PLAYER winner)."""
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, EngineStats, ShipCombatResult, EngineStats, DamageBreakdown,
+            CombatResult, ShipCombatResult, EngineStats, DamageBreakdown,
         )
         from starsector_optimizer.instance_manager import LocalInstancePool
 

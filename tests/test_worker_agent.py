@@ -4,6 +4,7 @@ import ast
 import json
 import time
 from pathlib import Path
+from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -133,7 +134,7 @@ class TestLoadWorkerConfigFromEnv:
     field raises ValueError; unknown coercion target raises TypeError.
     """
 
-    _REQUIRED_ENV = {
+    _REQUIRED_ENV: ClassVar[dict[str, str]] = {
         "STARSECTOR_WORKER_CAMPAIGN_ID": "c-all",
         "STARSECTOR_WORKER_STUDY_ID": "wolf__early__seed0",
         "STARSECTOR_WORKER_PROJECT_TAG": "starsector-c-all",
@@ -393,7 +394,7 @@ class TestConsumerConcurrency:
         import threading
         from unittest.mock import MagicMock
         from starsector_optimizer.models import (
-            CombatResult, EngineStats,
+            CombatResult,
         )
         from starsector_optimizer.worker_agent import _consumer_loop
 

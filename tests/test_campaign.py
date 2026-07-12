@@ -1,10 +1,8 @@
 """Tests for CampaignConfig, CostLedger, CampaignManager (Phase 6)."""
 
-import atexit
 import dataclasses
 import json
 import logging
-import os
 import signal
 import subprocess
 import time
@@ -629,8 +627,6 @@ class TestCampaignManagerPreflight:
             if cmd[:3] == ["git", "rev-parse", "HEAD"]:
                 return MagicMock(returncode=0, stdout=current_git_sha, stderr="")
             # strip optional ["--socket", <path>] between "tailscale" and verb
-            bare = [a for a in cmd if a != "tailscale" and not a.startswith("--socket")]
-            # skip explicit socket-path positional (follows --socket)
             cleaned: list[str] = []
             skip_next = False
             for a in cmd[1:]:
@@ -801,7 +797,7 @@ class TestCheckAmiTagsAgainstManifest:
         return GameManifest.load()
 
     def _manifest_sha(self):
-        from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
+        from starsector_optimizer.campaign import manifest_sha256
         return manifest_sha256()
 
     def _provider_returning(
@@ -810,10 +806,14 @@ class TestCheckAmiTagsAgainstManifest:
         provider = MagicMock()
         manifest_sha = manifest_sha or self._manifest_sha()
         def _describe(*, ami_id, region, tag_key):
-            if tag_key == "GameVersion": return gv
-            if tag_key == "ManifestSha256": return manifest_sha
-            if tag_key == "ModCommitSha": return sha
-            if tag_key == "WorkerSourceSha": return worker_sha
+            if tag_key == "GameVersion":
+                return gv
+            if tag_key == "ManifestSha256":
+                return manifest_sha
+            if tag_key == "ModCommitSha":
+                return sha
+            if tag_key == "WorkerSourceSha":
+                return worker_sha
             raise KeyError(tag_key)
         provider.describe_ami_tag.side_effect = _describe
         return provider
@@ -1006,7 +1006,7 @@ class TestLedgerTick:
         provider = MagicMock()
         provider.list_active.return_value = []
         _m = GameManifest.load()
-        from starsector_optimizer.campaign import manifest_sha256
+        from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
         def _describe_ami_tag(*, ami_id, region, tag_key):
             if tag_key == "GameVersion":
                 return _m.constants.game_version
@@ -1042,8 +1042,29 @@ class TestLedgerTick:
             },
         )
 
+    def test_manager_mock_resolves_all_preflight_ami_tags(self, tmp_path):
+        # Pins the fixture's AMI-tag mock to the full preflight tag protocol.
+        # A missing name in the mock (e.g. worker_source_sha256) would
+        # otherwise only surface if a test in this class happened to run
+        # preflight — this exercises every branch directly.
+        from starsector_optimizer.campaign import manifest_sha256, worker_source_sha256
+        from starsector_optimizer.game_manifest import GameManifest
+        _mgr, provider, _ledger = self._manager(tmp_path)
+        _m = GameManifest.load()
+        expected = {
+            "GameVersion": _m.constants.game_version,
+            "ManifestSha256": manifest_sha256(),
+            "ModCommitSha": _m.constants.mod_commit_sha,
+            "WorkerSourceSha": worker_source_sha256(),
+        }
+        for tag_key, want in expected.items():
+            got = provider.describe_ami_tag(
+                ami_id="ami-test", region="us-east-1", tag_key=tag_key,
+            )
+            assert got == want, tag_key
+
     def test_tick_ledger_writes_row_per_live_worker(self, tmp_path, fake_redis):
-        mgr, provider, ledger = self._manager(tmp_path)
+        mgr, _provider, _ledger = self._manager(tmp_path)
         mgr._redis = fake_redis
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-b")
@@ -1056,7 +1077,7 @@ class TestLedgerTick:
         assert {r["worker_id"] for r in rows} == {"worker-a", "worker-b", "worker-c"}
 
     def test_tick_ledger_raises_budget_exceeded(self, tmp_path, fake_redis):
-        mgr, provider, ledger = self._manager(tmp_path, budget_usd=0.001)
+        mgr, provider, _ledger = self._manager(tmp_path, budget_usd=0.001)
         mgr._redis = fake_redis
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         provider.get_spot_price.return_value = 5.0  # exceeds 0.001 instantly
@@ -1065,7 +1086,7 @@ class TestLedgerTick:
             mgr._tick_ledger()
 
     def test_tick_ledger_caches_spot_price_across_ticks(self, tmp_path, fake_redis):
-        mgr, provider, ledger = self._manager(tmp_path)
+        mgr, provider, _ledger = self._manager(tmp_path)
         mgr._redis = fake_redis
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         for _ in range(4):
@@ -1078,7 +1099,7 @@ class TestLedgerTick:
     def test_tick_ledger_skips_stale_heartbeat(self, tmp_path, fake_redis):
         """Heartbeat older than heartbeat_stale_multiplier × interval →
         worker treated as dead, no ledger row written."""
-        mgr, provider, ledger = self._manager(tmp_path)
+        mgr, _provider, _ledger = self._manager(tmp_path)
         mgr._redis = fake_redis
         stale_offset = (
             mgr._config.ledger_heartbeat_interval_seconds
@@ -1096,7 +1117,7 @@ class TestLedgerTick:
     def test_tick_ledger_hours_elapsed_capped_at_interval(self, tmp_path, fake_redis):
         """Consecutive ticks at interval_seconds apart → each tick charges
         at most `interval_seconds/3600` hours per worker."""
-        mgr, provider, ledger = self._manager(tmp_path)
+        mgr, _provider, _ledger = self._manager(tmp_path)
         mgr._redis = fake_redis
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         mgr._tick_ledger()
@@ -1601,11 +1622,8 @@ class TestEnvDictNotLogged:
     def test_spawn_studies_does_not_log_env_dict(
         self, tmp_path, monkeypatch, caplog,
     ):
-        from starsector_optimizer.campaign import CampaignManager
-        import starsector_optimizer.campaign as mod
-        config = load_campaign_config = __import__(
-            "starsector_optimizer.campaign", fromlist=["load_campaign_config"],
-        ).load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        from starsector_optimizer.campaign import CampaignManager, load_campaign_config
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
         monkeypatch.chdir(tmp_path)
         provider = MagicMock()
         provider.list_active.return_value = []

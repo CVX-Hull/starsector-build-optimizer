@@ -6,13 +6,14 @@ Game-launch testing is manual (see combat-harness/CLAUDE.md).
 
 import json
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
 from starsector_optimizer.models import BuildSpec, MatchupConfig
-from starsector_optimizer.result_parser import parse_combat_result, write_queue_file
+from starsector_optimizer.result_parser import parse_combat_result
 from starsector_optimizer.calibration import generate_random_build
-from starsector_optimizer.variant import build_to_build_spec, generate_variant, write_variant_file
+from starsector_optimizer.variant import build_to_build_spec
 
 
 SAVES_COMMON = Path(__file__).parent.parent / "game" / "starsector" / "saves" / "common"
@@ -102,7 +103,7 @@ class TestQueueGeneration:
 class TestBatchResultParsing:
     """Test that Python can parse batch results written by the Java mod."""
 
-    SAMPLE_RESULTS = [
+    SAMPLE_RESULTS: ClassVar[list[dict]] = [
         {
             "matchup_id": "eval_001",
             "winner": "ENEMY",

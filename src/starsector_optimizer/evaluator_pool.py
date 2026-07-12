@@ -47,7 +47,7 @@ class EvaluatorPool(abc.ABC):
         uses this to size its ThreadPoolExecutor.
         """
 
-    def __enter__(self) -> "EvaluatorPool":
+    def __enter__(self) -> EvaluatorPool:
         self.setup()
         return self
 

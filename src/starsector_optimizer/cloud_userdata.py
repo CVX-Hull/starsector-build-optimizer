@@ -226,6 +226,6 @@ def render_probe_user_data(campaign_id: str) -> str:
     return f"""#!/bin/bash
 set -euo pipefail
 mkdir -p /var/log
-echo probe-boot-ok campaign_id={shlex.quote(campaign_id)} $(date -u +%Y-%m-%dT%H:%M:%SZ) \\
+echo probe-boot-ok campaign_id={shlex.quote(campaign_id)} "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \\
     > /var/log/starsector-probe.log
 """

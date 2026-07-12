@@ -192,18 +192,14 @@ def format_estimate_report(
     lines.append("=" * 70)
     lines.append("Cost Estimates")
     lines.append("=" * 70)
-    lines.append(f"{'Provider':<25} {'$/hr':>8} {'Machines':>8} {'Total $':>10}")
-    lines.append("-" * 55)
+    lines.append(f"{'Provider':<25} {'$/hr':>8} {'Total $':>10}")
+    lines.append("-" * 45)
     for name, cost in sorted(estimate.cost_estimates.items(), key=lambda x: x[1]):
         provider = next((p for p in DEFAULT_PROVIDERS if p.name == name), None)
         if provider:
-            machines = math.ceil(estimate.total_sims
-                                 / (estimate.effective_matchups_per_hour * estimate.total_hours)
-                                 / provider.max_instances) if provider.max_instances > 0 else 1
-            # Simpler: just compute from num_instances in the estimate
-            lines.append(f"{name:<25} ${provider.cost_per_hour:>6.2f} {'':>8} ${cost:>9.2f}")
+            lines.append(f"{name:<25} ${provider.cost_per_hour:>6.2f} ${cost:>9.2f}")
         else:
-            lines.append(f"{name:<25} {'':>8} {'':>8} ${cost:>9.2f}")
+            lines.append(f"{name:<25} {'':>8} ${cost:>9.2f}")
     lines.append("")
 
     return "\n".join(lines)
@@ -222,14 +218,14 @@ def print_scenario_comparison(num_hulls: int = 50) -> str:
     lines.append("-" * 90)
 
     scenarios = [
-        ("3x speed, 180s limit, 1 inst", dict(time_mult=3.0, game_time_limit_seconds=180, num_instances=1)),
-        ("3x speed, 180s limit, 8 inst", dict(time_mult=3.0, game_time_limit_seconds=180, num_instances=8)),
-        ("5x speed, 180s limit, 8 inst", dict(time_mult=5.0, game_time_limit_seconds=180, num_instances=8)),
-        ("5x speed, 180s limit, 16 inst", dict(time_mult=5.0, game_time_limit_seconds=180, num_instances=16)),
-        ("5x speed, 120s limit, 8 inst", dict(time_mult=5.0, game_time_limit_seconds=120, num_instances=8)),
-        ("5x speed, 120s limit, 16 inst", dict(time_mult=5.0, game_time_limit_seconds=120, num_instances=16)),
-        ("5x speed, 60s limit, 8 inst", dict(time_mult=5.0, game_time_limit_seconds=60, num_instances=8)),
-        ("5x speed, 60s limit, 16 inst", dict(time_mult=5.0, game_time_limit_seconds=60, num_instances=16)),
+        ("3x speed, 180s limit, 1 inst", {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 1}),
+        ("3x speed, 180s limit, 8 inst", {"time_mult": 3.0, "game_time_limit_seconds": 180, "num_instances": 8}),
+        ("5x speed, 180s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 8}),
+        ("5x speed, 180s limit, 16 inst", {"time_mult": 5.0, "game_time_limit_seconds": 180, "num_instances": 16}),
+        ("5x speed, 120s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 120, "num_instances": 8}),
+        ("5x speed, 120s limit, 16 inst", {"time_mult": 5.0, "game_time_limit_seconds": 120, "num_instances": 16}),
+        ("5x speed, 60s limit, 8 inst", {"time_mult": 5.0, "game_time_limit_seconds": 60, "num_instances": 8}),
+        ("5x speed, 60s limit, 16 inst", {"time_mult": 5.0, "game_time_limit_seconds": 60, "num_instances": 16}),
     ]
 
     providers = [
@@ -314,7 +310,7 @@ def budget_optimizer(
     lines.append("-" * 95)
 
     seen_providers: set[str] = set()
-    for hours, cost, pname, params, est in results[:20]:
+    for hours, cost, pname, params, _est in results[:20]:
         provider = next(p for p in providers if p.name == pname)
         machines = math.ceil(params.num_instances / provider.max_instances)
         cost_per_inst_hr = provider.cost_per_hour / provider.max_instances
@@ -335,7 +331,7 @@ def budget_optimizer(
     for pname in ["Hetzner CCX43", "Hetzner CCX53", "AWS c7i.4xl spot"]:
         provider_results = [r for r in results if r[2] == pname]
         if provider_results:
-            hours, cost, _, params, est = provider_results[0]
+            hours, cost, _, params, _est = provider_results[0]
             provider = next(p for p in providers if p.name == pname)
             machines = math.ceil(params.num_instances / provider.max_instances)
             lines.append(

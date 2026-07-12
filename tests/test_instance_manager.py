@@ -4,18 +4,14 @@ All tests use tmp_path and mocked subprocess (no real game needed).
 """
 
 import json
-import os
-import shutil
 import subprocess
 import time
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from starsector_optimizer.models import BuildSpec, CombatResult, MatchupConfig
 from starsector_optimizer.instance_manager import (
-    GameInstance,
     InstanceConfig,
     InstanceError,
     LocalInstancePool,

@@ -35,4 +35,4 @@ def test_log_health_bins_are_chronological_across_midnight(tmp_path: Path) -> No
 
     health = log_health(log)
 
-    assert list(sorted(health["bins"])) == [1425, 1440]
+    assert sorted(health["bins"]) == [1425, 1440]

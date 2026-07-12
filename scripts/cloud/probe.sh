@@ -32,6 +32,8 @@ echo
 
 # The trap is the belt to probe.py's suspenders: even if Python is SIGKILLed
 # or the host reboots, the final_audit.sh run here will surface any leak.
+# shellcheck disable=SC2064  # expand-now is intentional: pin $NAME at
+# trap-definition time so later reassignment can't retarget the teardown.
 trap "scripts/cloud/teardown.sh '$NAME' || true; scripts/cloud/final_audit.sh '$NAME' || true" EXIT
 
 uv run python scripts/cloud/probe.py "$YAML"

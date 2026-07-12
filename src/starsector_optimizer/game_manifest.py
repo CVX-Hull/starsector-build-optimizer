@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -91,7 +91,7 @@ _ParseT = TypeVar("_ParseT", bound=Enum)
 # --- Manifest-only enums (game-rule vocabulary that differs from SlotType) ----
 
 
-class WeaponMountType(str, Enum):
+class WeaponMountType(StrEnum):
     """Slot-type a weapon requires.
 
     Distinct from the weapon's damage/ammo `type` — a weapon with
@@ -106,7 +106,7 @@ class WeaponMountType(str, Enum):
     UNIVERSAL = "UNIVERSAL"
 
 
-class SlotMountType(str, Enum):
+class SlotMountType(StrEnum):
     """Physical mount kind on a hull slot — how a weapon is attached.
 
     Engine emits TURRET / HARDPOINT for assignable slots and OTHER for

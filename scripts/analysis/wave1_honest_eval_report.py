@@ -113,7 +113,7 @@ def render_md(rows: list[CellRow]) -> str:
     out.append("")
     out.append(
         "Cell ranking by mean honest fitness "
-        f"(production-relevant headline): "
+        "(production-relevant headline): "
         + " > ".join(r.cell for r in sorted_rows)
         + "."
     )

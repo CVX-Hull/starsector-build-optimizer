@@ -16,7 +16,8 @@ import abc
 import base64
 import logging
 import time
-from typing import Any, Sequence
+from typing import Any
+from collections.abc import Sequence
 
 logger = logging.getLogger(__name__)
 

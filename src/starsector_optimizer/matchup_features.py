@@ -8,7 +8,7 @@ import math
 import re
 from pathlib import Path
 from statistics import mean, pstdev
-from typing import Iterable, Mapping
+from collections.abc import Iterable, Mapping
 
 from .calibration import compute_build_features
 from .game_manifest import GameManifest
@@ -17,7 +17,6 @@ from .models import (
     DamageType,
     GameData,
     ShipHull,
-    SlotType,
     SlotSize,
     Weapon,
 )

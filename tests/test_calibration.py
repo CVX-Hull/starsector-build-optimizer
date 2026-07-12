@@ -1,8 +1,7 @@
 """Tests for calibration pipeline."""
 
-import pytest
 
-from starsector_optimizer.models import Build, GameData
+from starsector_optimizer.models import Build
 from starsector_optimizer.repair import is_feasible
 from starsector_optimizer.calibration import (
     generate_random_build,

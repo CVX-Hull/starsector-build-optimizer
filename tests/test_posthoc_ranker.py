@@ -12,7 +12,6 @@ import json
 from pathlib import Path
 
 import numpy as np
-import pytest
 
 from starsector_optimizer.posthoc_ranker import (
     BradleyTerryConfig,

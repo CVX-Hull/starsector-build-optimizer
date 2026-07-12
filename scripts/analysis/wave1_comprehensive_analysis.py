@@ -48,7 +48,7 @@ import logging
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Sequence
 
 import matplotlib
 
@@ -104,8 +104,7 @@ plt.rcParams.update({
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
-from starsector_optimizer.deconfounding import twfe_decompose  # noqa: E402
-from starsector_optimizer.posthoc_ranker import (  # noqa: E402
+from starsector_optimizer.posthoc_ranker import (
     RankedBuild,
     TrialRecord,
     _build_score_matrix,
@@ -179,10 +178,10 @@ def _iter_log_rows(paths: Sequence[Path]):
         seed = fp.parent.name.rsplit("__seed", 1)[-1]
         with fp.open() as f:
             for line in f:
-                line = line.strip()
-                if not line:
+                stripped = line.strip()
+                if not stripped:
                     continue
-                yield cell, seed, json.loads(line)
+                yield cell, seed, json.loads(stripped)
 
 
 # -------------------------------------------------------------- section 1 ---
@@ -204,7 +203,8 @@ def section_01_topk_per_cell(k: int = 5) -> dict:
             for j, b in enumerate(METHOD_ORDER):
                 mat[i, j] = _jaccard(rankings[a], rankings[b])
         im = ax.imshow(mat, vmin=0.0, vmax=1.0, cmap="viridis")
-        ax.set_xticks(range(4)); ax.set_yticks(range(4))
+        ax.set_xticks(range(4))
+        ax.set_yticks(range(4))
         ax.set_xticklabels(METHOD_ORDER, rotation=40, ha="right")
         if ax_i == 0:
             ax.set_yticklabels(METHOD_ORDER)
@@ -274,7 +274,8 @@ def section_02_topk_pooled(ks: tuple[int, ...] = (3, 5, 10)) -> dict:
     fig, ax = plt.subplots(1, 1, figsize=(7.5, 6.4))
     ax.grid(False)
     im = ax.imshow(mat, vmin=0.0, vmax=1.0, cmap="viridis")
-    ax.set_xticks(range(4)); ax.set_yticks(range(4))
+    ax.set_xticks(range(4))
+    ax.set_yticks(range(4))
     ax.set_xticklabels(METHOD_ORDER, rotation=30, ha="right")
     ax.set_yticklabels(METHOD_ORDER)
     for i in range(4):
@@ -317,7 +318,7 @@ def section_03_alpha_distribution() -> dict:
         data.append(alphas)
         labels.append(f"{cell}\nn = {len(alphas)}")
         out[cell] = {
-            "n_builds": int(len(alphas)),
+            "n_builds": len(alphas),
             "mean": float(alphas.mean()),
             "std": float(alphas.std(ddof=1)) if len(alphas) > 1 else float("nan"),
             "min": float(alphas.min()) if len(alphas) else float("nan"),
@@ -333,8 +334,8 @@ def section_03_alpha_distribution() -> dict:
         pc.set_facecolor(color)
         pc.set_edgecolor("black")
         pc.set_linewidth(0.5)
-    bp = ax.boxplot(data, widths=0.22, patch_artist=False, showfliers=False,
-                    medianprops={"color": "black", "linewidth": 1.4})
+    ax.boxplot(data, widths=0.22, patch_artist=False, showfliers=False,
+               medianprops={"color": "black", "linewidth": 1.4})
     means = [float(d.mean()) for d in data]
     ax.scatter(range(1, len(CELLS) + 1), means, marker="D",
                color="white", edgecolor="black", zorder=5, s=24,
@@ -373,8 +374,12 @@ def section_04_eb_shrinkage_scatter() -> dict:
             tw = ranked_twfe.get(r.build_id)
             if tw is None:
                 continue
-            x.append(tw.score); y.append(r.score); n.append(r.n_matches)
-        x = np.asarray(x); y = np.asarray(y); n = np.asarray(n)
+            x.append(tw.score)
+            y.append(r.score)
+            n.append(r.n_matches)
+        x = np.asarray(x)
+        y = np.asarray(y)
+        n = np.asarray(n)
         sc = ax.scatter(x, y, c=n, cmap="plasma", s=18, alpha=0.7,
                         edgecolors="none")
         lo, hi = float(min(x.min(), y.min())), float(max(x.max(), y.max()))
@@ -393,7 +398,7 @@ def section_04_eb_shrinkage_scatter() -> dict:
             ax.legend(loc="lower right")
         out[cell] = {
             "shrinkage_slope": slope,
-            "n_builds": int(len(x)),
+            "n_builds": len(x),
             "mean_alpha_twfe": float(x.mean()) if len(x) else float("nan"),
             "mean_alpha_eb": float(y.mean()) if len(y) else float("nan"),
         }
@@ -442,7 +447,7 @@ def section_05_boxcox_saturation() -> dict:
         }
     colors = ["#C85200" if b > SAT_FAIL_FRAC * 100.0 else "#006BA4"
               for b in bars]
-    bars_h = ax.bar(CELLS, bars, color=colors, edgecolor="black", linewidth=0.6)
+    ax.bar(CELLS, bars, color=colors, edgecolor="black", linewidth=0.6)
     ax.axhline(SAT_FAIL_FRAC * 100, color="black", ls="--", lw=0.9,
                label=f"F2a threshold = {SAT_FAIL_FRAC*100:.0f} %")
     ax.set_ylabel(r"saturation rate  $\frac{|\{i: \mathrm{eb\_fitness}_i \geq 0.99\}|}{N_{\mathrm{nonpruned}}}$  (%)")
@@ -452,11 +457,11 @@ def section_05_boxcox_saturation() -> dict:
         "(F2a gate: orange = exceeds 1 %)"
     )
     for i, (b, n) in enumerate(zip(bars, n_obs)):
-        ax.text(i, b + max(0.05, 0.02 * max(bars + [SAT_FAIL_FRAC*100])),
+        ax.text(i, b + max(0.05, 0.02 * max([*bars, SAT_FAIL_FRAC * 100])),
                 f"{b:.2f} %\n(n = {n})",
                 ha="center", va="bottom", fontsize=9)
     ax.legend(loc="upper left")
-    ax.set_ylim(0, max(bars + [SAT_FAIL_FRAC*100]) * 1.4)
+    ax.set_ylim(0, max([*bars, SAT_FAIL_FRAC * 100]) * 1.4)
     fig.savefig(CHARTS_DIR / "05_boxcox_saturation_per_cell.png")
     plt.close(fig)
     return out
@@ -475,7 +480,7 @@ def section_06_pruner_rate() -> dict:
         if d.get("pruned"):
             pruned[cell][seed] += 1
     fig, ax = plt.subplots(1, 1, figsize=(10, 4.8))
-    n_cells = len(CELLS); n_seeds = len(SEEDS)
+    n_cells = len(CELLS)
     width = 0.26
     out: dict[str, dict] = {}
     for j, seed in enumerate(SEEDS):
@@ -489,14 +494,15 @@ def section_06_pruner_rate() -> dict:
                 "n_total": int(tot), "n_pruned": int(pr), "rate": float(rate),
             }
         xs = np.arange(n_cells) + (j - 1) * width
-        bars = ax.bar(xs, ys, width, label=f"seed {seed}",
-                      edgecolor="black", linewidth=0.4)
+        ax.bar(xs, ys, width, label=f"seed {seed}",
+               edgecolor="black", linewidth=0.4)
         for x_, y_ in zip(xs, ys):
             ax.text(x_, y_ + 0.012, f"{y_*100:.0f}%",
                     ha="center", va="bottom", fontsize=8)
     ax.axhspan(0.10, 0.60, alpha=0.12, color="#C85200",
                label="design band  [0.10, 0.60]", zorder=0)
-    ax.set_xticks(np.arange(n_cells)); ax.set_xticklabels(CELLS)
+    ax.set_xticks(np.arange(n_cells))
+    ax.set_xticklabels(CELLS)
     ax.set_ylabel(r"MedianPruner rate  $N_{\mathrm{pruned}} / N_{\mathrm{total}}$")
     ax.set_xlabel("cell (configuration)")
     ax.set_title("Pruner rate per (cell, seed)")
@@ -588,7 +594,7 @@ def section_07_confounding_heatmap(repr_cell: str = "c2",
     ax = axes[1]
     cells = list(per_cell_imb.keys())
     vals = [per_cell_imb[c] for c in cells]
-    bars = ax.bar(cells, vals, color="#006BA4", edgecolor="black", linewidth=0.5)
+    ax.bar(cells, vals, color="#006BA4", edgecolor="black", linewidth=0.5)
     ax.set_ylabel(r"imbalance index  $I = \mathrm{Var}(c) / \mathrm{Mean}(c)$")
     ax.set_xlabel("cell (configuration)")
     ax.set_title("(b) Per-cell mean imbalance  (higher = more confounded)")
@@ -624,7 +630,6 @@ def section_08_pooling_stability(k: int = 10) -> dict:
         cell_records = load_records(_cell_log_paths(cell))
         cell_ranked = rank_twfe_eb(cell_records, k=10**6)
         cell_top = cell_ranked[:k]
-        cell_top_ids = [r.build_id for r in cell_top]
         cell_rank_map = {r.build_id: i for i, r in enumerate(cell_ranked)}
 
         per_seed_jaccard, per_seed_rho = [], []
@@ -717,7 +722,6 @@ def section_09_bt_vs_twfe_alpha() -> dict:
     common = set(bt.keys()) & set(eb.keys())
     xs = np.asarray([eb[b].score for b in common])
     ys = np.asarray([bt[b].score for b in common])
-    sigs_eb = np.asarray([eb[b].sigma for b in common])
     if xs.std() > 0 and ys.std() > 0:
         pearson_r = float(np.corrcoef(xs, ys)[0, 1])
     else:
@@ -753,7 +757,7 @@ def section_09_bt_vs_twfe_alpha() -> dict:
     fig.savefig(CHARTS_DIR / "09_bt_vs_twfe_eb_alpha.png")
     plt.close(fig)
     return {
-        "n_builds": int(len(common)),
+        "n_builds": len(common),
         "pearson_r": pearson_r,
         "n_disagree_gt_1sigma": n_disagree,
         "disagree_frac": float(n_disagree / max(len(common), 1)),
@@ -774,8 +778,8 @@ def section_10_search_coverage() -> dict:
         records = load_records(_cell_log_paths(cell))
         distinct = {r.build_id for r in records}
         out[cell] = {
-            "n_finalized": int(len(records)),
-            "n_distinct_builds": int(len(distinct)),
+            "n_finalized": len(records),
+            "n_distinct_builds": len(distinct),
             "duplicate_rate": float(1.0 - len(distinct) / max(len(records), 1)),
         }
         bar_y_distinct.append(len(distinct))
@@ -787,12 +791,13 @@ def section_10_search_coverage() -> dict:
            edgecolor="black", linewidth=0.5, label="finalized trials")
     ax.bar(x + width / 2, bar_y_distinct, width, color="#006BA4",
            edgecolor="black", linewidth=0.5, label="distinct Build hashes")
-    ax.set_xticks(x); ax.set_xticklabels(CELLS)
+    ax.set_xticks(x)
+    ax.set_xticklabels(CELLS)
     ax.set_xlabel("cell (configuration)")
     ax.set_ylabel("count")
     ax.set_title("(a) Finalized trials vs distinct builds per cell")
     ax.legend(loc="lower right")
-    ymax = max(max(bar_y_total), max(bar_y_distinct))
+    ymax = max(*bar_y_total, *bar_y_distinct)
     ax.set_ylim(0, ymax * 1.13)
     for i, cell in enumerate(CELLS):
         dup = out[cell]["duplicate_rate"] * 100
@@ -804,7 +809,7 @@ def section_10_search_coverage() -> dict:
     cell_color = {c: plt.rcParams["axes.prop_cycle"].by_key()["color"][i]
                   for i, c in enumerate(CELLS)}
     for cell in CELLS:
-        for seed_i, seed in enumerate(SEEDS):
+        for _seed_i, seed in enumerate(SEEDS):
             recs = load_records(_seed_log_paths(cell, seed))
             recs = sorted(recs, key=lambda r: r.trial_number)
             seen = set()
@@ -946,7 +951,7 @@ def section_12_eb_shrinkage_diagnostics() -> dict:
             continue
         zs = np.asarray(zs)
         out[cell] = {
-            "n_builds": int(len(zs)),
+            "n_builds": len(zs),
             "mean_z": float(zs.mean()),
             "std_z": float(zs.std(ddof=1)) if len(zs) > 1 else float("nan"),
             "median_abs_z": float(np.median(np.abs(zs))),

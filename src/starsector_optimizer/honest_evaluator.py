@@ -17,9 +17,9 @@ import signal
 import threading
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Sequence
+from collections.abc import Sequence
 
 from .campaign import (
     check_ami_tags_against_manifest, check_authkey_syntax,
@@ -97,8 +97,8 @@ def read_ledger(ledger_path: Path) -> dict[tuple[str, str, int], float]:
         return {}
     completed: dict[tuple[str, str, int], float] = {}
     with ledger_path.open() as f:
-        for lineno, line in enumerate(f, 1):
-            line = line.strip()
+        for lineno, raw_line in enumerate(f, 1):
+            line = raw_line.strip()
             if not line:
                 continue
             try:
@@ -579,7 +579,7 @@ def evaluate_builds(
                         opponent_variant_id=job.opp,
                         replicate_idx=job.rep,
                         fitness=fitness,
-                        completed_at=datetime.now(timezone.utc).isoformat(),
+                        completed_at=datetime.now(UTC).isoformat(),
                     ))
                 scores_per_build[job.build_idx].append(fitness)
                 completed += 1
@@ -710,7 +710,7 @@ def write_outputs(
 
     summary_dir = out_root / "campaigns"
     summary_dir.mkdir(parents=True, exist_ok=True)
-    today = datetime.now(timezone.utc).date().isoformat()
+    today = datetime.now(UTC).date().isoformat()
     summary_path = summary_dir / f"honest_eval_summary_{today}.json"
     summary_path.write_text(json.dumps({
         "schema_version": result.schema_version,
@@ -1035,7 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
                 jsonl_path, top_k=config.top_k_per_seed,
             )
             primary = disagreement[args.ranking_method]
-            others = {m: l for m, l in disagreement.items()
+            others = {m: picks for m, picks in disagreement.items()
                       if m != args.ranking_method}
             consensus_count = max(
                 (sum(1 for m in others.values() if h in m) for h in primary),
@@ -1149,7 +1149,7 @@ def main(argv: list[str] | None = None) -> int:
             f"(default = {port_max - 1})."
         )
 
-    started_at = datetime.now(timezone.utc)
+    started_at = datetime.now(UTC)
     stamp = started_at.strftime("%Y%m%dT%H%M%SZ")
     if args.resume_from:
         eval_tag = args.resume_from
@@ -1286,7 +1286,7 @@ def main(argv: list[str] | None = None) -> int:
         logger.warning("honest_eval interrupted — cleanup complete")
         return 130
 
-    finished_at = datetime.now(timezone.utc)
+    finished_at = datetime.now(UTC)
     summaries = summarize_by_cell(evaluated)
     result = HonestEvaluationResult(
         schema_version=HONEST_EVAL_SCHEMA_VERSION,

@@ -2,29 +2,22 @@
 name = "starsector-optimizer"
 version = "0.1.0"
 description = "Automated ship build optimizer for Starsector"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.35",
-    "cmaes>=0.11.0",
     "flask>=3.0",
-    "lifelines>=0.30.0",
     "numpy",
-    "optunahub>=0.1.0",
     "optuna>=4.0.0",
     "pandas",
-    "pandas-stubs~=2.3.3",
     "pyyaml>=6.0",
     "redis>=5.0",
     "requests>=2.31",
     "scikit-learn>=1.5.0",
     "scipy>=1.15.3",
+    "werkzeug>=3.0",
 ]
 
 [project.optional-dependencies]
-dev = [
-    "pytest",
-    "pytest-cov",
-]
 literature = [
     "docling>=2.48",
     "pymupdf4llm>=0.0.17",
@@ -48,14 +41,62 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
+    "deptry>=0.23",
     "fakeredis>=2.20",
     "ipykernel>=7.2.0",
+    "matplotlib>=3.9",
     "moto>=5.0",
+    "mypy>=1.14",
     "nbclient>=0.10.4",
     "nbconvert>=7.17.1",
+    "pandas-stubs~=2.3.3",
     "pytest>=9.0.2",
     "pytest-cov>=7.1.0",
+    "pytest-randomly>=3.16",
+    "ruff>=0.15",
+    "shellcheck-py>=0.10",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/starsector_optimizer"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src"]
+# Notebooks are exploratory analysis artifacts, not maintained code.
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# Bug-finder families only; style-taste families (SIM/ARG/PTH/RET) and
+# format enforcement deliberately excluded — rationale in
+# docs/reports/2026-07-12-quality-tooling-research.md.
+select = ["E4", "E7", "E9", "F", "B", "UP", "C4", "PLE", "PLW", "RUF"]
+ignore = [
+    "RUF001", "RUF002", "RUF003",  # deliberate ×/—/§ house typography in docstrings
+    "B905",  # zip(strict=) staged follow-up: 20 sites each need a human judgment
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E741"]  # single-letter names in tests: churn without defect value
+"scripts/analysis/**" = ["E402"]  # matplotlib.use("Agg") before pyplot import is load-bearing
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src", "tests"]
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+# Staged follow-up: replace with per-module overrides (optuna/sklearn/scipy).
+ignore_missing_imports = true
+
+[tool.deptry]
+known_first_party = ["starsector_optimizer"]
+
+[tool.deptry.per_rule_ignores]
+# Opt-in extras: declared-but-unimported by design.
+DEP002 = [
+    "docling", "pymupdf4llm", "pypdf", "unstructured",
+    "botorch", "catboost", "gpytorch", "pyro-ppl", "torch",
+]

@@ -1,11 +1,10 @@
 """Tests for the EvaluatorPool ABC + subclass conformance."""
 
-import abc
 
 import pytest
 
 from starsector_optimizer.evaluator_pool import EvaluatorPool
-from starsector_optimizer.models import BuildSpec, CombatResult, MatchupConfig
+from starsector_optimizer.models import BuildSpec, MatchupConfig
 
 
 def _dummy_matchup() -> MatchupConfig:

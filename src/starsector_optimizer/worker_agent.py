@@ -29,7 +29,6 @@ import requests
 from .evaluator_pool import LOADOUT_MISMATCH_HTTP_STATUS
 from .instance_manager import InstanceConfig, LocalInstancePool
 from .models import MatchupConfig, WorkerConfig
-from .result_parser import parse_combat_result
 
 logger = logging.getLogger(__name__)
 

@@ -3,7 +3,6 @@
 import pytest
 
 from starsector_optimizer.models import (
-    CombatFitnessConfig,
     CombatResult,
     DamageBreakdown,
     ShipCombatResult,

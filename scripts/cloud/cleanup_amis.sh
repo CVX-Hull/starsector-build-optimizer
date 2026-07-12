@@ -45,7 +45,6 @@ if [[ ${#AMIS[@]} -eq 0 ]]; then
     exit 2
 fi
 
-CALLER_ACCT=$(aws sts get-caller-identity --query Account --output text)
 LIVE_AMIS="$(grep -rhE 'ami-[0-9a-f]+' examples/ 2>/dev/null \
     | grep -oE 'ami-[0-9a-f]+' | sort -u)"
 REGIONS=(us-east-1 us-east-2 us-west-1 us-west-2)
@@ -124,7 +123,7 @@ print(' '.join(b['Ebs']['SnapshotId']
     for snap in $snapshots; do
         # AWS sometimes refuses to delete the snapshot until deregister
         # finishes propagating; retry briefly.
-        for attempt in 1 2 3 4 5; do
+        for _attempt in 1 2 3 4 5; do
             if aws ec2 delete-snapshot --region "$region" --snapshot-id "$snap" 2>/dev/null; then
                 echo "  deleted snapshot $snap"
                 break

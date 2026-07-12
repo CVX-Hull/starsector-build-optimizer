@@ -26,7 +26,7 @@ import sys
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from pathlib import Path
 
 import numpy as np
@@ -41,8 +41,8 @@ from .game_manifest import GameManifest
 from .instance_manager import InstanceError
 from .models import (
     Build, BuildSpec, CombatFitnessConfig, CombatResult, EBShrinkageConfig,
-    EngineStats, GameData, HullSize, MatchupConfig,
-    REGIME_EARLY, REGIME_PRESETS, RegimeConfig,
+    EngineStats, GameData, MatchupConfig,
+    REGIME_EARLY, RegimeConfig,
     ScorerResult, ShapeConfig, ShipHull, TWFEConfig,
 )
 from .combat_fitness import combat_fitness
@@ -462,7 +462,7 @@ class _EBDiagnostics:
 
 
 def _op_used_fraction(
-    build: Build, hull: ShipHull, manifest: "GameManifest",
+    build: Build, hull: ShipHull, manifest: GameManifest,
 ) -> float:
     """Ordnance-point utilization on a pre-matchup build (manifest-driven).
 
@@ -490,7 +490,7 @@ def _op_used_fraction(
 
 
 def _build_covariate_vector(
-    record: _EBRecord, build: Build, hull: ShipHull, manifest: "GameManifest",
+    record: _EBRecord, build: Build, hull: ShipHull, manifest: GameManifest,
 ) -> np.ndarray:
     """Assemble the 10-dim covariate vector for EB shrinkage.
 
@@ -1406,7 +1406,7 @@ def _append_eval_log(
     raw_fitness: float | None = None,
     eb_fitness: float | None = None,
     twfe_fitness: float | None = None,
-    engine_stats: "EngineStats | None" = None,
+    engine_stats: EngineStats | None = None,
     covariate_vector: list[float] | None = None,
     shape_lambda: float | None = None,
     shape_passthrough_reason: str | None = None,
@@ -1414,7 +1414,7 @@ def _append_eval_log(
     pruned: bool = False,
     opponents_total: int = 0,
     opponent_order: list[str] | None = None,
-    eb_diagnostics: "_EBDiagnostics | None" = None,
+    eb_diagnostics: _EBDiagnostics | None = None,
     cache_hit: bool = False,
     cache_hit_origin_trial: int | None = None,
     invalid_spec: bool = False,
@@ -1461,9 +1461,7 @@ def _append_eval_log(
         "trial_number": trial_number,
         "build": {
             "hull_id": build.hull_id,
-            "weapon_assignments": {
-                k: v for k, v in build.weapon_assignments.items()
-            },
+            "weapon_assignments": dict(build.weapon_assignments.items()),
             "hullmods": sorted(build.hullmods),
             "flux_vents": build.flux_vents,
             "flux_capacitors": build.flux_capacitors,
@@ -1486,7 +1484,7 @@ def _append_eval_log(
         "raw_fitness": raw_fitness if raw_fitness is not None else fitness,
         "fitness": fitness,
         "regime": regime,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
     if cache_hit and cache_hit_origin_trial is not None:
         record["cache_hit_origin_trial"] = cache_hit_origin_trial
@@ -1554,8 +1552,6 @@ def optimize_hull(
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
     sampler = _create_sampler(config)
-    opponents = get_opponents(opponent_pool, hull.hull_size)
-    n_active = min(config.active_opponents, len(opponents))
     pruner = _create_pruner(config)
 
     study_name = f"{hull_id}__{config.regime.name}"

@@ -5,7 +5,6 @@ import pytest
 from starsector_optimizer.calibration import generate_diverse_builds, compute_build_features
 from starsector_optimizer.repair import is_feasible, compute_op_cost
 from starsector_optimizer.scorer import heuristic_score
-from starsector_optimizer.search_space import build_search_space
 from starsector_optimizer.variant import generate_variant
 from starsector_optimizer.game_manifest import (
     SLOT_WEAPON_COMPATIBILITY as SLOT_COMPATIBILITY,

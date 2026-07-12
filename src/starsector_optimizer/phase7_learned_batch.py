@@ -16,7 +16,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
+from collections.abc import Callable, Mapping, Sequence
 
 import yaml
 from flask import Flask, jsonify, request, send_file
@@ -1308,7 +1309,7 @@ def run_live_batch(
                 f"only {len(instance_ids)} workers provisioned; "
                 f"minimum is {config.min_workers_to_start}"
             )
-        pending_instance_ids.update({instance_id: start for instance_id in instance_ids})
+        pending_instance_ids.update(dict.fromkeys(instance_ids, start))
         while True:
             now = now_fn()
             if now - start > config.max_lifetime_hours * 3600.0:
@@ -1411,7 +1412,7 @@ def run_live_batch(
                 )
                 instance_ids.extend(replacements)
                 pending_instance_ids.update(
-                    {instance_id: now for instance_id in replacements}
+                    dict.fromkeys(replacements, now)
                 )
                 active = provider.list_active(config.project_tag)
                 active_worker_ids = {

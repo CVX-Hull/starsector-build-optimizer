@@ -810,7 +810,8 @@ set -e
 echo "trapped=$trapped code=$CODE"
 """
     proc = subprocess.run(
-        ["bash", "-c", script], capture_output=True, text=True, timeout=30
+        ["bash", "-c", script], capture_output=True, text=True, timeout=30,
+        check=False,
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "trapped=0 code=143"
@@ -1712,7 +1713,7 @@ def test_cli_launch_execute_runs_live_batch_after_preflight(tmp_path, monkeypatc
     monkeypatch.setattr(cli, "check_amis_available", lambda provider, config: calls.append("ami-available"))
     monkeypatch.setattr(cli, "check_key_pairs_available", lambda provider, config: calls.append("keypair"))
     monkeypatch.setattr(cli, "check_split_feasibility", lambda config: calls.append("split-feasibility"))
-    monkeypatch.setattr(cli, "GameManifest", type("GM", (), {"load": staticmethod(lambda: object())}))
+    monkeypatch.setattr(cli, "GameManifest", type("GM", (), {"load": staticmethod(object)}))
     monkeypatch.setattr(cli, "AWSProvider", lambda regions: FakeProvider())
     monkeypatch.setattr(cli, "create_bundle", lambda path, out: (tmp_path / "bundle.tgz", "b" * 64))
     monkeypatch.setattr(cli.secrets, "token_urlsafe", lambda n: "token")

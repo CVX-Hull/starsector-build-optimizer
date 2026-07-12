@@ -12,7 +12,7 @@ def _make_study_with_trials(n_trials: int) -> optuna.Study:
     import random
 
     study = optuna.create_study(direction="maximize")
-    for i in range(n_trials):
+    for _i in range(n_trials):
         trial = study.ask({
             "x": optuna.distributions.FloatDistribution(0.0, 1.0),
             "y": optuna.distributions.FloatDistribution(0.0, 1.0),

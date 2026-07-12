@@ -32,9 +32,9 @@ import hashlib
 import json
 import logging
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 from scipy.optimize import minimize
@@ -93,8 +93,8 @@ def load_records(
         study = f"{cell}/seed{seed}"
 
         with fp.open() as f:
-            for lineno, line in enumerate(f, start=1):
-                line = line.strip()
+            for lineno, raw_line in enumerate(f, start=1):
+                line = raw_line.strip()
                 if not line:
                     continue
                 try:
@@ -387,11 +387,14 @@ def rank_bradley_terry(
             bidx.append(bi)
             oidx.append(opps[opp])
             if winner == "PLAYER":
-                y.append(1.0); weight.append(1.0)
+                y.append(1.0)
+                weight.append(1.0)
             elif winner == "ENEMY":
-                y.append(0.0); weight.append(1.0)
+                y.append(0.0)
+                weight.append(1.0)
             else:  # TIMEOUT or unknown
-                y.append(0.5); weight.append(cfg.timeout_weight)
+                y.append(0.5)
+                weight.append(cfg.timeout_weight)
 
     n_b, n_o = len(builds), len(opps)
     bidx_a = np.asarray(bidx, dtype=np.int64)

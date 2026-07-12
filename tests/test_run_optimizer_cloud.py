@@ -15,9 +15,8 @@ Tests mock AWSProvider, CloudWorkerPool, and optimize_hull — no network I/O.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -133,7 +132,7 @@ class TestRunCloudStudyOrdering:
         return config, path, call_log, cloud_runner
 
     def test_provision_before_pool_enter(self, monkeypatch, tmp_path, smoke_env):
-        config, path, call_log, cloud_runner = self._prep_mocks(
+        _config, path, call_log, cloud_runner = self._prep_mocks(
             monkeypatch, tmp_path, smoke_env,
         )
         game_data = MagicMock()
@@ -151,7 +150,7 @@ class TestRunCloudStudyOrdering:
     def test_teardown_fleet_runs_in_finally_even_after_exception(
         self, monkeypatch, tmp_path, smoke_env,
     ):
-        config, path, call_log, cloud_runner = self._prep_mocks(
+        _config, path, call_log, cloud_runner = self._prep_mocks(
             monkeypatch, tmp_path, smoke_env,
         )
         monkeypatch.setattr(cloud_runner, "optimize_hull",
@@ -171,7 +170,7 @@ class TestRunCloudStudyOrdering:
     ):
         """Pool __exit__ (shuts Flask + janitor) must run BEFORE terminate_fleet —
         otherwise a live worker could POST to a torn-down listener."""
-        config, path, call_log, cloud_runner = self._prep_mocks(
+        _config, path, call_log, cloud_runner = self._prep_mocks(
             monkeypatch, tmp_path, smoke_env,
         )
         hull = MagicMock()
@@ -184,7 +183,7 @@ class TestRunCloudStudyOrdering:
         assert call_log.index("pool.__exit__") < call_log.index("terminate_fleet")
 
     def test_fleet_name_equals_study_id(self, monkeypatch, tmp_path, smoke_env):
-        config, path, call_log, cloud_runner = self._prep_mocks(
+        _config, path, _call_log, cloud_runner = self._prep_mocks(
             monkeypatch, tmp_path, smoke_env,
         )
 
@@ -221,7 +220,7 @@ class TestRunCloudStudyOrdering:
     def test_user_data_rendered_with_authkey_from_env(
         self, monkeypatch, tmp_path, smoke_env,
     ):
-        config, path, call_log, cloud_runner = self._prep_mocks(
+        _config, path, _call_log, cloud_runner = self._prep_mocks(
             monkeypatch, tmp_path, smoke_env,
         )
 
@@ -330,7 +329,7 @@ class TestPoolTotalMatchupSlots:
         self, monkeypatch, tmp_path, smoke_env,
     ):
         import starsector_optimizer.cloud_runner as cloud_runner
-        config, path = _make_smoke_config(
+        _config, path = _make_smoke_config(
             tmp_path,
             matchup_slots_per_worker=2,
             studies=[{
@@ -383,7 +382,7 @@ class TestManifestIsThreadedIntoOptimizeHull:
         self, monkeypatch, tmp_path, smoke_env,
     ):
         import starsector_optimizer.cloud_runner as cloud_runner
-        config, path = _make_smoke_config(tmp_path)
+        _config, path = _make_smoke_config(tmp_path)
 
         class Recorder:
             def __init__(self, *, regions): pass
@@ -429,7 +428,7 @@ class TestSeedIndexResolvesCorrectSeed:
     def test_seed_idx_picks_the_named_seed(self, monkeypatch, tmp_path, smoke_env):
         import starsector_optimizer.cloud_runner as cloud_runner
         # Smoke config with a multi-seed study.
-        config, path = _make_smoke_config(
+        _config, path = _make_smoke_config(
             tmp_path,
             studies=[{
                 "hull": "hammerhead", "regime": "early",
@@ -530,21 +529,21 @@ class TestPrepareCloudPool:
         return cloud_runner, call_log, captured
 
     def _kwargs(self, campaign):
-        return dict(
-            campaign=campaign,
-            study_id="honest-eval-x",
-            project_tag="honest-eval-x",
-            fleet_name="honest-eval-x",
-            flask_port=8999,
-            target_workers=4,
-            total_matchup_slots=8,
-            tailnet_ip="100.64.1.2",
-            bearer_token="bt",
-            tailscale_authkey="tskey-auth-test",
-        )
+        return {
+            "campaign": campaign,
+            "study_id": "honest-eval-x",
+            "project_tag": "honest-eval-x",
+            "fleet_name": "honest-eval-x",
+            "flask_port": 8999,
+            "target_workers": 4,
+            "total_matchup_slots": 8,
+            "tailnet_ip": "100.64.1.2",
+            "bearer_token": "bt",
+            "tailscale_authkey": "tskey-auth-test",
+        }
 
     def test_full_lifecycle_order(self, monkeypatch, tmp_path):
-        cloud_runner, log, captured = self._capture_lifecycle(monkeypatch)
+        cloud_runner, log, _captured = self._capture_lifecycle(monkeypatch)
         cfg, _ = _make_smoke_config(tmp_path)
         with cloud_runner.prepare_cloud_pool(**self._kwargs(cfg)) as pool:
             log.append("yield_body")

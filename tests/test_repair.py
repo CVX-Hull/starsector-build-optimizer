@@ -1,6 +1,5 @@
 """Tests for repair operator."""
 
-import pytest
 
 from starsector_optimizer.models import (
     Build, HullSize, ShieldType, SlotSize, SlotType, MountType,
@@ -12,19 +11,19 @@ from starsector_optimizer.repair import compute_op_cost, repair_build, is_feasib
 # --- Helpers ---
 
 def _hull(op=100, hull_size=HullSize.CRUISER, shield_type=ShieldType.FRONT, **kw):
-    defaults = dict(
-        id="test", name="Test", hull_size=hull_size, designation="Cruiser",
-        tech_manufacturer="", system_id="", fleet_pts=10, hitpoints=5000,
-        armor_rating=500, max_flux=5000, flux_dissipation=300, ordnance_points=op,
-        fighter_bays=0, max_speed=60, shield_type=shield_type, shield_arc=270,
-        shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0, phase_upkeep=0,
-        peak_cr_sec=480, cr_loss_per_sec=0.25,
-        weapon_slots=[
+    defaults = {
+        "id": "test", "name": "Test", "hull_size": hull_size, "designation": "Cruiser",
+        "tech_manufacturer": "", "system_id": "", "fleet_pts": 10, "hitpoints": 5000,
+        "armor_rating": 500, "max_flux": 5000, "flux_dissipation": 300, "ordnance_points": op,
+        "fighter_bays": 0, "max_speed": 60, "shield_type": shield_type, "shield_arc": 270,
+        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0, "phase_upkeep": 0,
+        "peak_cr_sec": 480, "cr_loss_per_sec": 0.25,
+        "weapon_slots": [
             WeaponSlot("WS1", SlotType.BALLISTIC, SlotSize.MEDIUM, MountType.TURRET, 0, 150, (0, 0)),
             WeaponSlot("WS2", SlotType.ENERGY, SlotSize.SMALL, MountType.TURRET, 0, 150, (0, 0)),
         ],
-        built_in_mods=[], built_in_weapons={}, hints=[], tags=[],
-    )
+        "built_in_mods": [], "built_in_weapons": {}, "hints": [], "tags": [],
+    }
     defaults.update(kw)
     return ShipHull(**defaults)
 
@@ -209,7 +208,7 @@ class TestIsFeasible:
         hull = _hull(hull_size=HullSize.FRIGATE)
         over_cap = manifest.constants.max_vents_per_ship + 5
         build = Build("test", {}, frozenset(), over_cap, 0)
-        ok, violations = is_feasible(build, hull, _game_data(), manifest)
+        ok, _violations = is_feasible(build, hull, _game_data(), manifest)
         assert not ok
 
     def test_wrong_weapon_type_infeasible(self, manifest):

@@ -1,8 +1,6 @@
 """Tests for game data parser using real 0.98a game data."""
 
-from pathlib import Path
 
-import pytest
 
 from starsector_optimizer.models import (
     DamageType,
@@ -14,7 +12,6 @@ from starsector_optimizer.models import (
     WeaponType,
 )
 from starsector_optimizer.parser import (
-    load_game_data,
     parse_hullmod_csv,
     parse_loose_json,
     parse_ship_csv,

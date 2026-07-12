@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: 2026-05-12
+last-validated: 2026-07-12
 ---
 
 # Cloud Deployment Specification
@@ -572,7 +572,7 @@ echo "STARSECTOR_WORKER_WORKER_ID=$INSTANCE_ID" >> /etc/starsector-worker.env
 
 `_IMDSV2_TOKEN_TTL_SECONDS = 300` is a module-level constant. IMDSv1 is NEVER used (SSRF risk). `sed -i` + append guarantees exactly one `STARSECTOR_WORKER_WORKER_ID=` line — no last-write-wins ambiguity. IMDS unreachable (dev VM, broken networking) → script halts at `curl --fail` → `systemctl start` never runs → worker never boots with empty ID.
 
-For probe scenarios where no real worker is needed, `render_probe_user_data(campaign_id) -> str` returns a minimal script: `echo probe-boot-ok > /var/log/starsector-probe.log`. The probe tests fleet lifecycle, not worker connectivity.
+For probe scenarios where no real worker is needed, `render_probe_user_data(campaign_id) -> str` returns a minimal script that writes a single boot marker line — `probe-boot-ok campaign_id=<id> <UTC timestamp>` — to `/var/log/starsector-probe.log`. The probe tests fleet lifecycle, not worker connectivity.
 
 ## Per-study SQLite layout
 

@@ -29,6 +29,8 @@ import sys
 import time
 from pathlib import Path
 
+from starsector_optimizer.instance_manager import InstanceConfig as _InstanceConfig
+
 logger = logging.getLogger("update_manifest")
 
 # Sentinel / output filenames inside `<work_dir>/saves/common/`.
@@ -177,7 +179,6 @@ _LAUNCHER_CLICK_SETTLE_SECONDS = 0.3
 # Single-source the Play-button position fractions from the production
 # InstanceConfig defaults — keeps the manifest dump and the production
 # launcher dispatch in lockstep across version updates.
-from starsector_optimizer.instance_manager import InstanceConfig as _InstanceConfig
 _LAUNCHER_PLAY_X_FRACTION: float = _InstanceConfig.__dataclass_fields__[
     "launcher_play_button_x_fraction"
 ].default
@@ -215,7 +216,7 @@ def _click_launcher(
     def _xdotool(*args: str, label: str) -> subprocess.CompletedProcess:
         cp = subprocess.run(
             ["xdotool", *args],
-            env=env, capture_output=True, text=True, timeout=5,
+            env=env, capture_output=True, text=True, timeout=5, check=False,
         )
         _trace(
             f"{label}: xdotool {' '.join(args)} → exit={cp.returncode} "
@@ -257,9 +258,9 @@ def _click_launcher(
     geom_cp = _xdotool("getwindowgeometry", "--shell", wid, label="geom_for_click")
     coords: dict[str, int] = {}
     for line in geom_cp.stdout.splitlines():
-        line = line.strip()
-        if "=" in line:
-            k, _, v = line.partition("=")
+        stripped = line.strip()
+        if "=" in stripped:
+            k, _, v = stripped.partition("=")
             try:
                 coords[k.strip()] = int(v.strip())
             except ValueError:

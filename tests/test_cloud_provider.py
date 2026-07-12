@@ -22,13 +22,13 @@ import pytest
 PROBE_USER_DATA = "#!/bin/bash\nset -euo pipefail\necho probe-boot-ok > /var/log/starsector-probe.log\n"
 
 # Canonical kwargs for provision_fleet across tests.
-_PROVISION_KWARGS = dict(
-    instance_types=("c7a.2xlarge",),
-    ssh_key_name="starsector-probe",
-    spot_allocation_strategy="price-capacity-optimized",
-    target_workers=1,
-    user_data=PROBE_USER_DATA,
-)
+_PROVISION_KWARGS = {
+    "instance_types": ("c7a.2xlarge",),
+    "ssh_key_name": "starsector-probe",
+    "spot_allocation_strategy": "price-capacity-optimized",
+    "target_workers": 1,
+    "user_data": PROBE_USER_DATA,
+}
 
 
 def _provision(provider, *, fleet_name, project_tag, regions=("us-east-1",),
@@ -38,7 +38,7 @@ def _provision(provider, *, fleet_name, project_tag, regions=("us-east-1",),
         fleet_name=fleet_name,
         project_tag=project_tag,
         regions=regions,
-        ami_ids_by_region={r: ami_id for r in regions},
+        ami_ids_by_region=dict.fromkeys(regions, ami_id),
         instance_types=("c7a.2xlarge",),
         ssh_key_name="starsector-probe",
         spot_allocation_strategy="price-capacity-optimized",
@@ -610,7 +610,7 @@ class TestSecurityGroupDeleteIdempotent:
         sleep_calls: list[float] = []
         monkeypatch.setattr(
             "starsector_optimizer.cloud_provider.time.sleep",
-            lambda s: sleep_calls.append(s),
+            sleep_calls.append,
         )
         provider._delete_security_groups_by_tags(
             "us-east-1", {"Project": "starsector-r", "Fleet": "A"},
@@ -640,7 +640,7 @@ class TestSecurityGroupDeleteIdempotent:
         sleep_calls: list[float] = []
         monkeypatch.setattr(
             "starsector_optimizer.cloud_provider.time.sleep",
-            lambda s: sleep_calls.append(s),
+            sleep_calls.append,
         )
         provider._delete_security_groups_by_tags(
             "us-east-1", {"Project": "starsector-r", "Fleet": "A"},
@@ -669,7 +669,7 @@ class TestSecurityGroupDeleteIdempotent:
         sleep_calls: list[float] = []
         monkeypatch.setattr(
             "starsector_optimizer.cloud_provider.time.sleep",
-            lambda s: sleep_calls.append(s),
+            sleep_calls.append,
         )
         provider._delete_security_groups_by_tags(
             "us-east-1", {"Project": "starsector-r", "Fleet": "A"},

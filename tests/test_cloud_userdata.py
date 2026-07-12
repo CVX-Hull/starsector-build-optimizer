@@ -8,7 +8,6 @@ produced shell script:
   - never leaks the bearer token or tailscale authkey into logs / stdout
 """
 
-import base64
 
 import pytest
 
@@ -19,17 +18,17 @@ TAILSCALE_SECRET_SENTINEL = "SENTINEL_TAILSCALE_e1a2f800"
 
 def _make_worker_config(**overrides):
     from starsector_optimizer.models import WorkerConfig
-    defaults = dict(
-        campaign_id="unit-test-campaign",
-        study_id="hammerhead__early__seed0",
-        project_tag="starsector-unit-test-campaign",
-        redis_host="100.64.0.1",
-        redis_port=6379,
-        http_endpoint="http://100.64.0.1:9000/result",
-        bearer_token=BEARER_TOKEN_SENTINEL,
-        max_lifetime_hours=6.0,
+    defaults = {
+        "campaign_id": "unit-test-campaign",
+        "study_id": "hammerhead__early__seed0",
+        "project_tag": "starsector-unit-test-campaign",
+        "redis_host": "100.64.0.1",
+        "redis_port": 6379,
+        "http_endpoint": "http://100.64.0.1:9000/result",
+        "bearer_token": BEARER_TOKEN_SENTINEL,
+        "max_lifetime_hours": 6.0,
         # worker_id left to default (""); cloud-init IMDSv2 overrides at boot.
-    )
+    }
     defaults.update(overrides)
     return WorkerConfig(**defaults)
 

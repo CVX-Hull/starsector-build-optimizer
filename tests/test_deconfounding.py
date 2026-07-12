@@ -346,7 +346,7 @@ class TestEBShrinkage:
             n=100, p=3, tau=0.5, sigma=1.0, seed=42,
         )
         cfg = EBShrinkageConfig()
-        alpha_eb, gamma, tau2, kept = eb_shrinkage(alpha_hat, sigma_sq, X, cfg)
+        alpha_eb, _gamma, tau2, kept = eb_shrinkage(alpha_hat, sigma_sq, X, cfg)
 
         mse_raw = np.mean((alpha_hat - alpha_true) ** 2)
         mse_eb = np.mean((alpha_eb - alpha_true) ** 2)
@@ -439,7 +439,7 @@ class TestEBShrinkage:
         sigma_sq = np.full(n, 0.1)
         cfg = EBShrinkageConfig(ols_ridge=0.5)
 
-        _, gamma, _, kept = eb_shrinkage(alpha_hat, sigma_sq, X, cfg)
+        _, gamma, _, _kept = eb_shrinkage(alpha_hat, sigma_sq, X, cfg)
 
         # Reconstruct expected gamma manually
         col_mean = X.mean(axis=0)

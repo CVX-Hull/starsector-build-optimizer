@@ -124,17 +124,17 @@ class TestWeaponSlot:
 
 
 def _make_hull(hull_size=HullSize.CRUISER, **kwargs):
-    defaults = dict(
-        id="eagle", name="Eagle", hull_size=hull_size, designation="Cruiser",
-        tech_manufacturer="Midline", system_id="maneuveringjets", fleet_pts=14,
-        hitpoints=8000.0, armor_rating=1000.0, max_flux=11000.0,
-        flux_dissipation=700.0, ordnance_points=155, fighter_bays=0,
-        max_speed=60.0, shield_type=ShieldType.FRONT, shield_arc=270.0,
-        shield_upkeep=0.4, shield_efficiency=0.8, phase_cost=0.0,
-        phase_upkeep=0.0, peak_cr_sec=480.0, cr_loss_per_sec=0.25,
-        weapon_slots=[], built_in_mods=[], built_in_weapons={},
-        hints=[], tags=["rare_bp", "merc"],
-    )
+    defaults = {
+        "id": "eagle", "name": "Eagle", "hull_size": hull_size, "designation": "Cruiser",
+        "tech_manufacturer": "Midline", "system_id": "maneuveringjets", "fleet_pts": 14,
+        "hitpoints": 8000.0, "armor_rating": 1000.0, "max_flux": 11000.0,
+        "flux_dissipation": 700.0, "ordnance_points": 155, "fighter_bays": 0,
+        "max_speed": 60.0, "shield_type": ShieldType.FRONT, "shield_arc": 270.0,
+        "shield_upkeep": 0.4, "shield_efficiency": 0.8, "phase_cost": 0.0,
+        "phase_upkeep": 0.0, "peak_cr_sec": 480.0, "cr_loss_per_sec": 0.25,
+        "weapon_slots": [], "built_in_mods": [], "built_in_weapons": {},
+        "hints": [], "tags": ["rare_bp", "merc"],
+    }
     defaults.update(kwargs)
     return ShipHull(**defaults)
 
@@ -161,15 +161,15 @@ class TestShipHull:
 
 
 def _make_weapon(**kwargs):
-    defaults = dict(
-        id="heavymauler", name="Heavy Mauler", size=SlotSize.MEDIUM,
-        weapon_type=WeaponType.BALLISTIC, damage_per_shot=200.0,
-        damage_per_second=0.0, damage_type=DamageType.KINETIC, emp=0.0,
-        flux_per_shot=200.0, flux_per_second=0.0, range=700.0, op_cost=10,
-        chargeup=0.0, chargedown=0.75, burst_size=1, burst_delay=0.0,
-        ammo=0, ammo_per_sec=0.0, proj_speed=500.0, turn_rate=30.0,
-        hints=[], tags=["kinetic3"],
-    )
+    defaults = {
+        "id": "heavymauler", "name": "Heavy Mauler", "size": SlotSize.MEDIUM,
+        "weapon_type": WeaponType.BALLISTIC, "damage_per_shot": 200.0,
+        "damage_per_second": 0.0, "damage_type": DamageType.KINETIC, "emp": 0.0,
+        "flux_per_shot": 200.0, "flux_per_second": 0.0, "range": 700.0, "op_cost": 10,
+        "chargeup": 0.0, "chargedown": 0.75, "burst_size": 1, "burst_delay": 0.0,
+        "ammo": 0, "ammo_per_sec": 0.0, "proj_speed": 500.0, "turn_rate": 30.0,
+        "hints": [], "tags": ["kinetic3"],
+    }
     defaults.update(kwargs)
     return Weapon(**defaults)
 
@@ -265,12 +265,12 @@ class TestWeaponDerivedMetrics:
 
 
 def _make_hullmod(**kwargs):
-    defaults = dict(
-        id="heavyarmor", name="Heavy Armor", tier=1,
-        tags=["defensive", "armor"], ui_tags=["Armor"],
-        cost_frigate=8, cost_destroyer=12, cost_cruiser=16, cost_capital=24,
-        is_hidden=False, script="data.hullmods.HeavyArmor",
-    )
+    defaults = {
+        "id": "heavyarmor", "name": "Heavy Armor", "tier": 1,
+        "tags": ["defensive", "armor"], "ui_tags": ["Armor"],
+        "cost_frigate": 8, "cost_destroyer": 12, "cost_cruiser": 16, "cost_capital": 24,
+        "is_hidden": False, "script": "data.hullmods.HeavyArmor",
+    }
     defaults.update(kwargs)
     return HullMod(**defaults)
 

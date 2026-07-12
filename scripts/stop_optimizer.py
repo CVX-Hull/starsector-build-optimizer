@@ -53,10 +53,10 @@ def _pids_matching(substring: str | None = None, regex: re.Pattern | None = None
         return []
     pids = []
     for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line:
+        stripped = line.strip()
+        if not stripped:
             continue
-        pid_str, _, args = line.partition(" ")
+        pid_str, _, args = stripped.partition(" ")
         if substring and substring in args:
             pids.append(int(pid_str))
         elif regex and regex.search(args.strip()):

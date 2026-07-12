@@ -59,6 +59,7 @@ echo
 child_pid=""
 shutdown_requested=0
 
+# shellcheck disable=SC2329  # invoked indirectly: `trap audit_on_exit EXIT`
 audit_on_exit() {
     if [[ ! -f "$ORCHESTRATOR_LOG" ]]; then
         return 0
@@ -84,6 +85,7 @@ audit_on_exit() {
     fi
 }
 
+# shellcheck disable=SC2329  # invoked indirectly: `trap 'forward_signal …'`
 forward_signal() {
     local sig="$1"
     shutdown_requested=1

@@ -11,17 +11,15 @@ Checks that:
 import logging
 import sys
 import time
+from pathlib import Path
 
-sys.path.insert(0, "src")
+from starsector_optimizer.models import BuildSpec, MatchupConfig
+from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-
-from pathlib import Path
-from starsector_optimizer.models import BuildSpec, MatchupConfig
-from starsector_optimizer.instance_manager import InstanceConfig, LocalInstancePool
 
 GAME_DIR = Path("game/starsector")
 OPPONENT = "dominator_Assault"
@@ -176,7 +174,7 @@ try:
 
     # Check 5: Damage dealt differs across builds (proves builds are applied)
     damages = []
-    for label, _, r in results:
+    for _label, _, r in results:
         p = r.player_ships[0]
         dmg = p.damage_dealt.shield + p.damage_dealt.armor + p.damage_dealt.hull
         damages.append(dmg)
@@ -184,7 +182,7 @@ try:
     print(f"[INFO] Winners: {[r.winner for _, _, r in results]}")
     print(f"[INFO] Player hull remaining: {[f'{r.player_ships[0].hull_fraction:.2f}' for _, _, r in results]}")
 
-    unique_damages = len(set(round(d, -1) for d in damages))
+    unique_damages = len({round(d, -1) for d in damages})
     assert unique_damages >= 2, \
         "All builds dealt identical damage — builds may not be applied"
     print(f"[PASS] {unique_damages} distinct damage profiles — builds are applied correctly")
@@ -202,7 +200,7 @@ except Exception as e:
         log_path = inst.work_dir / "starsector.log"
         if log_path.exists():
             lines = log_path.read_text().splitlines()
-            print(f"  Last 50 lines of starsector.log:")
+            print("  Last 50 lines of starsector.log:")
             for line in lines[-50:]:
                 print(f"    {line}")
     sys.exit(1)

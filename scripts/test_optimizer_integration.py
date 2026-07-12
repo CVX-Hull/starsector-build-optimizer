@@ -6,10 +6,7 @@ Verifies the full pipeline: heuristic warm-start → build proposal → repair �
 → combat sim → fitness computation → JSONL logging.
 """
 
-import sys
 import time
-
-sys.path.insert(0, "src")
 
 from pathlib import Path
 
@@ -24,7 +21,7 @@ from starsector_optimizer.instance_manager import InstanceConfig, LocalInstanceP
 from starsector_optimizer.opponent_pool import (
     OpponentPool, generate_matchups, compute_fitness, hp_differential, get_opponents,
 )
-from starsector_optimizer.models import HullSize
+from starsector_optimizer.models import HullSize, REGIME_ENDGAME
 
 GAME_DIR = Path("game/starsector")
 EVAL_LOG = Path("data/integration_test_eval.jsonl")
@@ -43,7 +40,6 @@ print("\n1. Loading game data...")
 game_data = load_game_data(GAME_DIR)
 manifest = GameManifest.load()
 hull = game_data.hulls["eagle"]
-from starsector_optimizer.models import REGIME_ENDGAME
 space = build_search_space(hull, game_data, REGIME_ENDGAME, manifest)
 print(f"   Eagle: {len(space.weapon_options)} weapon slots, "
       f"{len(space.eligible_hullmods)} hullmods, "
@@ -94,7 +90,7 @@ try:
 
         t0 = time.monotonic()
         results = []
-        for i, m in enumerate(matchups):
+        for _i, m in enumerate(matchups):
             results.append(pool.run_matchup(m))
         elapsed = time.monotonic() - t0
 

@@ -28,22 +28,23 @@ import subprocess
 import sys
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
-
-# Wall-clock seconds per hour — used by the ledger tick to convert
-# heartbeat interval seconds into fractional hours for billing.
-# Named constant (not a magic number) per CLAUDE.md Design Invariants.
-_SECONDS_PER_HOUR: float = 3600.0
+from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
+from collections.abc import Callable
 
 import yaml
 
 from .cloud_provider import CloudProvider
 from .models import (
     CampaignConfig, CostLedgerEntry, GlobalAutoStopConfig,
-    StudyConfig, WorkerConfig,
+    StudyConfig,
 )
+
+# Wall-clock seconds per hour — used by the ledger tick to convert
+# heartbeat interval seconds into fractional hours for billing.
+# Named constant (not a magic number) per CLAUDE.md Design Invariants.
+_SECONDS_PER_HOUR: float = 3600.0
 
 logger = logging.getLogger(__name__)
 
@@ -247,7 +248,7 @@ class CostLedger:
         delta = hours_elapsed * rate_usd_per_hr
         self._cumulative += delta
         entry = CostLedgerEntry(
-            timestamp=datetime.now(timezone.utc).isoformat(),
+            timestamp=datetime.now(UTC).isoformat(),
             event_type=event_type,
             worker_id=worker_id,
             region=region,
@@ -372,10 +373,11 @@ def _tailscale_socket_args() -> list[str]:
 
 def _resolve_tailnet_ip(timeout_seconds: float = _TS_CLI_TIMEOUT_SECONDS) -> str:
     """Shell out to `tailscale ip -4`. Empty stdout → PreflightFailure."""
-    cmd = ["tailscale"] + _tailscale_socket_args() + ["ip", "-4"]
+    cmd = ["tailscale", *_tailscale_socket_args(), "ip", "-4"]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=timeout_seconds,
+            check=False,
         )
     except FileNotFoundError as e:
         raise PreflightFailure(
@@ -402,11 +404,12 @@ def _tailscale_serve_exposes_port(port: int) -> bool:
     interface, so workers reach workstation services through `tailscale
     serve` TCP proxies. This check verifies the proxy mapping is in place.
     """
-    cmd = ["tailscale"] + _tailscale_socket_args() + ["serve", "status"]
+    cmd = ["tailscale", *_tailscale_socket_args(), "serve", "status"]
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
             timeout=_TS_CLI_TIMEOUT_SECONDS,
+            check=False,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False

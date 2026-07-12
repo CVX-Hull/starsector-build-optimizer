@@ -40,11 +40,10 @@ from __future__ import annotations
 
 import json
 import logging
-import statistics
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Sequence
+from collections.abc import Sequence
 
 import matplotlib
 
@@ -166,10 +165,10 @@ def _load_cell_seed(cell: str, seed: str) -> list[TrialRow]:
     out: list[TrialRow] = []
     with p.open() as f:
         for line in f:
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+            if not stripped:
                 continue
-            d = json.loads(line)
+            d = json.loads(stripped)
             if d.get("invalid_spec"):
                 kind = "invalid_spec"
             elif d.get("cache_hit"):
@@ -359,7 +358,9 @@ def section_02_sample_efficiency(data: dict[tuple[str, str], list[TrialRow]]) ->
         for T in CHECKPOINTS:
             entry = out[cell].get(f"T={T}")
             if entry is None:
-                meds.append(np.nan); errs_lo.append(0); errs_hi.append(0)
+                meds.append(np.nan)
+                errs_lo.append(0)
+                errs_hi.append(0)
             else:
                 meds.append(entry["median"])
                 errs_lo.append(entry["median"] - entry["min"])
@@ -426,9 +427,10 @@ def section_03_time_to_target(data: dict[tuple[str, str], list[TrialRow]]) -> di
 
     fig, ax = plt.subplots(figsize=(8.5, 4.6))
     bp = ax.boxplot(box_data, tick_labels=box_labels, widths=0.5,
-                    patch_artist=True, medianprops=dict(color="#C85200"))
+                    patch_artist=True, medianprops={"color": "#C85200"})
     for patch in bp["boxes"]:
-        patch.set_facecolor("#A2C8EC"); patch.set_edgecolor("#006BA4")
+        patch.set_facecolor("#A2C8EC")
+        patch.set_edgecolor("#006BA4")
     for ci, vals in enumerate(box_data):
         ax.scatter([ci + 1] * len(vals), vals, color="#595959",
                    s=22, zorder=3, alpha=0.8)
@@ -883,7 +885,7 @@ def section_12_combat_budget_pooled(
     ranker?" — a strictly fairer question than the trial-number axis.
     """
     log.info("[12] Combat-budget axis × pooled α̂_EB retrospective")
-    from starsector_optimizer.posthoc_ranker import (  # noqa: E402
+    from starsector_optimizer.posthoc_ranker import (
         _BuildId, load_records, rank_twfe_eb,
     )
 
