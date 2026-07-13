@@ -32,8 +32,13 @@ from starsector_optimizer.optimizer import OptimizerConfig, optimize_hull
 # args would require StudyConfig + campaign.py wire-through. Unset → use the
 # OptimizerConfig defaults; set → override the matching frozen-dataclass field.
 _ABLATION_ENV_VARS = (
-    "STARSECTOR_EB_MIN_BUILDS",  # C0a/C0b: set to sim_budget+1 to disable EB
-    "STARSECTOR_SHAPE_MIN_SAMPLES",  # C1: set to sim_budget+1 to disable Box-Cox A3
+    # EB + Box-Cox default OFF since the 2026-07-13 re-groom (D3); the
+    # *_ENABLED vars opt a cell back in. The threshold vars tune an enabled
+    # stage (the pre-flip "set to sim_budget+1 to disable" hack is obsolete).
+    "STARSECTOR_EB_ENABLED",  # 1 to enable EB shrinkage (default off)
+    "STARSECTOR_EB_MIN_BUILDS",  # stability floor for an enabled EB stage
+    "STARSECTOR_SHAPE_ENABLED",  # 1 to enable Box-Cox A3 (default off)
+    "STARSECTOR_SHAPE_MIN_SAMPLES",  # min-max fallback floor for enabled A3
     "STARSECTOR_TWFE_TRIM_WORST",  # C0a: set to 0 to disable scalar-CV trimming
     "STARSECTOR_WARM_START_N",  # C3: set to 50 to enable heuristic warm-start
 )
@@ -57,10 +62,26 @@ def _resolve_ablation_overrides() -> _AblationOverrides:
     operator log carry a record of which cell ran.
     """
     overrides: _AblationOverrides = {}
-    if (v := os.environ.get("STARSECTOR_EB_MIN_BUILDS")) is not None:
-        overrides["eb"] = EBShrinkageConfig(eb_min_builds=int(v))
-    if (v := os.environ.get("STARSECTOR_SHAPE_MIN_SAMPLES")) is not None:
-        overrides["shape"] = ShapeConfig(min_samples=int(v))
+    eb_enabled = os.environ.get("STARSECTOR_EB_ENABLED")
+    eb_min_builds = os.environ.get("STARSECTOR_EB_MIN_BUILDS")
+    if eb_enabled is not None or eb_min_builds is not None:
+        base_eb = EBShrinkageConfig()
+        overrides["eb"] = EBShrinkageConfig(
+            enabled=bool(int(eb_enabled)) if eb_enabled is not None else base_eb.enabled,
+            eb_min_builds=(
+                int(eb_min_builds) if eb_min_builds is not None else base_eb.eb_min_builds
+            ),
+        )
+    shape_enabled = os.environ.get("STARSECTOR_SHAPE_ENABLED")
+    shape_min_samples = os.environ.get("STARSECTOR_SHAPE_MIN_SAMPLES")
+    if shape_enabled is not None or shape_min_samples is not None:
+        base_shape = ShapeConfig()
+        overrides["shape"] = ShapeConfig(
+            enabled=bool(int(shape_enabled)) if shape_enabled is not None else base_shape.enabled,
+            min_samples=int(shape_min_samples)
+            if shape_min_samples is not None
+            else base_shape.min_samples,
+        )
     if (v := os.environ.get("STARSECTOR_TWFE_TRIM_WORST")) is not None:
         overrides["twfe"] = TWFEConfig(trim_worst=int(v))
     if (v := os.environ.get("STARSECTOR_WARM_START_N")) is not None:

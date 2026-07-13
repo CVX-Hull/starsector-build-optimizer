@@ -1083,6 +1083,10 @@ class StagedEvaluator:
         credible intervals at analysis time.
         """
         eb_cfg = self._config.eb
+        if not eb_cfg.enabled:
+            # Default-off per the honest-eval end-to-end ranking
+            # (2026-07-13 re-groom D3): plain TWFE α̂ ships unchanged.
+            return twfe_fitness, None
         if len(self._completed_records) < eb_cfg.eb_min_builds:
             return twfe_fitness, None
 
@@ -1337,6 +1341,13 @@ def _shape_fitness(
     """
     if not math.isfinite(eb_fitness):
         raise ValueError(f"Non-finite eb_fitness: {eb_fitness}")
+
+    if not config.enabled:
+        # Default-off per the honest-eval end-to-end ranking (2026-07-13
+        # re-groom D3): the fitness passes through unshaped. The non-finite
+        # guard above still applies — upstream NaN is an invariant
+        # violation regardless of shaping.
+        return eb_fitness, _ShapeDiag(lam=None, passthrough_reason="disabled")
 
     values = np.asarray(completed_values, dtype=float)
     n = len(values)

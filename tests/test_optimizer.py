@@ -1926,7 +1926,7 @@ class TestStagedEvaluatorEBIntegration:
             sim_budget=3,
             warm_start_n=2,
             warm_start_sample_n=20,
-            eb=EBShrinkageConfig(eb_min_builds=8),
+            eb=EBShrinkageConfig(enabled=True, eb_min_builds=8),
         )
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -1951,7 +1951,7 @@ class TestStagedEvaluatorEBIntegration:
             sim_budget=12,
             warm_start_n=2,
             warm_start_sample_n=20,
-            eb=EBShrinkageConfig(eb_min_builds=4),
+            eb=EBShrinkageConfig(enabled=True, eb_min_builds=4),
         )
 
         study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -2269,7 +2269,7 @@ class TestEvalLogAuditFields:
             warm_start_n=2,
             warm_start_sample_n=20,
             eval_log_path=log_path,
-            eb=EBShrinkageConfig(eb_min_builds=3),
+            eb=EBShrinkageConfig(enabled=True, eb_min_builds=3),
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
 
@@ -2328,7 +2328,7 @@ class TestShapeFitness:
         from starsector_optimizer.optimizer import _shape_fitness, _ShapeDiag
         from starsector_optimizer.models import ShapeConfig
 
-        cfg = ShapeConfig()
+        cfg = ShapeConfig(enabled=True)
         # n=0 → passthrough (n<=1)
         _val, diag = _shape_fitness(0.5, [], cfg)
         assert isinstance(diag, _ShapeDiag)
@@ -2349,7 +2349,7 @@ class TestShapeFitness:
         from starsector_optimizer.optimizer import _shape_fitness
         from starsector_optimizer.models import ShapeConfig
 
-        val, diag = _shape_fitness(1.234, [], ShapeConfig())
+        val, diag = _shape_fitness(1.234, [], ShapeConfig(enabled=True))
         assert val == 0.5
         assert diag.passthrough_reason == "n<1"
 
@@ -2358,7 +2358,7 @@ class TestShapeFitness:
         from starsector_optimizer.optimizer import _shape_fitness
         from starsector_optimizer.models import ShapeConfig
 
-        val, diag = _shape_fitness(0.0, [0.7], ShapeConfig())
+        val, diag = _shape_fitness(0.0, [0.7], ShapeConfig(enabled=True))
         assert val == 0.5
         assert diag.passthrough_reason == "n<1"
 
@@ -2369,7 +2369,7 @@ class TestShapeFitness:
         from starsector_optimizer.optimizer import _shape_fitness
         from starsector_optimizer.models import ShapeConfig
 
-        cfg = ShapeConfig()
+        cfg = ShapeConfig(enabled=True)
         # n=5 completed, min_samples=8 → passthrough
         completed = [0.1, 0.3, 0.5, 0.7, 0.9]
         val_low, diag_low = _shape_fitness(0.1, completed, cfg)
@@ -2389,7 +2389,7 @@ class TestShapeFitness:
         from starsector_optimizer.models import ShapeConfig
 
         completed = [0.42] * 10  # n=10, constant population
-        val, diag = _shape_fitness(0.42, completed, ShapeConfig())
+        val, diag = _shape_fitness(0.42, completed, ShapeConfig(enabled=True))
         assert val == 0.5
         assert diag.passthrough_reason == "constant"
         assert diag.lam is None
@@ -2401,7 +2401,7 @@ class TestShapeFitness:
         from starsector_optimizer.models import ShapeConfig
         import math
 
-        cfg = ShapeConfig()
+        cfg = ShapeConfig(enabled=True)
         completed = list(range(10))
         for bad in (float("nan"), float("inf"), -math.inf):
             with pytest.raises(ValueError, match=r"[Nn]on-finite"):
@@ -2413,7 +2413,7 @@ class TestShapeFitness:
         from starsector_optimizer.models import ShapeConfig
         import random
 
-        cfg = ShapeConfig()
+        cfg = ShapeConfig(enabled=True)
         rng = random.Random(0)
         population = [rng.gauss(0.5, 0.2) for _ in range(30)]
         inputs = [-1.0, -0.1, 0.0, 0.5, 1.0, 2.5]
@@ -2437,7 +2437,7 @@ class TestShapeFitness:
         # by `test_shape_fitness_clips_outlier_current_trial`.
         rng = random.Random(1)
         population = [rng.gauss(0.5, 0.2) for _ in range(50)]
-        shaped = [_shape_fitness(v, population, ShapeConfig())[0] for v in population]
+        shaped = [_shape_fitness(v, population, ShapeConfig(enabled=True))[0] for v in population]
         rho, _ = spearmanr(population, shaped)
         assert rho == pytest.approx(1.0, abs=1e-9)
 
@@ -2453,7 +2453,7 @@ class TestShapeFitness:
         # 100-point sweep across the population range
         lo, hi = min(population), max(population)
         sweep = [lo + i * (hi - lo) / 99 for i in range(100)]
-        shaped = [_shape_fitness(x, population, ShapeConfig())[0] for x in sweep]
+        shaped = [_shape_fitness(x, population, ShapeConfig(enabled=True))[0] for x in sweep]
         # Strictly non-decreasing
         for a, b in itertools.pairwise(shaped):
             assert a <= b + 1e-12, f"Monotonicity violated: {a} > {b}"
@@ -2464,7 +2464,7 @@ class TestShapeFitness:
         from starsector_optimizer.optimizer import _shape_fitness
         from starsector_optimizer.models import ShapeConfig
 
-        cfg = ShapeConfig()
+        cfg = ShapeConfig(enabled=True)
         population = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
         # Extreme outliers
         val_high, _ = _shape_fitness(50.0, population, cfg)
@@ -2479,7 +2479,7 @@ class TestShapeFitness:
         from starsector_optimizer.models import ShapeConfig
         import random
 
-        cfg = ShapeConfig()
+        cfg = ShapeConfig(enabled=True)
         rng = random.Random(3)
         # 90% exploit cluster at ~0.8, 10% at ~0.0 — mirrors sim
         population = [
@@ -2607,7 +2607,7 @@ class TestShapeFitness:
         Early rows show passthrough (reason populated); later rows show a fitted λ."""
         from starsector_optimizer.optimizer import optimize_hull
         from starsector_optimizer.opponent_pool import OpponentPool
-        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.models import HullSize, ShapeConfig
         import json
 
         pool = self._make_mock_pool()
@@ -2618,6 +2618,7 @@ class TestShapeFitness:
             warm_start_n=2,
             warm_start_sample_n=20,
             eval_log_path=log_path,
+            shape=ShapeConfig(enabled=True),
         )
         optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
         recs = [json.loads(l) for l in log_path.read_text().splitlines()]
@@ -2645,11 +2646,14 @@ class TestShapeFitness:
         from starsector_optimizer.models import HullSize
 
         pool = self._make_mock_pool()
+        from starsector_optimizer.models import ShapeConfig
+
         opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
         config = OptimizerConfig(
             sim_budget=12,
             warm_start_n=2,
             warm_start_sample_n=20,
+            shape=ShapeConfig(enabled=True),
         )
         with caplog.at_level(logging.INFO, logger="starsector_optimizer.optimizer"):
             optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
@@ -3013,3 +3017,64 @@ class TestPhase7PrepInvariants:
         )
         expected = expected_num / hull.ordnance_points
         assert _op_used_fraction(build, hull, manifest) == pytest.approx(expected)
+
+
+class TestDefaultsFlipToPlainTWFE:
+    """2026-07-13 re-groom D3: EB shrinkage and Box-Cox shaping are opt-in,
+    default OFF, per the honest-eval end-to-end ranking (plain TWFE > EB >
+    full c2 stack; docs/reports/2026-07-13-roadmap-regroom.md)."""
+
+    def test_eb_and_shape_default_disabled(self):
+        from starsector_optimizer.models import EBShrinkageConfig, ShapeConfig
+
+        assert EBShrinkageConfig().enabled is False
+        assert ShapeConfig().enabled is False
+
+    def test_shape_fitness_disabled_is_identity_with_reason(self):
+        from starsector_optimizer.optimizer import _shape_fitness
+        from starsector_optimizer.models import ShapeConfig
+        import random
+
+        rng = random.Random(3)
+        population = [rng.gauss(0.5, 0.2) for _ in range(30)]
+        val, diag = _shape_fitness(0.375, population, ShapeConfig())
+        assert val == 0.375
+        assert diag.lam is None
+        assert diag.passthrough_reason == "disabled"
+
+    def test_default_config_ships_plain_twfe_end_to_end(
+        self, wolf_hull, game_data, tmp_path, manifest
+    ):
+        """A default OptimizerConfig — enough budget that EB and Box-Cox
+        WOULD both engage if enabled — must report the raw TWFE alpha to
+        Optuna: eval-log rows show eb == twfe, no eb_diagnostics, and
+        shape passthrough reason "disabled" on every completed row."""
+        import json
+
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.models import HullSize
+
+        pool = TestStagedEvaluatorEBIntegration._make_mock_pool(TestStagedEvaluatorEBIntegration())
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        log_path = tmp_path / "eval.jsonl"
+        config = OptimizerConfig(
+            sim_budget=12,
+            warm_start_n=2,
+            warm_start_sample_n=20,
+            eval_log_path=log_path,
+        )
+        assert config.eb.enabled is False
+        assert config.shape.enabled is False
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+
+        recs = [json.loads(line) for line in log_path.read_text().splitlines()]
+        completed = [r for r in recs if not r["pruned"]]
+        assert len(completed) >= 8  # would satisfy both default thresholds
+        for rec in completed:
+            assert rec["eb_fitness"] == rec["twfe_fitness"]
+            assert "eb_diagnostics" not in rec
+            assert rec["shape_lambda"] is None
+            assert rec["shape_passthrough_reason"] == "disabled"
+            assert rec["fitness"] == rec["twfe_fitness"]

@@ -68,6 +68,7 @@ Frozen dataclass in `models.py` configuring the A2′ empirical-Bayes shrinkage 
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
+| `enabled` | `bool` | `False` | Opt-in switch for the entire A2′ stage. Default off since the 2026-07-13 re-groom: the honest-eval end-to-end ranking placed plain TWFE above every EB variant ([2026-07-13-roadmap-regroom.md](../reports/2026-07-13-roadmap-regroom.md) D3). When False, `_apply_eb_shrinkage` returns raw α̂ with no diagnostics before any other guard. |
 | `tau2_floor_frac` | `float` | `0.05` | Method-of-moments floor for τ̂² expressed as a fraction of `Var(α̂)`. Prevents total collapse when the OLS fit over-explains α̂ in small samples. |
 | `triple_goal` | `bool` | `True` | When True, apply Lin-Louis-Shen (1999) triple-goal rank correction to the posterior mean before returning. Preserves posterior rank ordering but substitutes the empirical TWFE α̂ histogram. |
 | `eb_min_builds` | `int` | `8` | The optimizer skips shrinkage entirely and returns raw α̂ if fewer than this many builds have been finalized. Stability guard for the OLS fit in the first few trials. |

@@ -568,8 +568,14 @@ class EBShrinkageConfig:
     Controls fusion of TWFE α̂ with a 7-covariate regression prior:
         α̂_EB_i = w_i · α̂_i + (1 − w_i) · γ̂ᵀ[1, X_i],  w_i = τ̂² / (τ̂² + σ̂_i²)
     See spec 28 §EB Shrinkage (A2′).
+
+    `enabled` defaults to False (opt-in): the 2026-05-11 honest-eval
+    end-to-end ranking placed plain TWFE above every EB variant, and the
+    2026-07-13 re-groom flipped the shipping default to match the evidence
+    (docs/reports/2026-07-13-roadmap-regroom.md, D3).
     """
 
+    enabled: bool = False
     tau2_floor_frac: float = 0.05
     triple_goal: bool = True
     eb_min_builds: int = 8
@@ -580,6 +586,11 @@ class EBShrinkageConfig:
 class ShapeConfig:
     """Phase 5E A3 Box-Cox output-warping parameters.
 
+    `enabled` defaults to False (opt-in): the 2026-05-11 honest-eval
+    end-to-end ranking disfavored the Box-Cox stack, and the 2026-07-13
+    re-groom flipped the shipping default to match the evidence
+    (docs/reports/2026-07-13-roadmap-regroom.md, D3). When disabled, the
+    A3 step passes the fitness through unchanged.
     `min_samples` is the floor below which the A3 step falls through to
     min-max scaling (Box-Cox MLE destabilises under ~8 samples; chosen by
     analogy to `EBShrinkageConfig.eb_min_builds`).
@@ -588,6 +599,7 @@ class ShapeConfig:
     See spec 24 §A3 Box-Cox Output Warping.
     """
 
+    enabled: bool = False
     min_samples: int = 8
     positivise_epsilon: float = 1e-6
 
