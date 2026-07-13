@@ -28,17 +28,16 @@ FEATURE_SCHEMA_VERSION = 4
 EMPTY_SENTINEL = "EMPTY"
 UNKNOWN_SENTINEL = "UNKNOWN"
 DEFAULT_FEATURE_PROFILE = "all"
+# sparse-cross ("sparse-component plus interactions") was removed at
+# experiment schema v5: sparse-component keeps every non-interaction
+# feature, so that definition was byte-identical to "all" (spec 31
+# §feature profiles).
 FEATURE_PROFILES = (
     "all",
     "aggregate",
     "geometry",
     "opponent-parity",
     "sparse-component",
-    "sparse-cross",
-)
-PROFILE_AGGREGATE_EXCLUDE_PARTS = (
-    "_slot_",
-    "_hullmod__",
 )
 PROFILE_GEOMETRY_INCLUDE_PARTS = (
     "_geometry_",
@@ -60,7 +59,6 @@ PROFILE_SPARSE_COMPONENT_INCLUDE_PARTS = (
     "_hull_id",
     "_variant_id",
 )
-PROFILE_SPARSE_CROSS_INCLUDE_PREFIXES = ("interaction_",)
 ARC_BUCKET_FRONT = "front"
 ARC_BUCKET_AFT = "aft"
 ARC_BUCKET_PORT = "port"
@@ -621,11 +619,19 @@ def filter_feature_profile(
             if not _is_sparse_component_key(key) and not key.startswith("interaction_")
         }
     if feature_profile == "geometry":
+        # Aggregate features plus geometry/slot-placement/arc fields;
+        # interaction columns are excluded like the aggregate profile
+        # (spec 31 — the profile carries geometry signal only), and the
+        # exclusion is checked first so interaction names containing
+        # geometry substrings (e.g. "_arc_") are not resurrected.
         return {
             key: value
             for key, value in row.items()
-            if not _is_sparse_component_key(key)
-            or any(part in key for part in PROFILE_GEOMETRY_INCLUDE_PARTS)
+            if not key.startswith("interaction_")
+            and (
+                not _is_sparse_component_key(key)
+                or any(part in key for part in PROFILE_GEOMETRY_INCLUDE_PARTS)
+            )
         }
     if feature_profile == "opponent-parity":
         return {
@@ -642,13 +648,7 @@ def filter_feature_profile(
             if _is_sparse_component_key(key)
             or (not _is_sparse_component_key(key) and not key.startswith("interaction_"))
         }
-    return {
-        key: value
-        for key, value in row.items()
-        if key.startswith(PROFILE_SPARSE_CROSS_INCLUDE_PREFIXES)
-        or _is_sparse_component_key(key)
-        or not _is_sparse_component_key(key)
-    }
+    raise AssertionError(f"feature profile {feature_profile!r} listed but not handled")
 
 
 def _is_sparse_component_key(key: str) -> bool:

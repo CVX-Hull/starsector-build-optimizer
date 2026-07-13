@@ -41,7 +41,7 @@ RESERVED_CONFIRMATORY_SEED = 151
 # infeasible (outer or inner draws overshoot).
 DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT = 0.35
 DEFAULT_INNER_CV_FOLDS = 3
-EXPERIMENT_SCHEMA_VERSION = 4
+EXPERIMENT_SCHEMA_VERSION = 5
 DEFAULT_PROMOTION_METRIC = "mean_per_opponent_spearman"
 DEFAULT_FINAL_REFIT_POLICY = "fit_outer_train_only_no_deployment_artifact"
 DEFAULT_DEPENDENCY_EXTRA = "surrogate"

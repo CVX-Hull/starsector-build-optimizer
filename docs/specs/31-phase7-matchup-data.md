@@ -179,17 +179,27 @@ the same static geometry/arc summaries as build rows.
 Feature profiles are deterministic ablation subsets:
 
 - `all` — every feature in the current schema.
-- `aggregate` — aggregate/scorer/context features without per-slot sparse
-  component columns or interaction columns.
+- `aggregate` — aggregate/scorer/context features without sparse ID/component
+  columns (per-slot columns, hullmod indicators, hull/variant IDs) or
+  interaction columns.
 - `geometry` — aggregate features plus geometry, slot placement, and arc
-  pressure fields.
+  pressure fields; like `aggregate`, it excludes interaction columns
+  (an early implementation leaked `interaction_*` keys into this profile;
+  the profile carries geometry signal only, so the exclusion is normative).
 - `opponent-parity` — build/opponent aggregate context without sparse ID
   residuals or explicit interaction fields.
 - `sparse-component` — aggregate features plus hull/slot/weapon/hullmod/
-  opponent categorical components.
-- `sparse-cross` — sparse-component features plus explicit interaction fields.
+  opponent categorical components (everything except interaction columns).
 
 Unknown feature profiles raise `ValueError`.
+
+A `sparse-cross` profile ("sparse-component plus explicit interaction
+fields") existed through experiment schema v4 but was removed: because
+`sparse-component` keeps every non-interaction feature, that definition is
+byte-identical to `all`, so the profile was a redundant arm. No artifact
+ever ran it (every canonical run pinned `all`). The interaction-field
+ablation is the `sparse-component` (no interactions) vs `all` (with
+interactions) contrast.
 
 Future feature-selection experiments must not treat the materialized feature
 columns as an anonymous flat mask. Any learned-selection artifact that claims
@@ -390,7 +400,7 @@ confirmatory seed live beside `BURNED_SPLIT_SEEDS` in
 113, 127, 131, 137, 139, 149)`, `RESERVED_CONFIRMATORY_SEED = 151`); batch
 validation references them. `phase7_matchup_data.py` is likewise the single
 owner of the shared experiment-contract constants —
-`EXPERIMENT_SCHEMA_VERSION` (4), the diagnostic status/reason vocabulary
+`EXPERIMENT_SCHEMA_VERSION` (5), the diagnostic status/reason vocabulary
 (`DIAGNOSTIC_COMPUTED_STATUS`, `ADVERSARIAL_REASON_INSUFFICIENT_GROUPS`,
 `ADVERSARIAL_REASON_NO_BUNDLES`, `ADVERSARIAL_REASON_RESULT_SPECIFIC`),
 `DEFAULT_PROMOTION_METRIC`,
@@ -781,7 +791,7 @@ Parallel execution policy:
 The learned-baseline script exposes:
 
 ```python
-EXPERIMENT_SCHEMA_VERSION: int  # 4
+EXPERIMENT_SCHEMA_VERSION: int  # 5
 
 @dataclass(frozen=True)
 class LearnedExperimentConfig:
@@ -886,7 +896,7 @@ Each learned model/split run uses nested validation:
    panel stats) alongside pooled metrics.
 
 The canonical job matrix reports fixed model families across fixed splits
-and rotated seeds (21 (split, model) cells; 180 jobs after the
+and rotated seeds (14 (split, model) cells; 120 jobs after the
 component-vocab seed exclusion — see §"Learned AWS Batch Artifacts"); it
 is a comparison matrix, not an automatically nested model-family selector.
 Any claim that names a single "best" learned model must either predeclare the
@@ -1022,7 +1032,7 @@ that flag is set, the JSON output records the skipped model and reason.
 
 The learned experiment JSON output includes:
 
-- `experiment_schema_version` (4)
+- `experiment_schema_version` (5)
 - `feature_schema_version`
 - `feature_profile`
 - source DB path and game directory
@@ -1164,8 +1174,18 @@ The canonical full-run batch job matrix is exactly:
 
 - splits: `build`, `opponent`, `opponent-hull`, `opponent-family`,
   `component-vocab`, `seed-cell`, `forward-time`;
-- model families: `random_forest_tuned`, `catboost_regressor`,
-  `sparse_pairwise_ridge`;
+- model families: `CANONICAL_MODELS = ("random_forest_tuned",
+  "catboost_regressor")`. `sparse_pairwise_ridge` was retired from the
+  canonical matrix after the schema-v2 wave (attempt-3 decision 3:
+  catastrophic off-vocabulary behavior added noise and cost without
+  evidence value); it remains a member of `SUPPORTED_MODELS` — the
+  validation universe for config `models:` lists — so non-canonical
+  configs can still run it. `CANONICAL_MODELS ⊆ SUPPORTED_MODELS`;
+  config validation rejects models outside `SUPPORTED_MODELS`, while the
+  canonical-publish guard requires exactly `CANONICAL_MODELS`;
+- feature profiles: `feature_profiles = ("all",)`. The profile list is a
+  first-class matrix axis (see below); canonical publication requires
+  exactly the default single-profile list;
 - split seeds: `CANONICAL_SPLIT_SEED_BANK` (10 rotated seeds) for every
   split except `forward-time`, which is deterministic and runs one instance
   per model, minus the per-family `SPLIT_SEED_EXCLUSIONS` (§"Seed policy"
@@ -1173,18 +1193,36 @@ The canonical full-run batch job matrix is exactly:
   `component-vocab`), which `generate_jobs` filters after the configured
   seed list is validated.
 
-That produces 5 × 3 × 10 + 3 × 9 + 1 × 3 = 180 jobs. Seeded job IDs are
+That produces 5 × 2 × 10 + 2 × 9 + 1 × 2 = 120 jobs. Seeded job IDs are
 `{split}__{model}__s{seed}`; forward-time job IDs are `{split}__{model}`.
+
+`feature_profiles` is a job-matrix axis: `generate_jobs` produces the full
+cross product splits × models × effective seeds × profiles. Non-default
+profiles append a `__p{profile}` job-ID segment
+(`{split}__{model}__s{seed}__p{profile}`, seedless
+`{split}__{model}__p{profile}`); the default (`all`) profile omits the
+segment, mirroring the seedless-split ID idiom, so every canonical job ID
+is unchanged from earlier schema versions. Config validation requires a
+non-empty, duplicate-free `feature_profiles` list drawn from
+`FEATURE_PROFILES`. Batch-config loading rejects any unrecognized yaml key
+with an error naming it (an unknown-keys allowlist) — in particular the
+retired scalar `feature_profile` key must fail loudly rather than silently
+falling back to the default profile.
 
 Jobs are dispatched longest-expected-first (LPT scheduling):
 `order_jobs_for_dispatch` stably sorts the generated matrix by the designed
-`DISPATCH_MODEL_RANK` × `DISPATCH_SPLIT_RANK` tables before it seeds the
-lease queue, and requeued jobs keep their queue position, so LPT priority
-survives retries. The family rank is evidence-backed across the whole matrix
-(model family dominates job duration); the within-family split rank
-(opponent-hierarchy splits first) is evidence-backed within
-`random_forest_tuned` only and acts as a harmless tie-break for the other
-families. Unknown model or split values rank first as forward-compat defense
+`DISPATCH_MODEL_RANK` × `DISPATCH_SPLIT_RANK` × `DISPATCH_PROFILE_RANK`
+tables before it seeds the lease queue, and requeued jobs keep their queue
+position, so LPT priority survives retries. The family rank is
+evidence-backed across the whole matrix (model family dominates job
+duration); the within-family split rank (opponent-hierarchy splits first) is
+evidence-backed within `random_forest_tuned` only and acts as a harmless
+tie-break for the other families. The profile rank is a designed heuristic
+with no measured backing (the tail-walltime evidence has no profile axis):
+profiles are ordered by expected feature-set width, wider first (`all`,
+`sparse-component`, `geometry`, `aggregate`, `opponent-parity`), on the
+reasoning that wider inputs make slower fits. Unknown model, split, or
+profile values rank first as forward-compat defense
 — they are unreachable through a validated config today (config validation
 rejects them) but protect future families before a measured ranking exists.
 Ranking provenance and magnitudes live in the dated
@@ -1194,9 +1232,10 @@ merge step (which re-derives its job set from `generate_jobs`) are
 unaffected; `status.json` job rows and the launch CLI's dry-run listing both
 present dispatch order.
 Each job runs `scripts/analysis/phase7_learned_surrogate_experiment.py` with
-exactly one split, one model family, and one split seed (carried in the
-lease payload), plus the configured source DB, game dir, HPO settings,
-fractions, top-k values, `--feature-profile`,
+exactly one split, one model family, one split seed, and one feature
+profile (all four carried in the lease payload; `--feature-profile` is
+rendered from the leased job, never from a batch-level scalar), plus the
+configured source DB, game dir, HPO settings, fractions, top-k values,
 `--inner-cv-folds`, noise-floor/bootstrap/overshoot options, claim-boundary
 options, and an explicit per-job `--output` path. The generated command must
 not include honest-eval training inputs or unsafe feature/model-selection
@@ -1213,8 +1252,10 @@ provenance, any configured split whose effective seed list is empty after
 seeds must fail with the real reason, not a downstream worker-count
 error.
 
-Batch configs may define explicit `splits`, `models`, and `split_seeds`
-subsets for smoke or debug runs. Workers drain a lease queue, so
+Batch configs may define explicit `splits`, `models`, `split_seeds`, and
+`feature_profiles` subsets for smoke, debug, or ablation runs (`models`
+validated against `SUPPORTED_MODELS`, profiles against
+`FEATURE_PROFILES`). Workers drain a lease queue, so
 `target_workers` must satisfy `1 ≤ target_workers ≤ job_count`;
 `min_workers_to_start` must equal `target_workers`, and `target_workers`
 must be divisible by the region count (provisioning is split evenly across
@@ -1260,7 +1301,15 @@ object with `job_id`, `batch_name`, `fleet_name`, `split`, `model`, and
 `split_seed`, and matching `batch_job_id`, `batch_name`,
 `batch_fleet_name`, and `dependency_extra` in provenance (the experiment
 script stamps its required dependency set; result validation rejects
-artifacts without it).
+artifacts without it). The `batch_job` object and the experiment-script
+interface carry no profile field: feature-profile identity is enforced
+against the leased/expected job at the four sites the script already
+stamps (artifact top-level `feature_profile`, `provenance.feature_profile`,
+`feature_families.feature_profile`,
+`feature_selection_protocol.feature_profile`), and the control plane's
+cheap result-acceptance identity check compares
+`feature_selection_protocol.feature_profile` alongside `split` and `model`
+against the leased job.
 Worker telemetry may additionally record attempt, instance ID, region,
 instance type, bundle SHA256, and timestamps in event logs. A skipped
 optional model is rejected at result acceptance for every control-plane
@@ -1279,19 +1328,24 @@ The batch merge step must validate every per-job artifact before publishing:
   terminates its job without burning lease retries, but any insufficiency
   artifact in the batch makes the merge refuse with an error naming the
   affected jobs (no `merged.json`, no publication);
-- every artifact has the same `experiment_schema_version` (4),
-  `feature_schema_version`, `feature_profile`, source DB path, game dir,
+- every artifact has the same `experiment_schema_version` (5),
+  `feature_schema_version`, source DB path, game dir,
   HPO seed, train/holdout fractions, top-k values, dependency extra, source
-  bundle SHA256, and code provenance — the split seed is per-job identity,
-  validated against the job spec and required to be in the config's
-  `split_seeds`;
+  bundle SHA256, and code provenance — the split seed and the feature
+  profile are per-job identity, validated against the job spec (the seed
+  additionally required to be in the config's `split_seeds`, the profile in
+  the config's `feature_profiles`);
 - every result has a present and passing leakage checklist;
-- every result's `split`, `model`, and `split_seed` match its job ID;
+- every result's `split`, `model`, `split_seed`, and feature profile match
+  its job identity (and, for non-default profiles, the job ID's
+  `__p{profile}` segment);
 - `comparator_inline`, `rank_metrics`, `skill_scores`,
   `panel_target_stats`, `inner_cv`, and `outer_split_lineage` (including a
   64-hex `realized_split_sha256`) are present for every completed result;
 - realized-split coherence and uniqueness hold across accepted results:
-  artifacts sharing `(split, split_seed)` (different models) must carry
+  artifacts sharing `(split, split_seed)` (different models and different
+  feature profiles — partitions are row-level and profile-independent, so
+  profile arms within a cell must agree on the digest) must carry
   **equal** `realized_split_sha256` digests (cross-worker
   split-construction determinism), and artifacts sharing a split family
   but differing in `split_seed` must carry **distinct** digests. This is a
@@ -1301,9 +1355,10 @@ The batch merge step must validate every per-job artifact before publishing:
   report-time cross-checks possible, and honest-evaluation report
   discipline owns those;
 - the adversarial-validation entry is coherent within each cell: across
-  the completed results sharing `(split, split_seed)`, the entry's
-  `(status, value, reason)` tuple must be identical — the entry is a pure
-  function of (partition, feature profile, split seed), so any mixture
+  the completed results sharing `(split, split_seed, feature_profile)`,
+  the entry's `(status, value, reason)` tuple must be identical — the
+  entry is a pure function of (partition, feature profile, split seed),
+  so any mixture
   (including `computed` beside `not_applicable`) or value inequality
   exposes cross-worker nondeterminism. Unlike the digest invariant this
   compares empirical float output: a mismatch is a nondeterminism
@@ -1319,18 +1374,27 @@ family's effective panel is that list minus the stamped exclusions, and
 `seed_aggregates.n_seeds` reflects the effective count.
 
 Merged output carries a top-level `seed_aggregates` object keyed
-`"split:model"`, one block per group: mean, SD, min/max, and `n_seeds` over the
+`"split:model:profile"` (uniformly, including single-profile batches —
+self-describing), one block per group: mean, SD, min/max, and `n_seeds` over the
 headline metrics (pooled Spearman/RMSE, mean per-opponent Spearman,
 build-aggregate Spearman, precision@k, regret@k, skill score); SD is `null`
 when `n_seeds == 1` (forward-time). `seed_aggregate` is descriptive spread
 over overlapping resplits of one dataset — not a calibrated standard error
 (Nadeau–Bengio); reports must not present SD/√n as inference.
 
+The merged artifact stamps `feature_profiles` (the configured list) at the
+top level in place of the pre-v5 scalar `feature_profile`. Top-level
+convenience copies of result objects that vary by profile —
+`feature_selection_protocol` and `leakage_diagnostics` — become maps keyed
+by profile; profile-independent top-level objects (`claim_boundary`,
+`model_family_policy`, `deployment_policy`, `hierarchy_scorecard`) keep
+their shape. Per-result objects are unchanged.
+
 Valid merge always writes a batch-internal `merged.json`. It atomically
 promotes the canonical full-run artifact to the config's
 `canonical_output_path` — a dated, per-wave path (the schema-v2 wave used
 `data/phase7/learned_surrogate_full_v2_2026-07.json`; the next canonical
-wave, on schema v4, needs a fresh dated path) — only when
+wave, on schema v5, needs a fresh dated path) — only when
 `publish_canonical: true` and the validated matrix is the full canonical
 matrix. Publishing refuses to overwrite an existing canonical file whose
 `batch_name` differs: prior waves' canonical artifacts (including the

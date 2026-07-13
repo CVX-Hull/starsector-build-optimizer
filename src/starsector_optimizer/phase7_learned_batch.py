@@ -58,9 +58,17 @@ CANONICAL_SPLITS: tuple[str, ...] = (
     "seed-cell",
     "forward-time",
 )
+# sparse_pairwise_ridge was retired from the canonical matrix after the
+# schema-v2 wave (attempt-3 decision 3: catastrophic off-vocabulary behavior
+# added noise and cost without evidence value). It remains in
+# SUPPORTED_MODELS — the validation universe for config `models:` lists —
+# so non-canonical configs can still run it.
 CANONICAL_MODELS: tuple[str, ...] = (
     "random_forest_tuned",
     "catboost_regressor",
+)
+SUPPORTED_MODELS: tuple[str, ...] = (
+    *CANONICAL_MODELS,
     "sparse_pairwise_ridge",
 )
 # Contract constants (EXPERIMENT_SCHEMA_VERSION, DEFAULT_DEPENDENCY_EXTRA,
@@ -91,6 +99,17 @@ DISPATCH_SPLIT_RANK: dict[str, int] = {
     "seed-cell": 4,
     "build": 5,
     "forward-time": 6,
+}
+# Profile rank is a designed heuristic with NO measured backing (the
+# tail-walltime evidence has no profile axis): profiles are ordered by
+# expected feature-set width, wider first, on the reasoning that wider
+# inputs make slower fits (spec 31 §"Learned AWS Batch Artifacts").
+DISPATCH_PROFILE_RANK: dict[str, int] = {
+    "all": 0,
+    "sparse-component": 1,
+    "geometry": 2,
+    "aggregate": 3,
+    "opponent-parity": 4,
 }
 
 
@@ -161,7 +180,7 @@ class LearnedBatchConfig:
     noise_floor_override: float | None = None
     bootstrap_resamples: int = EvalMetricsConfig().bootstrap_resamples
     component_vocab_max_overshoot: float = DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT
-    feature_profile: str = DEFAULT_FEATURE_PROFILE
+    feature_profiles: tuple[str, ...] = (DEFAULT_FEATURE_PROFILE,)
     dependency_extra: str = DEFAULT_DEPENDENCY_EXTRA
     root_volume_size_gb: int | None = None
     result_upload_attempts: int = DEFAULT_RESULT_UPLOAD_ATTEMPTS
@@ -176,6 +195,7 @@ class LearnedBatchJob:
     split: str
     model: str
     split_seed: int
+    feature_profile: str
     output_path: Path
 
 
@@ -185,6 +205,7 @@ class JobLease:
     split: str
     model: str
     split_seed: int
+    feature_profile: str
     attempt: int
     worker_id: str
     lease_expires_at: float
@@ -255,6 +276,7 @@ class BatchState:
                     split=state.job.split,
                     model=state.job.model,
                     split_seed=state.job.split_seed,
+                    feature_profile=state.job.feature_profile,
                     attempt=state.attempt,
                     worker_id=worker_id,
                     lease_expires_at=state.lease_expires_at,
@@ -318,6 +340,14 @@ class BatchState:
                     raise ValueError(f"result split does not match job {job_id}")
                 if result_row.get("model") != state.job.model:
                     raise ValueError(f"result model does not match job {job_id}")
+                # Uniform across completed AND insufficiency rows: the
+                # experiment script stamps feature_selection_protocol on
+                # every result row it writes (spec 31 carves out no
+                # insufficiency exception for this cheap identity check).
+                protocol = result_row.get("feature_selection_protocol")
+                profile = protocol.get("feature_profile") if isinstance(protocol, dict) else None
+                if profile != state.job.feature_profile:
+                    raise ValueError(f"result feature profile does not match job {job_id}")
             if before_accept is not None:
                 before_accept()
             state.result = result
@@ -444,10 +474,94 @@ def _expand_env(value: Any) -> Any:
     return value
 
 
+# Every yaml key load_batch_config recognizes. Unknown keys are rejected so
+# a typo in an optional key (or the retired scalar `feature_profile`) fails
+# loudly instead of silently falling back to a default (spec 31).
+_KNOWN_CONFIG_KEYS = frozenset(
+    {
+        "name",
+        "project_tag",
+        "fleet_name",
+        "regions",
+        "ami_ids_by_region",
+        "instance_types",
+        "ssh_key_name",
+        "spot_allocation_strategy",
+        "target_workers",
+        "min_workers_to_start",
+        "budget_usd",
+        "max_lifetime_hours",
+        "max_job_attempts",
+        "lease_renewal_interval_seconds",
+        "lease_grace_seconds",
+        "pending_instance_grace_seconds",
+        "ledger_heartbeat_interval_seconds",
+        "ledger_warn_thresholds",
+        "tailscale_authkey_secret",
+        "control_plane_host",
+        "control_plane_port",
+        "output_dir",
+        "canonical_output_path",
+        "publish_canonical",
+        "execution_enabled",
+        "source_db_path",
+        "game_dir",
+        "hpo_trials",
+        "hpo_jobs",
+        "model_thread_count",
+        "top_k",
+        "split_seeds",
+        "hpo_seed",
+        "holdout_fraction",
+        "train_fraction",
+        "honest_eval_usage",
+        "fresh_honest_eval_ledger_id",
+        "primary_top_k",
+        "promotion_metric",
+        "promotion_threshold",
+        "claim_label",
+        "final_refit_policy",
+        "candidate_universe",
+        "deployment_artifact",
+        "inner_cv_folds",
+        "noise_floor_override",
+        "bootstrap_resamples",
+        "component_vocab_max_overshoot",
+        "feature_profiles",
+        "dependency_extra",
+        "root_volume_size_gb",
+        "result_upload_attempts",
+        "result_upload_retry_seconds",
+        "splits",
+        "models",
+    }
+)
+
+
+def _string_list(
+    expanded: Mapping[str, Any], key: str, default: tuple[str, ...]
+) -> tuple[str, ...]:
+    """Read a list-of-strings yaml key. A bare string fails loudly — iterating
+    it would silently explode into per-character 'values' and produce a
+    misleading downstream validation error."""
+    value = expanded.get(key, default)
+    if isinstance(value, str) or not isinstance(value, Sequence):
+        raise ValueError(f"batch config key {key!r} must be a list of strings")
+    return tuple(str(item) for item in value)
+
+
 def load_batch_config(path: Path | str) -> LearnedBatchConfig:
     raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict):
         raise ValueError("batch config must be a mapping")
+    unknown_keys = sorted(set(raw) - _KNOWN_CONFIG_KEYS)
+    if unknown_keys:
+        raise ValueError(
+            f"unknown batch config key(s): {', '.join(unknown_keys)} — "
+            "unrecognized keys fail loudly so a typo cannot silently fall "
+            "back to a default (the retired scalar 'feature_profile' key "
+            "was replaced by the 'feature_profiles' list)"
+        )
     expanded = {key: _expand_env(value) for key, value in raw.items()}
     cfg = LearnedBatchConfig(
         name=str(expanded["name"]),
@@ -506,7 +620,7 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         component_vocab_max_overshoot=float(
             expanded.get("component_vocab_max_overshoot", DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT)
         ),
-        feature_profile=str(expanded.get("feature_profile", DEFAULT_FEATURE_PROFILE)),
+        feature_profiles=_string_list(expanded, "feature_profiles", (DEFAULT_FEATURE_PROFILE,)),
         dependency_extra=str(expanded.get("dependency_extra", DEFAULT_DEPENDENCY_EXTRA)),
         root_volume_size_gb=(
             None
@@ -519,8 +633,8 @@ def load_batch_config(path: Path | str) -> LearnedBatchConfig:
         result_upload_retry_seconds=float(
             expanded.get("result_upload_retry_seconds", DEFAULT_RESULT_UPLOAD_RETRY_SECONDS)
         ),
-        splits=tuple(str(v) for v in expanded.get("splits", CANONICAL_SPLITS)),
-        models=tuple(str(v) for v in expanded.get("models", CANONICAL_MODELS)),
+        splits=_string_list(expanded, "splits", CANONICAL_SPLITS),
+        models=_string_list(expanded, "models", CANONICAL_MODELS),
     )
     validate_batch_config(cfg)
     return cfg
@@ -546,11 +660,18 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
     unknown_splits = [split for split in config.splits if split not in CANONICAL_SPLITS]
     if unknown_splits:
         raise ValueError(f"unknown split(s): {', '.join(unknown_splits)}")
-    unknown_models = [model for model in config.models if model not in CANONICAL_MODELS]
+    unknown_models = [model for model in config.models if model not in SUPPORTED_MODELS]
     if unknown_models:
         raise ValueError(f"unknown model(s): {', '.join(unknown_models)}")
-    if config.feature_profile not in FEATURE_PROFILES:
-        raise ValueError(f"unknown feature_profile: {config.feature_profile}")
+    if not config.feature_profiles:
+        raise ValueError("feature_profiles must be non-empty")
+    unknown_profiles = [
+        profile for profile in config.feature_profiles if profile not in FEATURE_PROFILES
+    ]
+    if unknown_profiles:
+        raise ValueError(f"unknown feature profile(s): {', '.join(unknown_profiles)}")
+    if len(set(config.feature_profiles)) != len(config.feature_profiles):
+        raise ValueError("feature_profiles must not contain duplicates")
     if len(set(config.splits)) != len(config.splits):
         raise ValueError("splits must not contain duplicates")
     if len(set(config.models)) != len(config.models):
@@ -662,43 +783,51 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
         config.splits == CANONICAL_SPLITS
         and config.models == CANONICAL_MODELS
         and config.split_seeds == CANONICAL_SPLIT_SEED_BANK
+        and config.feature_profiles == (DEFAULT_FEATURE_PROFILE,)
     )
     if config.publish_canonical and not canonical_matrix:
         raise ValueError(
-            "publish_canonical is allowed only for the full canonical split/model/seed-bank matrix"
+            "publish_canonical is allowed only for the full canonical "
+            "split/model/seed-bank matrix on the default feature profile"
         )
 
 
 def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
-    """Job matrix: splits x models x split_seeds; seedless splits get one
-    instance per model (their partition is deterministic). Per-family
-    SPLIT_SEED_EXCLUSIONS are filtered here, downstream of the configured
-    seed list (spec 31 §"Seed policy" → "Realized-split uniqueness")."""
+    """Job matrix: feature_profiles x splits x models x split_seeds; seedless
+    splits get one instance per model (their partition is deterministic).
+    Per-family SPLIT_SEED_EXCLUSIONS are filtered here, downstream of the
+    configured seed list (spec 31 §"Seed policy" → "Realized-split
+    uniqueness"). Non-default profiles append a ``__p{profile}`` job-ID
+    segment; the default profile omits it, so canonical job IDs are
+    unchanged from single-profile schema versions."""
     result_dir = config.output_dir / "results"
     jobs: list[LearnedBatchJob] = []
-    for split in config.splits:
-        excluded = SPLIT_SEED_EXCLUSIONS.get(split, frozenset())
-        seeds = (
-            (config.split_seeds[0],)
-            if split in SEEDLESS_SPLITS
-            else tuple(seed for seed in config.split_seeds if seed not in excluded)
-        )
-        for model in config.models:
-            for seed in seeds:
-                job_id = (
-                    f"{split}__{model}"
-                    if split in SEEDLESS_SPLITS
-                    else f"{split}__{model}__s{seed}"
-                )
-                jobs.append(
-                    LearnedBatchJob(
-                        job_id=job_id,
-                        split=split,
-                        model=model,
-                        split_seed=seed,
-                        output_path=result_dir / f"{job_id}.json",
+    for profile in config.feature_profiles:
+        profile_segment = "" if profile == DEFAULT_FEATURE_PROFILE else f"__p{profile}"
+        for split in config.splits:
+            excluded = SPLIT_SEED_EXCLUSIONS.get(split, frozenset())
+            seeds = (
+                (config.split_seeds[0],)
+                if split in SEEDLESS_SPLITS
+                else tuple(seed for seed in config.split_seeds if seed not in excluded)
+            )
+            for model in config.models:
+                for seed in seeds:
+                    job_id = (
+                        f"{split}__{model}{profile_segment}"
+                        if split in SEEDLESS_SPLITS
+                        else f"{split}__{model}__s{seed}{profile_segment}"
                     )
-                )
+                    jobs.append(
+                        LearnedBatchJob(
+                            job_id=job_id,
+                            split=split,
+                            model=model,
+                            split_seed=seed,
+                            feature_profile=profile,
+                            output_path=result_dir / f"{job_id}.json",
+                        )
+                    )
     return tuple(jobs)
 
 
@@ -707,9 +836,9 @@ def order_jobs_for_dispatch(
 ) -> tuple[LearnedBatchJob, ...]:
     """Permute jobs into longest-expected-first (LPT) dispatch order.
 
-    Stable sort by (model rank, split rank); ties keep the caller's
-    (canonical) order. Job identity, output paths, and the merge step are
-    unaffected — this orders the lease queue only.
+    Stable sort by (model rank, split rank, profile rank); ties keep the
+    caller's (canonical) order. Job identity, output paths, and the merge
+    step are unaffected — this orders the lease queue only.
     """
     return tuple(
         sorted(
@@ -717,6 +846,7 @@ def order_jobs_for_dispatch(
             key=lambda job: (
                 DISPATCH_MODEL_RANK.get(job.model, _DISPATCH_UNKNOWN_RANK),
                 DISPATCH_SPLIT_RANK.get(job.split, _DISPATCH_UNKNOWN_RANK),
+                DISPATCH_PROFILE_RANK.get(job.feature_profile, _DISPATCH_UNKNOWN_RANK),
             ),
         )
     )
@@ -758,7 +888,7 @@ def build_job_command(config: LearnedBatchConfig, job: LearnedBatchJob) -> list[
         "--top-k",
         ",".join(str(value) for value in config.top_k_values),
         "--feature-profile",
-        config.feature_profile,
+        job.feature_profile,
         "--honest-eval-usage",
         config.honest_eval_usage,
         "--primary-top-k",
@@ -1155,6 +1285,7 @@ while (( SECONDS < DEADLINE )); do
   SPLIT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["split"])' <<< "$LEASE_BODY")
   MODEL=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["model"])' <<< "$LEASE_BODY")
   SPLIT_SEED=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["split_seed"])' <<< "$LEASE_BODY")
+  FEATURE_PROFILE=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["feature_profile"])' <<< "$LEASE_BODY")
   ATTEMPT=$(python3 -c 'import json,sys; print(json.load(sys.stdin)["attempt"])' <<< "$LEASE_BODY")
   OUTPUT="data/phase7/aws-job-$JOB_ID.json"
   LOG="data/phase7/aws-job-$JOB_ID.log"
@@ -1182,7 +1313,7 @@ while (( SECONDS < DEADLINE )); do
     --bootstrap-resamples {config.bootstrap_resamples} \\
     --component-vocab-max-overshoot {config.component_vocab_max_overshoot} \\
     --top-k {top_k} \\
-    --feature-profile {shlex.quote(config.feature_profile)} \\
+    --feature-profile "$FEATURE_PROFILE" \\
     --honest-eval-usage {shlex.quote(config.honest_eval_usage)} \\
     --primary-top-k {config.primary_top_k} \\
     --promotion-metric {shlex.quote(config.promotion_metric)} \\
@@ -1807,8 +1938,10 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} model_families mismatch")
     if artifact.get("db_path") != str(config.source_db_path):
         raise ValueError(f"job {job.job_id} source DB mismatch")
-    if artifact.get("feature_profile") != config.feature_profile:
+    if artifact.get("feature_profile") != job.feature_profile:
         raise ValueError(f"job {job.job_id} feature profile mismatch")
+    if job.feature_profile not in config.feature_profiles:
+        raise ValueError(f"job {job.job_id} feature profile is not in the config profile list")
     provenance = artifact.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError(f"job {job.job_id} provenance missing")
@@ -1828,7 +1961,7 @@ def validate_job_payload(
         "holdout_fraction": config.holdout_fraction,
         "train_fraction": config.train_fraction,
         "top_k_values": list(config.top_k_values),
-        "feature_profile": config.feature_profile,
+        "feature_profile": job.feature_profile,
         "honest_eval_usage": config.honest_eval_usage,
         "fresh_honest_eval_ledger_id": config.fresh_honest_eval_ledger_id,
         "primary_top_k": config.primary_top_k,
@@ -1921,7 +2054,7 @@ def validate_job_payload(
         raise ValueError(f"job {job.job_id} target variable mismatch")
     if not isinstance(result.get("feature_families"), dict):
         raise ValueError(f"job {job.job_id} feature families malformed")
-    if result["feature_families"].get("feature_profile") != config.feature_profile:
+    if result["feature_families"].get("feature_profile") != job.feature_profile:
         raise ValueError(f"job {job.job_id} feature family profile mismatch")
     if not isinstance(result.get("hpo"), dict) or "selected_hyperparameters" not in result["hpo"]:
         raise ValueError(f"job {job.job_id} HPO payload malformed")
@@ -1966,7 +2099,7 @@ def validate_job_payload(
     if policy.get("selected_model_family") != job.model:
         raise ValueError(f"job {job.job_id} model family policy mismatch")
     feature_protocol = result["feature_selection_protocol"]
-    if feature_protocol.get("feature_profile") != config.feature_profile:
+    if feature_protocol.get("feature_profile") != job.feature_profile:
         raise ValueError(f"job {job.job_id} feature selection profile mismatch")
     registry = feature_protocol.get("feature_family_registry")
     expected_digest = hashlib.sha256(
@@ -2013,7 +2146,9 @@ def _common_key(payload: Mapping[str, Any], config: LearnedBatchConfig) -> tuple
         provenance.get("holdout_fraction"),
         provenance.get("train_fraction"),
         tuple(provenance.get("top_k_values", ())),
-        provenance.get("feature_profile"),
+        # feature_profile is per-job identity under the profile-axis matrix
+        # and is validated against the job spec instead of joining the
+        # common key (same treatment as the split seed above).
         provenance.get("honest_eval_usage"),
         provenance.get("fresh_honest_eval_ledger_id"),
         provenance.get("primary_top_k"),
@@ -2058,26 +2193,32 @@ def _validate_realized_split_digests(results: Sequence[Mapping[str, Any]]) -> No
             )
 
 
+def _result_feature_profile(result: Mapping[str, Any]) -> Any:
+    protocol = result.get("feature_selection_protocol")
+    return protocol.get("feature_profile") if isinstance(protocol, Mapping) else None
+
+
 def _validate_adversarial_auc_coherence(results: Sequence[Mapping[str, Any]]) -> None:
     """Within-cell adversarial-AUC coherence (spec 31): the entry is a pure
     function of (partition, feature profile, split seed), so completed
-    results sharing (split, split_seed) must carry an identical
-    (status, value, reason) tuple — any mixture or inequality is a
+    results sharing (split, split_seed, feature_profile) must carry an
+    identical (status, value, reason) tuple — any mixture or inequality is a
     cross-worker nondeterminism tripwire, not data corruption; investigate
     the worker environment and re-run the cell."""
-    cell_entries: dict[tuple[str, int], tuple[Any, Any, Any]] = {}
+    cell_entries: dict[tuple[str, int, Any], tuple[Any, Any, Any]] = {}
     for result in results:
         split = str(result["split"])
         seed = int(result["outer_split_lineage"]["split_seed"])
+        profile = _result_feature_profile(result)
         entry = result["leakage_diagnostics"]["adversarial_validation_auc"]
         signature = (entry.get("status"), entry.get("value"), entry.get("reason"))
-        known = cell_entries.setdefault((split, seed), signature)
+        known = cell_entries.setdefault((split, seed, profile), signature)
         if known != signature:
             raise ValueError(
                 f"adversarial-validation AUC mismatch within cell ({split}, "
-                f"s{seed}): {known} vs {signature} — the entry is seeded from "
-                "the split seed and must be identical across the cell's "
-                "workers (nondeterminism tripwire; re-run the cell)"
+                f"s{seed}, {profile}): {known} vs {signature} — the entry is "
+                "seeded from the split seed and must be identical across the "
+                "cell's workers (nondeterminism tripwire; re-run the cell)"
             )
 
 
@@ -2117,6 +2258,11 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
 
     first = payloads[0]
     first_result = first["results"][0]
+    # Profile-dependent top-level convenience copies become per-profile maps
+    # (spec 31): one representative payload per configured profile.
+    first_by_profile: dict[str, dict[str, Any]] = {}
+    for payload in payloads:
+        first_by_profile.setdefault(str(payload["feature_profile"]), payload)
     provenance = dict(first["provenance"])
     provenance["batch"] = {
         "name": config.name,
@@ -2137,21 +2283,27 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     merged = {
         "experiment_schema_version": first["experiment_schema_version"],
         "feature_schema_version": first["feature_schema_version"],
-        "feature_profile": first["feature_profile"],
+        "feature_profiles": list(config.feature_profiles),
         "db_path": first["db_path"],
         "model_families": list(config.models),
         "split_seeds": list(config.split_seeds),
         "claim_boundary": first.get("claim_boundary") or first_result.get("claim_boundary"),
         "model_family_policy": first.get("model_family_policy")
         or first_result.get("model_family_policy"),
-        "feature_selection_protocol": first.get("feature_selection_protocol")
-        or first_result.get("feature_selection_protocol"),
+        "feature_selection_protocol": {
+            profile: payload.get("feature_selection_protocol")
+            or payload["results"][0].get("feature_selection_protocol")
+            for profile, payload in sorted(first_by_profile.items())
+        },
         "deployment_policy": first.get("deployment_policy")
         or first_result.get("deployment_policy"),
         "hierarchy_scorecard": first.get("hierarchy_scorecard")
         or first_result.get("hierarchy_scorecard"),
-        "leakage_diagnostics": first.get("leakage_diagnostics")
-        or first_result.get("leakage_diagnostics"),
+        "leakage_diagnostics": {
+            profile: payload.get("leakage_diagnostics")
+            or payload["results"][0].get("leakage_diagnostics")
+            for profile, payload in sorted(first_by_profile.items())
+        },
         "provenance": provenance,
         "result_count": len(results),
         "skipped_models": [],
@@ -2167,10 +2319,12 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
             config.splits == CANONICAL_SPLITS
             and config.models == CANONICAL_MODELS
             and config.split_seeds == CANONICAL_SPLIT_SEED_BANK
+            and config.feature_profiles == (DEFAULT_FEATURE_PROFILE,)
         )
         if not canonical_matrix:
             raise ValueError(
-                "canonical publication requires the full canonical split/model/seed-bank matrix"
+                "canonical publication requires the full canonical "
+                "split/model/seed-bank matrix on the default feature profile"
             )
         _guard_canonical_overwrite(config)
         _atomic_write_json(config.canonical_output_path, merged)
@@ -2222,7 +2376,7 @@ def _seed_aggregates(
     )
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for result in results:
-        key = f"{result.get('split')}:{result.get('model')}"
+        key = f"{result.get('split')}:{result.get('model')}:{_result_feature_profile(result)}"
         grouped.setdefault(key, []).append(result)
     aggregates: dict[str, Any] = {}
     for key, group in sorted(grouped.items()):

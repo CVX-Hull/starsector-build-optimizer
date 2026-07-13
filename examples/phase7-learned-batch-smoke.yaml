@@ -55,5 +55,6 @@ bootstrap_resamples: 500
 component_vocab_max_overshoot: 0.35
 holdout_fraction: 0.2
 train_fraction: 0.8
-feature_profile: all
+feature_profiles:
+  - all
 dependency_extra: surrogate

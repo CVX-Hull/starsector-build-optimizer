@@ -14,6 +14,7 @@ from starsector_optimizer.phase7_learned_batch import (
     CANONICAL_MODELS,
     CANONICAL_SPLITS,
     DISPATCH_MODEL_RANK,
+    DISPATCH_PROFILE_RANK,
     DISPATCH_SPLIT_RANK,
     BatchLaunchFailed,
     BatchState,
@@ -320,12 +321,24 @@ def test_order_jobs_for_dispatch_longest_expected_first(tmp_path):
     # Pure permutation of the canonical matrix.
     assert sorted(job.job_id for job in ordered) == sorted(job.job_id for job in jobs)
     # Model family dominates measured duration: dispatch rank is
-    # non-decreasing, with tuned RF first and CatBoost before ridge.
+    # non-decreasing, with tuned RF first.
     model_ranks = [DISPATCH_MODEL_RANK[job.model] for job in ordered]
     assert model_ranks == sorted(model_ranks)
     assert ordered[0].model == "random_forest_tuned"
-    first_catboost = next(i for i, job in enumerate(ordered) if job.model == "catboost_regressor")
-    first_ridge = next(i for i, job in enumerate(ordered) if job.model == "sparse_pairwise_ridge")
+    # Retired-but-supported ridge still ranks after CatBoost when a
+    # non-canonical config requests it.
+    ridge_cfg = replace(
+        cfg,
+        models=("random_forest_tuned", "catboost_regressor", "sparse_pairwise_ridge"),
+        publish_canonical=False,
+    )
+    ridge_ordered = order_jobs_for_dispatch(generate_jobs(ridge_cfg))
+    first_catboost = next(
+        i for i, job in enumerate(ridge_ordered) if job.model == "catboost_regressor"
+    )
+    first_ridge = next(
+        i for i, job in enumerate(ridge_ordered) if job.model == "sparse_pairwise_ridge"
+    )
     assert first_catboost < first_ridge
     # Within a family, opponent-hierarchy splits (the heaviest measured
     # tails) dispatch first.
@@ -365,7 +378,7 @@ def test_build_job_command_is_single_split_single_model_and_no_unsafe_flags(tmp_
     assert command[command.index("--model") + 1] == job.model
     assert "--output" in command
     assert "--feature-profile" in command
-    assert command[command.index("--feature-profile") + 1] == cfg.feature_profile
+    assert command[command.index("--feature-profile") + 1] == job.feature_profile
     assert "--honest-eval-usage" in command
     assert command[command.index("--honest-eval-usage") + 1] == cfg.honest_eval_usage
     assert "--primary-top-k" in command
@@ -454,8 +467,15 @@ def test_check_split_feasibility_refuses_infeasible_cells(tmp_path, monkeypatch)
     assert "duplicates seed 101" in message
 
 
-def test_check_split_feasibility_dry_runs_each_unique_cell_once(tmp_path, monkeypatch, capsys):
-    cfg = make_config(tmp_path)
+@pytest.mark.parametrize("profiles", (("all",), ("aggregate", "geometry", "sparse-component")))
+def test_check_split_feasibility_dry_runs_each_unique_cell_once(
+    tmp_path, monkeypatch, capsys, profiles
+):
+    cfg = replace(
+        make_config(tmp_path),
+        feature_profiles=profiles,
+        publish_canonical=profiles == ("all",),
+    )
     cli = load_batch_cli_module()
     experiment = cli._load_experiment_module()
     received = []
@@ -669,7 +689,15 @@ def test_control_plane_requires_bearer_token_for_all_routes(tmp_path):
             },
             json={
                 "result_count": 1,
-                "results": [{"split": lease_payload["split"], "model": lease_payload["model"]}],
+                "results": [
+                    {
+                        "split": lease_payload["split"],
+                        "model": lease_payload["model"],
+                        "feature_selection_protocol": {
+                            "feature_profile": lease_payload["feature_profile"]
+                        },
+                    }
+                ],
             },
         ).status_code
         == 200
@@ -760,7 +788,16 @@ def test_lease_duplicate_result_and_wrong_job_handling(tmp_path):
     state = BatchState(generate_jobs(cfg), lease_grace_seconds=60.0, max_attempts=2)
     lease = state.lease(now=100.0, worker_id="i-1")
     assert lease is not None
-    payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
+    payload = {
+        "result_count": 1,
+        "results": [
+            {
+                "split": lease.split,
+                "model": lease.model,
+                "feature_selection_protocol": {"feature_profile": lease.feature_profile},
+            }
+        ],
+    }
 
     assert (
         state.record_result(
@@ -825,7 +862,16 @@ def test_lease_renewal_extends_long_running_job_ownership(tmp_path):
     assert renewed["status"] == "renewed"
     rows = {row["job_id"]: row for row in state.status()["jobs"]}
     assert rows[lease.job_id]["lease_expires_at"] == 210.0
-    payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
+    payload = {
+        "result_count": 1,
+        "results": [
+            {
+                "split": lease.split,
+                "model": lease.model,
+                "feature_selection_protocol": {"feature_profile": lease.feature_profile},
+            }
+        ],
+    }
     assert (
         state.record_result(
             lease.job_id,
@@ -860,7 +906,16 @@ def test_result_rejects_wrong_worker_and_expired_unrenewed_lease(tmp_path):
     state = BatchState(generate_jobs(cfg), lease_grace_seconds=5.0, max_attempts=2)
     lease = state.lease(now=100.0, worker_id="i-1")
     assert lease is not None
-    payload = {"result_count": 1, "results": [{"split": lease.split, "model": lease.model}]}
+    payload = {
+        "result_count": 1,
+        "results": [
+            {
+                "split": lease.split,
+                "model": lease.model,
+                "feature_selection_protocol": {"feature_profile": lease.feature_profile},
+            }
+        ],
+    }
 
     with pytest.raises(ValueError, match="different worker"):
         state.record_result(lease.job_id, payload, worker_id="i-2", attempt=1, now=101.0)
@@ -1074,11 +1129,22 @@ def test_write_status_snapshot_contains_counts_and_budget(tmp_path):
 
 
 def one_job_payload(
-    cfg: LearnedBatchConfig, split: str, model: str, split_seed: int | None = None
+    cfg: LearnedBatchConfig,
+    split: str,
+    model: str,
+    split_seed: int | None = None,
+    feature_profile: str | None = None,
 ) -> dict:
     if split_seed is None:
         split_seed = cfg.split_seeds[0]
-    job_id = f"{split}__{model}" if split in SEEDLESS_SPLITS else f"{split}__{model}__s{split_seed}"
+    if feature_profile is None:
+        feature_profile = cfg.feature_profiles[0]
+    profile_segment = "" if feature_profile == "all" else f"__p{feature_profile}"
+    job_id = (
+        f"{split}__{model}{profile_segment}"
+        if split in SEEDLESS_SPLITS
+        else f"{split}__{model}__s{split_seed}{profile_segment}"
+    )
     registry = {
         "a_x": {"family": "a", "template": "a_x", "parents": [], "leakage_risk": "low"},
     }
@@ -1092,7 +1158,7 @@ def one_job_payload(
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
-        "feature_profile": cfg.feature_profile,
+        "feature_profile": feature_profile,
         "batch_job": {
             "job_id": job_id,
             "batch_name": cfg.name,
@@ -1117,7 +1183,7 @@ def one_job_payload(
             "holdout_fraction": cfg.holdout_fraction,
             "train_fraction": cfg.train_fraction,
             "top_k_values": list(cfg.top_k_values),
-            "feature_profile": cfg.feature_profile,
+            "feature_profile": feature_profile,
             "honest_eval_usage": cfg.honest_eval_usage,
             "fresh_honest_eval_ledger_id": cfg.fresh_honest_eval_ledger_id,
             "primary_top_k": cfg.primary_top_k,
@@ -1162,14 +1228,14 @@ def one_job_payload(
                     "selection_scope": "predeclared_fixed_matrix",
                 },
                 "feature_families": {
-                    "feature_profile": cfg.feature_profile,
+                    "feature_profile": feature_profile,
                     "column_count": 2,
                     "prefixes": ["a"],
                     "columns": ["a_x", "a_y"],
                 },
                 "feature_selection_protocol": {
                     "policy_type": "fixed_profile_no_selector",
-                    "feature_profile": cfg.feature_profile,
+                    "feature_profile": feature_profile,
                     "feature_family_registry": registry,
                     "feature_family_registry_sha256": registry_sha,
                     "selected_feature_families": ["a"],
@@ -1533,7 +1599,8 @@ def test_merge_requires_all_jobs_and_promotes_atomically(tmp_path):
 
     assert merged["result_count"] == CANONICAL_JOB_COUNT
     assert merged["claim_boundary"]["honest_eval_usage"] == cfg.honest_eval_usage
-    assert merged["feature_selection_protocol"]["policy_type"] == "fixed_profile_no_selector"
+    assert merged["feature_selection_protocol"]["all"]["policy_type"] == "fixed_profile_no_selector"
+    assert merged["feature_profiles"] == ["all"]
     assert merged["deployment_policy"]["candidate_universe"] == cfg.candidate_universe
     # Self-describing seed panel: `split_seeds` is the configured list, so
     # the applied exclusions must be stamped alongside it.
@@ -2612,12 +2679,12 @@ def test_merge_emits_seed_aggregates_with_descriptive_spread(tmp_path):
     merged = merge_job_artifacts(cfg)
 
     aggregates = merged["seed_aggregates"]
-    build_agg = aggregates["build:random_forest_tuned"]
+    build_agg = aggregates["build:random_forest_tuned:all"]
     assert build_agg["n_seeds"] == 2
     assert build_agg["rmse"]["mean"] == pytest.approx(0.2)
     assert build_agg["rmse"]["sd"] == pytest.approx(0.0)
     assert build_agg["mean_per_opponent_spearman"]["n_finite"] == 2
-    forward_agg = aggregates["forward-time:random_forest_tuned"]
+    forward_agg = aggregates["forward-time:random_forest_tuned:all"]
     assert forward_agg["n_seeds"] == 1
     assert forward_agg["rmse"]["sd"] is None
     assert merged["split_seeds"] == [101, 103]
@@ -2729,3 +2796,279 @@ def test_merge_refuses_batches_containing_insufficiency_artifacts(tmp_path):
     with pytest.raises(ValueError, match="insufficiency artifacts"):
         merge_job_artifacts(cfg)
     assert not (cfg.output_dir / "merged.json").exists()
+
+
+def _ablation_config(tmp_path: Path) -> LearnedBatchConfig:
+    return replace(
+        make_config(tmp_path),
+        feature_profiles=("aggregate", "geometry", "opponent-parity", "sparse-component"),
+        publish_canonical=False,
+        target_workers=64,
+        min_workers_to_start=64,
+    )
+
+
+class TestFeatureProfileAxis:
+    def test_canonical_matrix_is_single_profile_120_jobs(self, tmp_path):
+        jobs = generate_jobs(make_config(tmp_path))
+
+        assert CANONICAL_MODELS == ("random_forest_tuned", "catboost_regressor")
+        assert len(jobs) == CANONICAL_JOB_COUNT == 120
+        # Default-profile job IDs carry no profile segment: canonical IDs
+        # are unchanged from single-profile schema versions.
+        assert all("__p" not in job.job_id for job in jobs)
+        assert all(job.feature_profile == "all" for job in jobs)
+
+    def test_ablation_matrix_is_480_jobs_with_profile_segments(self, tmp_path):
+        cfg = _ablation_config(tmp_path)
+        validate_batch_config(cfg)
+
+        jobs = generate_jobs(cfg)
+
+        assert len(jobs) == 480
+        assert {job.feature_profile for job in jobs} == set(cfg.feature_profiles)
+        assert "build__catboost_regressor__s101__paggregate" in {job.job_id for job in jobs}
+        assert "forward-time__catboost_regressor__pgeometry" in {job.job_id for job in jobs}
+        # Per-profile sub-matrices mirror the canonical shape (exclusions
+        # applied per family).
+        for profile in cfg.feature_profiles:
+            per_profile = [job for job in jobs if job.feature_profile == profile]
+            assert len(per_profile) == 120
+            assert not any(
+                job.split == "component-vocab" and job.split_seed == 149 for job in per_profile
+            )
+        # Distinct output paths for every job.
+        assert len({job.output_path for job in jobs}) == 480
+
+    def test_supported_models_accepts_retired_ridge_outside_canonical(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            models=("sparse_pairwise_ridge",),
+            publish_canonical=False,
+            target_workers=1,
+            min_workers_to_start=1,
+        )
+
+        validate_batch_config(cfg)
+
+        with pytest.raises(ValueError, match="unknown model"):
+            validate_batch_config(replace(cfg, models=("gradient_boosted_mystery",)))
+
+    def test_publish_canonical_requires_default_profile_list(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            feature_profiles=("all", "aggregate"),
+            publish_canonical=True,
+        )
+
+        with pytest.raises(ValueError, match="default feature profile"):
+            validate_batch_config(cfg)
+
+    def test_validate_batch_config_rejects_bad_profile_lists(self, tmp_path):
+        base = replace(make_config(tmp_path), publish_canonical=False)
+
+        with pytest.raises(ValueError, match="non-empty"):
+            validate_batch_config(replace(base, feature_profiles=()))
+        with pytest.raises(ValueError, match="unknown feature profile"):
+            validate_batch_config(replace(base, feature_profiles=("sparse-cross",)))
+        with pytest.raises(ValueError, match="duplicates"):
+            validate_batch_config(replace(base, feature_profiles=("aggregate", "aggregate")))
+
+    def test_loader_rejects_unknown_keys_including_retired_scalar(self, tmp_path):
+        path = tmp_path / "cfg.yaml"
+        base = Path("examples/phase7-learned-batch.yaml").read_text(encoding="utf-8")
+        path.write_text(base + "feature_profile: all\n", encoding="utf-8")
+
+        with pytest.raises(ValueError, match="feature_profile"):
+            load_batch_config(path)
+
+        typo = base.replace("bootstrap_resamples:", "bootstrap_resample:")
+        path.write_text(typo, encoding="utf-8")
+        with pytest.raises(ValueError, match="bootstrap_resample"):
+            load_batch_config(path)
+
+    def test_ablation_example_config_loads_and_validates(self, monkeypatch):
+        monkeypatch.setenv("TAILSCALE_AUTHKEY", "tskey-auth-test")
+        monkeypatch.setenv("STARSECTOR_WORKSTATION_TAILNET_IP", "100.64.0.9")
+
+        cfg = load_batch_config(Path("examples/phase7-learned-batch-ablation.yaml"))
+
+        assert cfg.feature_profiles == (
+            "aggregate",
+            "geometry",
+            "opponent-parity",
+            "sparse-component",
+        )
+        assert cfg.publish_canonical is False
+        assert len(generate_jobs(cfg)) == 480
+
+    def test_dispatch_profile_rank_is_third_key(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            feature_profiles=("aggregate", "all", "sparse-component"),
+            publish_canonical=False,
+        )
+
+        ordered = order_jobs_for_dispatch(generate_jobs(cfg))
+
+        # Within each (model, split) block, wider profiles dispatch first.
+        for i in range(len(ordered) - 1):
+            a, b = ordered[i], ordered[i + 1]
+            if a.model == b.model and a.split == b.split:
+                assert (
+                    DISPATCH_PROFILE_RANK[a.feature_profile]
+                    <= (DISPATCH_PROFILE_RANK[b.feature_profile])
+                )
+        known = ordered[0]
+        unknown_profile = replace(known, job_id="future-profile-job", feature_profile="fancy")
+        assert order_jobs_for_dispatch((known, unknown_profile))[0] is unknown_profile
+
+    def test_user_data_takes_profile_from_lease_not_config(self, tmp_path):
+        cfg = _ablation_config(tmp_path)
+
+        out = render_phase7_learned_batch_user_data(
+            cfg,
+            control_plane_url="http://100.64.0.1:9131",
+            bearer_token="secret-token",
+            bundle_sha256="a" * 64,
+        )
+
+        assert '--feature-profile "$FEATURE_PROFILE"' in out
+        assert "FEATURE_PROFILE=$(python3" in out
+        for profile in cfg.feature_profiles:
+            assert f"--feature-profile {profile}" not in out
+
+    def test_lease_carries_profile_and_result_profile_mismatch_is_rejected(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            feature_profiles=("aggregate",),
+            publish_canonical=False,
+        )
+        jobs = generate_jobs(cfg)
+        state = BatchState(jobs, lease_grace_seconds=300.0, max_attempts=2)
+
+        lease = state.lease(worker_id="w1")
+        assert lease is not None
+        assert lease.feature_profile == "aggregate"
+        wrong = {
+            "result_count": 1,
+            "results": [
+                {
+                    "split": lease.split,
+                    "model": lease.model,
+                    "feature_selection_protocol": {"feature_profile": "all"},
+                }
+            ],
+        }
+        with pytest.raises(ValueError, match="feature profile"):
+            state.record_result(lease.job_id, wrong, worker_id="w1", attempt=lease.attempt)
+
+    def test_validate_job_payload_rejects_profile_mismatch(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            feature_profiles=("aggregate",),
+            publish_canonical=False,
+        )
+        job = generate_jobs(cfg)[0]
+        payload = one_job_payload(
+            cfg, job.split, job.model, job.split_seed, feature_profile=job.feature_profile
+        )
+        payload["feature_profile"] = "all"
+
+        with pytest.raises(ValueError, match="feature profile mismatch"):
+            validate_job_payload(cfg, job, payload)
+
+    def test_multi_profile_merge_keys_aggregates_and_diagnostics_per_profile(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            feature_profiles=("all", "aggregate"),
+            splits=("build",),
+            split_seeds=(101, 103),
+            publish_canonical=False,
+            target_workers=8,
+            min_workers_to_start=8,
+        )
+        result_dir = cfg.output_dir / "results"
+        result_dir.mkdir(parents=True)
+        for job in generate_jobs(cfg):
+            payload = one_job_payload(
+                cfg, job.split, job.model, job.split_seed, feature_profile=job.feature_profile
+            )
+            # The adversarial entry is a pure function of (partition,
+            # profile, seed): give each profile a distinct value — legal
+            # across profiles, enforced-equal within one.
+            entry = payload["results"][0]["leakage_diagnostics"]["adversarial_validation_auc"]
+            entry["value"] = 0.5 if job.feature_profile == "all" else 0.6
+            (result_dir / f"{job.job_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        merged = merge_job_artifacts(cfg)
+
+        assert merged["feature_profiles"] == ["all", "aggregate"]
+        assert "feature_profile" not in merged
+        assert set(merged["feature_selection_protocol"]) == {"all", "aggregate"}
+        assert set(merged["leakage_diagnostics"]) == {"all", "aggregate"}
+        aggregates = merged["seed_aggregates"]
+        assert "build:random_forest_tuned:all" in aggregates
+        assert "build:random_forest_tuned:aggregate" in aggregates
+        assert aggregates["build:random_forest_tuned:all"]["n_seeds"] == 2
+        # Profile-independent top-level singletons keep their shape — they
+        # must NOT become per-profile maps (spec 31).
+        assert merged["claim_boundary"]["target_variable"] == "training_matchups.target"
+        assert merged["model_family_policy"]["policy_type"] == "fixed_matrix"
+        assert merged["deployment_policy"]["candidate_universe"] == cfg.candidate_universe
+        assert merged["hierarchy_scorecard"]["split_level"] == "build"
+
+    def test_multi_profile_merge_rejects_cross_profile_digest_disagreement(self, tmp_path):
+        cfg = replace(
+            make_config(tmp_path),
+            feature_profiles=("all", "aggregate"),
+            splits=("build",),
+            split_seeds=(101,),
+            publish_canonical=False,
+            target_workers=4,
+            min_workers_to_start=4,
+        )
+        result_dir = cfg.output_dir / "results"
+        result_dir.mkdir(parents=True)
+        for job in generate_jobs(cfg):
+            payload = one_job_payload(
+                cfg, job.split, job.model, job.split_seed, feature_profile=job.feature_profile
+            )
+            if job.feature_profile == "aggregate":
+                # Partitions are profile-independent; a differing digest
+                # within the (split, seed) cell is cross-profile
+                # nondeterminism and must refuse to merge.
+                payload["results"][0]["outer_split_lineage"]["realized_split_sha256"] = "c" * 64
+            (result_dir / f"{job.job_id}.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        with pytest.raises(ValueError, match="digest mismatch within cell"):
+            merge_job_artifacts(cfg)
+
+    def test_loader_rejects_scalar_string_for_list_keys(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("TAILSCALE_AUTHKEY", "tskey-auth-test")
+        monkeypatch.setenv("STARSECTOR_WORKSTATION_TAILNET_IP", "100.64.0.9")
+        path = tmp_path / "cfg.yaml"
+        base = Path("examples/phase7-learned-batch.yaml").read_text(encoding="utf-8")
+        scalar = base.replace("feature_profiles:\n  - all", "feature_profiles: all")
+        assert scalar != base
+        path.write_text(scalar, encoding="utf-8")
+
+        with pytest.raises(ValueError, match="must be a list"):
+            load_batch_config(path)
+
+
+def test_known_config_keys_allowlist_matches_loader_reads():
+    """The allowlist exists to make typos fail loudly; a key present in the
+    allowlist but never read by the loader would be silently ignored —
+    exactly the failure mode the allowlist prevents. Keep them in lockstep."""
+    import re
+
+    from starsector_optimizer import phase7_learned_batch as module
+
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    start = source.index("def load_batch_config(")
+    end = source.index("def validate_batch_config(", start)
+    body = source[start:end]
+    read_keys = set(re.findall(r'expanded(?:\.get\()?\[?"([a-z_0-9]+)"', body))
+    read_keys |= set(re.findall(r'_string_list\(expanded, "([a-z_0-9]+)"', body))
+    assert read_keys == set(module._KNOWN_CONFIG_KEYS)

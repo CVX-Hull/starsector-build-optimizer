@@ -141,10 +141,12 @@ These features preserve the Phase 7 requirement that small slots remain
 addressable. They let the model learn opponent-conditional small-slot value
 without hard-filling those slots.
 
-Feature schema v3 implements these as flat tabular features plus deterministic
-feature profiles (`all`, `aggregate`, `geometry`, `opponent-parity`,
-`sparse-component`, and `sparse-cross`) so ablations can test representation
-families without changing the underlying row materialization.
+The feature schema (since v3) implements these as flat tabular features plus
+deterministic feature profiles (`all`, `aggregate`, `geometry`,
+`opponent-parity`, and `sparse-component`) so ablations can test
+representation families without changing the underlying row materialization.
+(A sixth profile, `sparse-cross`, was removed at experiment schema v5 as
+byte-identical to `all` — see spec 31 §feature profiles.)
 
 Future feature-selection experiments should treat these profiles as the first
 level of a hierarchy, not as the whole selection space. Each materialized

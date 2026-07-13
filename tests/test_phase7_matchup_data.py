@@ -716,8 +716,8 @@ class TestSplitSeedExclusions:
 
 
 class TestDiagnosticVocabulary:
-    def test_schema_version_is_four(self):
-        assert EXPERIMENT_SCHEMA_VERSION == 4
+    def test_schema_version_is_five(self):
+        assert EXPERIMENT_SCHEMA_VERSION == 5
 
     def test_computed_status_and_adversarial_reasons(self):
         assert DIAGNOSTIC_COMPUTED_STATUS == "computed"

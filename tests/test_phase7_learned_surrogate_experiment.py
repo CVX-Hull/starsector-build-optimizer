@@ -212,8 +212,8 @@ def test_default_model_is_catboost_after_seed151_ratification():
     assert args.model == learned.DEFAULT_MODEL == "catboost_regressor"
 
 
-def test_experiment_schema_version_is_four():
-    assert learned.EXPERIMENT_SCHEMA_VERSION == 4
+def test_experiment_schema_version_is_five():
+    assert learned.EXPERIMENT_SCHEMA_VERSION == 5
 
 
 def test_final_claim_requires_fresh_honest_eval_ledger():

@@ -229,6 +229,14 @@ class TestFeatureProfiles:
         assert "build_arc_front_weapon_dps" in filtered
         assert "build_hullmod__armoredweapons" not in filtered
 
+    def test_geometry_profile_drops_interaction_fields(self, game_dir, game_data, manifest):
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
+        filtered = filter_feature_profile(row, "geometry")
+
+        assert not any(key.startswith("interaction_") for key in filtered)
+
     def test_sparse_component_profile_keeps_ids(self, game_dir, game_data, manifest):
         row = matchup_feature_row(
             _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
@@ -255,14 +263,19 @@ class TestFeatureProfiles:
         assert "build_hullmod__armoredweapons" not in filtered
         assert "interaction_range_delta" not in filtered
 
-    def test_sparse_cross_profile_keeps_components_and_interactions(
-        self, game_dir, game_data, manifest
-    ):
+    def test_sparse_cross_profile_is_removed(self, game_dir, game_data, manifest):
+        # sparse-cross was byte-identical to `all` by definition
+        # (sparse-component already keeps every non-interaction feature);
+        # spec 31 removed it as a redundant arm.
         row = matchup_feature_row(
             _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
         )
-        filtered = filter_feature_profile(row, "sparse-cross")
+        assert "sparse-cross" not in FEATURE_PROFILES
+        with pytest.raises(ValueError, match="unknown feature profile"):
+            filter_feature_profile(row, "sparse-cross")
 
-        assert "build_slot_00_weapon_id" in filtered
-        assert "build_hullmod__armoredweapons" in filtered
-        assert "interaction_range_delta" in filtered
+    def test_all_profile_is_identity(self, game_dir, game_data, manifest):
+        row = matchup_feature_row(
+            _hammerhead_build(), "enforcer_Balanced", game_dir, game_data, manifest
+        )
+        assert filter_feature_profile(row, "all") == dict(row)

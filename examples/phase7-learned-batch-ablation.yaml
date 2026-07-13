@@ -1,8 +1,9 @@
-name: phase7-learned-batch-v2-202607
-project_tag: starsector-phase7-learned-batch-v2-202607
+name: phase7-learned-ablation-202607
+project_tag: starsector-phase7-learned-ablation-202607
 fleet_name: learned-surrogate
 regions:
   - us-east-1
+# Re-bake before launch and update this AMI ID (pre-launch gate).
 ami_ids_by_region:
   us-east-1: ami-0d8cc592d90d086d8
 instance_types:
@@ -14,12 +15,14 @@ instance_types:
   - m7a.4xlarge
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
-# Workers drain the lease queue; 120 jobs do not need 120 workers.
-target_workers: 24
-min_workers_to_start: 24
+# 480 jobs (4 profiles x 2 models x 60 cells); walltime, not cost, is the
+# binding constraint — see the ablation-wave plan for the worker-hour
+# arithmetic behind 64 x 10 h.
+target_workers: 64
+min_workers_to_start: 64
 root_volume_size_gb: 128
-budget_usd: 150.0
-max_lifetime_hours: 8.0
+budget_usd: 300.0
+max_lifetime_hours: 10.0
 max_job_attempts: 6
 lease_renewal_interval_seconds: 60.0
 lease_grace_seconds: 300.0
@@ -32,8 +35,10 @@ ledger_warn_thresholds:
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
 control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
 control_plane_port: 9131
-output_dir: data/phase7/learned_surrogate_batch_v2_2026-07
-canonical_output_path: data/phase7/learned_surrogate_full_v2_2026-07.json
+output_dir: data/phase7/learned_surrogate_ablation_2026-07
+# Ablation matrices are non-canonical by definition; the path below is
+# never written while publish_canonical stays false.
+canonical_output_path: data/phase7/learned_surrogate_ablation_2026-07/never-published.json
 publish_canonical: false
 execution_enabled: false
 source_db_path: data/phase7/wave1_matchups.sqlite
@@ -72,6 +77,11 @@ claim_label: exploratory
 final_refit_policy: fit_outer_train_only_no_deployment_artifact
 candidate_universe: source_db_builds
 deployment_artifact: none
+# The `all` arm is NOT re-run: the attempt-3 canonical artifact is the
+# digest-linked baseline (see the ablation-wave plan §D).
 feature_profiles:
-  - all
+  - aggregate
+  - geometry
+  - opponent-parity
+  - sparse-component
 dependency_extra: surrogate
