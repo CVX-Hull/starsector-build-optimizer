@@ -14,8 +14,9 @@ steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
 Groomed: 2026-07-12 (tail-walltime measurement closed; scale-down-on-drain +
-LPT dispatch shipped). Re-groom whenever a wave completes or a decision
-changes scope; update `last-validated`.
+LPT dispatch shipped; seed-bank split-uniqueness enforcement shipped).
+Re-groom whenever a wave completes or a decision changes scope; update
+`last-validated`.
 
 ## Active workstream — Phase 7 surrogate evidence program
 
@@ -71,9 +72,11 @@ From [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md)
   ablation wave is no longer gated on it.
 - Stale-AMI hygiene: run `audit_amis.sh` + `cleanup_amis.sh` after every
   re-bake (done 2026-07-11; keep as post-bake SOP step).
-- Seed-bank split-uniqueness check (spec 31, small): component-vocab seeds
-  107 and 149 produced byte-identical splits in the 2026-07 wave —
-  dedupe-or-reject at split construction; evidence:
+- Seed-bank split-uniqueness check: **shipped 2026-07-12** — realized-split
+  digests, preflight duplicate + stale-exclusion checks, merge invariants,
+  and the seed-149 component-vocab exclusion (canonical matrix now 180
+  jobs, schema v3); contract in spec 31 §"Seed policy" → "Realized-split
+  uniqueness"; evidence:
   [attempt-3 results §2.4](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
 
 ## Planned phases (unchanged in scope, gated)
