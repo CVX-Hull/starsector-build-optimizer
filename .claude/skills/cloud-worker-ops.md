@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 # Cloud Worker Operations SOP
 
-Use this skill when the user asks you to run or debug a cloud campaign — anything involving multiple Starsector workers outside the local workstation. Built on the Phase 6 Cloud Worker Federation design (`docs/reference/phase6-cloud-worker-federation.md`). Empirical throughput numbers are pending re-validation under the V2 loadout fix; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
+Use this skill when the user asks you to run or debug a cloud campaign — anything involving multiple Starsector workers outside the local workstation. Built on the Phase 6 Cloud Worker Federation design (`docs/reference/phase6-cloud-worker-federation.md`). Per-VM throughput was re-validated under V2 (all cells in the design band; see [../../docs/reports/2026-05-10-wave1-validation.md](../../docs/reports/2026-05-10-wave1-validation.md)); campaign-level cost figures live in dated reports (learned-batch: [../../docs/reports/2026-07-11-aws-cost-analysis.md](../../docs/reports/2026-07-11-aws-cost-analysis.md)).
 
 ## The rules of money
 
@@ -22,12 +22,12 @@ Use this skill when the user asks you to run or debug a cloud campaign — anyth
 
 | Situation | Pick |
 |---|---|
-| **Phase 6 MVP + Phase 7 prep budget tier** | **AWS c7a.2xlarge spot us-east-1 + us-east-2**. Account quota: 640 spot vCPU per region = 80 VMs each with zero lead time. Pricing under `price-capacity-optimized` + `CapacityRebalancing`. Concrete $-figures (campaign budget, hourly rate, per-matchup cost, preemption rate) live in dated reports — pending re-validation under V2; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). |
+| **Phase 6 MVP + Phase 7 prep budget tier** | **AWS c7a.2xlarge spot us-east-1 + us-east-2**. Account quota: 640 spot vCPU per region = 80 VMs each with zero lead time. Pricing under `price-capacity-optimized` + `CapacityRebalancing`. Concrete $-figures (campaign budget, hourly rate, per-matchup cost, preemption rate) live in dated reports — V2 figures: [../../docs/reports/2026-07-11-aws-cost-analysis.md](../../docs/reports/2026-07-11-aws-cost-analysis.md). Note: 16-vCPU learned-batch workers cap at 40 per region under the same 640-vCPU quota. |
 | Larger-budget campaign where Hetzner's per-matchup advantage justifies a quota-ticket lead time | **Hetzner CCX33** — `HetznerProvider` is stubbed until this threshold; implementing it means filing a quota ticket (1-2 business days) then writing the hcloud-python wrapper per `docs/specs/22-cloud-deployment.md`. |
-| GPU cloud | **Never.** CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU adds no throughput and costs more. Quantitative speedup pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). |
+| GPU cloud | **Never.** CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU adds no throughput and costs more. The quantitative cloud-vs-local ratio was retired unmeasured (no Linux local baseline on this workstation; no decision consumes it — [../../docs/reports/2026-07-13-roadmap-regroom.md](../../docs/reports/2026-07-13-roadmap-regroom.md)). |
 | ARM / Graviton | **Never.** LWJGL 2.9.3 is x86_64-only. |
 
-**Why AWS primary at small budget**: at the Phase 6 MVP scale the dominant operator cost is *lead time*, not per-matchup price. AWS already has 1,792 spot vCPU across 4 US regions; Hetzner's default 10-VM project cap requires a multi-day quota ticket. The AWS premium at small budgets is small relative to a human-day of waiting. At larger spend, the absolute Hetzner-vs-AWS delta begins to exceed a human-day of engineering, and Hetzner becomes the better pick. The cost-tier crossover point and per-matchup deltas are pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
+**Why AWS primary at small budget**: at the Phase 6 MVP scale the dominant operator cost is *lead time*, not per-matchup price. AWS already has 1,792 spot vCPU across 4 US regions; Hetzner's default 10-VM project cap requires a multi-day quota ticket. The AWS premium at small budgets is small relative to a human-day of waiting. At larger spend, the absolute Hetzner-vs-AWS delta begins to exceed a human-day of engineering, and Hetzner becomes the better pick. The cost-tier crossover point and per-matchup deltas under V2 live in [../../docs/reports/2026-07-11-aws-cost-analysis.md](../../docs/reports/2026-07-11-aws-cost-analysis.md).
 
 ## Initial workstation setup (one-time)
 
@@ -512,7 +512,7 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 
 - **"Let's run it overnight and see"** without a budget cap. No — set `budget_usd` explicitly first. A misconfig can burn $500 overnight.
 - **"Skip the baked image, just use cloud-init each time"**. Not supported. Packer bake is mandatory — cloud-init bulk apt/PyPI fails under 50+ concurrent cold starts.
-- **"GPU cloud for speed"**. CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU doesn't help this workload. Quantitative speedup pending re-validation; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md).
+- **"GPU cloud for speed"**. CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU doesn't help this workload. The quantitative cloud-vs-local ratio was retired unmeasured ([../../docs/reports/2026-07-13-roadmap-regroom.md](../../docs/reports/2026-07-13-roadmap-regroom.md)).
 - **"One giant study with 200 workers"**. TPE saturates above 24; a 200-worker mega-study wastes most of the budget on random sampling at the front of TPE's startup. Federate into ≤24-worker studies per `(hull, regime, seed)`.
 - **"PostgreSQL for Optuna storage"**. Not needed — each study runs its own SQLite locally in a subprocess on the orchestrator.
 - **"Let's try SkyPilot / Ray / Modal / Fargate"**. Already rejected in the design — see `docs/reference/phase6-cloud-worker-federation.md` §rejected alternatives.
@@ -522,7 +522,7 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 
 - **Design doc**: `docs/reference/phase6-cloud-worker-federation.md`
 - **Cloud deployment spec**: `docs/specs/22-cloud-deployment.md`
-- **Empirical validation**: pending re-validation under V2 loadout fix; see [../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](../../docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). Re-validation reports as they land are tracked in [../../docs/reports/INDEX.md](../../docs/reports/INDEX.md).
+- **Empirical validation**: V2 throughput gate passed ([../../docs/reports/2026-05-10-wave1-validation.md](../../docs/reports/2026-05-10-wave1-validation.md)); remaining Phase 5/6 re-validation gates were retired/folded/parked by the [2026-07-13 re-groom](../../docs/reports/2026-07-13-roadmap-regroom.md). Dated reports are tracked in [../../docs/reports/INDEX.md](../../docs/reports/INDEX.md).
 - **Cost model**: pre-V1-invalidation `experiments/phase6-planning/cost_model.py` was deleted alongside the rest of the V1 experiment artefacts; the next cost model lands as part of V2 re-validation.
 - **Scripts**: `scripts/cloud/{devenv-up,devenv-down,launch_campaign,status,teardown,final_audit,watch_eval_cleanup,probe,bake_image}.sh` + `scripts/cloud/packer/aws.pkr.hcl`
 - **LWJGL XRandR fix**: `src/starsector_optimizer/instance_manager.py::_start_xvfb`

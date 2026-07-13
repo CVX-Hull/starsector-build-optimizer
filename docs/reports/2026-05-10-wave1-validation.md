@@ -1,15 +1,20 @@
 ---
 type: report
-status: draft
-last-validated: unvalidated
+status: shipped
+last-validated: 2026-07-13
 ---
 
 # Wave 1 validation report — re-validation under V2 loadout fix
 
-> **Status: draft / partial training-gate evidence.** Wave 1 training runs
-> have completed, but the cross-cell honest-eval oracle has not completed.
-> This report must not be read as a final cross-cell build-quality verdict.
-> Sections marked `<<TBD>>` remain incomplete until honest eval finishes.
+> **Status note (updated 2026-07-13):** the training-gate readings here
+> (including the per-VM throughput gate) are final; the cross-cell
+> build-quality verdict this report deferred landed in
+> [2026-05-11-wave1-honest-eval-final.md](2026-05-11-wave1-honest-eval-final.md).
+> Promoted from draft by the
+> [2026-07-13 re-groom](2026-07-13-roadmap-regroom.md), which retires the
+> Phase-6 throughput re-validation gate on this report's evidence.
+> Sections marked `<<TBD>>` were superseded by the honest-eval final
+> report rather than completed here.
 
 Wave 1 of the validation campaign defined in [2026-05-10-validation-plan.md](2026-05-10-validation-plan.md)
 re-validates 12 of the 20 algorithmic / infrastructure mechanisms shipped

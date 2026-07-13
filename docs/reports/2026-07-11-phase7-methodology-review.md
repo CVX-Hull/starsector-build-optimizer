@@ -248,6 +248,11 @@ widening and cross-hull evidence need new sim spend.
 
 ## 6. Redesigned next evidence wave
 
+> **Superseded sequencing (2026-07-13):** this section's *ordering* was
+> replaced by the data-first re-groom — see
+> [2026-07-13-roadmap-regroom.md](2026-07-13-roadmap-regroom.md) and
+> `docs/roadmap.md`. The findings (§2–§4) remain authoritative.
+
 Replaces §4 of the 2026-05-16 report as the current next-step list, in order:
 
 1. **Evaluation-harness fix (blocks everything else)**: per-opponent rank

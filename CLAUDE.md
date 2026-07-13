@@ -8,7 +8,7 @@ last-validated: 2026-07-11
 
 Automated ship build discovery for Starsector using Bayesian optimization and combat simulation.
 
-> **Empirical-claims status (2026-05-10):** All Phase 5A–5F empirical magnitudes are pending re-validation under the V2 combat-harness loadout fix (commit `8a5b968`). Design rationale, phase-completion status, and architectural decisions are unchanged. See [docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](docs/reports/2026-05-10-v1-loadout-bug-invalidation.md). Doc conventions: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
+> **Empirical-claims status:** All Phase 5A–5F V1 empirical magnitudes remain invalid (2026-05-10 loadout fix, commit `8a5b968`; see [docs/reports/2026-05-10-v1-loadout-bug-invalidation.md](docs/reports/2026-05-10-v1-loadout-bug-invalidation.md)). The open re-measurement gates were resolved 2026-07-13 — retired, folded, or parked per [docs/reports/2026-07-13-roadmap-regroom.md](docs/reports/2026-07-13-roadmap-regroom.md); design rationale and architectural decisions are unchanged. Doc conventions: [docs/CONVENTIONS.md](docs/CONVENTIONS.md).
 
 ## Phase status
 
@@ -18,11 +18,11 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 | 2 — Combat harness mod (Java AI-vs-AI sim) | shipped | specs `09–16, 19, 27`; [combat-harness/AGENTS.md](combat-harness/AGENTS.md) |
 | 3 — Instance manager (parallel JVMs via Xvfb) | shipped | specs `17, 18` |
 | 4 — Optimizer integration (Optuna TPE + opponent pool + importance) | shipped | specs `23–26` |
-| 5A–5F — Signal quality (TWFE / pruner / opponent curriculum / EB shrinkage / Box-Cox / regime segmentation) | shipped, re-val paused | [docs/reference/phase5*.md](docs/reference/) |
+| 5A–5F — Signal quality (TWFE / pruner / opponent curriculum / EB shrinkage / Box-Cox / regime segmentation) | shipped; re-val gates resolved 2026-07-13 (5F parked) | [docs/reference/phase5*.md](docs/reference/), [re-groom record](docs/reports/2026-07-13-roadmap-regroom.md) |
 | 6 — Cloud worker federation (AWS spot fleet, Tailscale mesh, Redis reliable queue) | shipped, Tier-2 live | [phase6-cloud-worker-federation.md](docs/reference/phase6-cloud-worker-federation.md), spec `22`, [.claude/skills/cloud-worker-ops.md](.claude/skills/cloud-worker-ops.md) |
 | Phase-7-prep — Manifest-as-oracle refactor (deletes `hullmod_effects.py` + `timeout_tuner.py`) | shipped | spec `29` |
 | Phase 7 data substrate — featurized matchup recovery and baseline validation | shipped | spec `31`, [phase7-featurized-matchup-surrogate.md](docs/reference/phase7-featurized-matchup-surrogate.md) |
-| Phase 7 surrogate evidence program (evaluation-harness redesign → ablations → FM/ranking models → replay ablation → opponent-panel wave; runs on AWS) | **active** | [docs/roadmap.md](docs/roadmap.md), [2026-07-11 methodology review](docs/reports/2026-07-11-phase7-methodology-review.md) |
+| Phase 7 surrogate evidence program (data-first, re-groomed 2026-07-13: replay gate → designed data wave → re-baseline/ablations → FM + ranking models; runs on AWS) | **active** | [docs/roadmap.md](docs/roadmap.md), [re-groom record](docs/reports/2026-07-13-roadmap-regroom.md) |
 | 7 — Structured search-space rep (BoTorch GP sampler) · 7.5 — Infra & repro · 5G — PSRO curriculum | planned/deferred, gated on the evidence program | [docs/roadmap.md](docs/roadmap.md) |
 
 **Forward roadmap (canonical): [docs/roadmap.md](docs/roadmap.md).** Spec number registry (gaps at 02/20/21): [docs/specs/README.md](docs/specs/README.md). Reports index: [docs/reports/INDEX.md](docs/reports/INDEX.md). Phase-grouped tour: [docs/project-overview.md](docs/project-overview.md).

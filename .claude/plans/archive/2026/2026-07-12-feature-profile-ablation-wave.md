@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: active
+status: implemented
 created: 2026-07-12
 approved: 2026-07-12
-implemented: null
+implemented: 2026-07-13
 owner: agent
 related_docs:
   - docs/specs/31-phase7-matchup-data.md
@@ -13,12 +13,22 @@ related_docs:
   - docs/reports/2026-07-12-phase7-attempt3-surrogate-results.md
   - docs/reports/2026-07-12-phase7-tail-walltime.md
   - docs/reference/phase7-featurized-matchup-surrogate.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: 96d33cc
+post_impl_audit: passed
 superseded_by: null
 ---
 
 # Feature-Profile Ablation Wave (Roadmap Item 2)
+
+> **Retirement note (2026-07-13):** sections A–C (profile axis, profile
+> fixes, ridge retirement) are implemented, audited, and committed
+> (`96d33cc`, `9ab670c`, `1c377be`); the AMI re-bake, quota finding, and
+> two-batch restructure are recorded in §D. Sections §D (launch) and §E
+> (report) were **not executed**: the user-ratified 2026-07-13 re-groom
+> folded the wave into the post-data-wave re-baseline
+> ([docs/reports/2026-07-13-roadmap-regroom.md](../../../docs/reports/2026-07-13-roadmap-regroom.md),
+> decision D1). The b1/b2 configs stay staged; the four predeclared
+> primary contrasts carry over to the re-baseline plan when it is drafted.
 
 ## Goal
 

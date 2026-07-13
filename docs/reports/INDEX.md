@@ -30,6 +30,8 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | 2026-07-12 | shipped | [Learned-batch tail-walltime analysis](2026-07-12-phase7-tail-walltime.md) | Attempt-3 fleet drain reconstruction: 85.3% utilization, idle tail ≈14% of spend (recoverable via scale-down-on-drain), tuned RF supplies the entire scheduling tail, longest-first dispatch worth −11.5% walltime. Corrects the attempt-3 completion time; closes the roadmap tail-walltime measurement item. |
 | 2026-07-12 | shipped | [Adversarial-AUC evidence sweep](2026-07-12-phase7-adversarial-auc-evidence.md) | First M2 diagnostic over all 60 canonical cells: build split indistinguishable on 10/10 seeds (attempt-3 build-transfer numbers are interpolation within the TPE cloud), component-vocab and forward-time impose genuine shift, opponent-hierarchy AUCs unstable at their group counts. |
 | 2026-07-12 | shipped | [Quality-tooling research](2026-07-12-quality-tooling-research.md) | Empirical tool trials behind the quality-gate adoption: per-tool finding counts and judgments, real defects surfaced, the Error Prone 2.42.0/JDK-17 pin, the shellcheck ERR-trap false negative, and measured rejection evidence for bandit/SpotBugs/PMD/codespell/markdownlint/etc. |
+| 2026-07-13 | shipped | [Roadmap re-groom](2026-07-13-roadmap-regroom.md) | Decision record: data-first reordering of the Phase 7 program (designed data wave = opponent panel + off-TPE build arm), staged ablation wave folded into the post-wave re-baseline, six of seven Phase 5/6 re-validation debts retired/folded (5F parked), optimizer defaults flipped to plain TWFE. |
+| 2026-05-10 | shipped | [Wave 1 validation](2026-05-10-wave1-validation.md) | Wave 1 training-gate readings under V2 (incl. the per-VM throughput gate, all cells in band); promoted from draft 2026-07-13 — the deferred cross-cell verdict landed in the honest-eval final report. |
 | 2026-05-09 | shipped | [Wave 0 validation](2026-05-09-wave0-validation.md) | V2 re-validation Wave 0 preflight gate. All gates passed post-fix; multi-worker LOADOUT_MISMATCH root-caused and verified clean. |
 
 ## Draft / In-Flight Reports
@@ -37,9 +39,8 @@ Reports are append-only; supersession is via frontmatter (`status: superseded` +
 | Date | Status | Report | Topic |
 |---|---|---|---|
 | 2026-05-10 | draft | [Validation campaign plan](2026-05-10-validation-plan.md) | Re-validation campaign plan: hull selection, per-mechanism gates, 4-wave architecture, budget, and decision tree. |
-| 2026-05-10 | draft | [Wave 1 validation](2026-05-10-wave1-validation.md) | Partial Wave 1 training/gate draft. No final cross-cell build-quality verdict until the honest-eval run completes. |
 | 2026-05-10 | draft | [Post-hoc ranker — research and Wave 1 empirics](2026-05-10-posthoc-ranker-research.md) | Training-log candidate-selection study. `36538033d63b` is the strongest domain-vetted candidate in this draft, not the honest-eval winner. |
-| 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Pre-launch; fills in after `launch_wave2.sh` completes. |
+| 2026-05-10 | draft | [Wave 2 validation](2026-05-10-wave2-validation.md) | Wave 2 cross-regime warm-start + wolf frigate scaffold. Never launched; the scaffold was retired by the [2026-07-13 re-groom](2026-07-13-roadmap-regroom.md) (wolf measurement folded into the instrumented accounting run). |
 
 ## Superseded
 

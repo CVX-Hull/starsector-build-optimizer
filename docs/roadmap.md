@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-07-12
+last-validated: 2026-07-13
 ---
 
 # Roadmap
@@ -13,131 +13,142 @@ must not accumulate their own live next-step lists — when a report's "next
 steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
-Groomed: 2026-07-12 (tail-walltime measurement closed; scale-down-on-drain +
-LPT dispatch shipped; seed-bank split-uniqueness enforcement shipped;
-adversarial-validation AUC diagnostic shipped, schema v4).
+Groomed: 2026-07-13 — full data-first re-groom, user-ratified; decisions and
+rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
 `last-validated`.
 
-## Active workstream — Phase 7 surrogate evidence program
+## Active workstream — Phase 7 surrogate evidence program (data-first order)
 
-Owner of rationale: [2026-07-11 methodology review](reports/2026-07-11-phase7-methodology-review.md)
-(§6 order is authoritative); literature grounding:
+Findings owner: [2026-07-11 methodology review](reports/2026-07-11-phase7-methodology-review.md)
+(its §6 *sequencing* is superseded by the
+[2026-07-13 re-groom](reports/2026-07-13-roadmap-regroom.md); the findings
+remain authoritative). Literature grounding:
 [phase7-surrogate-methodology-gaps](reference/phase7-surrogate-methodology-gaps.md).
-Compute runs on AWS learned-batch — decision + costs:
+Compute runs on AWS learned-batch; costs:
 [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md).
 
-1. **Evaluation-harness fix** (gates all later items): **implemented
-   2026-07-11** (plan `2026-07-11-phase7-eval-harness-fix`; spec 31 schema v2)
-   — per-opponent rank metrics with noise-floor ties, sparse/top-decile
-   Kendall τ, precision@k / regret@k, build-aggregate metrics, skill scores,
-   cluster-bootstrap CIs, rotated 10-seed bank (+ reserved confirmatory seed
-   151), component-vocabulary split, grouped k-fold inner CV with aligned
-   seeds, inline comparators, outer-split lineage. The 183-job canonical
-   re-run completed 2026-07-12 (attempt 3); results:
-   [2026-07-12 attempt-3 surrogate results](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
-   The seed-151 confirmatory check ratified CatBoost over tuned RF on the
-   build split (2026-07-12; the reserved seed is now spent and the learned
-   script's default family is `catboost_regressor`):
-   [2026-07-12 seed-151 confirmatory](reports/2026-07-12-phase7-seed151-confirmatory.md).
-   **Item closed — no open sub-items.**
-2. **Feature-profile ablations** on repeated opponent-family/opponent splits,
-   under the fixed harness.
-3. **FM / low-rank bilinear interaction features** as a new model family
-   (replaces the retired sparse-pairwise-ridge path), judged on unseen-family
-   rank metrics.
-4. **Within-opponent pairwise-ranking CatBoost** (groups = opponent, pairs
-   gapped beyond noise floor).
-5. **Prequential replay ablation** — the decision-relevant optimizer-integration
-   gate, from existing logs.
-6. **Evidence-reuse discipline**: rotated/predeclared split seeds,
-   opponent-family lockbox, Ladder-margin acceptance, per-wave model-info
-   sheet; amend spec 31 artifact contract with outer-test reuse lineage.
-7. **Opponent-panel data wave** (new sim spend): wide stock-variant panel,
-   randomized exposure, balanced replicates.
+1. **Optimizer defaults flip to plain TWFE** (small code change, gates
+   apply): EB shrinkage and Box-Cox shaping become opt-in flags, default
+   off, per the honest-eval end-to-end ranking
+   ([re-groom D3](reports/2026-07-13-roadmap-regroom.md)).
+2. **Prequential replay ablation** — the decision-relevant
+   optimizer-integration gate (methodology review M3), from existing wave-1
+   logs; local, no sim spend. Requirements added by later evidence:
+   **drift-aware** reporting (rank fidelity vs temporal distance — the
+   forward-time partition is genuinely shifted,
+   [adversarial-AUC evidence](reports/2026-07-12-phase7-adversarial-auc-evidence.md))
+   and **estimator arms** A0/A1/A2/A3 folded in from the retired Phase 5A
+   debt (same logs, same incumbent definition;
+   [re-groom D2](reports/2026-07-13-roadmap-regroom.md)).
+3. **Data-wave prerequisites** (AWS, cheap):
+   - port a **cost ledger** onto the honest-eval path (still absent;
+     [AWS cost analysis §4](reports/2026-07-11-aws-cost-analysis.md));
+   - port **scale-down-on-drain** to the honest-eval fleet (shipped for
+     the learned batch only);
+   - one **instrumented accounting run** to resolve the matchups-per-trial
+     spread — includes the never-landed **wolf** (non-meta hull)
+     measurement (absorbs the retired Wave-2 residue).
+4. **Designed data wave — opponent panel + off-TPE build-diversity arm**
+   (the centerpiece; new sim spend, scope user-ratified in
+   [re-groom D4](reports/2026-07-13-roadmap-regroom.md)). Design
+   constraints already fixed by evidence: randomized opponent exposure, no
+   pruner censoring, balanced (build × opponent) cells with replicates for
+   noise floors (methodology review H5, H1); enough variants for
+   double-digit held-out hull/family groups (adversarial-AUC instability
+   at current group counts); endpoint-mass handling per H1; **off-TPE
+   build sampling** with per-row acquisition/propensity metadata so
+   novel-build claims become measurable (build-split AUC ≈ 0.5 on all
+   seeds); reuse discipline designed in at collection time — predeclared
+   rotated seeds, a **fresh reserved confirmatory seed** (151 is spent),
+   an **opponent-family lockbox** opened once per phase gate,
+   **Ladder-margin acceptance**, and a **per-wave model-info sheet**
+   (absorbs the former evidence-reuse-discipline item; methodology review
+   C4). Spec-first through the normal plan gates.
+5. **Re-baseline + feature-profile ablations on the new DB** — absorbs the
+   staged-but-unlaunched b1/b2 wave
+   ([re-groom D1](reports/2026-07-13-roadmap-regroom.md); configs
+   `examples/phase7-learned-batch-ablation-b1/-b2.yaml` stay staged; the
+   four predeclared primary contrasts carry over from the retired plan).
+   Before launch: decide the **RF HPO-budget rebalance** (tail-walltime
+   open question — RF is most of fleet compute and loses on build-like
+   splits). Delivers the parked M2 **sparse-ID ablation** as predeclared
+   contrast 1.
+6. **FM / low-rank bilinear interaction features** as a new model family
+   (replaces retired sparse-pairwise-ridge), judged on the new DB's
+   powered opponent splits. Mandatory comparator: **archetype-cluster-mean
+   opponent baseline** before any learned-opponent-representation claim
+   ([methodology-gaps §1](reference/phase7-surrogate-methodology-gaps.md)).
+7. **Within-opponent pairwise-ranking CatBoost** (groups = opponent, pairs
+   gapped beyond noise floor) — targets the top-decile ≈ 0 weakness, the
+   statistic the optimizer actually exploits. Scope now includes the **H1
+   two-part censored-target treatment** (top-end weakness and 58.7%
+   endpoint mass are two faces of the same target problem).
 
-## AWS / infrastructure action items
+## AWS / infrastructure notes
 
-From [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md)
-§4–5:
+- **Spot-quota constraint (measured 2026-07-13)**: L-34B43A08
+  (Standard-family spot, us-east-1) = 640 vCPU ⇒ max 40 concurrent
+  16-vCPU learned-batch workers (80 × 8-vCPU sim workers). Fleets must be
+  sized to it or a quota increase requested per-launch.
+- Stale-AMI hygiene and the pre-launch gate live as SOPs in
+  [`cloud-worker-ops`](../.claude/skills/cloud-worker-ops.md) — not open
+  work.
 
-- Port a cost ledger onto the honest-eval path before the next sweep.
-- One instrumented run to resolve the matchups-per-trial accounting spread
-  (blocks phase7-prep budgeting); includes the never-landed wolf (non-meta
-  hull) measurement.
-- Tail-job walltime at scale: measured 2026-07-12
-  ([tail-walltime analysis](reports/2026-07-12-phase7-tail-walltime.md));
-  the scale-down-on-drain + longest-expected-first dispatch follow-up
-  **shipped 2026-07-12** — contract in spec 22 §"One-shot AWS batch
-  runners" item 9 and spec 31 §"Learned AWS Batch Artifacts". The item-2
-  ablation wave is no longer gated on it.
-- Stale-AMI hygiene: run `audit_amis.sh` + `cleanup_amis.sh` after every
-  re-bake (done 2026-07-11; keep as post-bake SOP step).
-- Seed-bank split-uniqueness check: **shipped 2026-07-12** — realized-split
-  digests, preflight duplicate + stale-exclusion checks, merge invariants,
-  and the seed-149 component-vocab exclusion (canonical matrix now 180
-  jobs; experiment schema since bumped to v4 by the adversarial-AUC
-  diagnostic); contract in spec 31 §"Seed policy" → "Realized-split
-  uniqueness"; evidence:
-  [attempt-3 results §2.4](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
+## Planned phases (gated)
 
-## Planned phases (unchanged in scope, gated)
-
-- **Phase 7 — BoTorch structured-search GP sampler**: implement only after
-  the evidence program above shows learned-surrogate value; start from
-  D-scaled vanilla mixed-GP baseline per the updated kernel plan in
+- **Phase 7 — BoTorch structured-search GP sampler**: go/no-go gate =
+  the prequential replay (item 2) plus an offline MCBO bake-off
+  (D-scaled vanilla mixed-GP baseline first) per
   [phase7-search-space-compression](reference/phase7-search-space-compression.md);
-  an offline surrogate bake-off (MCBO harness, LFBO/RF baselines) precedes
-  any sim-budget commitment. Cross-hull claims additionally require a small
-  multi-hull data wave.
+  cross-hull claims additionally require a **multi-hull data wave**
+  (also the trigger for parked 5F below).
 - **Phase 7.5 — Infra & reproducibility**:
   [phase7.5-infrastructure-reproducibility](reference/phase7.5-infrastructure-reproducibility.md).
 
-## Paused — Phase 5/6 re-validation debts
+## Paused
 
-Mechanism-specific V2 re-validation gates below were defined before the
-Phase 7 pivot and remain unscheduled; they are debts, not active work. Decide
-per-item whether to run or retire when the surrogate program stabilizes.
-Evidence context: [Wave 1 honest-eval final](reports/2026-05-11-wave1-honest-eval-final.md).
+- **Phase 5F regime segmentation** (distinguishable optimum across
+  regimes) — kept parked by the
+  [2026-07-13 re-groom](reports/2026-07-13-roadmap-regroom.md); explicit
+  trigger: the first multi-hull/multi-regime data wave produces this
+  evidence as a near-free side effect. Reference:
+  [phase5f-regime-segmented-optimization](reference/phase5f-regime-segmented-optimization.md).
 
-| Claim | State | Design threshold | Reference doc |
-|---|---|---|---|
-| Phase 5A TWFE A0/A1/A2/A3 ablation | honest-eval final complete; mechanism gate unscheduled | A2/A3 outperform A0/A1 on LOOO ρ | [phase5-signal-quality](reference/phase5-signal-quality.md), [phase5a-deconfounding-theory](reference/phase5a-deconfounding-theory.md) |
-| Phase 5D EB shrinkage vs A0/A | honest-eval disfavors c2 as default; LOOO gate unscheduled | Δρ ≥ +0.02 vs A0 and vs legacy A | [phase5d-covariate-adjustment](reference/phase5d-covariate-adjustment.md), [spec 28](specs/28-deconfounding.md) |
-| Phase 5E Box-Cox A3 ceiling/overlap | honest-eval disfavors EB+Box-Cox as tested; shape gate unscheduled | ceiling saturation ≤ 1%; top-5 overlap ≥ 0.40 | [phase5e-shape-revision](reference/phase5e-shape-revision.md) |
-| Phase 5F regime segmentation effect | pending Wave 2+ | distinguishable optimum across regimes | [phase5f-regime-segmented-optimization](reference/phase5f-regime-segmented-optimization.md) |
-| Phase 6 cloud throughput per VM | partial V2 draft | per-VM gate passed; Wave 3 feasibility pending Wave 2 sizing | [phase6-cloud-worker-federation](reference/phase6-cloud-worker-federation.md), [throughput-optimization](reference/throughput-optimization.md), specs [17](specs/17-throughput-estimator.md)/[22](specs/22-cloud-deployment.md) |
-| Phase 6 cloud-vs-local speedup | pending | ≥ 2× | [phase6-cloud-worker-federation](reference/phase6-cloud-worker-federation.md) |
-| Wave 2 (warm-start + wolf scaffold) | pre-launch draft, never launched | see draft | [2026-05-10 Wave 2 validation](reports/2026-05-10-wave2-validation.md) |
+All other Phase 5/6 re-validation debts were retired or folded 2026-07-13
+— dispositions and evidence:
+[re-groom D2](reports/2026-07-13-roadmap-regroom.md).
 
 ## Deferred
 
-- **H1 two-part censored model** (score-regime classifier + contested-regime
-  magnitude, heteroscedastic noise from honest-eval replicates) — methodology
-  review H1 remedy; no current owner. Closest kin is item 4's noise-floor
-  machinery.
-- **M2 leakage diagnostics** — adversarial-validation AUC **shipped
-  2026-07-12** (grouped-CV diagnostic stamped per cell, schema v4; contract
-  in spec 31 §"Adversarial-validation AUC"); the evidence sweep confirmed
-  the build split is interpolation within the TPE cloud on all 10 seeds:
-  [adversarial-AUC evidence](reports/2026-07-12-phase7-adversarial-auc-evidence.md).
-  Nearest-neighbor overlap, rare-combination overlap, and sparse-ID
-  ablation remain parked under item 2's ablation wave, and the review's
-  fuller remedy (nearest-neighbor-distance-stratified rank metrics) is
-  still open.
-- **Comparator tuning-budget parity** (C3 residue): comparators run at fixed
-  defaults vs tuned learned families; a tuned-comparator arm only if a
-  model-family claim ever needs it.
-- **Phase 5G — adversarial PSRO opponent curriculum**: researched, revisit
-  after the opponent-representation work (items 3/7 above) lands.
-- **Weapon-group decisions in the search space** (fidelity limitation recorded
-  in the roadmap report; a future prior/residual may learn grouping
-  sensitivity).
-- **Multi-hull surrogate** (natural Phase 7+ extension once single-hull kernel
-  validated).
+- **M2 leakage-diagnostic residue**: nearest-neighbor overlap,
+  rare-combination overlap, and nearest-neighbor-distance-stratified rank
+  metrics (the review's fuller remedy) — natural home is the item-5
+  re-baseline on the new DB. Adversarial-validation AUC shipped
+  2026-07-12; the sparse-ID ablation is predeclared as item-5 contrast 1.
+- **Feature-family registry / learned-selection enforcement** (spec 31
+  forward-looking contract): becomes live the moment any model family does
+  learned feature selection — item 6's FM path is the likely trigger.
+- **Comparator tuning-budget parity** (C3 residue): comparators run at
+  fixed defaults vs tuned learned families; a tuned-comparator arm only if
+  a model-family claim ever needs it.
+- **H5 remedy rungs 2 & 4** (hierarchical partial pooling variant⊂hull⊂
+  family; out-of-fold opponent-difficulty encoding) — candidate additions
+  to item 6's evaluation if the FM family under-delivers on panel data.
+- **Phase 5G — adversarial PSRO opponent curriculum**: revisit after the
+  opponent-representation work (items 4/6) lands.
+- **Weapon-group decisions in the search space** (fidelity limitation; a
+  future prior/residual may learn grouping sensitivity).
+- **Multi-hull surrogate** (Phase 7+ extension once the single-hull kernel
+  is validated; the multi-hull *data wave* itself is gated under Planned
+  phases).
 
 ## Superseded next-step lists (do not work from these)
 
+- [2026-07-11 methodology review §6](reports/2026-07-11-phase7-methodology-review.md)
+  sequencing — replaced by the Active workstream above (findings remain
+  authoritative); see the
+  [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 - [2026-05-16 seven-split evidence §4](reports/2026-05-16-phase7-seven-split-evidence.md)
   — replaced by the Active workstream above.
 - [2026-05-11 validation-to-Phase-7 roadmap](reports/2026-05-11-validation-to-phase7-roadmap.md)
