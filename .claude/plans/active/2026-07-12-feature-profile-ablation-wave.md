@@ -258,15 +258,23 @@ profile.
      bookkeeping, v4 = adversarial-AUC diagnostic, v5 = profile-axis
      bookkeeping) — stated in the report, verified by the same code diff
      as step 2.
-- Budget and capacity (designed caps, refined at approval time from the
-  tail-walltime ledger): **walltime, not cost, is the binding constraint**
-  — attempt-3 burned ~231 busy worker-hours on 183 jobs with RF at ~61% of
-  compute; 480 RF+CatBoost jobs with one near-full-width arm
-  (sparse-component) plausibly need ~370–450 worker-hours. Config:
-  `target_workers: 64`, `max_lifetime_hours: 10` (640 worker-hour capacity
-  with tail headroom under LPT + drain), `budget_usd: 300` hard cap.
-  Exact worker-hour arithmetic recomputed from the attempt-3 ledger at
-  approval time and presented with the spend ask.
+- Budget and capacity (refined 2026-07-13 from the tail-walltime ledger):
+  **walltime, not cost, is the binding constraint**. Measured attempt-3
+  rates: RF 2.36 h/job, CatBoost 0.80 h/job at full feature width,
+  effective $0.274/worker-hour → ~190 wh per full-width profile.
+  Width-scaled conservative estimate ~512 wh (~$140); implausible
+  all-full-width worst case ~759 wh (~$208). Config: `target_workers: 64`,
+  `max_lifetime_hours: 12` (768 wh capacity ≥ worst case; scale-down-on-
+  drain makes lifetime a deadline, not a cost driver), `budget_usd: 300`
+  hard cap.
+- **Quota finding (2026-07-13)**: L-34B43A08 (Standard-family spot,
+  us-east-1) is 640 vCPU — 64 workers × 16 = 1024 does NOT fit. Decision
+  presented with the spend ask: (a) user-approved quota-increase request
+  to ≥ 1024 then 64×12 single batch, or (b) 40 workers (640 vCPU) with the
+  wave split into two sequential 2-profile batches
+  (sparse-component+geometry ≈ 323 wh ≈ 8.1 h; aggregate+opponent-parity
+  ≈ 190 wh ≈ 4.8 h at 40 workers). Attempt-3's 36 workers fit under 640,
+  which is why this never surfaced before.
 - Launch gates (all mandatory, in order): owed **AMI re-bake**; post-bake
   `audit_amis.sh` + `cleanup_amis.sh`; post-impl audit passed; stale-AWS
   -resource sweep; **spot-quota check** (L-34B43A08 Standard-family vCPU ≥

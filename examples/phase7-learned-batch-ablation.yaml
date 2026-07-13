@@ -5,7 +5,7 @@ regions:
   - us-east-1
 # Re-bake before launch and update this AMI ID (pre-launch gate).
 ami_ids_by_region:
-  us-east-1: ami-0d8cc592d90d086d8
+  us-east-1: ami-0dfbd09e1d9420a3a
 instance_types:
   - c7i.4xlarge
   - c7a.4xlarge
@@ -16,13 +16,16 @@ instance_types:
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
 # 480 jobs (4 profiles x 2 models x 60 cells); walltime, not cost, is the
-# binding constraint — see the ablation-wave plan for the worker-hour
-# arithmetic behind 64 x 10 h.
+# binding constraint. Attempt-3 measured rates (tail-walltime report): RF
+# 2.36 h/job + CatBoost 0.80 h/job at full width -> ~190 wh per profile;
+# conservative width-scaled estimate ~512 wh (~$140 at $0.274/wh), worst
+# case ~759 wh (~$208). 64 x 12 h = 768 wh capacity covers the worst case;
+# scale-down-on-drain means lifetime is a deadline, not a cost driver.
 target_workers: 64
 min_workers_to_start: 64
 root_volume_size_gb: 128
 budget_usd: 300.0
-max_lifetime_hours: 10.0
+max_lifetime_hours: 12.0
 max_job_attempts: 6
 lease_renewal_interval_seconds: 60.0
 lease_grace_seconds: 300.0
