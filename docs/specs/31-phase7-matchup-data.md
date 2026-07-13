@@ -144,7 +144,7 @@ from `GameData.weapons` use `UNKNOWN`. Unknown weapons contribute to
 Built-in weapons are resolved consistently for per-slot, small-slot, and
 aggregate weapon features.
 
-Schema v3 adds static geometry features parsed from `.ship` files:
+The schema (since v3) includes static geometry features parsed from `.ship` files:
 `geometry_width`, `geometry_height`, `geometry_collision_radius`,
 `geometry_center_*`, `geometry_shield_center_*`, `geometry_shield_radius`,
 `geometry_style`, and engine-slot count/width/length summaries. These fields
@@ -156,7 +156,7 @@ constants for front/aft/port/starboard bucket thresholds and emit
 `arc_broadside_weapon_dps`, `arc_frontal_weapon_dps`, and
 `arc_aft_weapon_dps`.
 
-Player/build feature rows do not model fighter wings under v3 because the
+Player/build feature rows do not model fighter wings because the
 current optimizer and combat-harness build contracts do not support non-empty
 player wings. Opponent rows may emit descriptive stock-variant wing pressure
 from `hulls/wing_data.csv` and variant `wings` lists, including wing count,
@@ -390,7 +390,10 @@ confirmatory seed live beside `BURNED_SPLIT_SEEDS` in
 113, 127, 131, 137, 139, 149)`, `RESERVED_CONFIRMATORY_SEED = 151`); batch
 validation references them. `phase7_matchup_data.py` is likewise the single
 owner of the shared experiment-contract constants —
-`EXPERIMENT_SCHEMA_VERSION` (3), `DEFAULT_PROMOTION_METRIC`,
+`EXPERIMENT_SCHEMA_VERSION` (4), the diagnostic status/reason vocabulary
+(`DIAGNOSTIC_COMPUTED_STATUS`, `ADVERSARIAL_REASON_INSUFFICIENT_GROUPS`,
+`ADVERSARIAL_REASON_NO_BUNDLES`, `ADVERSARIAL_REASON_RESULT_SPECIFIC`),
+`DEFAULT_PROMOTION_METRIC`,
 `DEFAULT_FINAL_REFIT_POLICY`, `DEFAULT_DEPENDENCY_EXTRA`,
 `DEFAULT_INNER_CV_FOLDS`, `DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT`,
 `SEEDLESS_SPLITS`, `INSUFFICIENCY_STATUSES`
@@ -778,7 +781,7 @@ Parallel execution policy:
 The learned-baseline script exposes:
 
 ```python
-EXPERIMENT_SCHEMA_VERSION: int  # 3
+EXPERIMENT_SCHEMA_VERSION: int  # 4
 
 @dataclass(frozen=True)
 class LearnedExperimentConfig:
@@ -919,9 +922,81 @@ they are not evidence for held-out-opponent transfer.
 Canonical learned runs must include named leakage diagnostics, or an explicit
 `not_applicable` reason for each unavailable diagnostic: forbidden-key overlap,
 adversarial-validation AUC by hierarchy level, rare-combination overlap,
-nearest-neighbor overlap, and sparse-ID ablation delta. Diagnostics may fail
-open only for exploratory artifacts; confirmatory artifacts must define pass,
-warning, or fail semantics before the run.
+nearest-neighbor overlap, and sparse-ID ablation delta. Diagnostics are of two
+kinds. **Gated** diagnostics (forbidden-key overlap) carry pass/fail semantics
+and may fail open only for exploratory artifacts; confirmatory artifacts must
+define pass, warning, or fail semantics before the run. **Descriptive**
+diagnostics (adversarial-validation AUC) carry status `computed` with a
+measured value and a spec-predeclared interpretation band; the bands, fixed
+here before any run, are the predeclared semantics a confirmatory artifact
+carries — a descriptive diagnostic never gates acceptance by itself, and
+reports own its interpretation. The status and reason vocabulary shared by
+the experiment script and batch validation
+(`DIAGNOSTIC_COMPUTED_STATUS`, `ADVERSARIAL_REASON_INSUFFICIENT_GROUPS`,
+`ADVERSARIAL_REASON_NO_BUNDLES`, `ADVERSARIAL_REASON_RESULT_SPECIFIC`) is
+owned by `phase7_matchup_data.py`; `diagnostic_not_implemented` is reserved
+for diagnostics with no implementation (currently rare-combination overlap,
+nearest-neighbor overlap, and sparse-ID ablation delta) and is rejected on
+completed results for implemented diagnostics.
+
+#### Adversarial-validation AUC
+
+Computed per cell on the exact outer feature bundles the surrogate models
+see (post feature-profile dict records — build-side identity is absent from
+records, opponent identity features are present): outer-train rows labeled
+0, outer-test rows labeled 1, vectorized with a diagnostic-only sparse
+`DictVectorizer` fit on the combined records, scored by out-of-fold
+predicted probabilities from a `RandomForestClassifier` under **grouped**
+stratified CV. The entry's `value` is the **pooled out-of-fold ROC AUC**
+(every row predicted exactly once); per-fold AUCs are descriptive detail
+only — on coarse-grouped splits a fold may score one or two groups, making
+per-fold AUC unstable, and a fold whose scored rows carry a single class
+records `null`.
+
+Row-level CV is forbidden: feature records are a pure function of
+`(build_key, opponent_variant_id, feature_profile)`, rows cluster by build
+and by opponent, and every cluster on the split's assignment side shares
+one class label — a row-level classifier fingerprints clusters seen during
+fit and measures group memorization, not distribution shift. The CV group
+unit is the outer split's assignment unit, coarsened to `build_key` where
+that unit is finer than the build-level feature clustering: `build_key` for
+build, component-vocab, and forward-time; `opponent_variant_id` for
+opponent; the hull and family group maps for opponent-hull and
+opponent-family; the `campaign:seed` cell for seed-cell. Grouping also
+prevents opponent-identity one-hots from trivially saturating the
+opponent-split AUC. Fold count is the designed default reduced to the
+smaller of the two classes' distinct group counts; below 2 usable groups
+the entry is `not_applicable` with reason
+`ADVERSARIAL_REASON_INSUFFICIENT_GROUPS`.
+
+Determinism is contractual (the merge coherence invariant compares entries
+produced by independent workers): the classifier and fold shuffle are
+seeded from `split_seed` — deliberately not `hpo_seed` — so the entry is a
+pure function of `(partition, feature_profile, split_seed)`, identical
+across models within a cell; and `predict_proba` must run single-threaded
+(parallel prediction accumulates tree votes in thread-completion order,
+and float non-associativity flips near-tied ranks), while fit may use the
+configured thread budget (per-tree seeding makes fit thread-independent).
+Classifier parameters and the interpretation bands are designed constants
+in the experiment script (`ADVERSARIAL_VALIDATION_PARAMS`,
+`ADVERSARIAL_AUC_BANDS`); the bands are `indistinguishable`
+(`value < 0.55`), `weak_separation` (`0.55 ≤ value < 0.70`), and
+`strong_separation` (`value ≥ 0.70`). Band labels are interpretation
+levels, not pass/fail: high separation on grouped splits is the designed
+behavior of those splits, and low separation on the build split is the
+interpolation qualifier the diagnostic exists to measure (methodology
+review M2).
+
+"By hierarchy level" is satisfied per-cell: each artifact is exactly one
+split level, so its AUC is the AUC at that level. The entry records
+`status`, `value`, nullable `per_fold_auc`, `cv_folds`,
+`fold_construction`, `group_unit`, row and group counts for both classes,
+the classifier parameters, the seed, and the `separation_band`. Artifacts
+that never build outer feature bundles (insufficiency artifacts,
+skipped-optional-model results) stamp `not_applicable` with reason
+`ADVERSARIAL_REASON_NO_BUNDLES`; the top-level payload stamp — the
+diagnostic is result-specific — is `not_applicable` with reason
+`ADVERSARIAL_REASON_RESULT_SPECIFIC`.
 
 Comparator context is computed **inline**: each learned run fits the six
 comparator-gate models on its exact outer split (same rows, same seed) and
@@ -947,7 +1022,7 @@ that flag is set, the JSON output records the skipped model and reason.
 
 The learned experiment JSON output includes:
 
-- `experiment_schema_version` (3)
+- `experiment_schema_version` (4)
 - `feature_schema_version`
 - `feature_profile`
 - source DB path and game directory
@@ -1017,6 +1092,10 @@ and per-result where the object is result-specific:
   adversarial-validation AUC, rare-combination overlap,
   nearest-neighbor overlap, and sparse-ID ablation delta. Unavailable
   diagnostics are represented as `not_applicable` objects with reasons.
+  On completed results the adversarial-validation entry must be `computed`
+  with a finite `value` in [0, 1] (fields per §"Adversarial-validation
+  AUC"), or `not_applicable` with reason
+  `ADVERSARIAL_REASON_INSUFFICIENT_GROUPS` exactly.
 - `deployment_policy`: `final_refit_policy`, `candidate_universe`, and
   `deployment_artifact`.
 - `rank_metrics`: `per_opponent` (table + aggregates + exclusion counters),
@@ -1200,7 +1279,7 @@ The batch merge step must validate every per-job artifact before publishing:
   terminates its job without burning lease retries, but any insufficiency
   artifact in the batch makes the merge refuse with an error naming the
   affected jobs (no `merged.json`, no publication);
-- every artifact has the same `experiment_schema_version` (3),
+- every artifact has the same `experiment_schema_version` (4),
   `feature_schema_version`, `feature_profile`, source DB path, game dir,
   HPO seed, train/holdout fractions, top-k values, dependency extra, source
   bundle SHA256, and code provenance — the split seed is per-job identity,
@@ -1220,7 +1299,17 @@ The batch merge step must validate every per-job artifact before publishing:
   hand-assembled `results/` directories); it does not cover manual
   standalone runs published directly in reports — the stamp makes
   report-time cross-checks possible, and honest-evaluation report
-  discipline owns those.
+  discipline owns those;
+- the adversarial-validation entry is coherent within each cell: across
+  the completed results sharing `(split, split_seed)`, the entry's
+  `(status, value, reason)` tuple must be identical — the entry is a pure
+  function of (partition, feature profile, split seed), so any mixture
+  (including `computed` beside `not_applicable`) or value inequality
+  exposes cross-worker nondeterminism. Unlike the digest invariant this
+  compares empirical float output: a mismatch is a nondeterminism
+  tripwire (dependency drift, heterogeneous numeric behavior), not data
+  corruption — investigate the worker environment and re-run the affected
+  cell; never hand-edit artifacts to pass the check.
 
 The merged artifact stays self-describing about the seed panel: merged
 provenance stamps `split_seed_exclusions` (the applied
@@ -1241,7 +1330,7 @@ Valid merge always writes a batch-internal `merged.json`. It atomically
 promotes the canonical full-run artifact to the config's
 `canonical_output_path` — a dated, per-wave path (the schema-v2 wave used
 `data/phase7/learned_surrogate_full_v2_2026-07.json`; the next canonical
-wave, on schema v3, needs a fresh dated path) — only when
+wave, on schema v4, needs a fresh dated path) — only when
 `publish_canonical: true` and the validated matrix is the full canonical
 matrix. Publishing refuses to overwrite an existing canonical file whose
 `batch_name` differs: prior waves' canonical artifacts (including the

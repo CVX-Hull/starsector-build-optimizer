@@ -41,7 +41,7 @@ RESERVED_CONFIRMATORY_SEED = 151
 # infeasible (outer or inner draws overshoot).
 DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT = 0.35
 DEFAULT_INNER_CV_FOLDS = 3
-EXPERIMENT_SCHEMA_VERSION = 3
+EXPERIMENT_SCHEMA_VERSION = 4
 DEFAULT_PROMOTION_METRIC = "mean_per_opponent_spearman"
 DEFAULT_FINAL_REFIT_POLICY = "fit_outer_train_only_no_deployment_artifact"
 DEFAULT_DEPENDENCY_EXTRA = "surrogate"
@@ -69,6 +69,22 @@ STALE_EXCLUSION_STATUS = "stale_split_seed_exclusion"
 SPLIT_SEED_EXCLUSIONS: dict[str, frozenset[int]] = {
     "component-vocab": frozenset({149}),
 }
+# Diagnostic status/reason vocabulary shared by the experiment script and
+# batch validation (spec 31 §"Learned Baseline Experiment"): descriptive
+# diagnostics carry `computed` with a value and a spec-predeclared
+# interpretation band; `diagnostic_not_implemented` is reserved for
+# diagnostics with no implementation and is contract-rejected on completed
+# results for implemented ones.
+DIAGNOSTIC_COMPUTED_STATUS = "computed"
+# The only legitimate adversarial-AUC escape on a completed result: fewer
+# than 2 usable CV groups in a class.
+ADVERSARIAL_REASON_INSUFFICIENT_GROUPS = "insufficient_groups_for_grouped_cv"
+# Artifacts that never build outer feature bundles (insufficiency,
+# skipped-optional-model) — the diagnostic is implemented but not computed
+# on those paths.
+ADVERSARIAL_REASON_NO_BUNDLES = "outer_feature_bundles_not_built"
+# Top-level payload stamp: the diagnostic is result-specific.
+ADVERSARIAL_REASON_RESULT_SPECIFIC = "result_specific_diagnostic"
 
 
 class ComponentVocabularyError(ValueError):
@@ -939,12 +955,18 @@ def grouped_kfold(
     return tuple(folds)
 
 
+def seed_cell_group_key(row: TrainingMatchupRow) -> str:
+    """Canonical campaign-cell key (outer split and the adversarial-AUC
+    diagnostic's CV grouping must agree on this format)."""
+    return f"{row.campaign}:{row.seed}"
+
+
 def held_out_seed_cell_split(
     rows: Sequence[TrainingMatchupRow], holdout_fraction: float, seed: int
 ) -> SplitIds:
     return _group_split(
         rows,
-        [f"{row.campaign}:{row.seed}" for row in rows],
+        [seed_cell_group_key(row) for row in rows],
         holdout_fraction,
         seed,
     )

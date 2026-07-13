@@ -21,10 +21,12 @@ from collections.abc import Mapping, Sequence
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.kernel_approximation import PolynomialCountSketch
 from sklearn.linear_model import Ridge
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import StratifiedGroupKFold
 from sklearn.pipeline import FeatureUnion, Pipeline
 
 from starsector_optimizer.matchup_features import (
@@ -34,12 +36,16 @@ from starsector_optimizer.matchup_features import (
 )
 from starsector_optimizer.phase7_eval import EvalMetricsConfig
 from starsector_optimizer.phase7_matchup_data import (
+    ADVERSARIAL_REASON_INSUFFICIENT_GROUPS,
+    ADVERSARIAL_REASON_NO_BUNDLES,
+    ADVERSARIAL_REASON_RESULT_SPECIFIC,
     CANONICAL_SPLIT_SEED_BANK,
     CANONICAL_SPLIT_SEED_BANK_LABEL,
     DEFAULT_DEPENDENCY_EXTRA,
     DEFAULT_FINAL_REFIT_POLICY,
     DEFAULT_INNER_CV_FOLDS,
     DEFAULT_PROMOTION_METRIC,
+    DIAGNOSTIC_COMPUTED_STATUS,
     DUPLICATE_SPLIT_STATUS,
     EXPERIMENT_SCHEMA_VERSION,
     RESERVED_CONFIRMATORY_SEED,
@@ -53,7 +59,9 @@ from starsector_optimizer.phase7_matchup_data import (
     grouped_kfold,
     held_out_component_vocabulary_split,
     reject_burned_split_seed,
+    _lookup_opponent_group,
     reject_excluded_split_seed,
+    seed_cell_group_key,
     split_partition_sha256,
 )
 
@@ -1201,7 +1209,165 @@ def hierarchy_scorecard(
     }
 
 
-def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[str, object]:
+# Adversarial-validation diagnostic (spec 31 §"Adversarial-validation AUC").
+# Designed constants: a probe classifier needs fewer trees than the learned
+# RF; min_samples_leaf smooths probabilities and bounds runtime.
+ADVERSARIAL_VALIDATION_PARAMS: dict[str, int] = {
+    "n_estimators": 100,
+    "min_samples_leaf": 5,
+    "cv_folds": 5,
+}
+# Interpretation bands over the pooled out-of-fold AUC — descriptive labels,
+# not pass/fail (spec 31 predeclares them so confirmatory artifacts carry
+# fixed semantics). Ordered (exclusive upper bound, label); None = no bound.
+ADVERSARIAL_AUC_BANDS: tuple[tuple[float | None, str], ...] = (
+    (0.55, "indistinguishable"),
+    (0.70, "weak_separation"),
+    (None, "strong_separation"),
+)
+# CV group unit per split family: the outer split's assignment unit,
+# coarsened to build_key where that unit is finer than the build-level
+# feature clustering (spec 31 forbids row-level CV here — it measures group
+# memorization, not distribution shift).
+ADVERSARIAL_GROUP_UNITS: dict[str, str] = {
+    "build": "build_key",
+    "component-vocab": "build_key",
+    "forward-time": "build_key",
+    "opponent": "opponent_variant_id",
+    "opponent-hull": "opponent_hull_id",
+    "opponent-family": "opponent_family",
+    "seed-cell": "campaign_seed_cell",
+}
+
+
+def adversarial_cv_groups(
+    split: str, rows: Sequence[TrainingMatchupRow | HonestEvalMatchupRow], game_dir: Path
+) -> tuple[str, list[str]]:
+    """Per-row CV group keys for the adversarial-validation diagnostic.
+
+    Fails loudly on rows missing the split's group attribute — a silent
+    fallback group would weaken the grouped CV toward the row-level
+    memorization regime spec 31 forbids.
+    """
+    unit = ADVERSARIAL_GROUP_UNITS[split]
+    if unit == "build_key":
+        keys = []
+        for row in rows:
+            if row.build_key is None:
+                raise ValueError(
+                    "adversarial CV grouping by build_key requires rows with a build key"
+                )
+            keys.append(row.build_key)
+        return unit, keys
+    if unit == "opponent_variant_id":
+        return unit, [row.opponent_variant_id for row in rows]
+    if unit == "campaign_seed_cell":
+        keys = []
+        for row in rows:
+            if not isinstance(row, TrainingMatchupRow):
+                raise ValueError("seed-cell adversarial CV grouping requires training matchup rows")
+            keys.append(seed_cell_group_key(row))
+        return unit, keys
+    hull_by_variant, family_by_variant = baseline.opponent_group_maps(game_dir, rows)
+    mapping, group_name = (
+        (hull_by_variant, "hull") if unit == "opponent_hull_id" else (family_by_variant, "family")
+    )
+    return unit, [
+        _lookup_opponent_group(mapping, row.opponent_variant_id, group_name) for row in rows
+    ]
+
+
+def _separation_band(value: float) -> str:
+    for upper_bound, label in ADVERSARIAL_AUC_BANDS:
+        if upper_bound is None or value < upper_bound:
+            return label
+    raise AssertionError("ADVERSARIAL_AUC_BANDS must end with an unbounded band")
+
+
+def _fold_auc(fold_labels: np.ndarray, probabilities: np.ndarray) -> float | None:
+    """Per-fold AUC, or None when the scored rows carry a single class.
+
+    StratifiedGroupKFold does not guarantee both classes in every fold,
+    so this defends against a degenerate fold; the pooled out-of-fold
+    value stays defined regardless.
+    """
+    if len(set(fold_labels)) < 2:
+        return None
+    return float(roc_auc_score(fold_labels, probabilities))
+
+
+def adversarial_validation_entry(
+    train_records: Sequence[Mapping[str, FeatureValue]],
+    test_records: Sequence[Mapping[str, FeatureValue]],
+    groups: Sequence[str],
+    group_unit: str,
+    seed: int,
+    thread_count: int,
+) -> dict[str, object]:
+    """Grouped adversarial-validation AUC over the outer feature records.
+
+    Deterministic contract (spec 31): seeded from the cell's split seed so
+    the entry is a pure function of (partition, feature profile, split
+    seed) — the merge compares it across workers — and `predict_proba`
+    runs single-threaded because parallel prediction accumulates tree
+    votes in thread-completion order, where float non-associativity flips
+    near-tied ranks.
+    """
+    if len(groups) != len(train_records) + len(test_records):
+        raise ValueError("adversarial CV groups must align one-to-one with train+test records")
+    labels = np.array([0] * len(train_records) + [1] * len(test_records))
+    group_array = np.asarray(list(groups))
+    train_groups = len(set(group_array[labels == 0]))
+    test_groups = len(set(group_array[labels == 1]))
+    folds = min(ADVERSARIAL_VALIDATION_PARAMS["cv_folds"], train_groups, test_groups)
+    if folds < 2:
+        return {
+            "status": "not_applicable",
+            "reason": ADVERSARIAL_REASON_INSUFFICIENT_GROUPS,
+        }
+    matrix = DictVectorizer(sparse=True).fit_transform(list(train_records) + list(test_records))
+    kfold = StratifiedGroupKFold(n_splits=folds, shuffle=True, random_state=seed)
+    out_of_fold = np.zeros(len(labels))
+    per_fold: list[float | None] = []
+    for fit_idx, score_idx in kfold.split(matrix, labels, group_array):
+        classifier = RandomForestClassifier(
+            n_estimators=ADVERSARIAL_VALIDATION_PARAMS["n_estimators"],
+            min_samples_leaf=ADVERSARIAL_VALIDATION_PARAMS["min_samples_leaf"],
+            random_state=seed,
+            n_jobs=thread_count,
+        )
+        classifier.fit(matrix[fit_idx], labels[fit_idx])
+        classifier.set_params(n_jobs=1)
+        probabilities = classifier.predict_proba(matrix[score_idx])[:, 1]
+        out_of_fold[score_idx] = probabilities
+        per_fold.append(_fold_auc(labels[score_idx], probabilities))
+    value = float(roc_auc_score(labels, out_of_fold))
+    return {
+        "status": DIAGNOSTIC_COMPUTED_STATUS,
+        "value": value,
+        "per_fold_auc": per_fold,
+        "cv_folds": folds,
+        "fold_construction": "stratified_group_kfold",
+        "group_unit": group_unit,
+        "n_train": len(train_records),
+        "n_test": len(test_records),
+        "n_train_groups": train_groups,
+        "n_test_groups": test_groups,
+        "classifier": {
+            "family": "random_forest_classifier",
+            "n_estimators": ADVERSARIAL_VALIDATION_PARAMS["n_estimators"],
+            "min_samples_leaf": ADVERSARIAL_VALIDATION_PARAMS["min_samples_leaf"],
+        },
+        "seed": seed,
+        "separation_band": _separation_band(value),
+    }
+
+
+def leakage_diagnostics(
+    hierarchy: Mapping[str, object] | None = None,
+    adversarial_validation: Mapping[str, object] | None = None,
+    adversarial_unavailable_reason: str = ADVERSARIAL_REASON_NO_BUNDLES,
+) -> dict[str, object]:
     overlaps = hierarchy.get("overlap_counts") if isinstance(hierarchy, Mapping) else None
     split_level_raw = hierarchy.get("split_level") if isinstance(hierarchy, Mapping) else None
     split_level = split_level_raw if isinstance(split_level_raw, str) else None
@@ -1231,12 +1397,14 @@ def leakage_diagnostics(hierarchy: Mapping[str, object] | None = None) -> dict[s
             "status": "pass" if forbidden_overlap == 0 else "fail",
             "value": forbidden_overlap,
         }
+    adversarial_entry: dict[str, object] = (
+        dict(adversarial_validation)
+        if adversarial_validation is not None
+        else {"status": "not_applicable", "reason": adversarial_unavailable_reason}
+    )
     return {
         "forbidden_key_overlap": forbidden_status,
-        "adversarial_validation_auc": {
-            "status": "not_applicable",
-            "reason": "diagnostic_not_implemented",
-        },
+        "adversarial_validation_auc": adversarial_entry,
         "rare_combination_overlap": {
             "status": "not_applicable",
             "reason": "diagnostic_not_implemented",
@@ -1444,7 +1612,20 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
     claim = claim_boundary(config, honest_eval_lineage)
     family_policy = model_family_policy(config)
     deploy_policy = deployment_policy(config)
-    leakage = leakage_diagnostics(hierarchy)
+    # Groups must align with the bundles' kept rows (bundle building drops
+    # rows without a recovered build), not the raw split rows.
+    group_unit, adversarial_groups = adversarial_cv_groups(
+        config.split, list(outer_train.rows) + list(outer_test.rows), config.game_dir
+    )
+    adversarial = adversarial_validation_entry(
+        outer_train.records,
+        outer_test.records,
+        adversarial_groups,
+        group_unit,
+        config.split_seed,
+        config.model_thread_count,
+    )
+    leakage = leakage_diagnostics(hierarchy, adversarial_validation=adversarial)
     return {
         "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
@@ -1701,7 +1882,9 @@ def _experiment_payload(
         "deployment_policy": deployment_policy(config),
         "honest_eval_lineage": honest_eval_lineage,
         "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
-        "leakage_diagnostics": leakage_diagnostics(),
+        "leakage_diagnostics": leakage_diagnostics(
+            adversarial_unavailable_reason=ADVERSARIAL_REASON_RESULT_SPECIFIC
+        ),
         "outer_split_lineage": outer_split_lineage(config),
         "db_path": str(config.db_path),
         "status": status,

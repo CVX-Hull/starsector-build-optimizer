@@ -9,8 +9,13 @@ import pytest
 from starsector_optimizer.models import Build
 from starsector_optimizer.repair import is_feasible
 from starsector_optimizer.phase7_matchup_data import (
+    ADVERSARIAL_REASON_INSUFFICIENT_GROUPS,
+    ADVERSARIAL_REASON_NO_BUNDLES,
+    ADVERSARIAL_REASON_RESULT_SPECIFIC,
     BURNED_SPLIT_SEEDS,
+    DIAGNOSTIC_COMPUTED_STATUS,
     DUPLICATE_SPLIT_STATUS,
+    EXPERIMENT_SCHEMA_VERSION,
     INSUFFICIENCY_STATUSES,
     SPLIT_SEED_EXCLUSIONS,
     STALE_EXCLUSION_STATUS,
@@ -708,3 +713,14 @@ class TestSplitSeedExclusions:
         assert STALE_EXCLUSION_STATUS == "stale_split_seed_exclusion"
         assert DUPLICATE_SPLIT_STATUS not in INSUFFICIENCY_STATUSES
         assert STALE_EXCLUSION_STATUS not in INSUFFICIENCY_STATUSES
+
+
+class TestDiagnosticVocabulary:
+    def test_schema_version_is_four(self):
+        assert EXPERIMENT_SCHEMA_VERSION == 4
+
+    def test_computed_status_and_adversarial_reasons(self):
+        assert DIAGNOSTIC_COMPUTED_STATUS == "computed"
+        assert ADVERSARIAL_REASON_INSUFFICIENT_GROUPS == "insufficient_groups_for_grouped_cv"
+        assert ADVERSARIAL_REASON_NO_BUNDLES == "outer_feature_bundles_not_built"
+        assert ADVERSARIAL_REASON_RESULT_SPECIFIC == "result_specific_diagnostic"

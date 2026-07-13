@@ -14,7 +14,8 @@ steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
 Groomed: 2026-07-12 (tail-walltime measurement closed; scale-down-on-drain +
-LPT dispatch shipped; seed-bank split-uniqueness enforcement shipped).
+LPT dispatch shipped; seed-bank split-uniqueness enforcement shipped;
+adversarial-validation AUC diagnostic shipped, schema v4).
 Re-groom whenever a wave completes or a decision changes scope; update
 `last-validated`.
 
@@ -75,7 +76,8 @@ From [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md)
 - Seed-bank split-uniqueness check: **shipped 2026-07-12** — realized-split
   digests, preflight duplicate + stale-exclusion checks, merge invariants,
   and the seed-149 component-vocab exclusion (canonical matrix now 180
-  jobs, schema v3); contract in spec 31 §"Seed policy" → "Realized-split
+  jobs; experiment schema since bumped to v4 by the adversarial-AUC
+  diagnostic); contract in spec 31 §"Seed policy" → "Realized-split
   uniqueness"; evidence:
   [attempt-3 results §2.4](reports/2026-07-12-phase7-attempt3-surrogate-results.md).
 
@@ -114,13 +116,15 @@ Evidence context: [Wave 1 honest-eval final](reports/2026-05-11-wave1-honest-eva
   magnitude, heteroscedastic noise from honest-eval replicates) — methodology
   review H1 remedy; no current owner. Closest kin is item 4's noise-floor
   machinery.
-- **M2 leakage diagnostics** (adversarial-validation AUC, nearest-neighbor
-  overlap, rare-combination overlap, sparse-ID ablation) — parked under
-  item 2's ablation wave (our assignment; the review left them unowned).
-  Until they exist, build-split rank numbers read as interpolation within a
-  TPE-concentrated cloud. The v2 artifacts now stamp all four as
-  `diagnostic_not_implemented`; adversarial-validation AUC first — it
-  directly qualifies the attempt-3 interpolation reading (§2.4).
+- **M2 leakage diagnostics** — adversarial-validation AUC **shipped
+  2026-07-12** (grouped-CV diagnostic stamped per cell, schema v4; contract
+  in spec 31 §"Adversarial-validation AUC"); the evidence sweep confirmed
+  the build split is interpolation within the TPE cloud on all 10 seeds:
+  [adversarial-AUC evidence](reports/2026-07-12-phase7-adversarial-auc-evidence.md).
+  Nearest-neighbor overlap, rare-combination overlap, and sparse-ID
+  ablation remain parked under item 2's ablation wave, and the review's
+  fuller remedy (nearest-neighbor-distance-stratified rank metrics) is
+  still open.
 - **Comparator tuning-budget parity** (C3 residue): comparators run at fixed
   defaults vs tuned learned families; a tuned-comparator arm only if a
   model-family claim ever needs it.

@@ -1200,10 +1200,39 @@ def one_job_payload(
                 },
                 "leakage_diagnostics": {
                     "forbidden_key_overlap": {"status": "pass", "value": 0},
-                    "adversarial_validation_auc": {"status": "not_applicable", "reason": "fixture"},
-                    "rare_combination_overlap": {"status": "not_applicable", "reason": "fixture"},
-                    "nearest_neighbor_overlap": {"status": "not_applicable", "reason": "fixture"},
-                    "sparse_id_ablation_delta": {"status": "not_applicable", "reason": "fixture"},
+                    # A pure function of (partition, profile, seed): constant
+                    # across models within a cell, like real computation.
+                    "adversarial_validation_auc": {
+                        "status": "computed",
+                        "value": 0.5,
+                        "per_fold_auc": [0.5, 0.5, 0.5],
+                        "cv_folds": 3,
+                        "fold_construction": "stratified_group_kfold",
+                        "group_unit": "build_key",
+                        "n_train": 100,
+                        "n_test": 25,
+                        "n_train_groups": 20,
+                        "n_test_groups": 5,
+                        "classifier": {
+                            "family": "random_forest_classifier",
+                            "n_estimators": 100,
+                            "min_samples_leaf": 5,
+                        },
+                        "seed": split_seed,
+                        "separation_band": "indistinguishable",
+                    },
+                    "rare_combination_overlap": {
+                        "status": "not_applicable",
+                        "reason": "diagnostic_not_implemented",
+                    },
+                    "nearest_neighbor_overlap": {
+                        "status": "not_applicable",
+                        "reason": "diagnostic_not_implemented",
+                    },
+                    "sparse_id_ablation_delta": {
+                        "status": "not_applicable",
+                        "reason": "diagnostic_not_implemented",
+                    },
                 },
                 "n_train": 100,
                 "n_test": 25,
@@ -1574,6 +1603,110 @@ def test_validate_job_payload_requires_realized_split_digest(tmp_path):
 
     with pytest.raises(ValueError, match="contract"):
         validate_job_payload(cfg, job, payload)
+
+
+def _payload_with_adversarial(tmp_path, entry):
+    cfg = make_config(tmp_path)
+    job = generate_jobs(cfg)[0]
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    payload["results"][0]["leakage_diagnostics"]["adversarial_validation_auc"] = entry
+    return cfg, job, payload
+
+
+def test_validate_job_payload_rejects_not_implemented_adversarial_stamp(tmp_path):
+    cfg, job, payload = _payload_with_adversarial(
+        tmp_path, {"status": "not_applicable", "reason": "diagnostic_not_implemented"}
+    )
+
+    with pytest.raises(ValueError, match="contract"):
+        validate_job_payload(cfg, job, payload)
+
+
+def test_validate_job_payload_rejects_loose_not_applicable_reason(tmp_path):
+    cfg, job, payload = _payload_with_adversarial(
+        tmp_path, {"status": "not_applicable", "reason": "fixture"}
+    )
+
+    with pytest.raises(ValueError, match="contract"):
+        validate_job_payload(cfg, job, payload)
+
+
+def test_validate_job_payload_accepts_insufficient_groups_reason(tmp_path):
+    cfg, job, payload = _payload_with_adversarial(
+        tmp_path,
+        {"status": "not_applicable", "reason": "insufficient_groups_for_grouped_cv"},
+    )
+
+    assert validate_job_payload(cfg, job, payload)["batch_job"]["job_id"] == job.job_id
+
+
+def test_validate_job_payload_rejects_out_of_range_adversarial_value(tmp_path):
+    for bad_value in (1.5, -0.1, float("nan"), "0.5", None, True):
+        cfg, job, payload = _payload_with_adversarial(
+            tmp_path, {"status": "computed", "value": bad_value}
+        )
+        with pytest.raises(ValueError, match="contract"):
+            validate_job_payload(cfg, job, payload)
+
+
+def test_leakage_diagnostics_gate_uses_per_entry_status_sets(tmp_path):
+    # `computed` is legal only on the adversarial entry: a gated or
+    # unimplemented diagnostic must not gain the descriptive escape status.
+    for key in (
+        "forbidden_key_overlap",
+        "rare_combination_overlap",
+        "nearest_neighbor_overlap",
+        "sparse_id_ablation_delta",
+    ):
+        cfg = make_config(tmp_path)
+        job = generate_jobs(cfg)[0]
+        payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+        payload["results"][0]["leakage_diagnostics"][key] = {"status": "computed", "value": 0.0}
+        with pytest.raises(ValueError, match="diagnostics"):
+            validate_job_payload(cfg, job, payload)
+
+
+def test_merge_rejects_adversarial_value_mismatch_within_cell(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    result_dir = _write_all_artifacts(cfg)
+    victim = result_dir / "build__catboost_regressor__s101.json"
+    payload = json.loads(victim.read_text(encoding="utf-8"))
+    payload["results"][0]["leakage_diagnostics"]["adversarial_validation_auc"]["value"] = 0.51
+    victim.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="adversarial"):
+        merge_job_artifacts(cfg)
+
+
+def test_merge_rejects_adversarial_status_mixture_within_cell(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    result_dir = _write_all_artifacts(cfg)
+    victim = result_dir / "build__catboost_regressor__s101.json"
+    payload = json.loads(victim.read_text(encoding="utf-8"))
+    payload["results"][0]["leakage_diagnostics"]["adversarial_validation_auc"] = {
+        "status": "not_applicable",
+        "reason": "insufficient_groups_for_grouped_cv",
+    }
+    victim.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="adversarial"):
+        merge_job_artifacts(cfg)
 
 
 def test_merge_refuses_partial_batch_without_canonical_overwrite(tmp_path):

@@ -31,6 +31,7 @@ from starsector_optimizer.matchup_features import (
 )
 from starsector_optimizer.phase7_eval import EvalMetricsConfig
 from starsector_optimizer.phase7_matchup_data import (
+    ADVERSARIAL_REASON_INSUFFICIENT_GROUPS,
     BURNED_SPLIT_SEEDS,
     CANONICAL_SPLIT_SEED_BANK,
     DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT,
@@ -38,6 +39,7 @@ from starsector_optimizer.phase7_matchup_data import (
     DEFAULT_FINAL_REFIT_POLICY,
     DEFAULT_INNER_CV_FOLDS,
     DEFAULT_PROMOTION_METRIC,
+    DIAGNOSTIC_COMPUTED_STATUS,
     EXPERIMENT_SCHEMA_VERSION,
     INSUFFICIENCY_STATUSES,
     RESERVED_CONFIRMATORY_SEED,
@@ -1651,21 +1653,44 @@ def _leakage_diagnostics_pass(result: Mapping[str, Any]) -> bool:
     leakage = result.get("leakage_diagnostics")
     if not isinstance(leakage, dict):
         return False
-    required = (
-        "forbidden_key_overlap",
-        "adversarial_validation_auc",
-        "rare_combination_overlap",
-        "nearest_neighbor_overlap",
-        "sparse_id_ablation_delta",
-    )
-    for key in required:
+    # Per-entry accepted statuses (spec 31): gated diagnostics must never
+    # gain the descriptive `computed` escape, and implementing one of the
+    # remaining diagnostics must consciously extend this table.
+    accepted_statuses = {
+        "forbidden_key_overlap": ("pass", "not_applicable"),
+        "adversarial_validation_auc": (DIAGNOSTIC_COMPUTED_STATUS, "not_applicable"),
+        "rare_combination_overlap": ("not_applicable",),
+        "nearest_neighbor_overlap": ("not_applicable",),
+        "sparse_id_ablation_delta": ("not_applicable",),
+    }
+    for key, accepted in accepted_statuses.items():
         diagnostic = leakage.get(key)
         if not isinstance(diagnostic, dict):
             return False
-        status = diagnostic.get("status")
-        if status not in ("pass", "not_applicable"):
+        if diagnostic.get("status") not in accepted:
             return False
     return True
+
+
+def _adversarial_entry_ok(leakage: Any) -> bool:
+    """Completed-result contract for the adversarial-validation entry
+    (spec 31): `computed` with a finite value in [0, 1], or the exact
+    insufficient-groups escape — never the not-implemented stamp."""
+    entry = leakage.get("adversarial_validation_auc") if isinstance(leakage, dict) else None
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("status") == DIAGNOSTIC_COMPUTED_STATUS:
+        value = entry.get("value")
+        return (
+            isinstance(value, int | float)
+            and not isinstance(value, bool)
+            and math.isfinite(float(value))
+            and 0.0 <= float(value) <= 1.0
+        )
+    return (
+        entry.get("status") == "not_applicable"
+        and entry.get("reason") == ADVERSARIAL_REASON_INSUFFICIENT_GROUPS
+    )
 
 
 def _contract_ok(result: Mapping[str, Any]) -> bool:
@@ -1732,6 +1757,7 @@ def _contract_ok(result: Mapping[str, Any]) -> bool:
                 "sparse_id_ablation_delta",
             )
         )
+        and _adversarial_entry_ok(leakage)
     )
 
 
@@ -2032,6 +2058,29 @@ def _validate_realized_split_digests(results: Sequence[Mapping[str, Any]]) -> No
             )
 
 
+def _validate_adversarial_auc_coherence(results: Sequence[Mapping[str, Any]]) -> None:
+    """Within-cell adversarial-AUC coherence (spec 31): the entry is a pure
+    function of (partition, feature profile, split seed), so completed
+    results sharing (split, split_seed) must carry an identical
+    (status, value, reason) tuple — any mixture or inequality is a
+    cross-worker nondeterminism tripwire, not data corruption; investigate
+    the worker environment and re-run the cell."""
+    cell_entries: dict[tuple[str, int], tuple[Any, Any, Any]] = {}
+    for result in results:
+        split = str(result["split"])
+        seed = int(result["outer_split_lineage"]["split_seed"])
+        entry = result["leakage_diagnostics"]["adversarial_validation_auc"]
+        signature = (entry.get("status"), entry.get("value"), entry.get("reason"))
+        known = cell_entries.setdefault((split, seed), signature)
+        if known != signature:
+            raise ValueError(
+                f"adversarial-validation AUC mismatch within cell ({split}, "
+                f"s{seed}): {known} vs {signature} — the entry is seeded from "
+                "the split seed and must be identical across the cell's "
+                "workers (nondeterminism tripwire; re-run the cell)"
+            )
+
+
 def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     jobs = generate_jobs(config)
     result_dir = config.output_dir / "results"
@@ -2064,6 +2113,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
             f"merged: {details}; adjust seeds/config and re-run those cells"
         )
     _validate_realized_split_digests(results)
+    _validate_adversarial_auc_coherence(results)
 
     first = payloads[0]
     first_result = first["results"][0]

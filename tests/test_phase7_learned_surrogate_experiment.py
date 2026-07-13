@@ -10,7 +10,12 @@ import pytest
 
 from starsector_optimizer.models import Build
 from starsector_optimizer.phase7_matchup_data import (
+    ADVERSARIAL_REASON_INSUFFICIENT_GROUPS,
+    ADVERSARIAL_REASON_NO_BUNDLES,
+    ADVERSARIAL_REASON_RESULT_SPECIFIC,
+    DIAGNOSTIC_COMPUTED_STATUS,
     ComponentVocabularySplit,
+    HonestEvalMatchupRow,
     SplitIds,
     TrainingMatchupRow,
     split_partition_sha256,
@@ -207,8 +212,8 @@ def test_default_model_is_catboost_after_seed151_ratification():
     assert args.model == learned.DEFAULT_MODEL == "catboost_regressor"
 
 
-def test_experiment_schema_version_is_three():
-    assert learned.EXPERIMENT_SCHEMA_VERSION == 3
+def test_experiment_schema_version_is_four():
+    assert learned.EXPERIMENT_SCHEMA_VERSION == 4
 
 
 def test_final_claim_requires_fresh_honest_eval_ledger():
@@ -361,6 +366,206 @@ def test_hierarchy_scorecard_component_overlap_has_exact_and_k_combinations(monk
     # "weapon:railgun" is held out but present in the TRAIN build b0? No —
     # b0 has lightdualmg/lightmg, so the forbidden count must be zero.
     assert scorecard["overlap_counts"]["component_vocabulary"] == 0
+
+
+def _adversarial_records(shifted: bool, train_groups: int = 30, test_groups: int = 10):
+    """Grouped records: each group has a unique signature feature.
+
+    Without a real shift, only grouped CV keeps the classifier honest —
+    row-level CV would memorize each group's signature and inflate the AUC
+    (the failure mode spec 31 forbids).
+    """
+    rng = np.random.default_rng(7)
+    train: list[dict[str, float]] = []
+    test: list[dict[str, float]] = []
+    groups: list[str] = []
+    for group_idx in range(train_groups + test_groups):
+        is_test = group_idx >= train_groups
+        for _ in range(8):
+            record = {
+                f"group_sig_{group_idx}": 1.0,
+                "shared_a": float(rng.normal()),
+                "shared_b": float(rng.normal()),
+            }
+            if shifted and is_test:
+                record["shared_a"] += 5.0
+            (test if is_test else train).append(record)
+            groups.append(f"g{group_idx}")
+    return train, test, groups
+
+
+def test_adversarial_validation_entry_grouped_cv_resists_group_memorization():
+    train, test, groups = _adversarial_records(shifted=False)
+
+    entry = learned.adversarial_validation_entry(train, test, groups, "build_key", 101, 1)
+
+    assert entry["status"] == DIAGNOSTIC_COMPUTED_STATUS
+    # Unique per-group signatures + no distribution shift: a row-level CV
+    # would memorize signatures and saturate the AUC; grouped CV must stay
+    # in the indistinguishable band.
+    assert entry["value"] < 0.55
+    assert entry["separation_band"] == "indistinguishable"
+    assert entry["fold_construction"] == "stratified_group_kfold"
+
+
+def test_adversarial_validation_entry_detects_distribution_shift():
+    train, test, groups = _adversarial_records(shifted=True)
+
+    entry = learned.adversarial_validation_entry(train, test, groups, "build_key", 101, 1)
+
+    assert entry["status"] == DIAGNOSTIC_COMPUTED_STATUS
+    assert entry["value"] >= 0.70
+    assert entry["separation_band"] == "strong_separation"
+
+
+def test_adversarial_validation_entry_deterministic_across_thread_counts():
+    train, test, groups = _adversarial_records(shifted=False)
+
+    serial = learned.adversarial_validation_entry(train, test, groups, "build_key", 101, 1)
+    threaded = learned.adversarial_validation_entry(train, test, groups, "build_key", 101, 4)
+
+    assert serial == threaded
+
+
+def test_adversarial_validation_entry_insufficient_groups_is_not_applicable():
+    train, test, groups = _adversarial_records(shifted=False, train_groups=5, test_groups=1)
+
+    entry = learned.adversarial_validation_entry(train, test, groups, "build_key", 101, 1)
+
+    assert entry == {
+        "status": "not_applicable",
+        "reason": ADVERSARIAL_REASON_INSUFFICIENT_GROUPS,
+    }
+
+
+def test_adversarial_validation_entry_shape_and_fold_reduction():
+    train, test, groups = _adversarial_records(shifted=False, train_groups=20, test_groups=3)
+
+    entry = learned.adversarial_validation_entry(train, test, groups, "opponent_family", 113, 1)
+
+    assert set(entry) == {
+        "status",
+        "value",
+        "per_fold_auc",
+        "cv_folds",
+        "fold_construction",
+        "group_unit",
+        "n_train",
+        "n_test",
+        "n_train_groups",
+        "n_test_groups",
+        "classifier",
+        "seed",
+        "separation_band",
+    }
+    # Fold count reduces to the smaller class's distinct group count.
+    assert entry["cv_folds"] == 3
+    assert len(entry["per_fold_auc"]) == 3
+    assert all(fold is None or 0.0 <= fold <= 1.0 for fold in entry["per_fold_auc"])
+    assert entry["group_unit"] == "opponent_family"
+    assert entry["n_train"] == len(train)
+    assert entry["n_test"] == len(test)
+    assert entry["n_train_groups"] == 20
+    assert entry["n_test_groups"] == 3
+    assert entry["seed"] == 113
+    assert entry["classifier"]["family"] == "random_forest_classifier"
+    assert (
+        entry["classifier"]["n_estimators"] == learned.ADVERSARIAL_VALIDATION_PARAMS["n_estimators"]
+    )
+
+
+def test_adversarial_auc_bands_are_the_designed_thresholds():
+    assert learned.ADVERSARIAL_AUC_BANDS == (
+        (0.55, "indistinguishable"),
+        (0.70, "weak_separation"),
+        (None, "strong_separation"),
+    )
+
+
+def test_adversarial_cv_groups_units_per_split_family(monkeypatch):
+    rows = _rows()
+    monkeypatch.setattr(
+        learned.baseline,
+        "opponent_group_maps",
+        lambda game_dir, rows: (
+            {"opp0": "wolf", "opp1": "enforcer"},
+            {"opp0": "FRIGATE:High Tech", "opp1": "DESTROYER:Low Tech"},
+        ),
+    )
+
+    for split in ("build", "component-vocab", "forward-time"):
+        unit, groups = learned.adversarial_cv_groups(split, rows, Path("game/starsector"))
+        assert unit == "build_key"
+        assert groups == ["b0", "b0", "b1", "b1"]
+    unit, groups = learned.adversarial_cv_groups("opponent", rows, Path("game/starsector"))
+    assert unit == "opponent_variant_id"
+    assert groups == ["opp0", "opp1", "opp0", "opp1"]
+    unit, groups = learned.adversarial_cv_groups("opponent-hull", rows, Path("game/starsector"))
+    assert unit == "opponent_hull_id"
+    assert groups == ["wolf", "enforcer", "wolf", "enforcer"]
+    unit, groups = learned.adversarial_cv_groups("opponent-family", rows, Path("game/starsector"))
+    assert unit == "opponent_family"
+    assert groups == [
+        "FRIGATE:High Tech",
+        "DESTROYER:Low Tech",
+        "FRIGATE:High Tech",
+        "DESTROYER:Low Tech",
+    ]
+    unit, groups = learned.adversarial_cv_groups("seed-cell", rows, Path("game/starsector"))
+    assert unit == "campaign_seed_cell"
+    assert groups == ["c0:0", "c0:0", "c1:1", "c1:1"]
+
+
+def test_adversarial_validation_entry_rejects_misaligned_groups():
+    train, test, groups = _adversarial_records(shifted=False)
+
+    with pytest.raises(ValueError, match="align one-to-one"):
+        learned.adversarial_validation_entry(train, test, groups[:-1], "build_key", 101, 1)
+
+
+def test_adversarial_cv_groups_fails_loudly_on_missing_group_attributes():
+    honest_row = HonestEvalMatchupRow("p", "id0", None, "opp0", 0, 1.0)
+
+    with pytest.raises(ValueError, match="build key"):
+        learned.adversarial_cv_groups("build", [honest_row], Path("game/starsector"))
+    with pytest.raises(ValueError, match="training matchup rows"):
+        learned.adversarial_cv_groups("seed-cell", [honest_row], Path("game/starsector"))
+
+
+def test_fold_auc_is_null_for_single_class_folds():
+    single_class = np.asarray([1, 1, 1])
+    assert learned._fold_auc(single_class, np.asarray([0.2, 0.5, 0.9])) is None
+    assert learned._fold_auc(np.asarray([0, 1, 1]), np.asarray([0.1, 0.8, 0.9])) == 1.0
+
+
+def test_leakage_diagnostics_adversarial_entry_passthrough_and_reasons():
+    default = learned.leakage_diagnostics()
+    assert default["adversarial_validation_auc"] == {
+        "status": "not_applicable",
+        "reason": ADVERSARIAL_REASON_NO_BUNDLES,
+    }
+    # The three genuinely unimplemented diagnostics keep the old stamp.
+    for key in (
+        "rare_combination_overlap",
+        "nearest_neighbor_overlap",
+        "sparse_id_ablation_delta",
+    ):
+        assert default[key] == {
+            "status": "not_applicable",
+            "reason": "diagnostic_not_implemented",
+        }
+
+    top_level = learned.leakage_diagnostics(
+        adversarial_unavailable_reason=ADVERSARIAL_REASON_RESULT_SPECIFIC
+    )
+    assert top_level["adversarial_validation_auc"] == {
+        "status": "not_applicable",
+        "reason": ADVERSARIAL_REASON_RESULT_SPECIFIC,
+    }
+
+    computed = {"status": DIAGNOSTIC_COMPUTED_STATUS, "value": 0.5}
+    passed_through = learned.leakage_diagnostics(adversarial_validation=computed)
+    assert passed_through["adversarial_validation_auc"] == computed
 
 
 def test_leakage_diagnostics_component_vocab_uses_vocabulary_overlap():
