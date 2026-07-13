@@ -7,7 +7,7 @@ import math
 import random
 import re
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from enum import StrEnum
 from hashlib import sha256
 from pathlib import Path
@@ -41,7 +41,7 @@ RESERVED_CONFIRMATORY_SEED = 151
 # infeasible (outer or inner draws overshoot).
 DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT = 0.35
 DEFAULT_INNER_CV_FOLDS = 3
-EXPERIMENT_SCHEMA_VERSION = 2
+EXPERIMENT_SCHEMA_VERSION = 3
 DEFAULT_PROMOTION_METRIC = "mean_per_opponent_spearman"
 DEFAULT_FINAL_REFIT_POLICY = "fit_outer_train_only_no_deployment_artifact"
 DEFAULT_DEPENDENCY_EXTRA = "surrogate"
@@ -56,6 +56,19 @@ INSUFFICIENCY_STATUSES: tuple[str, ...] = (
     "empty_outer_split",
     "insufficient_inner_groups",
 )
+# Preflight-level statuses (spec 31 §"Seed policy" → "Realized-split
+# uniqueness"): NOT members of INSUFFICIENCY_STATUSES — workers cannot
+# observe cross-seed duplicates, so these never appear in worker artifacts.
+DUPLICATE_SPLIT_STATUS = "duplicate_realized_split"
+STALE_EXCLUSION_STATUS = "stale_split_seed_exclusion"
+# Bank seeds excluded per split family because their realized partition
+# duplicated an earlier bank seed's on the frozen source DB (evidence:
+# docs/reports/2026-07-12-phase7-attempt3-surrogate-results.md §2.4).
+# Resolution policy for future collisions: amend this table plus spec 31,
+# never a silent dedupe at aggregation time.
+SPLIT_SEED_EXCLUSIONS: dict[str, frozenset[int]] = {
+    "component-vocab": frozenset({149}),
+}
 
 
 class ComponentVocabularyError(ValueError):
@@ -71,6 +84,22 @@ def reject_burned_split_seed(seed: int) -> None:
             f"outer split seed {seed} is burned (methodology review C4: it "
             "drove prior adaptive evidence waves); use a seed from "
             "CANONICAL_SPLIT_SEED_BANK"
+        )
+
+
+def reject_excluded_split_seed(split: str, seed: int) -> None:
+    """Raise when a (split, seed) cell is retired by SPLIT_SEED_EXCLUSIONS.
+
+    Lives at claim-validation level, not inside split construction: the
+    launch preflight's stale-exclusion probe must still be able to construct
+    excluded cells (spec 31 §"Seed policy" → "Realized-split uniqueness").
+    """
+    if seed in SPLIT_SEED_EXCLUSIONS.get(split, frozenset()):
+        raise ValueError(
+            f"split seed {seed} is excluded for split {split!r}: its realized "
+            "partition duplicates another bank seed's "
+            "(SPLIT_SEED_EXCLUSIONS; evidence in the 2026-07-12 attempt-3 "
+            "surrogate results, §2.4)"
         )
 
 
@@ -123,6 +152,30 @@ class HonestEvalMatchupRow:
 class SplitIds:
     train: tuple[TrainingMatchupRow | HonestEvalMatchupRow, ...]
     test: tuple[TrainingMatchupRow | HonestEvalMatchupRow, ...]
+
+
+def split_partition_sha256(split: SplitIds) -> str:
+    """Canonical 64-hex digest of a realized partition (spec 31).
+
+    Canonicalization is a cross-artifact contract (the merge coherence
+    invariant compares digests produced by independent workers): each row →
+    compact sorted-key JSON of its dataclass fields; each partition's
+    row-JSON strings sorted lexicographically; digest over the compact JSON
+    of both partitions. Covers full row content, so it identifies a
+    partition of a specific DB materialization — not comparable across DB
+    regens.
+    """
+
+    def canonical_rows(rows: Iterable[TrainingMatchupRow | HonestEvalMatchupRow]) -> list[str]:
+        return sorted(
+            json.dumps(asdict(row), sort_keys=True, separators=(",", ":")) for row in rows
+        )
+
+    payload = json.dumps(
+        {"train": canonical_rows(split.train), "test": canonical_rows(split.test)},
+        separators=(",", ":"),
+    )
+    return sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _canonical_build_dict(build: Build) -> dict[str, Any]:

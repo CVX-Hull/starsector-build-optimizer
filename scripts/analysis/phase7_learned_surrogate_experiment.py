@@ -40,8 +40,11 @@ from starsector_optimizer.phase7_matchup_data import (
     DEFAULT_FINAL_REFIT_POLICY,
     DEFAULT_INNER_CV_FOLDS,
     DEFAULT_PROMOTION_METRIC,
+    DUPLICATE_SPLIT_STATUS,
     EXPERIMENT_SCHEMA_VERSION,
     RESERVED_CONFIRMATORY_SEED,
+    SEEDLESS_SPLITS,
+    STALE_EXCLUSION_STATUS,
     ComponentVocabularyError,
     HonestEvalMatchupRow,
     SplitIds,
@@ -50,6 +53,8 @@ from starsector_optimizer.phase7_matchup_data import (
     grouped_kfold,
     held_out_component_vocabulary_split,
     reject_burned_split_seed,
+    reject_excluded_split_seed,
+    split_partition_sha256,
 )
 
 
@@ -465,6 +470,7 @@ def inner_cv_splits(
         return _rolling_origin_folds(rows, config.inner_cv_folds)
     if config.split == "component-vocab":
         folds = []
+        fold_digests: set[str] = set()
         for fold_idx in range(config.inner_cv_folds):
             try:
                 vocab_split = held_out_component_vocabulary_split(
@@ -480,6 +486,18 @@ def inner_cv_splits(
                     config.progress,
                 )
                 return ()
+            digest = split_partition_sha256(vocab_split.split)
+            if digest in fold_digests:
+                # A duplicated draw means fewer distinct folds than declared
+                # (spec 31): same insufficiency as too-few-groups; this
+                # progress line is the disambiguation.
+                _progress(
+                    f"inner vocabulary draw {fold_idx} duplicates an earlier "
+                    "fold's realized partition",
+                    config.progress,
+                )
+                return ()
+            fold_digests.add(digest)
             folds.append(vocab_split.split)
         return tuple(folds)
     groups = _inner_fold_groups(config, rows)
@@ -860,7 +878,9 @@ def comparator_deltas(
     }
 
 
-def outer_split_lineage(config: LearnedExperimentConfig) -> dict[str, object]:
+def outer_split_lineage(
+    config: LearnedExperimentConfig, split: SplitIds | None = None
+) -> dict[str, object]:
     """C4 reuse ledger, parallel to honest_eval_usage (spec 31)."""
     if config.split_seed == RESERVED_CONFIRMATORY_SEED:
         seed_bank_label = "reserved-confirmatory"
@@ -875,6 +895,10 @@ def outer_split_lineage(config: LearnedExperimentConfig) -> dict[str, object]:
         # forward-time's deterministic partition predates the seed bank and
         # absorbed the burned evidence waves; reports must caveat it.
         "reused_partition": config.split == "forward-time",
+        # Stamped whenever the outer partition was constructed; null for
+        # degenerate/empty draws and missing-model artifacts (spec 31
+        # §"Seed policy" → "Realized-split uniqueness").
+        "realized_split_sha256": None if split is None else split_partition_sha256(split),
     }
 
 
@@ -886,6 +910,7 @@ def _validate_claim_config(config: LearnedExperimentConfig) -> None:
     if config.inner_cv_folds < 2:
         raise ValueError("inner_cv_folds must be >= 2")
     reject_burned_split_seed(config.split_seed)
+    reject_excluded_split_seed(config.split, config.split_seed)
 
 
 def _honest_eval_lineage(db_path: Path) -> dict[str, object]:
@@ -1255,13 +1280,17 @@ def missing_optional_model_result(config: LearnedExperimentConfig) -> dict[str, 
 
 def construct_splits(
     config: LearnedExperimentConfig,
-) -> tuple[str, None] | tuple[None, tuple]:
+) -> tuple[str, tuple | None] | tuple[None, tuple]:
     """Build the outer split and inner folds, or name why the cell cannot.
 
-    Returns ``(insufficiency_status, None)`` for a structurally infeasible
-    cell, else ``(None, (split, build_lookup, split_extras, inner_folds))``.
-    Single owner of the insufficiency decision for both live runs and the
-    launch-time feasibility preflight, so the two cannot drift.
+    Returns ``(insufficiency_status, constructed_or_none)`` for a
+    structurally infeasible cell, else
+    ``(None, (split, build_lookup, split_extras, inner_folds))``. The
+    ``insufficient_inner_groups`` status carries the constructed outer
+    split (with empty inner folds) so callers can stamp its partition
+    digest; the outer-draw failures carry ``None``. Single owner of the
+    insufficiency decision for both live runs and the launch-time
+    feasibility preflight, so the two cannot drift.
     """
     try:
         split, build_lookup, split_extras = baseline._split_rows(_baseline_config(config))
@@ -1274,12 +1303,13 @@ def construct_splits(
         return "empty_outer_split", None
     inner_folds = inner_cv_splits(config, split.train, build_lookup)
     if not inner_folds:
-        return "insufficient_inner_groups", None
+        return "insufficient_inner_groups", (split, build_lookup, split_extras, ())
     return None, (split, build_lookup, split_extras, inner_folds)
 
 
 def split_feasibility_report(
     configs: Sequence[LearnedExperimentConfig],
+    excluded_probe_configs: Sequence[LearnedExperimentConfig] = (),
 ) -> list[dict[str, object]]:
     """Dry-run split construction for each config; report infeasible cells.
 
@@ -1287,10 +1317,20 @@ def split_feasibility_report(
     caught in seconds before a fleet is provisioned (the 2026-07-11 batch
     spent its full runtime discovering 24 structurally infeasible
     component-vocab cells at merge time).
+
+    Feasible seeded cells are additionally checked for realized-split
+    uniqueness per split family (spec 31 §"Seed policy" → "Realized-split
+    uniqueness"): a partition duplicating an earlier config's is reported
+    as ``duplicate_realized_split``. ``excluded_probe_configs`` are the
+    SPLIT_SEED_EXCLUSIONS cells the caller filtered out of the job matrix;
+    each must still duplicate a retained partition of its family —
+    otherwise the exclusion is stale (``stale_split_seed_exclusion``) and
+    would silently drop a seed's evidence.
     """
     infeasible: list[dict[str, object]] = []
+    family_digests: dict[str, dict[str, int]] = {}
     for config in configs:
-        status, _ = construct_splits(config)
+        status, constructed = construct_splits(config)
         if status is not None:
             infeasible.append(
                 {
@@ -1299,6 +1339,44 @@ def split_feasibility_report(
                     "status": status,
                 }
             )
+            continue
+        if config.split in SEEDLESS_SPLITS:
+            # One deterministic instance per family: nothing to compare.
+            continue
+        assert constructed is not None  # construct_splits pairs None status with data
+        digest = split_partition_sha256(constructed[0])
+        seen = family_digests.setdefault(config.split, {})
+        if digest in seen:
+            infeasible.append(
+                {
+                    "split": config.split,
+                    "split_seed": config.split_seed,
+                    "status": DUPLICATE_SPLIT_STATUS,
+                    "detail": f"realized partition duplicates seed {seen[digest]}",
+                }
+            )
+            continue
+        seen[digest] = config.split_seed
+    for probe in excluded_probe_configs:
+        retained = family_digests.get(probe.split, {})
+        status, constructed = construct_splits(probe)
+        # The exclusion is justified by OUTER-partition duplication, so an
+        # inner-fold insufficiency on the probe still yields a comparable
+        # outer partition; only outer-draw failures leave nothing to compare.
+        if constructed is None:
+            detail = f"excluded cell no longer constructs an outer partition ({status})"
+        elif split_partition_sha256(constructed[0]) in retained:
+            continue
+        else:
+            detail = "excluded cell no longer duplicates any retained seed's partition"
+        infeasible.append(
+            {
+                "split": probe.split,
+                "split_seed": probe.split_seed,
+                "status": STALE_EXCLUSION_STATUS,
+                "detail": detail,
+            }
+        )
     return infeasible
 
 
@@ -1311,7 +1389,9 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
 
     status, constructed = construct_splits(config)
     if status is not None:
-        return _insufficient_result(config, status)
+        return _insufficient_result(
+            config, status, constructed[0] if constructed is not None else None
+        )
     assert constructed is not None  # construct_splits pairs None status with data
     split, build_lookup, split_extras, inner_folds = constructed
 
@@ -1386,7 +1466,7 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
             ],
         },
         "leakage_diagnostics": leakage,
-        "outer_split_lineage": outer_split_lineage(config),
+        "outer_split_lineage": outer_split_lineage(config, split),
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,
@@ -1431,7 +1511,9 @@ def run_one(config: LearnedExperimentConfig) -> dict[str, object]:
     }
 
 
-def _insufficient_result(config: LearnedExperimentConfig, reason: str) -> dict[str, object]:
+def _insufficient_result(
+    config: LearnedExperimentConfig, reason: str, split: SplitIds | None = None
+) -> dict[str, object]:
     _validate_claim_config(config)
     feature_protocol = feature_selection_protocol((), config.feature_profile)
     honest_eval_lineage = _honest_eval_lineage(config.db_path)
@@ -1448,7 +1530,7 @@ def _insufficient_result(config: LearnedExperimentConfig, reason: str) -> dict[s
         "hierarchy_scorecard": hierarchy_scorecard(config, None, {}),
         "inner_validation_metadata": inner_validation_metadata(config),
         "leakage_diagnostics": leakage_diagnostics(),
-        "outer_split_lineage": outer_split_lineage(config),
+        "outer_split_lineage": outer_split_lineage(config, split),
         "provenance": provenance(config),
         "split": config.split,
         "model": config.model,

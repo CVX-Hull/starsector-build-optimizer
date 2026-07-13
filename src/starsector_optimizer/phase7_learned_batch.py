@@ -42,6 +42,7 @@ from starsector_optimizer.phase7_matchup_data import (
     INSUFFICIENCY_STATUSES,
     RESERVED_CONFIRMATORY_SEED,
     SEEDLESS_SPLITS,
+    SPLIT_SEED_EXCLUSIONS,
 )
 
 logger = logging.getLogger(__name__)
@@ -568,6 +569,16 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
             f"{RESERVED_CONFIRMATORY_SEED}; it is spent only on a "
             "promotion-grade predeclared claim"
         )
+    for split in config.splits:
+        if split in SEEDLESS_SPLITS:
+            continue
+        excluded = SPLIT_SEED_EXCLUSIONS.get(split, frozenset())
+        if excluded and not set(config.split_seeds) - excluded:
+            raise ValueError(
+                f"every configured seed for split {split!r} is excluded by "
+                f"SPLIT_SEED_EXCLUSIONS ({sorted(excluded)}: realized-split "
+                "duplicates, spec 31); configure at least one retained seed"
+            )
     if config.inner_cv_folds < 2:
         raise ValueError("inner_cv_folds must be >= 2")
     if config.bootstrap_resamples <= 0:
@@ -658,11 +669,18 @@ def validate_batch_config(config: LearnedBatchConfig) -> None:
 
 def generate_jobs(config: LearnedBatchConfig) -> tuple[LearnedBatchJob, ...]:
     """Job matrix: splits x models x split_seeds; seedless splits get one
-    instance per model (their partition is deterministic)."""
+    instance per model (their partition is deterministic). Per-family
+    SPLIT_SEED_EXCLUSIONS are filtered here, downstream of the configured
+    seed list (spec 31 §"Seed policy" → "Realized-split uniqueness")."""
     result_dir = config.output_dir / "results"
     jobs: list[LearnedBatchJob] = []
     for split in config.splits:
-        seeds = (config.split_seeds[0],) if split in SEEDLESS_SPLITS else config.split_seeds
+        excluded = SPLIT_SEED_EXCLUSIONS.get(split, frozenset())
+        seeds = (
+            (config.split_seeds[0],)
+            if split in SEEDLESS_SPLITS
+            else tuple(seed for seed in config.split_seeds if seed not in excluded)
+        )
         for model in config.models:
             for seed in seeds:
                 job_id = (
@@ -1698,6 +1716,8 @@ def _contract_ok(result: Mapping[str, Any]) -> bool:
         and isinstance(result.get("inner_cv"), dict)
         and isinstance(lineage, dict)
         and isinstance(lineage.get("split_seed"), int)
+        and isinstance(lineage.get("realized_split_sha256"), str)
+        and re.fullmatch(r"[0-9a-fA-F]{64}", lineage["realized_split_sha256"]) is not None
         and isinstance(result.get("comparator_inline"), dict)
         and bool(result.get("comparator_inline"))
         and isinstance(result.get("comparator_delta"), dict)
@@ -1983,6 +2003,35 @@ def _common_key(payload: Mapping[str, Any], config: LearnedBatchConfig) -> tuple
     )
 
 
+def _validate_realized_split_digests(results: Sequence[Mapping[str, Any]]) -> None:
+    """Within-batch realized-split invariants (spec 31): same (split, seed)
+    cell across models ⇒ equal digests (cross-worker split-construction
+    determinism); same split family, different seeds ⇒ distinct digests.
+    Defense in depth behind the launch preflight — it cannot cover manual
+    standalone runs that never pass this merge."""
+    cell_digests: dict[tuple[str, int], str] = {}
+    seed_by_family_digest: dict[tuple[str, str], int] = {}
+    for result in results:
+        split = str(result["split"])
+        lineage = result["outer_split_lineage"]
+        seed = int(lineage["split_seed"])
+        digest = str(lineage["realized_split_sha256"])
+        cell = (split, seed)
+        known = cell_digests.setdefault(cell, digest)
+        if known != digest:
+            raise ValueError(
+                f"realized split digest mismatch within cell ({split}, s{seed}): "
+                "split construction is not deterministic across the cell's workers"
+            )
+        partner = seed_by_family_digest.setdefault((split, digest), seed)
+        if partner != seed:
+            raise ValueError(
+                f"realized split digests must be distinct across seeds within "
+                f"split {split!r}: seeds {partner} and {seed} share one "
+                "partition (amend SPLIT_SEED_EXCLUSIONS per spec 31)"
+            )
+
+
 def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
     jobs = generate_jobs(config)
     result_dir = config.output_dir / "results"
@@ -2014,6 +2063,7 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
             "batch contains structured insufficiency artifacts and cannot be "
             f"merged: {details}; adjust seeds/config and re-run those cells"
         )
+    _validate_realized_split_digests(results)
 
     first = payloads[0]
     first_result = first["results"][0]
@@ -2024,6 +2074,15 @@ def merge_job_artifacts(config: LearnedBatchConfig) -> dict[str, Any]:
         "fleet_name": config.fleet_name,
         "job_count": len(jobs),
         "source_artifact_dir": str(result_dir),
+    }
+    # Self-describing seed panel (spec 31): `split_seeds` below is the
+    # configured list; each family's effective panel is that list minus
+    # these applied exclusions.
+    provenance["split_seed_exclusions"] = {
+        split: sorted(applied)
+        for split in config.splits
+        if split not in SEEDLESS_SPLITS
+        and (applied := SPLIT_SEED_EXCLUSIONS.get(split, frozenset()) & set(config.split_seeds))
     }
     merged = {
         "experiment_schema_version": first["experiment_schema_version"],

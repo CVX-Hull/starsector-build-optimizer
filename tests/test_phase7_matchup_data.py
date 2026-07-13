@@ -10,10 +10,15 @@ from starsector_optimizer.models import Build
 from starsector_optimizer.repair import is_feasible
 from starsector_optimizer.phase7_matchup_data import (
     BURNED_SPLIT_SEEDS,
+    DUPLICATE_SPLIT_STATUS,
+    INSUFFICIENCY_STATUSES,
+    SPLIT_SEED_EXCLUSIONS,
+    STALE_EXCLUSION_STATUS,
     BuildSourceKind,
     ComponentVocabularySplit,
     HonestEvalMatchupRow,
     RecoveredBuild,
+    SplitIds,
     TrainingMatchupRow,
     build_from_log_row,
     build_key,
@@ -36,6 +41,8 @@ from starsector_optimizer.phase7_matchup_data import (
     recover_logged_builds,
     recover_study_db_builds,
     honest_build_id_to_key,
+    reject_excluded_split_seed,
+    split_partition_sha256,
 )
 
 
@@ -657,3 +664,47 @@ class TestComponentVocabularyError:
             rows, build_lookup, holdout_fraction=0.25, max_overshoot_fraction=0.5, seed=1
         )
         assert "weapon:orphan_weapon" not in result.held_out_components
+
+
+class TestSplitPartitionSha256:
+    def test_digest_is_64_hex_and_row_order_invariant(self):
+        rows = _split_rows()
+        split = SplitIds(train=tuple(rows[:8]), test=tuple(rows[8:]))
+        shuffled = SplitIds(train=tuple(reversed(rows[:8])), test=tuple(reversed(rows[8:])))
+        digest = split_partition_sha256(split)
+        assert len(digest) == 64
+        assert all(char in "0123456789abcdef" for char in digest)
+        assert digest == split_partition_sha256(shuffled)
+
+    def test_distinct_partitions_produce_distinct_digests(self):
+        rows = _split_rows()
+        split_a = SplitIds(train=tuple(rows[:8]), test=tuple(rows[8:]))
+        split_b = SplitIds(train=tuple(rows[:7]), test=tuple(rows[7:]))
+        assert split_partition_sha256(split_a) != split_partition_sha256(split_b)
+
+    def test_digest_supports_honest_eval_rows(self):
+        rows = [
+            HonestEvalMatchupRow("p", f"id{i}", f"b{i}", f"opp{i % 2}", 0, float(i))
+            for i in range(4)
+        ]
+        digest = split_partition_sha256(SplitIds(train=tuple(rows[:2]), test=tuple(rows[2:])))
+        assert len(digest) == 64
+
+
+class TestSplitSeedExclusions:
+    def test_exclusion_table_names_component_vocab_149(self):
+        assert SPLIT_SEED_EXCLUSIONS == {"component-vocab": frozenset({149})}
+
+    def test_reject_excluded_split_seed_raises_for_excluded_pair(self):
+        with pytest.raises(ValueError, match="excluded"):
+            reject_excluded_split_seed("component-vocab", 149)
+
+    def test_reject_excluded_split_seed_passes_other_pairs(self):
+        reject_excluded_split_seed("component-vocab", 107)
+        reject_excluded_split_seed("build", 149)
+
+    def test_preflight_statuses_are_not_worker_statuses(self):
+        assert DUPLICATE_SPLIT_STATUS == "duplicate_realized_split"
+        assert STALE_EXCLUSION_STATUS == "stale_split_seed_exclusion"
+        assert DUPLICATE_SPLIT_STATUS not in INSUFFICIENCY_STATUSES
+        assert STALE_EXCLUSION_STATUS not in INSUFFICIENCY_STATUSES

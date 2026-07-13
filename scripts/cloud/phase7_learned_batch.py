@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tarfile
 from pathlib import Path
+from typing import Any
 
 from starsector_optimizer.campaign import (
     check_ami_tags_against_manifest,
@@ -33,6 +34,7 @@ from starsector_optimizer.phase7_learned_batch import (
     run_live_batch,
     validate_batch_config,
 )
+from starsector_optimizer.phase7_matchup_data import SEEDLESS_SPLITS, SPLIT_SEED_EXCLUSIONS
 
 
 SOURCE_VERSION_ARCNAME = ".phase7_source_version"
@@ -139,6 +141,9 @@ def check_split_feasibility(cfg) -> None:
     parser = experiment.build_parser()
     seen: set[tuple[str, int]] = set()
     configs = []
+    # Values are the dynamically loaded experiment module's config dataclass,
+    # invisible to static typing here.
+    first_config_by_split: dict[str, Any] = {}
     for job in generate_jobs(cfg):
         cell = (job.split, job.split_seed)
         if cell in seen:
@@ -154,19 +159,35 @@ def check_split_feasibility(cfg) -> None:
         script_index = next(index for index, token in enumerate(command) if token.endswith(".py"))
         args = parser.parse_args(command[script_index + 1 :])
         config = experiment.config_from_args(args)
-        configs.append(
-            dataclasses.replace(config, progress=False, allow_missing_optional_models=True)
-        )
-    infeasible = experiment.split_feasibility_report(configs)
+        probe = dataclasses.replace(config, progress=False, allow_missing_optional_models=True)
+        configs.append(probe)
+        first_config_by_split.setdefault(job.split, probe)
+    # Exclusions that removed a configured seed must still correspond to a
+    # real realized-split collision (spec 31 stale-exclusion self-check).
+    excluded_probes = [
+        dataclasses.replace(first_config_by_split[split], split_seed=seed)
+        for split in cfg.splits
+        if split not in SEEDLESS_SPLITS and split in first_config_by_split
+        for seed in sorted(SPLIT_SEED_EXCLUSIONS.get(split, frozenset()) & set(cfg.split_seeds))
+    ]
+    infeasible = experiment.split_feasibility_report(
+        configs, excluded_probe_configs=excluded_probes
+    )
     if infeasible:
         details = ", ".join(
-            f"{cell['split']}(seed {cell['split_seed']}): {cell['status']}" for cell in infeasible
+            f"{cell['split']}(seed {cell['split_seed']}): {cell['status']}"
+            + (f" [{cell['detail']}]" if cell.get("detail") else "")
+            for cell in infeasible
         )
         raise RuntimeError(
             f"{len(infeasible)} structurally infeasible split cell(s); "
             f"adjust seeds/config before provisioning: {details}"
         )
-    print(f"Split feasibility preflight passed ({len(seen)} cells).", flush=True)
+    print(
+        f"Split feasibility preflight passed ({len(seen)} cells, "
+        f"{len(excluded_probes)} exclusion probe(s)).",
+        flush=True,
+    )
 
 
 def check_amis_available(provider, cfg) -> None:

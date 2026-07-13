@@ -9,7 +9,12 @@ import numpy as np
 import pytest
 
 from starsector_optimizer.models import Build
-from starsector_optimizer.phase7_matchup_data import SplitIds, TrainingMatchupRow
+from starsector_optimizer.phase7_matchup_data import (
+    ComponentVocabularySplit,
+    SplitIds,
+    TrainingMatchupRow,
+    split_partition_sha256,
+)
 
 
 SCRIPT_PATH = Path("scripts/analysis/phase7_learned_surrogate_experiment.py")
@@ -174,14 +179,36 @@ def test_outer_split_lineage_marks_bank_and_reused_partition():
     assert forward["reused_partition"] is True
 
 
+def test_outer_split_lineage_stamps_realized_split_sha256():
+    rows = _rows()
+    split = SplitIds(train=tuple(rows[:2]), test=tuple(rows[2:]))
+
+    lineage = learned.outer_split_lineage(_config(split_seed=101), split)
+
+    assert lineage["realized_split_sha256"] == split_partition_sha256(split)
+    # No constructed partition (degenerate/empty draws, missing-model
+    # artifacts) stamps null.
+    assert learned.outer_split_lineage(_config(split_seed=101))["realized_split_sha256"] is None
+
+
+def test_validate_claim_config_rejects_excluded_split_seed():
+    with pytest.raises(ValueError, match="excluded"):
+        learned._validate_claim_config(_config(split="component-vocab", split_seed=149))
+
+    # The exclusion is per-family: other splits keep the seed, and the
+    # family keeps its other bank seeds.
+    learned._validate_claim_config(_config(split="build", split_seed=149))
+    learned._validate_claim_config(_config(split="component-vocab", split_seed=107))
+
+
 def test_default_model_is_catboost_after_seed151_ratification():
     parser = learned.build_parser()
     args = parser.parse_args(["db.sqlite"])
     assert args.model == learned.DEFAULT_MODEL == "catboost_regressor"
 
 
-def test_experiment_schema_version_is_two():
-    assert learned.EXPERIMENT_SCHEMA_VERSION == 2
+def test_experiment_schema_version_is_three():
+    assert learned.EXPERIMENT_SCHEMA_VERSION == 3
 
 
 def test_final_claim_requires_fresh_honest_eval_ledger():
@@ -538,6 +565,25 @@ def test_inner_cv_splits_component_vocab_degenerate_draw_returns_empty(monkeypat
     assert result == ()
 
 
+def test_inner_cv_splits_component_vocab_rejects_duplicate_draws(monkeypatch, capsys):
+    rows = _rows()
+    same_draw = ComponentVocabularySplit(
+        split=SplitIds(train=tuple(rows[:2]), test=tuple(rows[2:])),
+        held_out_components=("weapon:x",),
+        realized_test_fraction=0.5,
+    )
+    monkeypatch.setattr(
+        learned, "held_out_component_vocabulary_split", lambda *args, **kwargs: same_draw
+    )
+
+    result = learned.inner_cv_splits(_config(split="component-vocab", progress=True), rows, {})
+
+    assert result == ()
+    # The insufficiency status is overloaded (spec 31); the progress line is
+    # the disambiguation between too-few-groups and a duplicated draw.
+    assert "duplicate" in capsys.readouterr().err
+
+
 def test_run_one_converts_degenerate_vocab_draw_to_insufficiency(monkeypatch):
     from starsector_optimizer.phase7_matchup_data import ComponentVocabularyError
 
@@ -560,6 +606,34 @@ def test_run_one_converts_degenerate_vocab_draw_to_insufficiency(monkeypatch):
 
     assert result["status"] == "degenerate_component_vocab_split"
     assert result["outer_split_lineage"]["split_seed"] == 101
+    assert result["outer_split_lineage"]["realized_split_sha256"] is None
+
+
+def test_run_one_stamps_partition_digest_on_insufficient_inner_groups(monkeypatch):
+    rows = _rows()
+    split = SplitIds(train=tuple(rows[:3]), test=tuple(rows[3:]))
+    monkeypatch.setattr(
+        learned,
+        "construct_splits",
+        lambda config: ("insufficient_inner_groups", (split, {}, {}, ())),
+    )
+    monkeypatch.setattr(
+        learned,
+        "_honest_eval_lineage",
+        lambda db_path: {
+            "status": "not_applicable",
+            "source_paths": [],
+            "ledger_id": None,
+            "run_lineage": [],
+        },
+    )
+
+    result = learned.run_one(_config(split="build", model="random_forest_tuned"))
+
+    assert result["status"] == "insufficient_inner_groups"
+    # The outer partition exists for this insufficiency, so its digest is
+    # stamped — colliding outer draws stay diagnosable in failed cells.
+    assert result["outer_split_lineage"]["realized_split_sha256"] == split_partition_sha256(split)
 
 
 def test_run_one_propagates_config_errors_unconverted(monkeypatch):
@@ -592,11 +666,79 @@ def test_split_feasibility_report_names_infeasible_cells(monkeypatch):
 
 
 def test_split_feasibility_report_empty_for_feasible_cells(monkeypatch):
-    monkeypatch.setattr(
-        learned, "construct_splits", lambda config: (None, ("split", {}, {}, ("fold",)))
+    rows = _rows()
+
+    def fake_construct(config):
+        # Distinct partition per seed: no duplicates to flag.
+        cut = 1 + config.split_seed % 3
+        return (None, (SplitIds(train=tuple(rows[:cut]), test=tuple(rows[cut:])), {}, {}, ("f",)))
+
+    monkeypatch.setattr(learned, "construct_splits", fake_construct)
+
+    assert (
+        learned.split_feasibility_report(
+            [_config(split="build", split_seed=101), _config(split="build", split_seed=103)]
+        )
+        == []
     )
 
-    assert learned.split_feasibility_report([_config(split="build")]) == []
+
+def test_split_feasibility_report_flags_duplicate_realized_splits(monkeypatch):
+    rows = _rows()
+    same = SplitIds(train=tuple(rows[:2]), test=tuple(rows[2:]))
+    monkeypatch.setattr(
+        learned, "construct_splits", lambda config: (None, (same, {}, {}, ("fold",)))
+    )
+
+    report = learned.split_feasibility_report(
+        [
+            _config(split="opponent", split_seed=101),
+            _config(split="opponent", split_seed=103),
+            # Same partition under a different family must NOT cross-flag.
+            _config(split="build", split_seed=101),
+            # Seedless splits are exempt: one deterministic instance per
+            # family, nothing to compare (spec 31).
+            _config(split="forward-time", split_seed=101),
+            _config(split="forward-time", split_seed=103),
+        ]
+    )
+
+    assert len(report) == 1
+    entry = report[0]
+    assert entry["split"] == "opponent"
+    assert entry["split_seed"] == 103
+    assert entry["status"] == "duplicate_realized_split"
+    assert "101" in entry["detail"]
+
+
+def test_split_feasibility_report_probes_stale_exclusions(monkeypatch):
+    rows = _rows()
+    part_a = SplitIds(train=tuple(rows[:2]), test=tuple(rows[2:]))
+    part_b = SplitIds(train=tuple(rows[:3]), test=tuple(rows[3:]))
+
+    def distinct_probe(config):
+        part = part_a if config.split_seed == 101 else part_b
+        return (None, (part, {}, {}, ("fold",)))
+
+    monkeypatch.setattr(learned, "construct_splits", distinct_probe)
+    retained = [_config(split="component-vocab", split_seed=101)]
+    probe = _config(split="component-vocab", split_seed=149)
+
+    report = learned.split_feasibility_report(retained, excluded_probe_configs=[probe])
+
+    assert len(report) == 1
+    entry = report[0]
+    assert entry["split"] == "component-vocab"
+    assert entry["split_seed"] == 149
+    assert entry["status"] == "stale_split_seed_exclusion"
+    assert entry["detail"]
+
+    # When the excluded cell still duplicates a retained partition, the
+    # exclusion is justified and the report stays clean.
+    monkeypatch.setattr(
+        learned, "construct_splits", lambda config: (None, (part_a, {}, {}, ("fold",)))
+    )
+    assert learned.split_feasibility_report(retained, excluded_probe_configs=[probe]) == []
 
 
 def test_inner_validation_metadata_documents_grouped_outer_training_contract():

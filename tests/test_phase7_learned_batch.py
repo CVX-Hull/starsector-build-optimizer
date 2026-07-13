@@ -36,14 +36,23 @@ from starsector_optimizer.phase7_learned_batch import (
 from starsector_optimizer.matchup_features import FEATURE_SCHEMA_VERSION
 from starsector_optimizer.phase7_matchup_data import (
     CANONICAL_SPLIT_SEED_BANK,
+    EXPERIMENT_SCHEMA_VERSION,
     RESERVED_CONFIRMATORY_SEED,
     SEEDLESS_SPLITS,
+    SPLIT_SEED_EXCLUSIONS,
 )
 
 
 SEEDED_SPLIT_COUNT = len(CANONICAL_SPLITS) - len(SEEDLESS_SPLITS)
+EXCLUDED_CANONICAL_CELLS = sum(
+    len(SPLIT_SEED_EXCLUSIONS.get(split, frozenset()) & set(CANONICAL_SPLIT_SEED_BANK))
+    for split in CANONICAL_SPLITS
+    if split not in SEEDLESS_SPLITS
+)
 CANONICAL_JOB_COUNT = len(CANONICAL_MODELS) * (
-    SEEDED_SPLIT_COUNT * len(CANONICAL_SPLIT_SEED_BANK) + len(SEEDLESS_SPLITS)
+    SEEDED_SPLIT_COUNT * len(CANONICAL_SPLIT_SEED_BANK)
+    - EXCLUDED_CANONICAL_CELLS
+    + len(SEEDLESS_SPLITS)
 )
 
 
@@ -241,14 +250,45 @@ def test_generate_jobs_has_canonical_matrix(tmp_path):
     assert len(jobs) == CANONICAL_JOB_COUNT
     expected = set()
     for split in CANONICAL_SPLITS:
+        excluded = SPLIT_SEED_EXCLUSIONS.get(split, frozenset())
         for model in CANONICAL_MODELS:
             if split in SEEDLESS_SPLITS:
                 expected.add(f"{split}__{model}")
             else:
-                expected.update(f"{split}__{model}__s{seed}" for seed in CANONICAL_SPLIT_SEED_BANK)
+                expected.update(
+                    f"{split}__{model}__s{seed}"
+                    for seed in CANONICAL_SPLIT_SEED_BANK
+                    if seed not in excluded
+                )
     assert {job.job_id for job in jobs} == expected
     seedless = [job for job in jobs if job.split in SEEDLESS_SPLITS]
     assert {job.split_seed for job in seedless} == {CANONICAL_SPLIT_SEED_BANK[0]}
+
+
+def test_generate_jobs_applies_split_seed_exclusions(tmp_path):
+    jobs = generate_jobs(make_config(tmp_path))
+    job_ids = {job.job_id for job in jobs}
+
+    # Seed 149 realized a duplicate component-vocab partition (attempt-3
+    # §2.4): excluded for that family only, retained everywhere else.
+    assert not any(job.split == "component-vocab" and job.split_seed == 149 for job in jobs)
+    assert "build__catboost_regressor__s149" in job_ids
+    assert "component-vocab__catboost_regressor__s107" in job_ids
+
+
+def test_validate_batch_config_rejects_fully_excluded_split(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("component-vocab",),
+        models=("catboost_regressor",),
+        split_seeds=(149,),
+        target_workers=1,
+        min_workers_to_start=1,
+        publish_canonical=False,
+    )
+
+    with pytest.raises(ValueError, match="excluded"):
+        validate_batch_config(cfg)
 
 
 def test_generate_jobs_supports_explicit_smoke_matrix(tmp_path):
@@ -388,19 +428,30 @@ def test_check_split_feasibility_refuses_infeasible_cells(tmp_path, monkeypatch)
     monkeypatch.setattr(
         experiment,
         "split_feasibility_report",
-        lambda configs: [
+        lambda configs, excluded_probe_configs=(): [
             {
                 "split": "component-vocab",
                 "split_seed": 109,
                 "status": "degenerate_component_vocab_split",
-            }
+            },
+            {
+                "split": "component-vocab",
+                "split_seed": 103,
+                "status": "duplicate_realized_split",
+                "detail": "realized partition duplicates seed 101",
+            },
         ],
     )
 
-    with pytest.raises(
-        RuntimeError, match=r"component-vocab\(seed 109\): degenerate_component_vocab_split"
-    ):
+    with pytest.raises(RuntimeError) as excinfo:
         cli.check_split_feasibility(cfg)
+
+    message = str(excinfo.value)
+    assert "component-vocab(seed 109): degenerate_component_vocab_split" in message
+    # Entries carrying a detail (duplicate/stale-exclusion statuses) must
+    # surface it in the refusal, e.g. the partner seed.
+    assert "duplicate_realized_split" in message
+    assert "duplicates seed 101" in message
 
 
 def test_check_split_feasibility_dry_runs_each_unique_cell_once(tmp_path, monkeypatch, capsys):
@@ -408,9 +459,11 @@ def test_check_split_feasibility_dry_runs_each_unique_cell_once(tmp_path, monkey
     cli = load_batch_cli_module()
     experiment = cli._load_experiment_module()
     received = []
+    received_probes = []
 
-    def record(configs):
+    def record(configs, excluded_probe_configs=()):
         received.extend(configs)
+        received_probes.extend(excluded_probe_configs)
         return []
 
     monkeypatch.setattr(experiment, "split_feasibility_report", record)
@@ -422,6 +475,10 @@ def test_check_split_feasibility_dry_runs_each_unique_cell_once(tmp_path, monkey
     assert len(received) == len(unique_cells)
     probed = {(c.split, c.split_seed) for c in received}
     assert probed == unique_cells
+    # Exclusions applicable to this config (excluded seed present in the
+    # configured seed list) are probed for staleness.
+    assert {(c.split, c.split_seed) for c in received_probes} == {("component-vocab", 149)}
+    assert all(c.progress is False for c in received_probes)
     for c in received:
         # The preflight parses the rendered job command through the
         # experiment script's own parser, so every worker knob — including
@@ -447,8 +504,9 @@ def test_check_split_feasibility_probes_the_rendered_job_command(tmp_path, monke
     experiment = cli._load_experiment_module()
     received = []
 
-    def record(configs):
+    def record(configs, excluded_probe_configs=()):
         received.extend(configs)
+        received.extend(excluded_probe_configs)
         return []
 
     monkeypatch.setattr(experiment, "split_feasibility_report", record)
@@ -1027,8 +1085,12 @@ def one_job_payload(
     registry_sha = hashlib.sha256(
         json.dumps(registry, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+    # One digest per (split, seed) cell: equal across models of the same
+    # cell (coherence), distinct across seeds (uniqueness), like real
+    # deterministic split construction.
+    partition_sha = hashlib.sha256(f"{split}:{split_seed}".encode()).hexdigest()
     return {
-        "experiment_schema_version": 2,
+        "experiment_schema_version": EXPERIMENT_SCHEMA_VERSION,
         "feature_schema_version": FEATURE_SCHEMA_VERSION,
         "feature_profile": cfg.feature_profile,
         "batch_job": {
@@ -1185,6 +1247,7 @@ def one_job_payload(
                     "seed_bank_label": "2026-07-bank-a",
                     "confirmatory_reserved_seed": RESERVED_CONFIRMATORY_SEED,
                     "reused_partition": split in SEEDLESS_SPLITS,
+                    "realized_split_sha256": partition_sha,
                 },
                 "leakage_checklist": {
                     "outer_test_targets_excluded_from_fit": True,
@@ -1443,8 +1506,74 @@ def test_merge_requires_all_jobs_and_promotes_atomically(tmp_path):
     assert merged["claim_boundary"]["honest_eval_usage"] == cfg.honest_eval_usage
     assert merged["feature_selection_protocol"]["policy_type"] == "fixed_profile_no_selector"
     assert merged["deployment_policy"]["candidate_universe"] == cfg.candidate_universe
+    # Self-describing seed panel: `split_seeds` is the configured list, so
+    # the applied exclusions must be stamped alongside it.
+    assert merged["provenance"]["split_seed_exclusions"] == {"component-vocab": [149]}
     assert (cfg.output_dir / "merged.json").exists()
     assert cfg.canonical_output_path.exists()
+
+
+def _write_all_artifacts(cfg: LearnedBatchConfig) -> Path:
+    result_dir = cfg.output_dir / "results"
+    result_dir.mkdir(parents=True)
+    for job in generate_jobs(cfg):
+        (result_dir / f"{job.job_id}.json").write_text(
+            json.dumps(one_job_payload(cfg, job.split, job.model, job.split_seed)),
+            encoding="utf-8",
+        )
+    return result_dir
+
+
+def test_merge_rejects_duplicate_realized_splits_across_seeds(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("catboost_regressor",),
+        split_seeds=(101, 103),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    result_dir = _write_all_artifacts(cfg)
+    victim = result_dir / "build__catboost_regressor__s103.json"
+    payload = json.loads(victim.read_text(encoding="utf-8"))
+    payload["results"][0]["outer_split_lineage"]["realized_split_sha256"] = hashlib.sha256(
+        b"build:101"
+    ).hexdigest()
+    victim.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="distinct across seeds"):
+        merge_job_artifacts(cfg)
+
+
+def test_merge_rejects_digest_mismatch_within_cell(tmp_path):
+    cfg = replace(
+        make_config(tmp_path),
+        splits=("build",),
+        models=("random_forest_tuned", "catboost_regressor"),
+        split_seeds=(101,),
+        target_workers=2,
+        min_workers_to_start=2,
+        publish_canonical=False,
+    )
+    result_dir = _write_all_artifacts(cfg)
+    victim = result_dir / "build__catboost_regressor__s101.json"
+    payload = json.loads(victim.read_text(encoding="utf-8"))
+    payload["results"][0]["outer_split_lineage"]["realized_split_sha256"] = "f" * 64
+    victim.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="digest mismatch within cell"):
+        merge_job_artifacts(cfg)
+
+
+def test_validate_job_payload_requires_realized_split_digest(tmp_path):
+    cfg = make_config(tmp_path)
+    job = generate_jobs(cfg)[0]
+    payload = one_job_payload(cfg, job.split, job.model, job.split_seed)
+    del payload["results"][0]["outer_split_lineage"]["realized_split_sha256"]
+
+    with pytest.raises(ValueError, match="contract"):
+        validate_job_payload(cfg, job, payload)
 
 
 def test_merge_refuses_partial_batch_without_canonical_overwrite(tmp_path):

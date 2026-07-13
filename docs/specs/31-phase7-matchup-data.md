@@ -390,12 +390,15 @@ confirmatory seed live beside `BURNED_SPLIT_SEEDS` in
 113, 127, 131, 137, 139, 149)`, `RESERVED_CONFIRMATORY_SEED = 151`); batch
 validation references them. `phase7_matchup_data.py` is likewise the single
 owner of the shared experiment-contract constants —
-`EXPERIMENT_SCHEMA_VERSION` (2), `DEFAULT_PROMOTION_METRIC`,
+`EXPERIMENT_SCHEMA_VERSION` (3), `DEFAULT_PROMOTION_METRIC`,
 `DEFAULT_FINAL_REFIT_POLICY`, `DEFAULT_DEPENDENCY_EXTRA`,
 `DEFAULT_INNER_CV_FOLDS`, `DEFAULT_COMPONENT_VOCAB_MAX_OVERSHOOT`,
-`SEEDLESS_SPLITS`, and `INSUFFICIENCY_STATUSES`
+`SEEDLESS_SPLITS`, `INSUFFICIENCY_STATUSES`
 (`degenerate_component_vocab_split`, `empty_outer_split`,
-`insufficient_inner_groups`) — so the experiment script and the batch
+`insufficient_inner_groups`), `SPLIT_SEED_EXCLUSIONS`, and the
+preflight-level statuses `DUPLICATE_SPLIT_STATUS`
+(`duplicate_realized_split`) and `STALE_EXCLUSION_STATUS`
+(`stale_split_seed_exclusion`) — so the experiment script and the batch
 validator cannot drift. The reserved seed must not
 appear in any batch seed list; it is spent only on a promotion-grade
 confirmatory claim with a predeclared model family and endpoint. It was
@@ -406,6 +409,56 @@ stays excluded from batch seed lists, and any future confirmatory claim
 needs a fresh reserved seed appended here first. The learned script's
 `--model` default is `catboost_regressor` per that ratification; the claim
 boundary is build-like splits only.
+
+#### Realized-split uniqueness
+
+A rotated-seed evidence panel must aggregate over *distinct* realized
+splits: two bank seeds can shuffle into the identical partition (the
+component vocabulary is coarse, so many draws stop after one high-coverage
+item; any grouped split with few groups is exposed in principle), which
+double-weights one draw and understates seed spread
+([evidence](../reports/2026-07-12-phase7-attempt3-surrogate-results.md)
+§2.4: bank seeds 107 and 149 realized byte-identical component-vocab
+splits on the wave-1 DB).
+
+`split_partition_sha256(split: SplitIds) -> str` (owned by
+`phase7_matchup_data.py`) is the canonical realized-partition digest: each
+row is serialized as compact (`separators=(",", ":")`) sorted-key JSON of
+`dataclasses.asdict(row)`; each partition's row-JSON strings are sorted
+lexicographically; the digest is the full 64-hex SHA-256 of the compact
+JSON of `{"train": [...], "test": [...]}`. The digest is row-order
+invariant and distinct partitions produce distinct digests. It covers full
+row content (including `source_path` and `target`), so it identifies a
+partition of a *specific DB materialization* and must not be compared
+across DB regens; within one batch the merge's common-provenance key pins
+the source DB.
+
+`SPLIT_SEED_EXCLUSIONS: dict[str, frozenset[int]]` (currently
+`{"component-vocab": {149}}`, provenance above) records bank seeds
+excluded per split family because their realized partition duplicates an
+earlier bank seed's on the frozen source DB. Exclusion is the designed
+resolution — not substituting a fresh seed, which would be an adaptive
+choice made after observing the collision — and enforcement is two-layer,
+mirroring the burned-seed pattern:
+
+- `generate_jobs` filters excluded seeds per family (matrix effect: see
+  §"Learned AWS Batch Artifacts"); batch-config validation rejects, with
+  an error naming the exclusion and its provenance, any configured split
+  whose effective seed list is empty after exclusions.
+- `reject_excluded_split_seed(split, seed)` (beside
+  `reject_burned_split_seed`) raises for excluded pairs and is called from
+  the learned experiment script's claim validation, so a standalone run
+  cannot stamp a retired `(split, seed)` cell with the canonical bank
+  label. The rejection deliberately does **not** live inside split
+  construction: the launch preflight's stale-exclusion probe must still be
+  able to construct excluded cells, and the baseline script's diagnostic
+  path stamps no bank label.
+
+When a future source DB collides another `(family, seed)` pair, the launch
+preflight fails with `duplicate_realized_split` (see §"Learned AWS Batch
+Artifacts") and the resolution is an explicit amendment to
+`SPLIT_SEED_EXCLUSIONS` plus this spec before any launch — never a silent
+dedupe at aggregation time.
 
 The supported split levels and their claim boundaries are:
 
@@ -488,7 +541,14 @@ train/validation pairs:
 - `component-vocab` is not a row partition, so inner validation uses
   `inner_cv_folds` independent vocabulary-holdout draws within outer-train,
   draw `i` seeded `hpo_seed + i`, with the outer `holdout_fraction` and
-  overshoot bound.
+  overshoot bound. The draws must be pairwise-distinct realized partitions:
+  a duplicated draw means fewer distinct folds than declared, so the caller
+  treats it exactly like a degenerate draw — progress output names the
+  duplicate-fold cause (distinct from exhaustion/overshoot), and the cell
+  emits `insufficient_inner_groups`. That status is deliberately
+  overloaded (too-few-groups and duplicate-draw both mean the declared
+  fold count is unachievable); the progress message is the
+  disambiguation.
 - `forward-time` uses rolling-origin semantics: `inner_cv_folds` ordered
   prefix/suffix origins within the outer-training prefix, declaring the
   ordering key.
@@ -718,7 +778,7 @@ Parallel execution policy:
 The learned-baseline script exposes:
 
 ```python
-EXPERIMENT_SCHEMA_VERSION: int  # 2
+EXPERIMENT_SCHEMA_VERSION: int  # 3
 
 @dataclass(frozen=True)
 class LearnedExperimentConfig:
@@ -823,8 +883,9 @@ Each learned model/split run uses nested validation:
    panel stats) alongside pooled metrics.
 
 The canonical job matrix reports fixed model families across fixed splits
-and rotated seeds (21 (split, model) cells; 183 jobs); it is a comparison
-matrix, not an automatically nested model-family selector.
+and rotated seeds (21 (split, model) cells; 180 jobs after the
+component-vocab seed exclusion — see §"Learned AWS Batch Artifacts"); it
+is a comparison matrix, not an automatically nested model-family selector.
 Any claim that names a single "best" learned model must either predeclare the
 model family and primary endpoint before the run, or implement model-family
 choice inside the inner validation procedure and evaluate that full selection
@@ -886,7 +947,7 @@ that flag is set, the JSON output records the skipped model and reason.
 
 The learned experiment JSON output includes:
 
-- `experiment_schema_version` (2)
+- `experiment_schema_version` (3)
 - `feature_schema_version`
 - `feature_profile`
 - source DB path and game directory
@@ -911,12 +972,20 @@ The learned experiment JSON output includes:
 
 `outer_split_lineage` is the C4 reuse ledger, parallel to
 `honest_eval_usage`: `{split_seed, seed_bank_label,
-confirmatory_reserved_seed, reused_partition}`. `seed_bank_label` is the
-bank label for bank seeds, `reserved-confirmatory` for the reserved
-confirmatory seed, and `ad-hoc` otherwise. `reused_partition` is `true`
-for `forward-time` (its deterministic partition predates the seed bank);
-seed history across waves is tracked by `seed_bank_label` plus the
-burned-seed registry, not per-seed ledgers. The promotion
+confirmatory_reserved_seed, reused_partition, realized_split_sha256}`.
+`seed_bank_label` is the bank label for bank seeds,
+`reserved-confirmatory` for the reserved confirmatory seed, and `ad-hoc`
+otherwise. `reused_partition` is `true` for `forward-time` (its
+deterministic partition predates the seed bank); seed history across
+waves is tracked by `seed_bank_label` plus the burned-seed registry, not
+per-seed ledgers. `realized_split_sha256` is the
+`split_partition_sha256` digest of the realized outer partition (see
+§"Seed policy" → "Realized-split uniqueness"), stamped whenever the outer
+split was constructed: completed results and `insufficient_inner_groups`
+artifacts (whose outer partition exists — useful for diagnosing colliding
+outer draws even in cells that failed inner validation);
+`degenerate_component_vocab_split`, `empty_outer_split`, and
+missing-optional-model artifacts stamp `null`. The promotion
 metric is `mean_per_opponent_spearman` on the outer test panel; the
 honest-eval diagnostic's primary readout is build-aggregate Spearman with
 CI. Any claim naming a single best model family must be predeclared and, for
@@ -962,7 +1031,9 @@ and per-result where the object is result-specific:
 - `inner_cv`: `fold_count`, per-fold train/validation sizes, and fold
   construction (`grouped_kfold` | `vocabulary_draws` | `rolling_origin`).
 - `outer_split_lineage`: `split_seed`, `seed_bank_label`,
-  `confirmatory_reserved_seed`, `reused_partition`.
+  `confirmatory_reserved_seed`, `reused_partition`,
+  `realized_split_sha256` (64-hex, required on completed results; `null`
+  only where no outer partition exists).
 
 The standalone learned script defaults `honest_eval_usage` to
 `diagnostic_only`. Current-ledger batch configs that informed roadmap decisions
@@ -993,6 +1064,23 @@ must derive each probe config by parsing the rendered job command through
 the experiment script's own parser and config builder — not by mirroring a
 hand-written field list that can drift from what the workers run.
 
+The same preflight enforces realized-split uniqueness (§"Seed policy" →
+"Realized-split uniqueness"): among feasible seeded cells it digests every
+realized outer partition with `split_partition_sha256` and, per split
+family, reports any seed whose partition duplicates an earlier
+(config-order) seed's with status `duplicate_realized_split` and a
+`detail` field naming the partner seed; the launch CLI renders `detail` in
+the refusal message. It also self-checks the exclusion table: for each
+excluded `(family, seed)` pair applicable to the configured splits it
+constructs the excluded cell and verifies the partition duplicates a
+retained seed's — otherwise it reports `stale_split_seed_exclusion` and
+the launch refuses, so an exclusion that stopped corresponding to a real
+collision (e.g. after a DB regen) cannot silently drop a seed's evidence.
+`SEEDLESS_SPLITS` are exempt from both checks (one instance by design).
+The preflight statuses are not worker artifact statuses and are not
+members of `INSUFFICIENCY_STATUSES`: workers cannot observe cross-seed
+duplicates.
+
 The canonical full-run batch job matrix is exactly:
 
 - splits: `build`, `opponent`, `opponent-hull`, `opponent-family`,
@@ -1001,9 +1089,12 @@ The canonical full-run batch job matrix is exactly:
   `sparse_pairwise_ridge`;
 - split seeds: `CANONICAL_SPLIT_SEED_BANK` (10 rotated seeds) for every
   split except `forward-time`, which is deterministic and runs one instance
-  per model.
+  per model, minus the per-family `SPLIT_SEED_EXCLUSIONS` (§"Seed policy"
+  → "Realized-split uniqueness"; currently seed 149 for
+  `component-vocab`), which `generate_jobs` filters after the configured
+  seed list is validated.
 
-That produces 6 × 3 × 10 + 1 × 3 = 183 jobs. Seeded job IDs are
+That produces 5 × 3 × 10 + 3 × 9 + 1 × 3 = 180 jobs. Seeded job IDs are
 `{split}__{model}__s{seed}`; forward-time job IDs are `{split}__{model}`.
 
 Jobs are dispatched longest-expected-first (LPT scheduling):
@@ -1035,7 +1126,13 @@ flags.
 Batch configs define `split_seeds` explicitly. Config validation rejects
 seed lists that are empty, intersect `BURNED_SPLIT_SEEDS`, or contain
 `RESERVED_CONFIRMATORY_SEED`. When `publish_canonical: true`, `split_seeds`
-must equal the canonical bank.
+must equal the canonical bank (exclusions are applied downstream by
+`generate_jobs`, so the configured list stays the full bank). Config
+validation also rejects, with an error naming the exclusion and its
+provenance, any configured split whose effective seed list is empty after
+`SPLIT_SEED_EXCLUSIONS` — a subset/smoke config listing only excluded
+seeds must fail with the real reason, not a downstream worker-count
+error.
 
 Batch configs may define explicit `splits`, `models`, and `split_seeds`
 subsets for smoke or debug runs. Workers drain a lease queue, so
@@ -1093,7 +1190,7 @@ through `local-smoke`, which bypasses the control plane.
 
 The batch merge step must validate every per-job artifact before publishing:
 
-- all expected job IDs (the configured splits × models × seeds matrix) are
+- all expected job IDs (the exclusion-filtered `generate_jobs` matrix) are
   present exactly once and every artifact's stamped `batch_job.job_id`
   matches the expected file/job identity;
 - no job is failed, missing, duplicate, stale, or partial; structured
@@ -1103,7 +1200,7 @@ The batch merge step must validate every per-job artifact before publishing:
   terminates its job without burning lease retries, but any insufficiency
   artifact in the batch makes the merge refuse with an error naming the
   affected jobs (no `merged.json`, no publication);
-- every artifact has the same `experiment_schema_version` (2),
+- every artifact has the same `experiment_schema_version` (3),
   `feature_schema_version`, `feature_profile`, source DB path, game dir,
   HPO seed, train/holdout fractions, top-k values, dependency extra, source
   bundle SHA256, and code provenance — the split seed is per-job identity,
@@ -1112,8 +1209,25 @@ The batch merge step must validate every per-job artifact before publishing:
 - every result has a present and passing leakage checklist;
 - every result's `split`, `model`, and `split_seed` match its job ID;
 - `comparator_inline`, `rank_metrics`, `skill_scores`,
-  `panel_target_stats`, `inner_cv`, and `outer_split_lineage` are present
-  for every completed result.
+  `panel_target_stats`, `inner_cv`, and `outer_split_lineage` (including a
+  64-hex `realized_split_sha256`) are present for every completed result;
+- realized-split coherence and uniqueness hold across accepted results:
+  artifacts sharing `(split, split_seed)` (different models) must carry
+  **equal** `realized_split_sha256` digests (cross-worker
+  split-construction determinism), and artifacts sharing a split family
+  but differing in `split_seed` must carry **distinct** digests. This is a
+  within-batch defense in depth behind the launch preflight (and against
+  hand-assembled `results/` directories); it does not cover manual
+  standalone runs published directly in reports — the stamp makes
+  report-time cross-checks possible, and honest-evaluation report
+  discipline owns those.
+
+The merged artifact stays self-describing about the seed panel: merged
+provenance stamps `split_seed_exclusions` (the applied
+`SPLIT_SEED_EXCLUSIONS` entries restricted to the configured splits), and
+the merged `split_seeds` field is the *configured* seed list — each
+family's effective panel is that list minus the stamped exclusions, and
+`seed_aggregates.n_seeds` reflects the effective count.
 
 Merged output carries a top-level `seed_aggregates` object keyed
 `"split:model"`, one block per group: mean, SD, min/max, and `n_seeds` over the
@@ -1125,8 +1239,9 @@ over overlapping resplits of one dataset — not a calibrated standard error
 
 Valid merge always writes a batch-internal `merged.json`. It atomically
 promotes the canonical full-run artifact to the config's
-`canonical_output_path` — a dated, per-wave path (the schema-v2 wave uses
-`data/phase7/learned_surrogate_full_v2_2026-07.json`) — only when
+`canonical_output_path` — a dated, per-wave path (the schema-v2 wave used
+`data/phase7/learned_surrogate_full_v2_2026-07.json`; the next canonical
+wave, on schema v3, needs a fresh dated path) — only when
 `publish_canonical: true` and the validated matrix is the full canonical
 matrix. Publishing refuses to overwrite an existing canonical file whose
 `batch_name` differs: prior waves' canonical artifacts (including the
