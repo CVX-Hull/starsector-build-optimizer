@@ -1,5 +1,5 @@
-name: phase7-learned-ablation-202607
-project_tag: starsector-phase7-learned-ablation-202607
+name: phase7-learned-ablation-b2-202607
+project_tag: starsector-phase7-learned-ablation-b2-202607
 fleet_name: learned-surrogate
 regions:
   - us-east-1
@@ -15,16 +15,13 @@ instance_types:
   - m7a.4xlarge
 ssh_key_name: starsector-probe
 spot_allocation_strategy: price-capacity-optimized
-# 480 jobs (4 profiles x 2 models x 60 cells); walltime, not cost, is the
-# binding constraint. Attempt-3 measured rates (tail-walltime report): RF
-# 2.36 h/job + CatBoost 0.80 h/job at full width -> ~190 wh per profile;
-# conservative width-scaled estimate ~512 wh (~$140 at $0.274/wh), worst
-# case ~759 wh (~$208). 64 x 12 h = 768 wh capacity covers the worst case;
-# scale-down-on-drain means lifetime is a deadline, not a cost driver.
-target_workers: 64
-min_workers_to_start: 64
+# Batch 2 of 2 (see batch 1 header). 240 jobs = 2 profiles x 2 models
+# x 60 cells; the narrow profiles. Conservative ~190 wh (~4.8 h at 40
+# workers), worst case ~380 wh (~9.5 h); 40 x 12 h = 480 wh capacity.
+target_workers: 40
+min_workers_to_start: 40
 root_volume_size_gb: 128
-budget_usd: 300.0
+budget_usd: 140.0
 max_lifetime_hours: 12.0
 max_job_attempts: 6
 lease_renewal_interval_seconds: 60.0
@@ -38,10 +35,10 @@ ledger_warn_thresholds:
 tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
 control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
 control_plane_port: 9131
-output_dir: data/phase7/learned_surrogate_ablation_2026-07
+output_dir: data/phase7/learned_surrogate_ablation_2026-07-b2
 # Ablation matrices are non-canonical by definition; the path below is
 # never written while publish_canonical stays false.
-canonical_output_path: data/phase7/learned_surrogate_ablation_2026-07/never-published.json
+canonical_output_path: data/phase7/learned_surrogate_ablation_2026-07-b2/never-published.json
 publish_canonical: false
 execution_enabled: false
 source_db_path: data/phase7/wave1_matchups.sqlite
@@ -84,7 +81,5 @@ deployment_artifact: none
 # digest-linked baseline (see the ablation-wave plan §D).
 feature_profiles:
   - aggregate
-  - geometry
   - opponent-parity
-  - sparse-component
 dependency_extra: surrogate

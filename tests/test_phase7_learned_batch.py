@@ -2887,20 +2887,30 @@ class TestFeatureProfileAxis:
         with pytest.raises(ValueError, match="bootstrap_resample"):
             load_batch_config(path)
 
-    def test_ablation_example_config_loads_and_validates(self, monkeypatch):
+    def test_ablation_example_configs_load_and_validate(self, monkeypatch):
         monkeypatch.setenv("TAILSCALE_AUTHKEY", "tskey-auth-test")
         monkeypatch.setenv("STARSECTOR_WORKSTATION_TAILNET_IP", "100.64.0.9")
 
-        cfg = load_batch_config(Path("examples/phase7-learned-batch-ablation.yaml"))
+        # Two sequential 40-worker batches (2026-07-13 decision: the wave
+        # fits the 640-vCPU us-east-1 spot quota as 2x40 workers, not 1x64).
+        b1 = load_batch_config(Path("examples/phase7-learned-batch-ablation-b1.yaml"))
+        b2 = load_batch_config(Path("examples/phase7-learned-batch-ablation-b2.yaml"))
 
-        assert cfg.feature_profiles == (
-            "aggregate",
-            "geometry",
-            "opponent-parity",
+        assert b1.feature_profiles == ("sparse-component", "geometry")
+        assert b2.feature_profiles == ("aggregate", "opponent-parity")
+        assert set(b1.feature_profiles) | set(b2.feature_profiles) == {
             "sparse-component",
-        )
-        assert cfg.publish_canonical is False
-        assert len(generate_jobs(cfg)) == 480
+            "geometry",
+            "aggregate",
+            "opponent-parity",
+        }
+        for cfg in (b1, b2):
+            assert cfg.publish_canonical is False
+            assert cfg.target_workers == 40
+            assert len(generate_jobs(cfg)) == 240
+        # The two batches must not collide on disk or in AWS naming.
+        assert b1.output_dir != b2.output_dir
+        assert b1.name != b2.name
 
     def test_dispatch_profile_rank_is_third_key(self, tmp_path):
         cfg = replace(

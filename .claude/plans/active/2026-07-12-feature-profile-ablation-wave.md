@@ -268,13 +268,19 @@ profile.
   drain makes lifetime a deadline, not a cost driver), `budget_usd: 300`
   hard cap.
 - **Quota finding (2026-07-13)**: L-34B43A08 (Standard-family spot,
-  us-east-1) is 640 vCPU — 64 workers × 16 = 1024 does NOT fit. Decision
-  presented with the spend ask: (a) user-approved quota-increase request
-  to ≥ 1024 then 64×12 single batch, or (b) 40 workers (640 vCPU) with the
-  wave split into two sequential 2-profile batches
-  (sparse-component+geometry ≈ 323 wh ≈ 8.1 h; aggregate+opponent-parity
-  ≈ 190 wh ≈ 4.8 h at 40 workers). Attempt-3's 36 workers fit under 640,
-  which is why this never surfaced before.
+  us-east-1) is 640 vCPU — 64 workers × 16 = 1024 does NOT fit
+  (attempt-3's 36 workers fit under 640, which is why this never surfaced
+  before). **User decision 2026-07-13: two sequential 40-worker batches**
+  — `examples/phase7-learned-batch-ablation-b1.yaml`
+  (sparse-component + geometry, 240 jobs, ~323 wh ≈ 8.1 h, budget $160)
+  then `-b2.yaml` (aggregate + opponent-parity, 240 jobs, ~190 wh ≈ 4.8 h,
+  budget $140); 40 × 12 h = 480 wh capacity per batch covers each batch's
+  worst case (~380 wh). Both configs preflight-passed against the fresh
+  AMI. **Spend approval: held ("Not yet", 2026-07-13)** — launch waits for
+  explicit user go-ahead; everything else is staged. Pre-launch gates
+  completed: AMI re-baked (ami-0dfbd09e1d9420a3a / us-east-2 copy),
+  superseded AMIs deregistered (user-approved), stale-resource sweep
+  clean, post-impl audit passed, split-feasibility preflight passed.
 - Launch gates (all mandatory, in order): owed **AMI re-bake**; post-bake
   `audit_amis.sh` + `cleanup_amis.sh`; post-impl audit passed; stale-AWS
   -resource sweep; **spot-quota check** (L-34B43A08 Standard-family vCPU ≥

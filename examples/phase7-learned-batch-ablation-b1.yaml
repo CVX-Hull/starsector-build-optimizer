@@ -1,0 +1,87 @@
+name: phase7-learned-ablation-b1-202607
+project_tag: starsector-phase7-learned-ablation-b1-202607
+fleet_name: learned-surrogate
+regions:
+  - us-east-1
+# Re-bake before launch and update this AMI ID (pre-launch gate).
+ami_ids_by_region:
+  us-east-1: ami-0dfbd09e1d9420a3a
+instance_types:
+  - c7i.4xlarge
+  - c7a.4xlarge
+  - c6i.4xlarge
+  - c6a.4xlarge
+  - m7i.4xlarge
+  - m7a.4xlarge
+ssh_key_name: starsector-probe
+spot_allocation_strategy: price-capacity-optimized
+# Batch 1 of 2 (user decision 2026-07-13: two sequential 40-worker
+# batches fit the 640-vCPU us-east-1 spot quota; 64 workers would need
+# 1024). 240 jobs = 2 profiles x 2 models x 60 cells; the wider
+# profiles run first. Conservative ~323 wh (~8.1 h at 40 workers),
+# worst case ~380 wh (~9.5 h); 40 x 12 h = 480 wh capacity.
+target_workers: 40
+min_workers_to_start: 40
+root_volume_size_gb: 128
+budget_usd: 160.0
+max_lifetime_hours: 12.0
+max_job_attempts: 6
+lease_renewal_interval_seconds: 60.0
+lease_grace_seconds: 300.0
+pending_instance_grace_seconds: 300.0
+ledger_heartbeat_interval_seconds: 60.0
+ledger_warn_thresholds:
+  - 0.5
+  - 0.8
+  - 0.95
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+control_plane_host: ${STARSECTOR_WORKSTATION_TAILNET_IP}
+control_plane_port: 9131
+output_dir: data/phase7/learned_surrogate_ablation_2026-07-b1
+# Ablation matrices are non-canonical by definition; the path below is
+# never written while publish_canonical stays false.
+canonical_output_path: data/phase7/learned_surrogate_ablation_2026-07-b1/never-published.json
+publish_canonical: false
+execution_enabled: false
+source_db_path: data/phase7/wave1_matchups.sqlite
+game_dir: game/starsector
+hpo_trials: 24
+hpo_jobs: 4
+model_thread_count: 4
+top_k:
+  - 1
+  - 3
+  - 5
+# CANONICAL_SPLIT_SEED_BANK (spec 31): rotated seeds; 17 is burned (C4) and
+# 151 is the reserved confirmatory seed — neither may appear here.
+split_seeds:
+  - 101
+  - 103
+  - 107
+  - 109
+  - 113
+  - 127
+  - 131
+  - 137
+  - 139
+  - 149
+hpo_seed: 23
+inner_cv_folds: 3
+bootstrap_resamples: 500
+component_vocab_max_overshoot: 0.35
+holdout_fraction: 0.2
+train_fraction: 0.8
+honest_eval_usage: exploratory_selection
+primary_top_k: 1
+promotion_metric: mean_per_opponent_spearman
+promotion_threshold: 0.0
+claim_label: exploratory
+final_refit_policy: fit_outer_train_only_no_deployment_artifact
+candidate_universe: source_db_builds
+deployment_artifact: none
+# The `all` arm is NOT re-run: the attempt-3 canonical artifact is the
+# digest-linked baseline (see the ablation-wave plan §D).
+feature_profiles:
+  - sparse-component
+  - geometry
+dependency_extra: surrogate
