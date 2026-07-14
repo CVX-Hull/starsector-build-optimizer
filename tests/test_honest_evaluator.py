@@ -614,6 +614,49 @@ class TestEvaluateBuilds:
         assert eb.oracle_se == pytest.approx(0.0, abs=1e-9)
         assert eb.n_matchups_succeeded == 6  # 3 opps × 2 reps
 
+    def test_progress_is_seeded_and_drains_to_zero(
+        self,
+        hammerhead_hull,
+        game_data,
+        manifest,
+    ):
+        """The optional progress sink is seeded to the job count and reaches 0
+        when the run completes — the honest-eval drain's remaining-work signal
+        (spec 30 §"Fleet drain")."""
+        from starsector_optimizer.calibration import generate_random_build
+        from starsector_optimizer.repair import repair_build
+        from starsector_optimizer.models import REGIME_PRESETS
+        from starsector_optimizer.honest_evaluator import MatchupProgress
+        import numpy as np
+
+        rng = np.random.default_rng(3)
+        b = repair_build(
+            generate_random_build(
+                hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+            ),
+            hammerhead_hull,
+            game_data,
+            manifest,
+        )
+
+        class _RecordingProgress(MatchupProgress):
+            def __init__(self):
+                super().__init__()
+                self.max_seen = 0
+
+            def set_remaining(self, n):
+                super().set_remaining(n)
+                self.max_seen = max(self.max_seen, n)
+
+        prog = _RecordingProgress()
+        pool = _MockPool()
+        eval_pool = ("opp_a", "opp_b")
+        cfg = HonestEvaluationConfig(replicates_per_matchup=4, max_retries_per_matchup=0)
+        evaluate_builds([_bp(b)], eval_pool, pool, cfg, hammerhead_hull, progress=prog)
+        # 1 build × 2 opponents × 4 replicates = 8 matchups seeded, drained to 0.
+        assert prog.max_seen == 8
+        assert prog.remaining() == 0
+
     def test_retries_failed_matchups_then_succeeds(
         self,
         hammerhead_hull,
@@ -1482,6 +1525,90 @@ class TestMainCLIWiring:
             > captured["campaign"].result_timeout_seconds
         )
 
+    def _run_main_with_drain_spy(
+        self, monkeypatch, tmp_path, study_jsonl_with_n_completed, game_dir, manifest, extra_argv
+    ):
+        """Shared harness: patch prepare_cloud_pool + evaluate_builds + both
+        background-thread factories, run main(), return whether the drain
+        factory was constructed."""
+        import contextlib
+        from contextlib import contextmanager
+
+        from starsector_optimizer import honest_evaluator
+
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(log_root, "ut-honest-eval-source", study_jsonl_with_n_completed)
+        monkeypatch.chdir(tmp_path)
+        self._patch_manifest_load(monkeypatch, manifest)
+        self._patch_preflight(monkeypatch)
+        (tmp_path / "examples").mkdir()
+        yaml_src = _write_smoke_campaign_yaml(tmp_path)
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
+
+        @contextmanager
+        def fake_prepare(**kwargs):
+            yield MagicMock(num_workers=2)
+
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator.prepare_cloud_pool", fake_prepare
+        )
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator.evaluate_builds", lambda *a, **kw: ()
+        )
+        # Neutralize the cost thread (avoids a real Redis client).
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator._make_cost_heartbeat_thread",
+            lambda *a, **kw: contextlib.nullcontext(),
+        )
+        drain_calls: list[int] = []
+
+        def _spy_drain(*a, **kw):
+            drain_calls.append(1)
+            return contextlib.nullcontext()
+
+        monkeypatch.setattr(
+            "starsector_optimizer.honest_evaluator._make_worker_drain_thread", _spy_drain
+        )
+
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(tmp_path / "out"),
+                *extra_argv,
+            ]
+        )
+        assert rc == 0
+        return len(drain_calls)
+
+    def test_drain_thread_entered_by_default(
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed, game_dir, manifest
+    ):
+        n = self._run_main_with_drain_spy(
+            monkeypatch, tmp_path, study_jsonl_with_n_completed, game_dir, manifest, extra_argv=[]
+        )
+        assert n == 1
+
+    def test_no_drain_flag_skips_drain_thread(
+        self, monkeypatch, tmp_path, smoke_env, study_jsonl_with_n_completed, game_dir, manifest
+    ):
+        n = self._run_main_with_drain_spy(
+            monkeypatch,
+            tmp_path,
+            study_jsonl_with_n_completed,
+            game_dir,
+            manifest,
+            extra_argv=["--no-drain"],
+        )
+        assert n == 0
+
     def test_full_run_flushes_redis_before_prepare_cloud_pool(
         self,
         monkeypatch,
@@ -2299,18 +2426,43 @@ class TestHonestEvalCostLedger:
         assert captured["decode_responses"] is True
         assert not cm.thread.is_alive()  # not started
 
+    def test_make_worker_drain_thread_uses_decoded_client(self, tmp_path, monkeypatch):
+        """The drain ticker's Redis client MUST decode responses — the
+        heartbeat active_matchups reads assume str fields (spec 22)."""
+        from starsector_optimizer import honest_evaluator as he
+        from starsector_optimizer.campaign import load_campaign_config
+        from starsector_optimizer.honest_evaluator import MatchupProgress
+
+        captured: dict = {}
+
+        def _fake_redis(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr("redis.Redis", _fake_redis)
+        campaign = load_campaign_config(_write_smoke_campaign_yaml(tmp_path))
+        cm = he._make_worker_drain_thread(
+            campaign,
+            "starsector-honest-eval-x",
+            MagicMock(),
+            MatchupProgress(),
+        )
+        assert captured["decode_responses"] is True
+        assert not cm.thread.is_alive()  # not started
+
     def test_cost_thread_ticks_and_joins_and_closes(self):
         import time
 
-        from starsector_optimizer.honest_evaluator import _CostHeartbeatThread
+        from starsector_optimizer.honest_evaluator import _PeriodicBackgroundThread
 
         ticks: list[int] = []
         closed: list[int] = []
 
-        cm = _CostHeartbeatThread(
+        cm = _PeriodicBackgroundThread(
             lambda: ticks.append(1),
             interval_seconds=0.01,
             join_timeout_seconds=5.0,
+            name="test-tick",
             on_close=lambda: closed.append(1),
         )
         with cm:
@@ -2323,9 +2475,11 @@ class TestHonestEvalCostLedger:
         assert closed == [1]
 
     def test_cost_thread_joined_on_exception(self):
-        from starsector_optimizer.honest_evaluator import _CostHeartbeatThread
+        from starsector_optimizer.honest_evaluator import _PeriodicBackgroundThread
 
-        cm = _CostHeartbeatThread(lambda: None, interval_seconds=0.01, join_timeout_seconds=5.0)
+        cm = _PeriodicBackgroundThread(
+            lambda: None, interval_seconds=0.01, join_timeout_seconds=5.0, name="test-tick"
+        )
         with pytest.raises(RuntimeError, match="boom"):
             with cm:
                 raise RuntimeError("boom")
@@ -2336,7 +2490,7 @@ class TestHonestEvalCostLedger:
     def test_cost_thread_swallows_tick_errors(self):
         import time
 
-        from starsector_optimizer.honest_evaluator import _CostHeartbeatThread
+        from starsector_optimizer.honest_evaluator import _PeriodicBackgroundThread
 
         calls: list[int] = []
 
@@ -2344,7 +2498,9 @@ class TestHonestEvalCostLedger:
             calls.append(1)
             raise ValueError("transient redis blip")
 
-        cm = _CostHeartbeatThread(_raising_tick, interval_seconds=0.01, join_timeout_seconds=5.0)
+        cm = _PeriodicBackgroundThread(
+            _raising_tick, interval_seconds=0.01, join_timeout_seconds=5.0, name="test-tick"
+        )
         with cm:
             for _ in range(300):
                 if len(calls) >= 2:
@@ -2362,7 +2518,7 @@ class TestHonestEvalCostLedger:
         from starsector_optimizer.campaign import CostHeartbeatTicker, CostLedger
         from starsector_optimizer.honest_evaluator import (
             _cost_ledger_path,
-            _CostHeartbeatThread,
+            _PeriodicBackgroundThread,
         )
 
         project_tag = "starsector-honest-eval-x"
@@ -2387,7 +2543,9 @@ class TestHonestEvalCostLedger:
             heartbeat_stale_multiplier=3,
             spot_price_cache_ttl_seconds=300.0,
         )
-        cm = _CostHeartbeatThread(ticker.tick, interval_seconds=0.01, join_timeout_seconds=5.0)
+        cm = _PeriodicBackgroundThread(
+            ticker.tick, interval_seconds=0.01, join_timeout_seconds=5.0, name="test-tick"
+        )
         with cm:
             for _ in range(300):
                 if path.exists() and path.read_text().strip():

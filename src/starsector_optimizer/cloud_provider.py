@@ -119,6 +119,17 @@ class CloudProvider(abc.ABC):
         Returns the number of instances terminated."""
 
     @abc.abstractmethod
+    def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:
+        """Terminate an explicit subset of instance IDs in one region.
+
+        The ONLY subset-termination primitive — every other terminate path is
+        tag-scoped whole-fleet/project. Used by the honest-eval
+        `WorkerDrainTicker` (spec 22 §"Worker drain (honest-eval)") to reap
+        provably-idle surplus workers. Empty `instance_ids` → return 0 with no
+        API call. Idempotent: terminating an already-terminating id is an AWS
+        no-op. Returns the number of instance IDs submitted for termination."""
+
+    @abc.abstractmethod
     def list_active(self, project_tag: str) -> list[dict]:
         """RUNNING + PENDING instances tagged `Project=project_tag`. Does NOT
         include launch templates or security groups."""
@@ -476,6 +487,20 @@ class AWSProvider(CloudProvider):
             self._delete_security_groups_by_tags(region, {_PROJECT_KEY: project_tag})
         return total
 
+    def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:
+        """Terminate an explicit subset of instance IDs in one region.
+
+        Empty `instance_ids` short-circuits with no API call (the honest-eval
+        drain calls this only when it has ids, but the guard keeps the
+        primitive safe for any caller). Idempotent at the AWS layer."""
+        ids = list(instance_ids)
+        if not ids:
+            return 0
+        client = self._client(region)
+        client.terminate_instances(InstanceIds=ids)
+        logger.info("terminated %d instances in %s: %s", len(ids), region, ids)
+        return len(ids)
+
     def _terminate_by_tags(self, region: str, tags: dict[str, str]) -> int:
         client = self._client(region)
         filters = [{"Name": f"tag:{k}", "Values": [v]} for k, v in tags.items()]
@@ -671,6 +696,9 @@ class HetznerProvider(CloudProvider):
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
     def terminate_all_tagged(self, project_tag: str) -> int:
+        raise NotImplementedError(_HETZNER_STUB_MESSAGE)
+
+    def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
     def list_active(self, project_tag: str) -> list[dict]:

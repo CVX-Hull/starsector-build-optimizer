@@ -20,6 +20,7 @@ import atexit
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -30,8 +31,8 @@ import time
 from dataclasses import asdict
 from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any
-from collections.abc import Callable
+from typing import Any, Protocol
+from collections.abc import Callable, Sequence
 
 import yaml
 
@@ -207,6 +208,8 @@ def load_campaign_config(path: Path) -> CampaignConfig:
         "spot_price_cache_ttl_seconds",
         "max_requeues",
         "heartbeat_stale_multiplier",
+        # Honest-eval fleet-drain cadence (spec 22 §"Worker drain").
+        "drain_poll_interval_seconds",
     ):
         if opt in raw:
             kwargs[opt] = raw[opt]
@@ -421,6 +424,170 @@ class CostHeartbeatTicker:
             rate = 0.0
         self._spot_price_cache[key] = (rate, now)
         return rate
+
+
+# ---- Worker drain (honest-eval) ----------------------------------------------
+
+
+class RemainingWork(Protocol):
+    """Read/write view of the outstanding-matchup count.
+
+    Decouples the drain ticker (which reads `remaining()`) and `evaluate_builds`
+    (which writes `set_remaining()`) from the concrete `MatchupProgress` in
+    `honest_evaluator` — the reverse import edge would be circular. The
+    honest-eval `MatchupProgress` satisfies this structurally."""
+
+    def set_remaining(self, n: int) -> None: ...
+
+    def remaining(self) -> int: ...
+
+
+def plan_worker_drain(
+    *,
+    live_instance_ids: Sequence[str],
+    idle_instance_ids: Sequence[str],
+    remaining_matchups: int,
+    matchup_slots_per_worker: int,
+) -> list[str]:
+    """Pure keep-floor decision: which idle instance IDs to terminate now.
+
+    `keep = max(1, ceil(remaining / slots))` while `remaining > 0`; terminate at
+    most `surplus = max(0, live − keep)` workers, and only from the *idle* set —
+    never a busy worker, never below `keep`. At `remaining <= 0` return `[]`
+    (teardown owns the final shutdown). See spec 22 §"Worker drain
+    (honest-eval)". No I/O — fully unit-testable.
+    """
+    if remaining_matchups <= 0:
+        return []
+    keep = max(1, math.ceil(remaining_matchups / matchup_slots_per_worker))
+    surplus = max(0, len(live_instance_ids) - keep)
+    if surplus <= 0:
+        return []
+    # Only idle instances that are actually live are terminable.
+    live = set(live_instance_ids)
+    terminable = [i for i in idle_instance_ids if i in live]
+    return terminable[:surplus]
+
+
+class WorkerDrainTicker:
+    """Orchestrator-driven scale-down for the static honest-eval fleet.
+
+    Each `tick()` terminates provably-idle surplus workers as the outstanding
+    matchup count (read Python-side via `RemainingWork`, NOT Redis depth) falls
+    below fleet capacity. Redis-only work runs first; the EC2 API is touched
+    only when there is something to terminate (spec 22 §"Worker drain
+    (honest-eval)").
+
+    The `redis_client` MUST be built with ``decode_responses=True`` — the
+    heartbeat reads below assume ``str`` fields (same trap `CostHeartbeatTicker`
+    documents). `heartbeat_interval_seconds` must be the worker's true write
+    cadence (`worker_agent.WORKER_HEARTBEAT_INTERVAL_SECONDS`), not the
+    ledger-tick interval, so the liveness cutoff is sized correctly.
+    """
+
+    def __init__(
+        self,
+        *,
+        redis_client: Any,
+        provider: CloudProvider,
+        project_tag: str,
+        source_list: str,
+        progress: RemainingWork,
+        matchup_slots_per_worker: int,
+        heartbeat_interval_seconds: float,
+        heartbeat_stale_multiplier: float,
+    ) -> None:
+        self._redis = redis_client
+        self._provider = provider
+        self._project_tag = project_tag
+        self._source_list = source_list
+        self._progress = progress
+        self._matchup_slots_per_worker = matchup_slots_per_worker
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._heartbeat_stale_multiplier = heartbeat_stale_multiplier
+
+    def tick(self, now: float | None = None) -> None:
+        """Terminate idle-surplus workers if any are safely reclaimable.
+
+        Order (Redis-cheap → EC2 only when warranted): remaining>0 gate →
+        source-empty gate → idle-scan (return before `list_active` if none) →
+        `list_active` + `plan_worker_drain` + `terminate_instances` per region.
+        """
+        if self._redis is None:
+            return
+        remaining = self._progress.remaining()
+        if remaining <= 0:
+            return
+        # Defer while any matchup is queued-but-unclaimed: a worker can only
+        # claim from a non-empty source, so an empty source is the regime where
+        # terminating an "idle" worker is safe (spec 22 §"Worker drain" gate).
+        if self._redis.llen(self._source_list) > 0:
+            return
+        if now is None:
+            now = time.time()
+        idle_ids = self._scan_idle_worker_ids(now)
+        if not idle_ids:
+            # Dormant (pre-field AMI) or genuinely no idle workers: make zero
+            # EC2 API calls.
+            return
+        live = self._provider.list_active(self._project_tag)
+        live_ids = [inst["id"] for inst in live]
+        id_to_region = {inst["id"]: inst["region"] for inst in live}
+        to_terminate = plan_worker_drain(
+            live_instance_ids=live_ids,
+            idle_instance_ids=idle_ids,
+            remaining_matchups=remaining,
+            matchup_slots_per_worker=self._matchup_slots_per_worker,
+        )
+        if not to_terminate:
+            return
+        by_region: dict[str, list[str]] = {}
+        for iid in to_terminate:
+            by_region.setdefault(id_to_region[iid], []).append(iid)
+        for region, ids in by_region.items():
+            self._provider.terminate_instances(ids, region=region)
+            logger.info(
+                "worker drain: terminated %d idle workers in %s (remaining=%d)",
+                len(ids),
+                region,
+                remaining,
+            )
+
+    def _scan_idle_worker_ids(self, now: float) -> list[str]:
+        """Instance IDs of live-fresh workers reporting `active_matchups == 0`.
+
+        A heartbeat lacking `active_matchups` (pre-field AMI) is treated as
+        busy and skipped — the drain is a safe no-op until the worker AMI is
+        re-baked. Stale heartbeats (dead/hung workers) are skipped too."""
+        stale_cutoff = self._heartbeat_interval_seconds * self._heartbeat_stale_multiplier
+        pattern = f"worker:{self._project_tag}:*:heartbeat"
+        idle: list[str] = []
+        for key in self._redis.scan_iter(match=pattern):
+            try:
+                hash_data = self._redis.hgetall(key)
+            except Exception as e:
+                logger.warning("worker drain: hgetall %s failed: %s", key, e)
+                continue
+            if not hash_data:
+                continue
+            try:
+                hb_ts = float(hash_data.get("timestamp", 0))
+            except (TypeError, ValueError):
+                continue
+            if now - hb_ts > stale_cutoff:
+                continue
+            raw_active = hash_data.get("active_matchups")
+            if raw_active is None:
+                continue  # pre-field AMI: unknown occupancy → treat as busy
+            try:
+                if int(raw_active) != 0:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            parts = key.split(":") if isinstance(key, str) else []
+            if len(parts) >= 4:
+                idle.append(parts[2])
+        return idle
 
 
 # ---- Reliable-queue janitor --------------------------------------------------

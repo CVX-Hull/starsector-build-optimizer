@@ -339,12 +339,39 @@ def _mod_jar_sha256(game_dir: Path) -> str:
     return sha
 
 
+class _ActiveMatchupCounter:
+    """Thread-safe count of matchups this worker is actively running.
+
+    Shared by the consumer threads (which increment on claim and decrement
+    when the run attempt finishes) and the heartbeat thread (which publishes
+    `value()` as `active_matchups`). It is the honest-eval drain's idle signal:
+    `value() == 0` means every slot is free, so the orchestrator may terminate
+    this worker (spec 22 §"Worker drain (honest-eval)")."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._count = 0
+
+    def increment(self) -> None:
+        with self._lock:
+            self._count += 1
+
+    def decrement(self) -> None:
+        with self._lock:
+            self._count -= 1
+
+    def value(self) -> int:
+        with self._lock:
+            return self._count
+
+
 def heartbeat(
     redis_client: Any,
     project_tag: str,
     worker_id: str,
     *,
     game_dir: Path,
+    active_matchups: int | None = None,
 ) -> None:
     """Write worker liveness + CPU-load + VM-identity telemetry +
     per-instance game_stdout.log tail + mod-jar SHA.
@@ -370,23 +397,32 @@ def heartbeat(
     heterogeneous fleet (some workers on the AMI's baked jar, others on
     a tailnet override) means results from different code, which is
     the exact "stale jar" failure mode `serve_mod_jar.sh` introduced.
+
+    `active_matchups` is the worker's live count of running matchups — the
+    honest-eval drain's idle signal (`== 0` ⇒ fully idle, terminable). It is
+    written only when supplied: a worker on an AMI baked before this field
+    existed (or any caller that does not report occupancy) omits it, and the
+    drain reads the *absence* as busy and never terminates it. Defaulting to
+    `None`-omit rather than `0` keeps the default on the SAFE side of that
+    asymmetry — an explicit `0` is the one value that makes a worker a
+    termination target (spec 22 §"Worker drain (honest-eval)").
     """
     meta = _fetch_vm_metadata()
     load_1, load_5, load_15 = os.getloadavg()
-    redis_client.hset(
-        f"worker:{project_tag}:{worker_id}:heartbeat",
-        mapping={
-            "timestamp": time.time(),
-            "load_avg_1min": load_1,
-            "load_avg_5min": load_5,
-            "load_avg_15min": load_15,
-            "cpu_count": os.cpu_count() or 0,
-            "region": meta.get("region", "unknown"),
-            "instance_type": meta.get("instance_type", "unknown"),
-            "game_log_tail": _read_game_log_tails(),
-            "mod_jar_sha256": _mod_jar_sha256(game_dir),
-        },
-    )
+    mapping: dict[str, Any] = {
+        "timestamp": time.time(),
+        "load_avg_1min": load_1,
+        "load_avg_5min": load_5,
+        "load_avg_15min": load_15,
+        "cpu_count": os.cpu_count() or 0,
+        "region": meta.get("region", "unknown"),
+        "instance_type": meta.get("instance_type", "unknown"),
+        "game_log_tail": _read_game_log_tails(),
+        "mod_jar_sha256": _mod_jar_sha256(game_dir),
+    }
+    if active_matchups is not None:
+        mapping["active_matchups"] = active_matchups
+    redis_client.hset(f"worker:{project_tag}:{worker_id}:heartbeat", mapping=mapping)
 
 
 # ---- Main loop ---------------------------------------------------------------
@@ -435,13 +471,23 @@ def _consumer_loop(
     stop_event: threading.Event,
     auth_failure_event: threading.Event,
     poll_timeout: int,
+    active_counter: _ActiveMatchupCounter | None = None,
 ) -> None:
     """One Redis consumer: BRPOPLPUSH → pool.run_matchup → POST → ack.
 
     N of these run concurrently (one per matchup slot on this VM), sharing
     a single LocalInstancePool. The pool's internal free-instance queue
     serializes each run_matchup call onto a distinct JVM.
+
+    `active_counter` (shared across the worker's consumer threads) tracks how
+    many matchups this worker is running: bumped when a claimed item is about
+    to run, released in a `finally` after the run attempt (success-then-ack or
+    failure-then-leave-for-janitor) — the drain idle signal in the heartbeat.
+    Omitted (`None`) in isolated tests that don't observe occupancy → a
+    private throwaway counter is used.
     """
+    if active_counter is None:
+        active_counter = _ActiveMatchupCounter()
     while not stop_event.is_set() and not auth_failure_event.is_set():
         if should_exit(config, started_at):
             return
@@ -453,6 +499,7 @@ def _consumer_loop(
         except json.JSONDecodeError:
             redis_client.lrem(processing, 1, raw)
             continue
+        active_counter.increment()
         try:
             matchup_id = item["matchup_id"]
             matchup = _load_matchup(item["matchup"])
@@ -475,6 +522,8 @@ def _consumer_loop(
         except Exception as e:
             logger.error("slot %d: matchup failed: %s", slot_idx, e)
             # Leave in processing list; janitor will re-queue after visibility timeout.
+        finally:
+            active_counter.decrement()
 
 
 def _heartbeat_loop(
@@ -484,19 +533,25 @@ def _heartbeat_loop(
     interval_seconds: float,
     stop_event: threading.Event,
     game_dir: Path,
+    active_counter: _ActiveMatchupCounter,
 ) -> None:
-    """Write worker heartbeat (with CPU load) every interval_seconds."""
+    """Write worker heartbeat (with CPU load + active-matchup count) every
+    interval_seconds."""
     while not stop_event.is_set():
         heartbeat(
             redis_client,
             config.project_tag,
             config.worker_id,
             game_dir=game_dir,
+            active_matchups=active_counter.value(),
         )
         stop_event.wait(timeout=interval_seconds)
 
 
-_HEARTBEAT_INTERVAL_SECONDS = 30.0
+# Public: the honest-eval drain ticker sizes its liveness-freshness cutoff
+# against this true write cadence (spec 22 §"Worker drain (honest-eval)"), so
+# it must be one shared source of truth, not duplicated.
+WORKER_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _MAIN_LOOP_TICK_SECONDS = 1.0
 _CONSUMER_JOIN_GRACE_SECONDS = 5.0
 _HEARTBEAT_JOIN_TIMEOUT_SECONDS = 5.0
@@ -530,18 +585,21 @@ def main() -> int:
 
     stop_event = threading.Event()
     auth_failure_event = threading.Event()
+    active_counter = _ActiveMatchupCounter()
 
     with LocalInstancePool(instance_config) as pool:
-        # Heartbeat thread writes CPU load so the orchestrator can verify
-        # matchup_slots_per_worker fits the VM shape.
+        # Heartbeat thread writes CPU load + active-matchup count so the
+        # orchestrator can verify matchup_slots_per_worker fits the VM shape
+        # and the honest-eval drain can spot idle workers.
         hb_thread = threading.Thread(
             target=_heartbeat_loop,
             kwargs={
                 "config": config,
                 "redis_client": redis_client,
-                "interval_seconds": _HEARTBEAT_INTERVAL_SECONDS,
+                "interval_seconds": WORKER_HEARTBEAT_INTERVAL_SECONDS,
                 "stop_event": stop_event,
                 "game_dir": game_dir,
+                "active_counter": active_counter,
             },
             name="worker-heartbeat",
             daemon=True,
@@ -562,6 +620,7 @@ def main() -> int:
                     "stop_event": stop_event,
                     "auth_failure_event": auth_failure_event,
                     "poll_timeout": poll_timeout,
+                    "active_counter": active_counter,
                 },
                 name=f"worker-consumer-{i}",
                 daemon=True,

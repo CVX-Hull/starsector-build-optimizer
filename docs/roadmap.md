@@ -15,7 +15,9 @@ dated evidence for *why*. No internal-sim numbers here; follow the links.
 
 Groomed: 2026-07-14 — items 1–2 delivered (defaults flip; prequential
 replay); replay follow-ups wired into items 3–7 + the Phase-7 gate; item-3
-cost-ledger prerequisite shipped (honest-eval cost measurement).
+cost-ledger + scale-down-on-drain prerequisites shipped (honest-eval cost
+measurement + orchestrator-driven fleet drain, both dormant/measurement-only
+until the next AMI re-bake activates the worker-side signals).
 Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
@@ -55,11 +57,15 @@ Compute runs on AWS learned-batch; costs:
      `honest_evaluator.main`, writing `data/honest_eval/<tag>/cost_ledger.jsonl`
      (spec 30 §"Cost measurement"); closes AWS-cost-analysis Unknown #1
      (realized honest-eval spend now measured, not derived);
-   - port **scale-down-on-drain** to the honest-eval fleet (shipped for
-     the learned batch only; the honest-eval fleet is static with no
-     replacement provisioning, so this needs an orchestrator-driven design,
-     not a copy of the learned-batch worker-self-terminate model — its own
-     plan);
+   - ~~port **scale-down-on-drain** to the honest-eval fleet~~ — **shipped
+     2026-07-14**: orchestrator-driven `WorkerDrainTicker` in
+     `honest_evaluator.main` terminates provably-idle surplus workers (idle
+     signal = `active_matchups == 0` in the heartbeat; keep-floor
+     `max(1, ceil(remaining/slots))` sized from Python-side remaining, not
+     Redis depth) via a new `CloudProvider.terminate_instances` primitive
+     (spec 22 §"Worker drain (honest-eval)", spec 30 §"Fleet drain"). Dormant
+     until the worker AMI is re-baked to emit `active_matchups`; `--no-drain`
+     escape hatch;
    - one **instrumented accounting run** to resolve the matchups-per-trial
      spread — includes the never-landed **wolf** (non-meta hull)
      measurement (absorbs the retired Wave-2 residue). The run's

@@ -80,12 +80,38 @@ class TestCloudProviderABC:
             def terminate_all_tagged(self, project_tag):
                 return 0
 
+            def terminate_instances(self, instance_ids, *, region):
+                return 0
+
             def list_active(self, project_tag):
                 return []
 
         # missing get_spot_price — deliberately abstract: exercises the TypeError path
         with pytest.raises(TypeError):
             cast(Any, Partial)()
+
+    def test_subclass_missing_terminate_instances_fails(self):
+        """terminate_instances is a required abstract method (spec 22 ABC block)."""
+        from starsector_optimizer.cloud_provider import CloudProvider
+
+        class MissingTerminateInstances(CloudProvider):
+            def provision_fleet(self, **kwargs):
+                return []
+
+            def terminate_fleet(self, *, fleet_name, project_tag):
+                return 0
+
+            def terminate_all_tagged(self, project_tag):
+                return 0
+
+            def list_active(self, project_tag):
+                return []
+
+            def get_spot_price(self, region, instance_type):
+                return 0.0
+
+        with pytest.raises(TypeError):
+            cast(Any, MissingTerminateInstances)()
 
     def test_old_create_fleet_method_gone(self):
         """Clean rewrite — create_fleet must not exist on the ABC or AWSProvider."""
@@ -422,6 +448,37 @@ class TestTerminateAllTaggedSweep:
         _provision(provider, fleet_name="F", project_tag="starsector-swidem")
         provider.terminate_all_tagged("starsector-swidem")
         assert provider.terminate_all_tagged("starsector-swidem") == 0
+
+
+class TestTerminateInstancesSubset:
+    """terminate_instances reaps an explicit subset of instance IDs (honest-eval drain)."""
+
+    @pytest.mark.usefixtures("aws_mocked")
+    def test_terminates_only_the_named_ids(self):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        # Two fleets under one project → ≥2 instances so we can prove subset behavior.
+        ids_a = _provision(provider, fleet_name="D1", project_tag="starsector-drain")
+        ids_b = _provision(provider, fleet_name="D2", project_tag="starsector-drain")
+        assert ids_a and ids_b
+        reaped = provider.terminate_instances(list(ids_a), region="us-east-1")
+        assert reaped == len(ids_a)
+        active_ids = {inst["id"] for inst in provider.list_active("starsector-drain")}
+        assert set(ids_a) & active_ids == set()
+        # The unnamed fleet survives — this is a subset terminate, not a sweep.
+        assert set(ids_b) <= active_ids
+
+    @pytest.mark.usefixtures("aws_mocked")
+    def test_empty_ids_is_noop_no_api_call(self):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        ids = _provision(provider, fleet_name="E", project_tag="starsector-drain2")
+        assert provider.terminate_instances([], region="us-east-1") == 0
+        # Nothing terminated.
+        active_ids = {inst["id"] for inst in provider.list_active("starsector-drain2")}
+        assert set(ids) <= active_ids
 
 
 class TestDeletionTagFiltering:
@@ -788,6 +845,12 @@ class TestHetznerProvider:
 
         with pytest.raises(NotImplementedError):
             HetznerProvider().terminate_all_tagged("starsector-anything")
+
+    def test_terminate_instances_raises(self):
+        from starsector_optimizer.cloud_provider import HetznerProvider
+
+        with pytest.raises(NotImplementedError):
+            HetznerProvider().terminate_instances(["i-abc"], region="eu-central")
 
     def test_list_active_raises(self):
         from starsector_optimizer.cloud_provider import HetznerProvider

@@ -1452,6 +1452,206 @@ class TestLedgerTick:
         mgr.monitor_loop([_FakeProc()])  # must not raise
 
 
+class _FakeProgress:
+    """Minimal RemainingWork for drain tests."""
+
+    def __init__(self, remaining):
+        self._n = remaining
+
+    def set_remaining(self, n):
+        self._n = n
+
+    def remaining(self):
+        return self._n
+
+
+class TestPlanWorkerDrain:
+    """Pure keep-floor decision — spec 22 §"Worker drain (honest-eval)"."""
+
+    def _plan(self, **kw):
+        from starsector_optimizer.campaign import plan_worker_drain
+
+        return plan_worker_drain(**kw)
+
+    def test_remaining_zero_returns_empty(self):
+        # remaining==0 → teardown owns the final shutdown, drain does nothing.
+        assert (
+            self._plan(
+                live_instance_ids=["a", "b", "c"],
+                idle_instance_ids=["a", "b", "c"],
+                remaining_matchups=0,
+                matchup_slots_per_worker=2,
+            )
+            == []
+        )
+
+    def test_terminates_only_surplus_idle_workers(self):
+        # remaining=2, slots=2 → keep=1; live=4 → surplus=3; 4 idle → terminate 3.
+        out = self._plan(
+            live_instance_ids=["a", "b", "c", "d"],
+            idle_instance_ids=["a", "b", "c", "d"],
+            remaining_matchups=2,
+            matchup_slots_per_worker=2,
+        )
+        assert len(out) == 3
+        assert set(out) <= {"a", "b", "c", "d"}
+
+    def test_never_terminates_a_busy_worker(self):
+        # Spread-busy worst case: only 'a' idle (b,c,d busy). Even though
+        # surplus is large, only the idle id is terminable.
+        out = self._plan(
+            live_instance_ids=["a", "b", "c", "d"],
+            idle_instance_ids=["a"],
+            remaining_matchups=2,
+            matchup_slots_per_worker=2,
+        )
+        assert out == ["a"]
+
+    def test_caps_at_surplus_when_more_idle_than_surplus(self):
+        # remaining=8, slots=2 → keep=4; live=10 → surplus=6; 9 idle → exactly 6.
+        idle = [f"i-{n}" for n in range(9)]
+        out = self._plan(
+            live_instance_ids=[f"i-{n}" for n in range(10)],
+            idle_instance_ids=idle,
+            remaining_matchups=8,
+            matchup_slots_per_worker=2,
+        )
+        assert len(out) == 6
+
+    def test_keep_floor_never_empties_fleet_while_work_remains(self):
+        # remaining=1, slots=2 → keep=max(1, ceil(0.5))=1; live=1 → surplus=0.
+        out = self._plan(
+            live_instance_ids=["only"],
+            idle_instance_ids=["only"],
+            remaining_matchups=1,
+            matchup_slots_per_worker=2,
+        )
+        assert out == []
+
+    def test_idle_id_not_live_is_ignored(self):
+        # A stale idle id that is no longer in list_active is not terminated.
+        out = self._plan(
+            live_instance_ids=["a", "b"],
+            idle_instance_ids=["a", "ghost"],
+            remaining_matchups=1,
+            matchup_slots_per_worker=1,
+        )
+        assert out == ["a"]  # keep=1, surplus=1, 'ghost' filtered out
+
+
+class TestWorkerDrainTicker:
+    """Orchestrator-driven drain over fake_redis — spec 22 §"Worker drain"."""
+
+    _TAG = "starsector-eval"
+    _SOURCE = "queue:starsector-eval:starsector-eval:source"
+
+    def _seed_hb(self, redis_client, worker_id, *, active_matchups, ts_offset=0.0):
+        mapping = {
+            "timestamp": time.time() - ts_offset,
+            "region": "us-east-1",
+            "instance_type": "c7a.2xlarge",
+        }
+        if active_matchups is not None:
+            mapping["active_matchups"] = active_matchups
+        redis_client.hset(f"worker:{self._TAG}:{worker_id}:heartbeat", mapping=mapping)
+
+    def _ticker(self, fake_redis, provider, progress, slots=2):
+        from starsector_optimizer.campaign import WorkerDrainTicker
+
+        return WorkerDrainTicker(
+            redis_client=fake_redis,
+            provider=provider,
+            project_tag=self._TAG,
+            source_list=self._SOURCE,
+            progress=progress,
+            matchup_slots_per_worker=slots,
+            heartbeat_interval_seconds=30.0,
+            heartbeat_stale_multiplier=3,
+        )
+
+    def test_none_redis_is_noop(self):
+        provider = MagicMock()
+        ticker = self._ticker(None, provider, _FakeProgress(10))
+        ticker.tick()
+        provider.list_active.assert_not_called()
+        provider.terminate_instances.assert_not_called()
+
+    def test_remaining_zero_is_noop(self, fake_redis):
+        provider = MagicMock()
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(0))
+        ticker.tick()
+        provider.list_active.assert_not_called()
+        provider.terminate_instances.assert_not_called()
+
+    def test_source_nonempty_defers(self, fake_redis):
+        provider = MagicMock()
+        fake_redis.lpush(self._SOURCE, "{}")  # a queued-but-unclaimed matchup
+        self._seed_hb(fake_redis, "i-1", active_matchups=0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1))
+        ticker.tick()
+        provider.list_active.assert_not_called()
+        provider.terminate_instances.assert_not_called()
+
+    def test_absent_active_matchups_is_dormant_no_ec2_call(self, fake_redis):
+        """Pre-field AMI (no active_matchups) → busy → no terminate AND no
+        list_active call at all (dormant mode issues zero EC2 API)."""
+        provider = MagicMock()
+        self._seed_hb(fake_redis, "i-1", active_matchups=None)
+        self._seed_hb(fake_redis, "i-2", active_matchups=None)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1))
+        ticker.tick()
+        provider.list_active.assert_not_called()
+        provider.terminate_instances.assert_not_called()
+
+    def test_stale_idle_heartbeat_skipped(self, fake_redis):
+        provider = MagicMock()
+        # 3×30 = 90s cutoff; 200s old is stale.
+        self._seed_hb(fake_redis, "i-1", active_matchups=0, ts_offset=200.0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1))
+        ticker.tick()
+        provider.list_active.assert_not_called()
+        provider.terminate_instances.assert_not_called()
+
+    def test_terminates_idle_surplus_grouped_by_region(self, fake_redis):
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-1", "region": "us-east-1"},
+            {"id": "i-2", "region": "us-east-1"},
+            {"id": "i-3", "region": "us-east-2"},
+        ]
+        # All idle; remaining=1, slots=2 → keep=1, surplus=2.
+        self._seed_hb(fake_redis, "i-1", active_matchups=0)
+        self._seed_hb(fake_redis, "i-2", active_matchups=0)
+        self._seed_hb(fake_redis, "i-3", active_matchups=0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1))
+        ticker.tick()
+        # Two workers terminated; calls grouped by region.
+        terminated = []
+        regions = []
+        for call in provider.terminate_instances.call_args_list:
+            terminated.extend(call.args[0])
+            regions.append(call.kwargs["region"])
+        assert len(terminated) == 2
+        assert set(terminated) <= {"i-1", "i-2", "i-3"}
+        # Each terminate_instances call is single-region.
+        assert all(r in {"us-east-1", "us-east-2"} for r in regions)
+
+    def test_busy_worker_never_terminated(self, fake_redis):
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-busy", "region": "us-east-1"},
+            {"id": "i-idle", "region": "us-east-1"},
+        ]
+        self._seed_hb(fake_redis, "i-busy", active_matchups=1)
+        self._seed_hb(fake_redis, "i-idle", active_matchups=0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1))
+        ticker.tick()
+        terminated = [
+            iid for call in provider.terminate_instances.call_args_list for iid in call.args[0]
+        ]
+        assert terminated == ["i-idle"]
+
+
 class TestRunJanitorPass:
     """Phase-7-prep: janitor resets enqueued_at on re-queue, tracks
     requeue_count per item, drops + ERROR on max_requeues exceeded."""

@@ -193,9 +193,21 @@ def evaluate_builds(
     config: HonestEvaluationConfig,
     hull: ShipHull,
     ledger_path: Path | None = None,
+    progress: RemainingWork | None = None,
 ) -> tuple[EvaluatedBuild, ...]:
     """Dispatch every (build × opp × replicate) matchup, retry failures up
     to `config.max_retries_per_matchup`, aggregate per-build mean.
+
+    `progress` (optional, observation-only): a `RemainingWork` sink (a
+    `typing.Protocol` with `set_remaining(int)`, defined in `campaign`; the
+    concrete `MatchupProgress` satisfies it). When provided, the dispatch loop
+    publishes the outstanding-matchup count (`len(queue) + len(pending)`) so
+    the honest-eval `WorkerDrainTicker` (spec 22 §"Worker drain (honest-eval)")
+    can size its keep-floor from Python-side remaining work rather than Redis
+    depth. It is seeded to `len(jobs)` on entry — the **post-`--resume-from`**
+    count, since the job list is built after the ledger skip-filter. Purely a
+    write-only side channel: with `progress=None` (local pool / non-cloud
+    tests) the behavior, return value, and order are byte-for-byte unchanged.
 
     Concurrency:
       Uses `pool.num_workers` (the EvaluatorPool ABC property at
@@ -257,6 +269,10 @@ module exposes a `main(argv)` that takes:
 - `--dry-run` — extract top builds + load campaign config + enumerate
   pool + run lightweight preflight (authkey + STS), then exit without
   provisioning AWS resources
+- `--no-drain` — disable the scale-down-on-drain background thread
+  (§"Fleet drain"). Default is drain-enabled. An operator escape hatch for a
+  feature that terminates live instances; also the recommended switch for the
+  first post-AMI-re-bake validation run, to be flipped on once observed.
 - `--resume-from <eval_tag>` — reuse a prior eval_tag and replay its
   ledger. Matchups already present in `{out_root}/honest_eval/{eval_tag}/results.jsonl`
   skip dispatch; the stored fitness folds straight into the in-memory
@@ -312,6 +328,30 @@ Realized spend = `sum(delta_usd)` over the ledger (resume-safe). On
 `cumulative_usd` is **seeded** from the prior file's last row (via
 `initial_cumulative`) so it stays monotone across the appended file and its
 last value equals total realized spend.
+
+**Fleet drain.** A second background thread — a sibling of the cost thread,
+built on the same bounded-lifecycle `_PeriodicBackgroundThread` and nested
+inside the cloud-pool context — drives a `WorkerDrainTicker` (spec 22
+§"Worker drain (honest-eval)") every `drain_poll_interval_seconds`. Because the
+honest-eval fleet is static (no replacement provisioning), workers that run out
+of work near end-of-run would otherwise idle-bill until the whole fleet is torn
+down at `evaluate_builds` return; the drain terminates provably-idle surplus
+workers as the outstanding-matchup count falls below fleet capacity, keeping
+enough alive to finish the remainder (the keep-floor invariant in spec 22).
+
+The drain reads outstanding work Python-side, not from Redis depth:
+`evaluate_builds` publishes `len(queue)+len(pending)` into a `MatchupProgress`
+sink (a `RemainingWork` Protocol instance) that `main()` passes to both
+`evaluate_builds` and the drain thread. `evaluate_builds` caps in-flight
+dispatch at `num_workers`, so Redis depth ≈ concurrency and is not the backlog.
+
+The drain is **dormant until the worker AMI is re-baked**: it terminates only
+workers whose heartbeat reports `active_matchups == 0`, and a heartbeat lacking
+that field (a pre-field AMI) reads as busy, so the drain is a safe no-op — and
+issues zero EC2 API calls — until re-baked. `--no-drain` disables the thread
+entirely. The drain Redis client, like the cost client, is built with
+`decode_responses=True`; the drain thread is joined (bounded by
+`teardown_thread_join_seconds`) on every exit path before fleet teardown.
 
 Writes `data/campaigns/<name>/honest_eval.json` per input campaign plus
 a single `data/campaigns/honest_eval_summary_YYYY-MM-DD.json` covering
@@ -412,9 +452,12 @@ timing when needed, then forwarded through `prepare_cloud_pool`):
 `max_requeues`, and — inherited **as pass-through, not adjusted** — the
 cost-measurement cadence knobs `ledger_heartbeat_interval_seconds`,
 `heartbeat_stale_multiplier`, `spot_price_cache_ttl_seconds`
-(§"Cost measurement"). Honest-eval also reads `teardown_thread_join_seconds`
-for the cost-thread join bound and `redis_preflight_timeout_seconds` as the
-`socket_timeout` for the cost-measurement Redis client (same use as
+(§"Cost measurement"), and the fleet-drain cadence knob
+`drain_poll_interval_seconds` (§"Fleet drain"). Honest-eval also reads
+`teardown_thread_join_seconds` for the cost- and drain-thread join bounds,
+`matchup_slots_per_worker` for the drain keep-floor, and
+`redis_preflight_timeout_seconds` as the `socket_timeout` for the
+cost-measurement and drain Redis clients (same use as
 `CampaignManager._preflight`). Honest-eval intentionally does NOT inherit
 `studies` (it spins one fleet, not N) or `budget_usd` (no per-eval
 budget cap; operator controls cost via `--workers` + `--replicates`).

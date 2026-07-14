@@ -33,7 +33,7 @@ workstation (single machine)                         cloud VM (N of them)
 └──────────────────────────────────────┘             └────────────────────────────────┘
 ```
 
-**Fleet ownership**: the study subprocess owns its own fleet — provisioning AND teardown. `CampaignManager` is a pure supervisor (spawn + monitor + sweep-backstop via `terminate_all_tagged`). Per-study fleet ownership is load-bearing: each study's workers carry that study's bearer token + Redis queue keys + Flask endpoint in their UserData. A campaign-wide fleet would force every worker to carry every study's secrets.
+**Fleet ownership**: the study subprocess owns its own fleet — provisioning AND teardown. `CampaignManager` is a pure supervisor (spawn + monitor + sweep-backstop via `terminate_all_tagged`). Per-study fleet ownership is load-bearing: each study's workers carry that study's bearer token + Redis queue keys + Flask endpoint in their UserData. A campaign-wide fleet would force every worker to carry every study's secrets. (Honest-eval's `main()` additionally gains an in-context *partial*-termination path — the drain thread, §"Worker drain (honest-eval)" — but ownership stays singular: it is the same process that owns the fleet, and the final teardown is idempotent over already-terminated ids.)
 
 ## Config dataclasses
 
@@ -102,7 +102,8 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `teardown_thread_join_seconds` | `float` | `5.0` | Bound on `CloudWorkerPool.teardown` waits on the Flask server thread + janitor thread |
 | `spot_price_cache_ttl_seconds` | `float` | `300.0` | In-process `(region, instance_type) → rate` cache lifetime in `CostHeartbeatTicker` (§"Ledger tick"). Prevents one `DescribeSpotPriceHistory` call per tick per worker at steady-state. Cache miss or TTL expiry re-fetches. |
 | `max_requeues` | `int` | `5` | Janitor hard cap. A matchup whose next visibility-timeout breach would push `requeue_count` above this value is dropped (LREM from processing, NOT re-LPUSH to source) with an ERROR log. Catches permanently stuck matchups without pathological ping-pong. |
-| `heartbeat_stale_multiplier` | `int` | `3` | Heartbeats whose `timestamp > heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds` old are treated as dead and skipped by `CostHeartbeatTicker.tick` — no cost accrues. Dead-key clean-up happens at teardown via `_flush_stale_campaign_keys`. |
+| `heartbeat_stale_multiplier` | `int` | `3` | Heartbeats whose `timestamp > heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds` old are treated as dead and skipped by `CostHeartbeatTicker.tick` — no cost accrues. Dead-key clean-up happens at teardown via `_flush_stale_campaign_keys`. The honest-eval drain (§"Worker drain (honest-eval)") reuses this multiplier for its liveness cutoff, but against `WORKER_HEARTBEAT_INTERVAL_SECONDS` (the true write cadence), not the ledger-tick interval. |
+| `drain_poll_interval_seconds` | `float` | `60.0` | How often the honest-eval `WorkerDrainTicker` (§"Worker drain (honest-eval)") scans for idle-surplus workers to terminate. Honest-eval-only; the campaign path has no fleet drain. Must be listed in the `load_campaign_config` pass-through opt tuple so operator YAML overrides are honored. |
 
 ### `WorkerConfig`
 
@@ -147,7 +148,7 @@ One JSONL row in `data/campaigns/<name>/ledger.jsonl`. All fields primitive and 
 Each study subprocess owns two Redis lists:
 - `queue:<project_tag>:<study_id>:source` — matchups awaiting a worker
 - `queue:<project_tag>:<study_id>:processing` — matchups claimed by a worker but not yet ack'd via `POST /result`
-- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every 30s by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`, `game_log_tail`, `mod_jar_sha256`. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU), the healthy `load_avg_1min` target band is design-set at [3, 8]. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying). `game_log_tail` is the concatenated last ~32 KiB of every per-instance `game_stdout.log` on this VM — the only orchestrator-side window into a hung JVM, since worker SGs grant zero ingress and `tailscale ssh` is unreliable from userspace-mode workstations. `mod_jar_sha256` is the SHA-256 of the loaded `combat-harness.jar`; the orchestrator's janitor scans it for fleet-wide consistency (see §"Diagnostic checks").
+- `worker:<project_tag>:<worker_id>:heartbeat` — Redis hash written every `WORKER_HEARTBEAT_INTERVAL_SECONDS` (30s) by the worker with fields: `timestamp`, `load_avg_1min`, `load_avg_5min`, `load_avg_15min`, `cpu_count`, `region`, `instance_type`, `game_log_tail`, `mod_jar_sha256`, `active_matchups`. `active_matchups` is the worker's count of currently-running matchups (incremented on BRPOPLPUSH claim, decremented after the run attempt completes — success-then-ack or failure-then-leave-for-janitor); it is the honest-eval drain's idle signal (`active_matchups == 0` ⇒ fully idle). **Backward-compat:** a heartbeat WITHOUT `active_matchups` (a worker on an AMI baked before this field existed) is treated by the drain as *busy/unknown* and never terminated — so the drain is a safe no-op until the worker AMI is re-baked. The load averages let the orchestrator verify `matchup_slots_per_worker` fits the VM shape — on c7a.2xlarge (8 vCPU), the healthy `load_avg_1min` target band is design-set at [3, 8]. Persistent `load_avg_1min > cpu_count` indicates over-subscription; `< 3` indicates under-utilization. `region` and `instance_type` are fetched from IMDSv2 at worker startup (cached in `_WORKER_VM_METADATA`; fallback `"unknown"` on IMDS failure — the resulting zero-rate ledger row is self-identifying). `game_log_tail` is the concatenated last ~32 KiB of every per-instance `game_stdout.log` on this VM — the only orchestrator-side window into a hung JVM, since worker SGs grant zero ingress and `tailscale ssh` is unreliable from userspace-mode workstations. `mod_jar_sha256` is the SHA-256 of the loaded `combat-harness.jar`; the orchestrator's janitor scans it for fleet-wide consistency (see §"Diagnostic checks").
 
 Keys are namespaced by `project_tag` (= `starsector-<campaign_name>`) so a re-run of a campaign whose study_ids happen to match a prior run's never inherits stale processing-list items. `CampaignManager._preflight` additionally SCANs and DELs `queue:<project_tag>:*` + `worker:<project_tag>:*` at startup to defend against same-campaign re-launch.
 
@@ -538,6 +539,82 @@ combat-worker Redis queue still inherit the cloud safety contract:
      because the idle-tail spend is per-run-certain while late reclaims are
      rare, and correctness is unaffected.
 
+## Worker drain (honest-eval)
+
+The honest-eval fleet (spec 30) is **static — one `provision_fleet` call, no
+replacement provisioning** — and dispatches over the Redis BRPOPLPUSH reliable
+queue, so the learned-batch drain above (an HTTP-`/lease` worker-self-terminate
+model with replacement) does **not** transfer. Honest-eval instead drains
+**orchestrator-driven**: a background `WorkerDrainTicker` in
+`honest_evaluator.main` (the campaign-analog owner, the same role it plays for
+the cost tick) terminates provably-idle surplus workers as the outstanding
+matchup count falls below fleet capacity near end-of-run.
+
+**Depends on** the `Type="instant"` no-respawn invariant (§"Per-study fleet
+lifecycle" step 3): AWS does not respawn a terminated instance, so external
+termination permanently shrinks the fleet. (That section flags the invariant
+"must be revisited if a maintain-type fleet is ever introduced" — this drain is
+one of the dependents.)
+
+Contract:
+
+1. **Remaining work is Python-side, never Redis depth.** `evaluate_builds`
+   caps in-flight dispatch at `num_workers` (= `total_matchup_slots`), so the
+   Redis source+processing depth ≈ concurrency throughout and is NOT the
+   backlog. The drain reads outstanding matchups (`total − completed`) from a
+   `MatchupProgress` sink that `evaluate_builds` updates; a Redis-depth drain
+   would misfire at t=0 and kill the fleet.
+
+2. **Keep-floor liveness invariant.** With `remaining` outstanding matchups
+   and `matchup_slots_per_worker` slots per worker,
+   `keep = max(1, ceil(remaining / matchup_slots_per_worker))` while
+   `remaining > 0`. The drain terminates only workers in the *idle* set
+   (`active_matchups == 0` in a live-fresh heartbeat) and at most
+   `surplus = max(0, live − keep)` of them. It never terminates a busy worker
+   and never drops the live count below `keep`, so surviving capacity always
+   covers the outstanding + any janitor-requeued matchups. At `remaining == 0`
+   it terminates nothing — normal `prepare_cloud_pool` teardown owns the final
+   shutdown.
+
+3. **Idle identification.** `worker_id == the EC2 instance-id` (IMDSv2 override
+   at worker boot), so the heartbeat key carries the instance to terminate.
+   The `active_matchups` heartbeat field (§"Redis key schema") is the idle
+   signal; an absent field (pre-field AMI) reads as busy, making the drain a
+   no-op until the worker AMI is re-baked.
+
+4. **Source-empty gate + tick order.** A tick runs Redis-only work first and
+   touches the EC2 API only when something is actually terminable: (a)
+   `remaining <= 0` → return; (b) `llen(source) > 0` → return (defer while any
+   matchup is queued-but-unclaimed); (c) scan heartbeats for live-fresh
+   `active_matchups == 0` idle ids, and if none → return **before**
+   `list_active` (an un-re-baked fleet issues zero `DescribeInstances`); (d)
+   `list_active(project_tag)` for the authoritative live set, terminate the
+   idle∩live surplus grouped by region. Freshness cutoff =
+   `WORKER_HEARTBEAT_INTERVAL_SECONDS × heartbeat_stale_multiplier` (sized
+   against the true write cadence, not the ledger-tick interval).
+
+5. **Named trade-off (accepted): claim-race → bounded requeue latency.**
+   `active_matchups` is sampled at the worker heartbeat cadence (~30s),
+   independent of the tick, so a live-fresh heartbeat can carry an idle
+   snapshot up to one cadence old; a worker that claims in that window and is
+   then terminated strands up to `matchup_slots_per_worker` matchups (per
+   terminated worker) in the processing list until the janitor requeues them,
+   after which a keep-worker runs them. **Correctness is preserved with high
+   probability, not unconditionally**: repeated stranding of the same matchup
+   is bounded by two independent ceilings — the janitor drops past
+   `max_requeues`, after which `run_matchup` raises `WorkerTimeout` and
+   consumes one of `evaluate_builds`' `max_retries_per_matchup` attempts;
+   exhausting those aborts the eval. The keep-floor (which leaves many
+   keep-workers while `surplus > 0`) plus the source-empty gate make this
+   pathological path very unlikely; the primary mitigation is the source-empty
+   gate, not the freshness filter (which controls timestamp age, not
+   occupancy-snapshot age).
+
+6. **Fleet ownership** (§"Fleet ownership") stays singular: the drain runs
+   inside honest-eval's own `main()` process, and the later
+   `terminate_fleet` + project sweep is idempotent over already-terminated
+   ids. Operator escape hatch: `--no-drain` (spec 30).
+
 ## `CloudProvider` ABC
 
 ```python
@@ -565,6 +642,13 @@ class CloudProvider(abc.ABC):
     @abc.abstractmethod
     def terminate_all_tagged(self, project_tag: str) -> int: ...
         # sweep: reaps everything tagged project_tag regardless of fleet. Crash-recovery backstop.
+
+    @abc.abstractmethod
+    def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int: ...
+        # terminate an explicit subset of instance IDs in one region; empty ids → 0, no API call.
+        # The only subset-termination primitive (all other terminate paths are tag-scoped whole-fleet).
+        # Used by the honest-eval WorkerDrainTicker (§"Worker drain (honest-eval)"). Idempotent:
+        # terminating an already-terminating id is an AWS no-op.
 
     @abc.abstractmethod
     def list_active(self, project_tag: str) -> list[dict]: ...

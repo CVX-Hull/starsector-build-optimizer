@@ -776,6 +776,10 @@ class CampaignConfig:
     # than `heartbeat_stale_multiplier × interval_seconds` is treated as
     # dead by the ledger tick and not charged.
     heartbeat_stale_multiplier: int = 3
+    # How often the honest-eval WorkerDrainTicker scans for idle-surplus
+    # workers to terminate (honest-eval-only; campaign path has no fleet
+    # drain). See spec 22 §"Worker drain (honest-eval)".
+    drain_poll_interval_seconds: float = 60.0
 
     def __repr__(self) -> str:
         fields = []

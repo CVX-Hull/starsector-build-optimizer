@@ -9,6 +9,7 @@ Methodology: docs/reference/honest-evaluation-methodology.md. SOP:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import math
@@ -24,6 +25,8 @@ from collections.abc import Callable, Sequence
 from .campaign import (
     CostHeartbeatTicker,
     CostLedger,
+    RemainingWork,
+    WorkerDrainTicker,
     check_ami_tags_against_manifest,
     check_authkey_syntax,
     check_aws_credentials,
@@ -31,6 +34,7 @@ from .campaign import (
     _flush_stale_campaign_keys,
 )
 from .cloud_provider import AWSProvider
+from .worker_agent import WORKER_HEARTBEAT_INTERVAL_SECONDS
 from .cloud_runner import prepare_cloud_pool
 from .combat_fitness import combat_fitness
 from .evaluator_pool import EvaluatorPool
@@ -175,19 +179,42 @@ class _LedgerWriter:
             os.fsync(f.fileno())
 
 
-class _CostHeartbeatThread:
-    """Context-managed background loop that ticks a `CostHeartbeatTicker` over
-    the honest-eval fleet for its lifetime (spec 30 §"Cost measurement").
+class MatchupProgress:
+    """Thread-safe outstanding-matchup count (a `campaign.RemainingWork`).
 
-    Honest-eval is the campaign-analog orchestrator, so it owns its cost tick
-    the way `CampaignManager.monitor_loop` owns the campaign one — the pool
-    stays a pure dispatch mechanism. `__exit__` sets the stop event and joins
-    (bounded by `join_timeout_seconds`) on every exit path — normal, exception,
-    and `KeyboardInterrupt` — so the thread never outlives the fleet; the loop
-    waits on the stop event (not `time.sleep`) so the join returns promptly; and
-    a per-tick `except Exception` keeps a transient Redis/AWS blip from aborting
-    a paid eval (measurement is best-effort). `on_close` closes owned resources
-    (the Redis client) after the join.
+    `evaluate_builds` writes `set_remaining()` from its dispatch loop; the
+    honest-eval `WorkerDrainTicker` reads `remaining()` to size its keep-floor
+    from Python-side work rather than Redis depth (spec 22 §"Worker drain
+    (honest-eval)"). Constructed with `remaining() == 0`, which makes the drain
+    a no-op until `evaluate_builds` seeds it — exactly right, there is nothing
+    to drain before dispatch begins."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._remaining = 0
+
+    def set_remaining(self, n: int) -> None:
+        with self._lock:
+            self._remaining = n
+
+    def remaining(self) -> int:
+        with self._lock:
+            return self._remaining
+
+
+class _PeriodicBackgroundThread:
+    """Context-managed background loop that calls `tick` every
+    `interval_seconds` for the lifetime of the `with` block.
+
+    Honest-eval is the campaign-analog orchestrator, so it owns its periodic
+    ticks (cost measurement, fleet drain) the way `CampaignManager.monitor_loop`
+    owns the campaign one — the pool stays a pure dispatch mechanism. `__exit__`
+    sets the stop event and joins (bounded by `join_timeout_seconds`) on every
+    exit path — normal, exception, and `KeyboardInterrupt` — so the thread never
+    outlives the fleet; the loop waits on the stop event (not `time.sleep`) so
+    the join returns promptly; and a per-tick `except Exception` keeps a
+    transient Redis/AWS blip from aborting a paid eval (ticks are best-effort).
+    `on_close` closes owned resources (the Redis client) after the join.
     """
 
     def __init__(
@@ -196,16 +223,18 @@ class _CostHeartbeatThread:
         *,
         interval_seconds: float,
         join_timeout_seconds: float,
+        name: str,
         on_close: Callable[[], None] | None = None,
     ) -> None:
         self._tick = tick
         self._interval_seconds = interval_seconds
         self._join_timeout_seconds = join_timeout_seconds
+        self._name = name
         self._on_close = on_close
         self._stop = threading.Event()
         self.thread = threading.Thread(
             target=self._run,
-            name="honest-eval-cost-tick",
+            name=name,
             daemon=True,
         )
 
@@ -214,10 +243,10 @@ class _CostHeartbeatThread:
             try:
                 self._tick()
             except Exception:
-                logger.exception("honest-eval cost tick failed; continuing")
+                logger.exception("%s tick failed; continuing", self._name)
             self._stop.wait(timeout=self._interval_seconds)
 
-    def __enter__(self) -> _CostHeartbeatThread:
+    def __enter__(self) -> _PeriodicBackgroundThread:
         self.thread.start()
         return self
 
@@ -228,7 +257,7 @@ class _CostHeartbeatThread:
             try:
                 self._on_close()
             except Exception:
-                logger.warning("honest-eval cost thread: on_close failed", exc_info=True)
+                logger.warning("%s: on_close failed", self._name, exc_info=True)
 
 
 def _make_cost_heartbeat_thread(
@@ -236,7 +265,7 @@ def _make_cost_heartbeat_thread(
     project_tag: str,
     cost_ledger_path: Path,
     provider: AWSProvider,
-) -> _CostHeartbeatThread:
+) -> _PeriodicBackgroundThread:
     """Build the measurement-only cost ledger + ticker + background thread for
     an honest-eval run. The ticker's Redis client is built with
     `decode_responses=True` (as `CampaignManager._preflight` does) — the tick
@@ -265,10 +294,51 @@ def _make_cost_heartbeat_thread(
         heartbeat_stale_multiplier=campaign.heartbeat_stale_multiplier,
         spot_price_cache_ttl_seconds=campaign.spot_price_cache_ttl_seconds,
     )
-    return _CostHeartbeatThread(
+    return _PeriodicBackgroundThread(
         ticker.tick,
         interval_seconds=campaign.ledger_heartbeat_interval_seconds,
         join_timeout_seconds=campaign.teardown_thread_join_seconds,
+        name="honest-eval-cost-tick",
+        on_close=client.close,
+    )
+
+
+def _make_worker_drain_thread(
+    campaign: CampaignConfig,
+    project_tag: str,
+    provider: AWSProvider,
+    progress: MatchupProgress,
+) -> _PeriodicBackgroundThread:
+    """Build the orchestrator-driven fleet-drain ticker + background thread for
+    an honest-eval run (spec 22 §"Worker drain (honest-eval)"). Its Redis
+    client is `decode_responses=True` (the heartbeat reads assume `str`), and
+    the ticker's liveness cutoff is sized against the worker's true write
+    cadence `WORKER_HEARTBEAT_INTERVAL_SECONDS`, not the ledger-tick interval.
+    honest-eval's `study_id == project_tag == eval_tag`, so the source list is
+    `queue:<tag>:<tag>:source`."""
+    import redis
+
+    client = redis.Redis(
+        host="127.0.0.1",
+        port=campaign.redis_port,
+        socket_timeout=campaign.redis_preflight_timeout_seconds,
+        decode_responses=True,
+    )
+    ticker = WorkerDrainTicker(
+        redis_client=client,
+        provider=provider,
+        project_tag=project_tag,
+        source_list=f"queue:{project_tag}:{project_tag}:source",
+        progress=progress,
+        matchup_slots_per_worker=campaign.matchup_slots_per_worker,
+        heartbeat_interval_seconds=WORKER_HEARTBEAT_INTERVAL_SECONDS,
+        heartbeat_stale_multiplier=campaign.heartbeat_stale_multiplier,
+    )
+    return _PeriodicBackgroundThread(
+        ticker.tick,
+        interval_seconds=campaign.drain_poll_interval_seconds,
+        join_timeout_seconds=campaign.teardown_thread_join_seconds,
+        name="honest-eval-drain",
         on_close=client.close,
     )
 
@@ -532,9 +602,17 @@ def evaluate_builds(
     config: HonestEvaluationConfig,
     hull: ShipHull,
     ledger_path: Path | None = None,
+    progress: RemainingWork | None = None,
 ) -> tuple[EvaluatedBuild, ...]:
     """Dispatch every (build × opp × replicate) matchup, retry failures up to
     config.max_retries_per_matchup, aggregate per-build mean fitness.
+
+    `progress` (optional, observation-only): when provided, publishes the
+    outstanding-matchup count so the honest-eval `WorkerDrainTicker` can size
+    its keep-floor from Python-side work, not Redis depth (spec 30
+    §"Fleet drain"). Seeded to `len(jobs)` — the post-`--resume-from` count.
+    A write-only side channel: with `progress=None` behavior/return/order are
+    unchanged.
 
     If `ledger_path` is provided, every successful matchup result is
     appended to the JSONL ledger with `flush()` + `os.fsync()` before we
@@ -670,10 +748,15 @@ def evaluate_builds(
     queue = list(jobs)
     completed = 0
     total = len(jobs)
+    # Seed the drain's Python-side remaining-work signal (post-replay count).
+    if progress is not None:
+        progress.set_remaining(total)
 
     executor = ThreadPoolExecutor(max_workers=num_workers)
     try:
         while queue or pending:
+            if progress is not None:
+                progress.set_remaining(len(queue) + len(pending))
             while queue and len(pending) < num_workers:
                 job = queue.pop(0)
                 fut = executor.submit(pool.run_matchup, _make_matchup(job))
@@ -743,6 +826,10 @@ def evaluate_builds(
         raise
     else:
         executor.shutdown(wait=True)
+        # All matchups done — drop remaining to 0 so the drain never acts on a
+        # stale positive count during the teardown window.
+        if progress is not None:
+            progress.set_remaining(0)
 
     # Aggregate per-build mean + SEM.
     out: list[EvaluatedBuild] = []
@@ -1121,6 +1208,14 @@ def main(argv: list[str] | None = None) -> int:
         "validating inputs before paying.",
     )
     parser.add_argument(
+        "--no-drain",
+        action="store_true",
+        help="Disable the scale-down-on-drain background thread (spec 22 "
+        "§'Worker drain'). Default is drain-enabled. An escape hatch for a "
+        "feature that terminates live instances; recommended for the first "
+        "post-AMI-re-bake validation run.",
+    )
+    parser.add_argument(
         "--resume-from",
         default=None,
         help="Reuse a prior eval_tag and resume from its ledger. The "
@@ -1476,11 +1571,24 @@ def main(argv: list[str] | None = None) -> int:
             # Measurement-only cost ledger for the fleet's lifetime (spec 30
             # §"Cost measurement"). Nested inside the pool so its bounded join
             # runs before fleet teardown on every exit path.
-            with _make_cost_heartbeat_thread(
-                campaign,
-                eval_tag,
-                _cost_ledger_path(args.out_root, eval_tag),
-                cost_provider,
+            progress = MatchupProgress()
+            drain_thread: contextlib.AbstractContextManager[object] = (
+                contextlib.nullcontext()
+                if args.no_drain
+                else _make_worker_drain_thread(campaign, eval_tag, cost_provider, progress)
+            )
+            with (
+                _make_cost_heartbeat_thread(
+                    campaign,
+                    eval_tag,
+                    _cost_ledger_path(args.out_root, eval_tag),
+                    cost_provider,
+                ),
+                # Scale-down-on-drain for the static fleet (spec 30 §"Fleet
+                # drain"); also nested inside the pool so its bounded join runs
+                # before fleet teardown. Dormant until the worker AMI carries
+                # `active_matchups`; `--no-drain` disables it entirely.
+                drain_thread,
             ):
                 evaluated = evaluate_builds(
                     builds_with_provenance,
@@ -1489,6 +1597,7 @@ def main(argv: list[str] | None = None) -> int:
                     config,
                     hull,
                     ledger_path=ledger_path,
+                    progress=progress,
                 )
     except KeyboardInterrupt:
         logger.warning("honest_eval interrupted — cleanup complete")

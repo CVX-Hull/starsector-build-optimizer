@@ -280,6 +280,25 @@ class TestHeartbeat:
         assert float(normalized["load_avg_1min"]) >= 0.0
         assert int(normalized["cpu_count"]) >= 1
 
+    def test_heartbeat_writes_active_matchups(self, worker_config, fake_redis, tmp_path):
+        """active_matchups is the honest-eval drain's idle signal (spec 22)."""
+        from starsector_optimizer.worker_agent import heartbeat
+
+        heartbeat(
+            fake_redis,
+            worker_config.project_tag,
+            worker_config.worker_id,
+            game_dir=tmp_path,
+            active_matchups=2,
+        )
+        key = f"worker:{worker_config.project_tag}:{worker_config.worker_id}:heartbeat"
+        hb = fake_redis.hgetall(key)
+        normalized = {
+            (k.decode() if isinstance(k, bytes) else k): (v.decode() if isinstance(v, bytes) else v)
+            for k, v in hb.items()
+        }
+        assert int(normalized["active_matchups"]) == 2
+
     def test_heartbeat_key_is_scoped_by_project_tag(self, worker_config, fake_redis, tmp_path):
         """Two campaigns with the same worker_id must not collide."""
         from starsector_optimizer.worker_agent import heartbeat
@@ -425,6 +444,173 @@ class TestConsumerConcurrency:
         assert "pool" in sig.parameters
         assert "slot_idx" in sig.parameters
         assert "stop_event" in sig.parameters
+
+    def test_active_counter_bumps_on_claim_and_releases_on_ack(
+        self,
+        worker_config,
+        fake_redis,
+    ):
+        """The counter is +1 while a matchup runs, back to 0 after ack — the
+        drain idle signal. run_matchup blocks on a gate so we can observe +1."""
+        import threading
+        from unittest.mock import MagicMock
+        from starsector_optimizer.models import CombatResult
+        from starsector_optimizer.worker_agent import _ActiveMatchupCounter, _consumer_loop
+
+        source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
+        processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
+        fake_redis.lpush(
+            source,
+            json.dumps(
+                {
+                    "matchup_id": "m0",
+                    "enqueued_at": time.time(),
+                    "matchup": {
+                        "matchup_id": "m0",
+                        "player_builds": [
+                            {
+                                "variant_id": "v",
+                                "hull_id": "wolf",
+                                "weapon_assignments": {},
+                                "hullmods": [],
+                                "flux_vents": 0,
+                                "flux_capacitors": 0,
+                            }
+                        ],
+                        "enemy_variants": ["dominator_Assault"],
+                        "time_limit_seconds": 90.0,
+                        "time_mult": 1.0,
+                    },
+                }
+            ),
+        )
+
+        counter = _ActiveMatchupCounter()
+        in_matchup = threading.Event()
+        release = threading.Event()
+
+        def _gated_run(matchup):
+            in_matchup.set()
+            release.wait(timeout=5.0)
+            return CombatResult(
+                matchup_id=matchup.matchup_id,
+                winner="player",
+                duration_seconds=1.0,
+                player_ships=(),
+                enemy_ships=(),
+                player_ships_destroyed=0,
+                enemy_ships_destroyed=1,
+                player_ships_retreated=0,
+                enemy_ships_retreated=0,
+                player_loadout_diagnostics=(),
+                engine_stats=None,
+            )
+
+        pool = MagicMock()
+        pool.run_matchup.side_effect = _gated_run
+        stop_event = threading.Event()
+
+        with patch("starsector_optimizer.worker_agent.post_result"):
+            thread = threading.Thread(
+                target=_consumer_loop,
+                kwargs={
+                    "slot_idx": 0,
+                    "config": worker_config,
+                    "pool": pool,
+                    "redis_client": fake_redis,
+                    "source": source,
+                    "processing": processing,
+                    "started_at": time.monotonic(),
+                    "stop_event": stop_event,
+                    "auth_failure_event": threading.Event(),
+                    "poll_timeout": 1,
+                    "active_counter": counter,
+                },
+            )
+            thread.start()
+            assert in_matchup.wait(timeout=5.0)
+            # While the matchup runs, the worker reports itself busy.
+            assert counter.value() == 1
+            release.set()
+            deadline = time.monotonic() + 5.0
+            while counter.value() != 0 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            # After ack, the worker is idle again.
+            assert counter.value() == 0
+            stop_event.set()
+            thread.join(timeout=3.0)
+
+    def test_active_counter_releases_even_on_failure(
+        self,
+        worker_config,
+        fake_redis,
+    ):
+        """A matchup that raises (left for the janitor) must still decrement —
+        otherwise a worker that hit a failure would look permanently busy and
+        the drain could never reclaim it."""
+        import threading
+        from unittest.mock import MagicMock
+        from starsector_optimizer.worker_agent import _ActiveMatchupCounter, _consumer_loop
+
+        source = f"queue:{worker_config.project_tag}:{worker_config.study_id}:source"
+        processing = f"queue:{worker_config.project_tag}:{worker_config.study_id}:processing"
+        fake_redis.lpush(
+            source,
+            json.dumps(
+                {
+                    "matchup_id": "m0",
+                    "enqueued_at": time.time(),
+                    "matchup": {
+                        "matchup_id": "m0",
+                        "player_builds": [
+                            {
+                                "variant_id": "v",
+                                "hull_id": "wolf",
+                                "weapon_assignments": {},
+                                "hullmods": [],
+                                "flux_vents": 0,
+                                "flux_capacitors": 0,
+                            }
+                        ],
+                        "enemy_variants": ["dominator_Assault"],
+                        "time_limit_seconds": 90.0,
+                        "time_mult": 1.0,
+                    },
+                }
+            ),
+        )
+
+        counter = _ActiveMatchupCounter()
+        pool = MagicMock()
+        pool.run_matchup.side_effect = RuntimeError("boom")
+        stop_event = threading.Event()
+
+        thread = threading.Thread(
+            target=_consumer_loop,
+            kwargs={
+                "slot_idx": 0,
+                "config": worker_config,
+                "pool": pool,
+                "redis_client": fake_redis,
+                "source": source,
+                "processing": processing,
+                "started_at": time.monotonic(),
+                "stop_event": stop_event,
+                "auth_failure_event": threading.Event(),
+                "poll_timeout": 1,
+                "active_counter": counter,
+            },
+        )
+        thread.start()
+        deadline = time.monotonic() + 5.0
+        while pool.run_matchup.call_count == 0 and time.monotonic() < deadline:
+            time.sleep(0.02)
+        stop_event.set()
+        thread.join(timeout=3.0)
+        # Failure path left the item in processing (janitor's job) but released
+        # the slot.
+        assert counter.value() == 0
+        assert fake_redis.llen(processing) == 1
 
     def test_multiple_consumers_drain_queue_concurrently(
         self,
