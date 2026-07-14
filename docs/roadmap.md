@@ -14,7 +14,8 @@ steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
 Groomed: 2026-07-14 — items 1–2 delivered (defaults flip; prequential
-replay); replay follow-ups wired into items 3–7 + the Phase-7 gate. Full data-first re-groom 2026-07-13, user-ratified; decisions and
+replay); replay follow-ups wired into items 3–7 + the Phase-7 gate.
+Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
 `last-validated`.
@@ -68,7 +69,7 @@ Compute runs on AWS learned-batch; costs:
      cell; the plan gate sets the minimum cell count for gate adequacy —
      single-cell streams are not gate-adequate, their readings are
      directional only); a **minimum count of wave-hull (hammerhead)
-     cells** — gate adequacy is defined over that subset, both arms of
+     cells** — gate adequacy is defined over that subset, both conditions of
      the item-4 contrast run on it, and wolf cells serve the accounting
      purpose only (directional replay readings at most; cross-hull
      claims stay gated behind the multi-hull wave); a **stream-reuse
@@ -93,10 +94,13 @@ Compute runs on AWS learned-batch; costs:
      the same predeclaration so coverage cannot be chosen after
      readings exist; and ownership — **running
      the replay on this stream and filing its report is a deliverable
-     of this item**. Sizing and any oracle-coverage spend are ratified
-     by the user at this item's plan gate (the D4 pattern), since they
-     convert the ratified accounting errand into the Phase-7 gate's
-     evidence substrate.
+     of this item**. This item also **owns retaining the frozen stream
+     matchup DB + eval logs, re-runnable, through item 7** — items 6/7
+     re-fit the instrument on them offline to obtain their promotion
+     readings, so the artifacts must not be reaped mid-program. Sizing
+     and any oracle-coverage spend are ratified by the user at this
+     item's plan gate (the D4 pattern), since they convert the ratified
+     accounting errand into the Phase-7 gate's evidence substrate.
 4. **Designed data wave — opponent panel + off-TPE build-diversity arm**
    (the centerpiece; new sim spend, scope user-ratified in
    [re-groom D4](reports/2026-07-13-roadmap-regroom.md)). Design
@@ -126,9 +130,15 @@ Compute runs on AWS learned-batch; costs:
    repair-collapsed build space, so the leakage control is an
    **exclusion rule, not just disclosure**: any wave-panel build whose
    build key collides with a scored stream future-block trial is
-   removed from the augmentation set before the paired re-run, and the
-   contrast report states the residual overlap as a verified hard-zero
-   check; the wave's
+   (keyed on the same repair-collapsed canonical `Build` identity the
+   replay uses to join matchup rows) removed from the augmentation set
+   before the paired re-run. The contrast report states the
+   post-exclusion residual as a verified hard-zero check **and** the
+   pre-exclusion realized-overlap magnitude (count and fraction of
+   wave-panel builds excluded) — the latter is the panel↔stream
+   similarity diagnostic that disambiguates a null result
+   (high overlap ⇒ panel-unhelpful; low overlap ⇒ off-TPE mismatch to a
+   TPE stream); the wave's
    oracle/holdout design should support **continuous oracle-value
    regret@k for selection evaluation** (expressible in spec 31's
    existing rank-metrics suite; the stream-side gating version is an
@@ -136,7 +146,7 @@ Compute runs on AWS learned-batch; costs:
    surrogate-improvement claim is measured by a **panel-augmented
    replay** on the item-3 stream — train on the wave panel plus the
    stream prefix, score stream future blocks — as a **paired same-code,
-   same-config run of both arms at item-4 time** on the wave-hull cells
+   same-config run of both conditions at item-4 time** on the wave-hull cells
    and cutoffs (item 3's filed unaugmented report is the predeclaration
    anchor and consistency check; the re-run is cheap and, with an empty
    augmentation set, must reproduce that report's computed fields). The
@@ -188,10 +198,13 @@ Compute runs on AWS learned-batch; costs:
    satisfying the spec 31 disclosure rule with real evidence rather than
    a no-reading disclaimer.
 7. **Within-opponent pairwise-ranking CatBoost** (groups = opponent, pairs
-   gapped beyond noise floor) — targets the top-decile ≈ 0 weakness, the
-   statistic the optimizer actually exploits. Scope now includes the **H1
-   two-part censored-target treatment** (top-end weakness and 58.7%
-   endpoint mass are two faces of the same target problem). Promotion
+   gapped beyond noise floor) — targets the near-zero top-decile rank
+   fidelity, the statistic the optimizer actually exploits
+   ([attempt-3 results](reports/2026-07-12-phase7-attempt3-surrogate-results.md)).
+   Scope now includes the **H1 two-part censored-target treatment**
+   (top-end weakness and the large endpoint mass are two faces of the
+   same target problem;
+   [methodology review H1](reports/2026-07-11-phase7-methodology-review.md)). Promotion
    deliverable (spec 31 disclosure rule): **land the ranking-family
    planned-panel-score spec amendment first** (spec 31 §"Prequential
    Replay Ablation" requires a ranking arm define its planned-panel

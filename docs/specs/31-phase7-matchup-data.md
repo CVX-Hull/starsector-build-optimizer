@@ -1296,7 +1296,9 @@ be labeled as such. This is the default headline for any run of the
 instrument; when a stream's replay readings feed a phase-gate decision,
 the consuming plan may predeclare a different gate statistic for that
 stream (the wave-1 replay found this q\* statistic could not
-discriminate gates), and that predeclaration governs the gate reading
+discriminate gates:
+[2026-07-14 replay report](../reports/2026-07-14-phase7-prequential-replay.md)),
+and that predeclaration governs the gate reading
 in place of this default.
 
 **Predeclared caveats** (verbatim in any consuming report): the replay
