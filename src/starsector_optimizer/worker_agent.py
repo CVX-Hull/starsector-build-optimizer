@@ -357,7 +357,8 @@ def heartbeat(
 
     `region`/`instance_type` come from the IMDSv2 fetch cached in
     `_WORKER_VM_METADATA` (populated on first call). The ledger tick
-    (CampaignManager._tick_ledger) reads these to attribute cost per
+    (`CostHeartbeatTicker.tick`, driven by `CampaignManager.monitor_loop`
+    and the honest-eval cost loop) reads these to attribute cost per
     region × instance_type bucket via the provider's spot-price API.
 
     `game_log_tail` is the concatenated last ~32 KiB of every per-instance

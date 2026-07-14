@@ -1353,6 +1353,53 @@ class TestMainCLIWiring:
         assert rc == 0
         flush.assert_not_called()
 
+    def test_dry_run_writes_no_cost_ledger(
+        self,
+        monkeypatch,
+        tmp_path,
+        smoke_env,
+        study_jsonl_with_n_completed,
+        game_dir,
+        manifest,
+    ):
+        """--dry-run returns before prepare_cloud_pool, so the nested cost
+        thread is never entered and no cost_ledger.jsonl is written."""
+        from starsector_optimizer import honest_evaluator
+
+        log_root = tmp_path / "data" / "logs"
+        self._seed_campaign_logs(
+            log_root,
+            "ut-honest-eval-source",
+            study_jsonl_with_n_completed,
+        )
+        monkeypatch.chdir(tmp_path)
+        self._patch_manifest_load(monkeypatch, manifest)
+        self._patch_preflight(monkeypatch)
+        (tmp_path / "examples").mkdir()
+        yaml_src = _write_smoke_campaign_yaml(tmp_path)
+        (tmp_path / "examples" / "ut-honest-eval-source.yaml").write_bytes(yaml_src.read_bytes())
+
+        out_root = tmp_path / "out"
+        rc = honest_evaluator.main(
+            [
+                "--campaign-name",
+                "ut-honest-eval-source",
+                "--hull",
+                "hammerhead",
+                "--game-dir",
+                str(game_dir),
+                "--top-k",
+                "1",
+                "--out-root",
+                str(out_root),
+                "--dry-run",
+            ]
+        )
+        assert rc == 0
+        # eval_tag is timestamped/unknown here; the whole honest_eval dir must
+        # be absent since dry-run provisions nothing.
+        assert not (out_root / "honest_eval").exists()
+
     def test_full_run_uses_honest_eval_namespace(
         self,
         monkeypatch,
@@ -2196,3 +2243,158 @@ class TestMainCLIWiring:
                     "1",
                 ]
             )
+
+
+class TestHonestEvalCostLedger:
+    """Measurement-only cost ledger for the honest-eval path (spec 30
+    §"Cost measurement")."""
+
+    def test_cost_ledger_path_reuses_ledger_dir(self, tmp_path):
+        from starsector_optimizer.honest_evaluator import _cost_ledger_path, _ledger_dir
+
+        assert (
+            _cost_ledger_path(tmp_path, "tag") == _ledger_dir(tmp_path, "tag") / "cost_ledger.jsonl"
+        )
+
+    def test_read_cost_ledger_cumulative_absent_then_present(self, tmp_path):
+        from starsector_optimizer.campaign import CostLedger
+        from starsector_optimizer.honest_evaluator import (
+            _cost_ledger_path,
+            _read_cost_ledger_cumulative,
+        )
+
+        path = _cost_ledger_path(tmp_path, "tag")
+        assert _read_cost_ledger_cumulative(path) == 0.0
+        ledger = CostLedger(path, budget_usd=None)
+        ledger.record_heartbeat(
+            worker_id="w",
+            region="r",
+            instance_type="t",
+            hours_elapsed=1.0,
+            rate_usd_per_hr=2.0,
+        )
+        assert _read_cost_ledger_cumulative(path) == pytest.approx(2.0)
+
+    def test_make_cost_heartbeat_thread_uses_decoded_client(self, tmp_path, monkeypatch):
+        """HIGH-finding guard: the ticker's Redis client MUST decode responses,
+        or the tick reads every heartbeat as stale and records zero rows."""
+        from starsector_optimizer import honest_evaluator as he
+        from starsector_optimizer.campaign import load_campaign_config
+        from starsector_optimizer.honest_evaluator import _cost_ledger_path
+
+        captured: dict = {}
+
+        def _fake_redis(**kwargs):
+            captured.update(kwargs)
+            return MagicMock()
+
+        monkeypatch.setattr("redis.Redis", _fake_redis)
+        campaign = load_campaign_config(_write_smoke_campaign_yaml(tmp_path))
+        cm = he._make_cost_heartbeat_thread(
+            campaign,
+            "starsector-honest-eval-x",
+            _cost_ledger_path(tmp_path, "x"),
+            MagicMock(),
+        )
+        assert captured["decode_responses"] is True
+        assert not cm.thread.is_alive()  # not started
+
+    def test_cost_thread_ticks_and_joins_and_closes(self):
+        import time
+
+        from starsector_optimizer.honest_evaluator import _CostHeartbeatThread
+
+        ticks: list[int] = []
+        closed: list[int] = []
+
+        cm = _CostHeartbeatThread(
+            lambda: ticks.append(1),
+            interval_seconds=0.01,
+            join_timeout_seconds=5.0,
+            on_close=lambda: closed.append(1),
+        )
+        with cm:
+            for _ in range(300):
+                if ticks:
+                    break
+                time.sleep(0.01)
+        assert ticks
+        assert not cm.thread.is_alive()
+        assert closed == [1]
+
+    def test_cost_thread_joined_on_exception(self):
+        from starsector_optimizer.honest_evaluator import _CostHeartbeatThread
+
+        cm = _CostHeartbeatThread(lambda: None, interval_seconds=0.01, join_timeout_seconds=5.0)
+        with pytest.raises(RuntimeError, match="boom"):
+            with cm:
+                raise RuntimeError("boom")
+        # The daemon flag would mask a missing join at process exit; assert the
+        # join actually ran on the exception path.
+        assert not cm.thread.is_alive()
+
+    def test_cost_thread_swallows_tick_errors(self):
+        import time
+
+        from starsector_optimizer.honest_evaluator import _CostHeartbeatThread
+
+        calls: list[int] = []
+
+        def _raising_tick() -> None:
+            calls.append(1)
+            raise ValueError("transient redis blip")
+
+        cm = _CostHeartbeatThread(_raising_tick, interval_seconds=0.01, join_timeout_seconds=5.0)
+        with cm:
+            for _ in range(300):
+                if len(calls) >= 2:
+                    break
+                time.sleep(0.01)
+        # A raising tick did not kill the loop.
+        assert len(calls) >= 2
+        assert not cm.thread.is_alive()
+
+    def test_cost_thread_writes_rows_over_fake_redis(self, tmp_path, fake_redis):
+        """Integration: a real ticker over a decoded fake Redis with a live
+        heartbeat writes >=1 cost_ledger row and the thread joins."""
+        import time
+
+        from starsector_optimizer.campaign import CostHeartbeatTicker, CostLedger
+        from starsector_optimizer.honest_evaluator import (
+            _cost_ledger_path,
+            _CostHeartbeatThread,
+        )
+
+        project_tag = "starsector-honest-eval-x"
+        fake_redis.hset(
+            f"worker:{project_tag}:w1:heartbeat",
+            mapping={
+                "timestamp": time.time(),
+                "region": "us-east-1",
+                "instance_type": "c7a.2xlarge",
+            },
+        )
+        provider = MagicMock()
+        provider.get_spot_price.return_value = 0.30
+        path = _cost_ledger_path(tmp_path, "x")
+        ledger = CostLedger(path, budget_usd=None)
+        ticker = CostHeartbeatTicker(
+            redis_client=fake_redis,
+            provider=provider,
+            project_tag=project_tag,
+            ledger=ledger,
+            interval_seconds=0.01,
+            heartbeat_stale_multiplier=3,
+            spot_price_cache_ttl_seconds=300.0,
+        )
+        cm = _CostHeartbeatThread(ticker.tick, interval_seconds=0.01, join_timeout_seconds=5.0)
+        with cm:
+            for _ in range(300):
+                if path.exists() and path.read_text().strip():
+                    break
+                time.sleep(0.01)
+        assert not cm.thread.is_alive()
+        rows = [json.loads(l) for l in path.read_text().splitlines()]
+        assert len(rows) >= 1
+        assert rows[0]["worker_id"] == "w1"
+        assert rows[0]["delta_usd"] > 0

@@ -19,9 +19,11 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, UTC
 from pathlib import Path
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 
 from .campaign import (
+    CostHeartbeatTicker,
+    CostLedger,
     check_ami_tags_against_manifest,
     check_authkey_syntax,
     check_aws_credentials,
@@ -83,6 +85,29 @@ def _ledger_dir(out_root: Path, eval_tag: str) -> Path:
 
 def _ledger_path(out_root: Path, eval_tag: str) -> Path:
     return _ledger_dir(out_root, eval_tag) / "results.jsonl"
+
+
+def _cost_ledger_path(out_root: Path, eval_tag: str) -> Path:
+    """Sibling of the results ledger — the measurement-only cost ledger
+    (spec 30 §"Cost measurement"). Reuses `_ledger_dir` so it cannot drift
+    from the results-ledger directory."""
+    return _ledger_dir(out_root, eval_tag) / "cost_ledger.jsonl"
+
+
+def _read_cost_ledger_cumulative(cost_ledger_path: Path) -> float:
+    """Return the last row's `cumulative_usd` (0.0 if the ledger is
+    absent/empty). Used to seed `CostLedger.initial_cumulative` on resume so
+    the appended column stays monotone (spec 30 §"Cost measurement")."""
+    if not cost_ledger_path.exists():
+        return 0.0
+    last = 0.0
+    with cost_ledger_path.open() as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line:
+                continue
+            last = float(json.loads(line)["cumulative_usd"])
+    return last
 
 
 def _resume_key(build_id: str, opp: str, rep: int) -> tuple[str, str, int]:
@@ -148,6 +173,104 @@ class _LedgerWriter:
             f.write(line)
             f.flush()
             os.fsync(f.fileno())
+
+
+class _CostHeartbeatThread:
+    """Context-managed background loop that ticks a `CostHeartbeatTicker` over
+    the honest-eval fleet for its lifetime (spec 30 §"Cost measurement").
+
+    Honest-eval is the campaign-analog orchestrator, so it owns its cost tick
+    the way `CampaignManager.monitor_loop` owns the campaign one — the pool
+    stays a pure dispatch mechanism. `__exit__` sets the stop event and joins
+    (bounded by `join_timeout_seconds`) on every exit path — normal, exception,
+    and `KeyboardInterrupt` — so the thread never outlives the fleet; the loop
+    waits on the stop event (not `time.sleep`) so the join returns promptly; and
+    a per-tick `except Exception` keeps a transient Redis/AWS blip from aborting
+    a paid eval (measurement is best-effort). `on_close` closes owned resources
+    (the Redis client) after the join.
+    """
+
+    def __init__(
+        self,
+        tick: Callable[[], None],
+        *,
+        interval_seconds: float,
+        join_timeout_seconds: float,
+        on_close: Callable[[], None] | None = None,
+    ) -> None:
+        self._tick = tick
+        self._interval_seconds = interval_seconds
+        self._join_timeout_seconds = join_timeout_seconds
+        self._on_close = on_close
+        self._stop = threading.Event()
+        self.thread = threading.Thread(
+            target=self._run,
+            name="honest-eval-cost-tick",
+            daemon=True,
+        )
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            try:
+                self._tick()
+            except Exception:
+                logger.exception("honest-eval cost tick failed; continuing")
+            self._stop.wait(timeout=self._interval_seconds)
+
+    def __enter__(self) -> _CostHeartbeatThread:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self._stop.set()
+        self.thread.join(timeout=self._join_timeout_seconds)
+        if self._on_close is not None:
+            try:
+                self._on_close()
+            except Exception:
+                logger.warning("honest-eval cost thread: on_close failed", exc_info=True)
+
+
+def _make_cost_heartbeat_thread(
+    campaign: CampaignConfig,
+    project_tag: str,
+    cost_ledger_path: Path,
+    provider: AWSProvider,
+) -> _CostHeartbeatThread:
+    """Build the measurement-only cost ledger + ticker + background thread for
+    an honest-eval run. The ticker's Redis client is built with
+    `decode_responses=True` (as `CampaignManager._preflight` does) — the tick
+    body reads `str` heartbeat fields, and a bytes client would record zero
+    rows. Resume seeds `cumulative_usd` from the prior ledger's last row."""
+    import redis
+
+    resume_cumulative = _read_cost_ledger_cumulative(cost_ledger_path)
+    ledger = CostLedger(
+        cost_ledger_path,
+        budget_usd=None,
+        initial_cumulative=resume_cumulative,
+    )
+    client = redis.Redis(
+        host="127.0.0.1",
+        port=campaign.redis_port,
+        socket_timeout=campaign.redis_preflight_timeout_seconds,
+        decode_responses=True,
+    )
+    ticker = CostHeartbeatTicker(
+        redis_client=client,
+        provider=provider,
+        project_tag=project_tag,
+        ledger=ledger,
+        interval_seconds=campaign.ledger_heartbeat_interval_seconds,
+        heartbeat_stale_multiplier=campaign.heartbeat_stale_multiplier,
+        spot_price_cache_ttl_seconds=campaign.spot_price_cache_ttl_seconds,
+    )
+    return _CostHeartbeatThread(
+        ticker.tick,
+        interval_seconds=campaign.ledger_heartbeat_interval_seconds,
+        join_timeout_seconds=campaign.teardown_thread_join_seconds,
+        on_close=client.close,
+    )
 
 
 @dataclass(frozen=True)
@@ -1332,6 +1455,7 @@ def main(argv: list[str] | None = None) -> int:
         flask_port,
     )
 
+    cost_provider = AWSProvider(regions=campaign.regions)
     try:
         with prepare_cloud_pool(
             campaign=campaign,
@@ -1349,14 +1473,23 @@ def main(argv: list[str] | None = None) -> int:
             mod_jar_override_sha256=mod_jar_override_sha256,
             sweep_project_on_exit=True,
         ) as pool:
-            evaluated = evaluate_builds(
-                builds_with_provenance,
-                eval_pool,
-                pool,
-                config,
-                hull,
-                ledger_path=ledger_path,
-            )
+            # Measurement-only cost ledger for the fleet's lifetime (spec 30
+            # §"Cost measurement"). Nested inside the pool so its bounded join
+            # runs before fleet teardown on every exit path.
+            with _make_cost_heartbeat_thread(
+                campaign,
+                eval_tag,
+                _cost_ledger_path(args.out_root, eval_tag),
+                cost_provider,
+            ):
+                evaluated = evaluate_builds(
+                    builds_with_provenance,
+                    eval_pool,
+                    pool,
+                    config,
+                    hull,
+                    ledger_path=ledger_path,
+                )
     except KeyboardInterrupt:
         logger.warning("honest_eval interrupted — cleanup complete")
         return 130

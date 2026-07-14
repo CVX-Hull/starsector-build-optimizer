@@ -280,6 +280,39 @@ a warning. Corrupt JSON lines raise. The ledger is only the resume
 substrate — final outputs (`honest_eval.json`, the cross-cell summary)
 remain in `{out_root}/campaigns/`.
 
+**Cost measurement.** Honest-eval writes a **measurement-only cost ledger**
+alongside the results ledger at
+`{out_root}/honest_eval/{eval_tag}/cost_ledger.jsonl` (the
+[spec 22 §"Cost ledger"](22-cloud-deployment.md) format, `budget_usd=None`).
+This exists to record *realized* dollar spend for the honest-eval path, which
+otherwise had no cost accounting (only the source-campaign path did). It does
+**not** contradict the "does NOT inherit `budget_usd`" decision above: the
+ledger is pure measurement — it records rows and warns nothing, and never caps
+or aborts the run. Honest-eval keeps its operator-control cost model
+(`--workers` + `--replicates`); a hard cap is deliberately absent because it
+would terminate a run mid-oracle and leave the (build × opp × rep) design
+unbalanced.
+
+A background thread — the honest-eval analog of `CampaignManager.monitor_loop`
+— drives a `CostHeartbeatTicker` (spec 22 §"Ledger tick") every
+`ledger_heartbeat_interval_seconds` for the duration of the provisioned fleet.
+The thread is entered inside the cloud-pool context and joined (bounded by
+`teardown_thread_join_seconds`) on every exit path — normal, exception, and
+`KeyboardInterrupt` — so it never outlives the fleet; a stop-event drives the
+loop so the join returns promptly rather than blocking a full interval, and a
+per-tick `except Exception` keeps a transient Redis/AWS blip from aborting a
+paid eval. The ticker's Redis client is built with `decode_responses=True`
+(spec 22 §"Ledger tick", step 1). Its heartbeat scan matches the honest-eval
+fleet's `project_tag` (= `eval_tag`); workers post the same
+`worker:<project_tag>:*:heartbeat` hashes as campaign workers (same AMI), so
+cost attribution is identical to the campaign path.
+
+Realized spend = `sum(delta_usd)` over the ledger (resume-safe). On
+`--resume-from`, the ledger **appends** across fleet lifetimes and
+`cumulative_usd` is **seeded** from the prior file's last row (via
+`initial_cumulative`) so it stays monotone across the appended file and its
+last value equals total realized spend.
+
 Writes `data/campaigns/<name>/honest_eval.json` per input campaign plus
 a single `data/campaigns/honest_eval_summary_YYYY-MM-DD.json` covering
 all cells. Each JSON also embeds `pool_size` (= `len(pool_variant_ids)`)
@@ -376,7 +409,13 @@ timing when needed, then forwarded through `prepare_cloud_pool`):
 `max_lifetime_hours`, `matchup_slots_per_worker`, `redis_port`,
 `base_flask_port`, `flask_ports_per_study`, `result_timeout_seconds`,
 `visibility_timeout_seconds`, `janitor_interval_seconds`,
-`max_requeues`. Honest-eval intentionally does NOT inherit
+`max_requeues`, and — inherited **as pass-through, not adjusted** — the
+cost-measurement cadence knobs `ledger_heartbeat_interval_seconds`,
+`heartbeat_stale_multiplier`, `spot_price_cache_ttl_seconds`
+(§"Cost measurement"). Honest-eval also reads `teardown_thread_join_seconds`
+for the cost-thread join bound and `redis_preflight_timeout_seconds` as the
+`socket_timeout` for the cost-measurement Redis client (same use as
+`CampaignManager._preflight`). Honest-eval intentionally does NOT inherit
 `studies` (it spins one fleet, not N) or `budget_usd` (no per-eval
 budget cap; operator controls cost via `--workers` + `--replicates`).
 

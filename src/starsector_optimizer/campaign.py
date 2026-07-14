@@ -222,20 +222,34 @@ def load_campaign_config(path: Path) -> CampaignConfig:
 class CostLedger:
     """Append-only JSONL cost ledger with fsync discipline.
 
-    One row per active worker per ledger_heartbeat_interval_seconds. Hard-
-    stops the campaign when cumulative cost reaches budget_usd.
+    One row per active worker per ledger_heartbeat_interval_seconds.
+
+    ``budget_usd`` is a hard ceiling: when a ``float`` is given the ledger warns
+    at ``warn_thresholds`` and raises ``BudgetExceeded`` once cumulative cost
+    reaches it (the campaign path). Passing ``budget_usd=None`` puts the ledger
+    in **measurement-only** mode — it appends rows and advances
+    ``cumulative_usd`` but never warns and never raises. Measurement-only exists
+    for consumers that must record spend without a cap (honest-eval, spec 30
+    §"Cost measurement").
+
+    ``initial_cumulative`` seeds ``cumulative_usd`` (default ``0.0``). A
+    measurement-only consumer that appends to an existing ledger on resume seeds
+    it with the prior file's last ``cumulative_usd`` so the column stays
+    monotone across the appended file.
     """
 
     def __init__(
         self,
         path: Path,
-        budget_usd: float,
+        budget_usd: float | None,
         warn_thresholds: tuple[float, ...] = (0.5, 0.8, 0.95),
+        *,
+        initial_cumulative: float = 0.0,
     ) -> None:
         self._path = path
         self._budget_usd = budget_usd
         self._warn_thresholds = tuple(sorted(warn_thresholds))
-        self._cumulative = 0.0
+        self._cumulative = initial_cumulative
         self._warned: set[float] = set()
         self._path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -265,11 +279,14 @@ class CostLedger:
             cumulative_usd=self._cumulative,
         )
         self._append(entry)
-        self._maybe_warn()
-        if self._cumulative >= self._budget_usd:
-            raise BudgetExceeded(
-                f"cumulative_usd={self._cumulative:.2f} >= budget_usd={self._budget_usd:.2f}"
-            )
+        # Measurement-only mode (budget_usd is None): record but never warn or
+        # cap. The float path is unchanged.
+        if self._budget_usd is not None:
+            self._maybe_warn()
+            if self._cumulative >= self._budget_usd:
+                raise BudgetExceeded(
+                    f"cumulative_usd={self._cumulative:.2f} >= budget_usd={self._budget_usd:.2f}"
+                )
         return entry
 
     def _append(self, entry: CostLedgerEntry) -> None:
@@ -290,6 +307,120 @@ class CostLedger:
                     self._cumulative,
                     self._budget_usd,
                 )
+
+
+# ---- Cost heartbeat ticker ---------------------------------------------------
+
+
+class CostHeartbeatTicker:
+    """Per-tick spot-price cost attribution over live worker heartbeats.
+
+    Owns the per-worker last-tick times and the ``(region, instance_type) →
+    (rate, fetched_at)`` spot-price cache. One ``tick()`` SCANs
+    ``worker:<project_tag>:*:heartbeat``, skips stale heartbeats, and records
+    one ``CostLedger`` row per live worker. Shared by ``CampaignManager``
+    (which delegates its ``monitor_loop`` tick) and the honest-eval cost loop
+    (spec 30 §"Cost measurement").
+
+    The ``redis_client`` MUST be constructed with ``decode_responses=True`` — the
+    heartbeat reads below assume ``str`` keys/values; a bytes-returning client
+    would read ``timestamp`` as missing, treat every worker as stale, and record
+    zero rows. ``BudgetExceeded`` from ``ledger.record_heartbeat`` (float-budget
+    ledgers only) propagates out of ``tick()``.
+    """
+
+    def __init__(
+        self,
+        *,
+        redis_client: Any,
+        provider: CloudProvider,
+        project_tag: str,
+        ledger: CostLedger,
+        interval_seconds: float,
+        heartbeat_stale_multiplier: float,
+        spot_price_cache_ttl_seconds: float,
+    ) -> None:
+        self._redis = redis_client
+        self._provider = provider
+        self._project_tag = project_tag
+        self._ledger = ledger
+        self._interval_seconds = interval_seconds
+        self._heartbeat_stale_multiplier = heartbeat_stale_multiplier
+        self._spot_price_cache_ttl_seconds = spot_price_cache_ttl_seconds
+        self._spot_price_cache: dict[tuple[str, str], tuple[float, float]] = {}
+        self._last_tick_ts: dict[str, float] = {}
+
+    def tick(self, now: float | None = None) -> None:
+        """Attribute spot-price cost to each live worker heartbeat.
+
+        Reads `worker:<project_tag>:*:heartbeat` hashes from Redis, filters
+        out heartbeats older than `heartbeat_stale_multiplier × interval` as
+        dead, fetches spot price per (region, instance_type) via the local
+        cache, and records one ledger row per live worker. `BudgetExceeded`
+        propagates out of `record_heartbeat` → out of this method.
+        """
+        if self._redis is None:
+            return
+        interval = self._interval_seconds
+        stale_cutoff = interval * self._heartbeat_stale_multiplier
+        if now is None:
+            now = time.time()
+        pattern = f"worker:{self._project_tag}:*:heartbeat"
+        for key in self._redis.scan_iter(match=pattern):
+            try:
+                hash_data = self._redis.hgetall(key)
+            except Exception as e:
+                logger.warning("ledger_tick: hgetall %s failed: %s", key, e)
+                continue
+            if not hash_data:
+                continue
+            try:
+                hb_ts = float(hash_data.get("timestamp", 0))
+            except (TypeError, ValueError):
+                continue
+            if now - hb_ts > stale_cutoff:
+                continue
+            # worker_id extracted from the key: worker:<project>:<worker>:heartbeat
+            parts = key.split(":") if isinstance(key, str) else []
+            worker_id = parts[2] if len(parts) >= 4 else hash_data.get("worker_id", "unknown")
+            region = hash_data.get("region", "unknown")
+            instance_type = hash_data.get("instance_type", "unknown")
+            rate = self._get_spot_price_cached(region, instance_type, now)
+            last_tick = self._last_tick_ts.get(worker_id, now - interval)
+            hours_elapsed = min(interval, now - last_tick) / _SECONDS_PER_HOUR
+            self._last_tick_ts[worker_id] = now
+            self._ledger.record_heartbeat(
+                worker_id=worker_id,
+                region=region,
+                instance_type=instance_type,
+                hours_elapsed=hours_elapsed,
+                rate_usd_per_hr=rate,
+            )
+
+    def _get_spot_price_cached(
+        self,
+        region: str,
+        instance_type: str,
+        now: float,
+    ) -> float:
+        """Return cached spot price, refreshing past ttl."""
+        ttl = self._spot_price_cache_ttl_seconds
+        key = (region, instance_type)
+        cached = self._spot_price_cache.get(key)
+        if cached is not None and (now - cached[1]) <= ttl:
+            return cached[0]
+        try:
+            rate = self._provider.get_spot_price(region, instance_type)
+        except Exception as e:
+            logger.warning(
+                "get_spot_price(%s, %s) failed: %s — using 0.0",
+                region,
+                instance_type,
+                e,
+            )
+            rate = 0.0
+        self._spot_price_cache[key] = (rate, now)
+        return rate
 
 
 # ---- Reliable-queue janitor --------------------------------------------------
@@ -799,14 +930,12 @@ class CampaignManager:
         self._tailnet_ip: str | None = None
         self._study_procs: list[subprocess.Popen] = []
         self._teardown_done = False
-        # Ledger-tick state. _redis is populated by _preflight, reused by
-        # _tick_ledger; _spot_price_cache holds (rate, fetched_at) per
-        # (region, instance_type) refreshed past spot_price_cache_ttl_seconds;
-        # _last_tick_ts[worker_id] -> last tick wall time so delta is
-        # capped at min(interval, now - last_tick) per tick.
+        # Ledger-tick state. _redis is populated by _preflight, which also
+        # builds _cost_ticker (owns the per-worker last-tick times + spot-price
+        # cache). monitor_loop delegates to it; it stays None until a
+        # successful preflight so a manager reached without preflight no-ops.
         self._redis: Any = None
-        self._spot_price_cache: dict[tuple[str, str], tuple[float, float]] = {}
-        self._last_tick_ts: dict[str, float] = {}
+        self._cost_ticker: CostHeartbeatTicker | None = None
         atexit.register(self._atexit_teardown)
 
     @property
@@ -862,6 +991,15 @@ class CampaignManager:
                 port=self._config.redis_port,
                 socket_timeout=self._config.redis_preflight_timeout_seconds,
                 decode_responses=True,
+            )
+            self._cost_ticker = CostHeartbeatTicker(
+                redis_client=self._redis,
+                provider=self._provider,
+                project_tag=self._project_tag,
+                ledger=self._ledger,
+                interval_seconds=self._config.ledger_heartbeat_interval_seconds,
+                heartbeat_stale_multiplier=self._config.heartbeat_stale_multiplier,
+                spot_price_cache_ttl_seconds=self._config.spot_price_cache_ttl_seconds,
             )
         except PreflightFailure as e:
             logger.error("preflight failed: %s", e)
@@ -987,79 +1125,11 @@ class CampaignManager:
         interval = self._config.ledger_heartbeat_interval_seconds
         while any(p.poll() is None for p in study_procs):
             time.sleep(interval)
-            self._tick_ledger()
-
-    def _tick_ledger(self) -> None:
-        """Iterate live worker heartbeats, attribute spot-price cost to each.
-
-        Reads `worker:<project_tag>:*:heartbeat` hashes from Redis, filters
-        out heartbeats older than `heartbeat_stale_multiplier × interval` as
-        dead, fetches spot price per (region, instance_type) via the
-        orchestrator-local cache, and records one ledger row per live worker
-        per tick. `BudgetExceeded` propagates out of `record_heartbeat`
-        → out of this method → caught by `run()`'s `except BudgetExceeded`.
-        """
-        if self._redis is None:
-            return
-        interval = self._config.ledger_heartbeat_interval_seconds
-        stale_cutoff = interval * self._config.heartbeat_stale_multiplier
-        now = time.time()
-        pattern = f"worker:{self._project_tag}:*:heartbeat"
-        for key in self._redis.scan_iter(match=pattern):
-            try:
-                hash_data = self._redis.hgetall(key)
-            except Exception as e:
-                logger.warning("ledger_tick: hgetall %s failed: %s", key, e)
-                continue
-            if not hash_data:
-                continue
-            try:
-                hb_ts = float(hash_data.get("timestamp", 0))
-            except (TypeError, ValueError):
-                continue
-            if now - hb_ts > stale_cutoff:
-                continue
-            # worker_id extracted from the key: worker:<project>:<worker>:heartbeat
-            parts = key.split(":") if isinstance(key, str) else []
-            worker_id = parts[2] if len(parts) >= 4 else hash_data.get("worker_id", "unknown")
-            region = hash_data.get("region", "unknown")
-            instance_type = hash_data.get("instance_type", "unknown")
-            rate = self._get_spot_price_cached(region, instance_type, now)
-            last_tick = self._last_tick_ts.get(worker_id, now - interval)
-            hours_elapsed = min(interval, now - last_tick) / _SECONDS_PER_HOUR
-            self._last_tick_ts[worker_id] = now
-            self._ledger.record_heartbeat(
-                worker_id=worker_id,
-                region=region,
-                instance_type=instance_type,
-                hours_elapsed=hours_elapsed,
-                rate_usd_per_hr=rate,
-            )
-
-    def _get_spot_price_cached(
-        self,
-        region: str,
-        instance_type: str,
-        now: float,
-    ) -> float:
-        """Return cached spot price, refreshing past ttl."""
-        ttl = self._config.spot_price_cache_ttl_seconds
-        key = (region, instance_type)
-        cached = self._spot_price_cache.get(key)
-        if cached is not None and (now - cached[1]) <= ttl:
-            return cached[0]
-        try:
-            rate = self._provider.get_spot_price(region, instance_type)
-        except Exception as e:
-            logger.warning(
-                "get_spot_price(%s, %s) failed: %s — using 0.0",
-                region,
-                instance_type,
-                e,
-            )
-            rate = 0.0
-        self._spot_price_cache[key] = (rate, now)
-        return rate
+            # None until a successful _preflight builds the ticker — a
+            # monitor_loop reached without preflight is a no-op (parity with
+            # the prior `if self._redis is None: return`).
+            if self._cost_ticker is not None:
+                self._cost_ticker.tick()
 
     def _terminate_study_procs(self) -> None:
         """SIGTERM all live study subprocesses, wait, then SIGKILL survivors.

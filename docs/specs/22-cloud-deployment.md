@@ -100,9 +100,9 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `game_dir` | `str` | `"game/starsector"` | Orchestrator-side path to the Starsector install. Study subprocesses load game data here for constraint-aware sampling + opponent-pool construction; workers run the JVM from their AMI-baked `/opt/starsector` |
 | `teardown_retry_delay_seconds` | `float` | `10.0` | Wait before retrying `terminate_all_tagged` in `CampaignManager.teardown` when `list_active` still shows workers |
 | `teardown_thread_join_seconds` | `float` | `5.0` | Bound on `CloudWorkerPool.teardown` waits on the Flask server thread + janitor thread |
-| `spot_price_cache_ttl_seconds` | `float` | `300.0` | In-process `(region, instance_type) → rate` cache lifetime in `CampaignManager._tick_ledger`. Prevents one `DescribeSpotPriceHistory` call per tick per worker at steady-state. Cache miss or TTL expiry re-fetches. |
+| `spot_price_cache_ttl_seconds` | `float` | `300.0` | In-process `(region, instance_type) → rate` cache lifetime in `CostHeartbeatTicker` (§"Ledger tick"). Prevents one `DescribeSpotPriceHistory` call per tick per worker at steady-state. Cache miss or TTL expiry re-fetches. |
 | `max_requeues` | `int` | `5` | Janitor hard cap. A matchup whose next visibility-timeout breach would push `requeue_count` above this value is dropped (LREM from processing, NOT re-LPUSH to source) with an ERROR log. Catches permanently stuck matchups without pathological ping-pong. |
-| `heartbeat_stale_multiplier` | `int` | `3` | Heartbeats whose `timestamp > heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds` old are treated as dead and skipped by `_tick_ledger` — no cost accrues. Dead-key clean-up happens at teardown via `_flush_stale_campaign_keys`. |
+| `heartbeat_stale_multiplier` | `int` | `3` | Heartbeats whose `timestamp > heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds` old are treated as dead and skipped by `CostHeartbeatTicker.tick` — no cost accrues. Dead-key clean-up happens at teardown via `_flush_stale_campaign_keys`. |
 
 ### `WorkerConfig`
 
@@ -241,17 +241,44 @@ Append-only JSONL at `data/campaigns/<name>/ledger.jsonl`. Every write is follow
 
 Warning logs fire at each `ledger_warn_thresholds` (default 50%/80%/95%) — once per threshold, never repeated. Hard cap at `budget_usd`: `record_heartbeat` raises `BudgetExceeded`, which `CampaignManager.run()` catches in a `try/finally` to trigger teardown and **returns exit code 0** (designed termination, not failure — wrapper scripts running multiple budget-capped cells back-to-back depend on this to advance to the next cell). Other failure modes keep distinct non-zero exit codes: preflight failure → 2, KeyboardInterrupt / SIGTERM / SIGHUP → 130, unexpected exception → propagates.
 
+**Optional budget (`budget_usd: float | None`).** `budget_usd=None` puts the
+ledger in **measurement-only** mode: `record_heartbeat` appends rows and
+advances `cumulative_usd` but never warns and never raises `BudgetExceeded`.
+This exists for consumers that must *measure* spend without a hard cap — the
+honest-eval path ([spec 30 §"Cost measurement"](30-honest-evaluator.md)), which
+deliberately has no per-eval budget. The `CampaignManager` campaign path always
+passes a concrete `float` (`config.budget_usd`), so its warn-and-cap behavior is
+unchanged. `CostLedger.__init__` also accepts `initial_cumulative: float = 0.0`
+to seed `cumulative_usd` — used by measurement-only consumers to keep the column
+monotone across an appended-to ledger on resume (default `0.0` preserves the
+campaign path). `cumulative_usd` is monotone within a single ledger lifetime; a
+consumer reading total realized spend across resumes should use `sum(delta_usd)`
+(always correct) or read the last row only when the ledger was seeded on resume.
+
 **`budget_usd` is a hard ceiling, not a target.** Wave 1 surfaced an operator footgun: a flat per-cell budget can truncate cells before their trial-count design floor, making downstream gate thresholds mis-interpretable (decision recorded 2026-05-10). The principled operator contract: **size `budget_usd` as `expected_cost × 1.5` headroom**, where expected_cost = trials × matchups_per_trial × per_matchup_cost. The 1.5× cushion absorbs spot-price spikes and worker-restart overhead without hitting the cap. Studies designed against trial counts MUST budget for trials, not flat dollar amounts. Future config option `min_trials_before_budget_cap` was considered and deferred — keeping budget purely-as-ceiling avoids a "two ways to do it" config surface; the trial-floor concern lives in operator math, not the framework.
 
 After every major optimization run that uses this infrastructure, the operator runs the **honest evaluator** ([spec 30](30-honest-evaluator.md), [`scripts/cloud/evaluate_campaign.sh`](../../scripts/cloud/evaluate_campaign.sh)) before publishing report findings — see [`honest-evaluation`](../../.claude/skills/honest-evaluation.md) skill for the SOP. The evaluator dispatches via the same `EvaluatorPool` ABC defined in this spec and reuses `cloud_runner.prepare_cloud_pool` for the per-eval fleet (separate `starsector-honest-eval-{name}-{utc}` namespace from the source campaign).
 
 ### Ledger tick (2026-04-19)
 
-`CampaignManager._tick_ledger` is called from `monitor_loop` every
-`ledger_heartbeat_interval_seconds`. Per tick:
+The per-tick attribution logic is owned by **`CostHeartbeatTicker`**
+(`campaign.py`, beside `CostLedger`) — a reusable unit that holds the
+per-worker `_last_tick_ts` and the `(region, instance_type) → (rate,
+fetched_at)` spot-price cache, and exposes `tick(now: float | None = None)`.
+`CampaignManager` constructs one after its Redis client + `CostLedger` exist
+(in `_preflight`) and delegates: `monitor_loop` calls `self._cost_ticker.tick()`
+every `ledger_heartbeat_interval_seconds` (guarded so a `monitor_loop` reached
+without a successful preflight is a no-op, matching the prior
+`if self._redis is None: return`). The honest-eval orchestrator
+([spec 30 §"Cost measurement"](30-honest-evaluator.md)) reuses the same ticker
+from its own background loop. The mechanics below are unchanged; they describe
+one `tick()`:
 
-1. SCAN `worker:<project_tag>:*:heartbeat` via the preflight-cached
-   Redis client (`self._redis`).
+1. SCAN `worker:<project_tag>:*:heartbeat` via the ticker's Redis client.
+   That client **must** be built with `decode_responses=True` (as
+   `CampaignManager._preflight` does) — the hash reads below assume `str`
+   keys/values, and a bytes-returning client would read `timestamp` as missing,
+   treat every worker as stale, and record zero rows.
 2. For each key, HGETALL and read `timestamp`, `region`, `instance_type`.
    Skip heartbeats older than
    `heartbeat_stale_multiplier × ledger_heartbeat_interval_seconds`
@@ -268,10 +295,11 @@ After every major optimization run that uses this infrastructure, the operator r
    `spot_price_cache_ttl_seconds`, on which the next lookup calls
    `self._provider.get_spot_price(region, instance_type)` and
    refreshes.
-5. Call `self._ledger.record_heartbeat(...)`. `BudgetExceeded`
-   propagates out of `_tick_ledger` → out of `monitor_loop` →
-   caught by `run()`'s top-level `try/finally`, which triggers
-   teardown.
+5. Call `ledger.record_heartbeat(...)`. In the campaign path (concrete
+   `budget_usd`), `BudgetExceeded` propagates out of `tick()` → out of
+   `monitor_loop` → caught by `run()`'s top-level `try/finally`, which triggers
+   teardown. In a measurement-only consumer (`budget_usd=None`),
+   `record_heartbeat` never raises.
 
 Module-level constant `_SECONDS_PER_HOUR = 3600.0` guards against
 bare `3600.0` literals in function bodies (project invariant).

@@ -356,6 +356,67 @@ class TestCostLedger:
         assert BEARER_TOKEN_SENTINEL not in content
         assert TAILSCALE_SECRET_SENTINEL not in content
 
+    def test_none_budget_never_warns_or_raises(self, tmp_path, caplog):
+        """Measurement-only mode: records rows, advances cumulative, never
+        warns, never raises BudgetExceeded regardless of spend."""
+        from starsector_optimizer.campaign import CostLedger
+
+        ledger = CostLedger(path=tmp_path / "ledger.jsonl", budget_usd=None)
+        with caplog.at_level(logging.WARNING):
+            for _ in range(20):
+                ledger.record_heartbeat(
+                    worker_id="w1",
+                    region="us-east-1",
+                    instance_type="c7a.2xlarge",
+                    hours_elapsed=10.0,
+                    rate_usd_per_hr=100.0,
+                )
+        rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        assert len(rows) == 20
+        assert rows[-1]["cumulative_usd"] > 0
+        assert rows == sorted(rows, key=lambda r: r["cumulative_usd"])
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    def test_initial_cumulative_seeds_and_keeps_monotone_on_resume(self, tmp_path):
+        """A resumed measurement-only ledger seeded with the prior last
+        cumulative_usd keeps the appended column monotone."""
+        from starsector_optimizer.campaign import CostLedger
+
+        path = tmp_path / "ledger.jsonl"
+        first = CostLedger(path=path, budget_usd=None)
+        for _ in range(3):
+            first.record_heartbeat(
+                worker_id="w1",
+                region="us-east-1",
+                instance_type="c7a.2xlarge",
+                hours_elapsed=1.0,
+                rate_usd_per_hr=1.0,
+            )
+        last_cum = json.loads(path.read_text().splitlines()[-1])["cumulative_usd"]
+        resumed = CostLedger(path=path, budget_usd=None, initial_cumulative=last_cum)
+        resumed.record_heartbeat(
+            worker_id="w1",
+            region="us-east-1",
+            instance_type="c7a.2xlarge",
+            hours_elapsed=1.0,
+            rate_usd_per_hr=1.0,
+        )
+        cumulatives = [json.loads(l)["cumulative_usd"] for l in path.read_text().splitlines()]
+        assert cumulatives == sorted(cumulatives)
+        assert cumulatives[-1] > last_cum
+
+
+class _FakeProc:
+    """A study-subprocess stand-in: `poll()` returns None on the first call
+    (alive → monitor_loop enters its body once) then 0 (exited → loop stops)."""
+
+    def __init__(self) -> None:
+        self._calls = 0
+
+    def poll(self):
+        self._calls += 1
+        return None if self._calls == 1 else 0
+
 
 class TestCampaignManager:
     """CampaignManager: pure supervisor — preflight, spawn subprocess per (study, seed),
@@ -1264,34 +1325,55 @@ class TestLedgerTick:
             )
             assert got == want, tag_key
 
+    def _ticker(self, tmp_path, fake_redis, budget_usd=10.0):
+        """Build a CostHeartbeatTicker over `fake_redis` — the extracted seam
+        the manager now delegates to. Config knobs mirror `_manager`."""
+        from starsector_optimizer.campaign import (
+            CostHeartbeatTicker,
+            CostLedger,
+            load_campaign_config,
+        )
+
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        provider = MagicMock()
+        provider.get_spot_price.return_value = 0.30
+        ledger = CostLedger(path=tmp_path / "ledger.jsonl", budget_usd=budget_usd)
+        ticker = CostHeartbeatTicker(
+            redis_client=fake_redis,
+            provider=provider,
+            project_tag=f"starsector-{config.name}",
+            ledger=ledger,
+            interval_seconds=config.ledger_heartbeat_interval_seconds,
+            heartbeat_stale_multiplier=config.heartbeat_stale_multiplier,
+            spot_price_cache_ttl_seconds=config.spot_price_cache_ttl_seconds,
+        )
+        return ticker, provider, config
+
     def test_tick_ledger_writes_row_per_live_worker(self, tmp_path, fake_redis):
-        mgr, _provider, _ledger = self._manager(tmp_path)
-        mgr._redis = fake_redis
+        ticker, _provider, _config = self._ticker(tmp_path, fake_redis)
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-b")
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-c")
-        mgr._tick_ledger()
+        ticker.tick()
         rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text().splitlines()]
         assert len(rows) == 3
         assert all(r["delta_usd"] > 0 for r in rows)
         assert {r["worker_id"] for r in rows} == {"worker-a", "worker-b", "worker-c"}
 
     def test_tick_ledger_raises_budget_exceeded(self, tmp_path, fake_redis):
-        mgr, provider, _ledger = self._manager(tmp_path, budget_usd=0.001)
-        mgr._redis = fake_redis
+        ticker, provider, _config = self._ticker(tmp_path, fake_redis, budget_usd=0.001)
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         provider.get_spot_price.return_value = 5.0  # exceeds 0.001 instantly
         from starsector_optimizer.campaign import BudgetExceeded
 
         with pytest.raises(BudgetExceeded):
-            mgr._tick_ledger()
+            ticker.tick()
 
     def test_tick_ledger_caches_spot_price_across_ticks(self, tmp_path, fake_redis):
-        mgr, provider, _ledger = self._manager(tmp_path)
-        mgr._redis = fake_redis
+        ticker, provider, _config = self._ticker(tmp_path, fake_redis)
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         for _ in range(4):
-            mgr._tick_ledger()
+            ticker.tick()
             # re-seed timestamp so heartbeat stays live
             self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
         # Cache: one call per (region, instance_type) across 4 ticks.
@@ -1300,11 +1382,9 @@ class TestLedgerTick:
     def test_tick_ledger_skips_stale_heartbeat(self, tmp_path, fake_redis):
         """Heartbeat older than heartbeat_stale_multiplier × interval →
         worker treated as dead, no ledger row written."""
-        mgr, _provider, _ledger = self._manager(tmp_path)
-        mgr._redis = fake_redis
+        ticker, _provider, config = self._ticker(tmp_path, fake_redis)
         stale_offset = (
-            mgr._config.ledger_heartbeat_interval_seconds * mgr._config.heartbeat_stale_multiplier
-            + 10
+            config.ledger_heartbeat_interval_seconds * config.heartbeat_stale_multiplier + 10
         )
         self._seed_heartbeat(
             fake_redis,
@@ -1312,7 +1392,7 @@ class TestLedgerTick:
             "worker-a",
             ts_offset=stale_offset,
         )
-        mgr._tick_ledger()
+        ticker.tick()
         assert not (tmp_path / "ledger.jsonl").exists() or (
             (tmp_path / "ledger.jsonl").read_text() == ""
         )
@@ -1320,18 +1400,56 @@ class TestLedgerTick:
     def test_tick_ledger_hours_elapsed_capped_at_interval(self, tmp_path, fake_redis):
         """Consecutive ticks at interval_seconds apart → each tick charges
         at most `interval_seconds/3600` hours per worker."""
-        mgr, _provider, _ledger = self._manager(tmp_path)
-        mgr._redis = fake_redis
+        ticker, _provider, config = self._ticker(tmp_path, fake_redis)
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
-        mgr._tick_ledger()
+        ticker.tick()
         # Re-seed so live, then tick again.
         self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
-        mgr._tick_ledger()
+        ticker.tick()
         rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text().splitlines()]
-        interval_hours = mgr._config.ledger_heartbeat_interval_seconds / 3600.0
+        interval_hours = config.ledger_heartbeat_interval_seconds / 3600.0
         for r in rows:
             # Allow tiny float slack.
             assert r["hours_elapsed"] <= interval_hours + 0.001
+
+    def test_cost_heartbeat_ticker_none_redis_is_noop(self, tmp_path):
+        """The ticker's own `redis_client is None` short-circuit: no scan, no
+        rows, no raise (the mechanism monitor_loop's None-guard relies on)."""
+        from starsector_optimizer.campaign import CostHeartbeatTicker, CostLedger
+
+        ledger = CostLedger(path=tmp_path / "ledger.jsonl", budget_usd=None)
+        ticker = CostHeartbeatTicker(
+            redis_client=None,
+            provider=MagicMock(),
+            project_tag="starsector-test-campaign",
+            ledger=ledger,
+            interval_seconds=60.0,
+            heartbeat_stale_multiplier=3,
+            spot_price_cache_ttl_seconds=300.0,
+        )
+        ticker.tick()  # must not raise
+        assert not (tmp_path / "ledger.jsonl").exists() or (
+            (tmp_path / "ledger.jsonl").read_text() == ""
+        )
+
+    def test_monitor_loop_delegates_to_cost_ticker(self, tmp_path, fake_redis):
+        """monitor_loop ticks the delegated CostHeartbeatTicker, producing the
+        same ledger rows the pre-refactor `_tick_ledger` produced."""
+        mgr, _provider, _ledger = self._manager(tmp_path, ledger_heartbeat_interval_seconds=0.01)
+        ticker, _p, _c = self._ticker(tmp_path, fake_redis)
+        mgr._cost_ticker = ticker
+        self._seed_heartbeat(fake_redis, "starsector-test-campaign", "worker-a")
+        mgr.monitor_loop([_FakeProc()])
+        rows = [json.loads(l) for l in (tmp_path / "ledger.jsonl").read_text().splitlines()]
+        assert len(rows) >= 1
+        assert rows[-1]["worker_id"] == "worker-a"
+
+    def test_monitor_loop_without_ticker_is_noop(self, tmp_path):
+        """A monitor_loop reached without a successful _preflight (ticker still
+        None) must not raise — parity with the prior `_redis is None` guard."""
+        mgr, _provider, _ledger = self._manager(tmp_path, ledger_heartbeat_interval_seconds=0.01)
+        assert mgr._cost_ticker is None
+        mgr.monitor_loop([_FakeProc()])  # must not raise
 
 
 class TestRunJanitorPass:

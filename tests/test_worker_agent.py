@@ -357,7 +357,7 @@ class TestHeartbeat:
         tmp_path,
     ):
         """Phase-7-prep: heartbeat carries IMDSv2-derived region + instance_type
-        so the orchestrator's _tick_ledger can attribute cost per (region,
+        so the orchestrator's CostHeartbeatTicker can attribute cost per (region,
         instance_type) bucket. Seed the module-level cache to avoid hitting
         the real IMDS endpoint during the unit test.
         """

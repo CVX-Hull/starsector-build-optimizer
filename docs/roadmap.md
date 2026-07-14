@@ -14,7 +14,8 @@ steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
 Groomed: 2026-07-14 — items 1–2 delivered (defaults flip; prequential
-replay); replay follow-ups wired into items 3–7 + the Phase-7 gate.
+replay); replay follow-ups wired into items 3–7 + the Phase-7 gate; item-3
+cost-ledger prerequisite shipped (honest-eval cost measurement).
 Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
@@ -48,10 +49,17 @@ Compute runs on AWS learned-batch; costs:
 3. **Data-wave prerequisites** (AWS; the base run is dollar-cheap, but
    walltime and the optional stream oracle coverage below are the real
    budgets, decided at the plan gate):
-   - port a **cost ledger** onto the honest-eval path (still absent;
-     [AWS cost analysis §4](reports/2026-07-11-aws-cost-analysis.md));
+   - ~~port a **cost ledger** onto the honest-eval path~~ — **shipped
+     2026-07-14**: measurement-only `CostLedger` (`budget_usd=None`) driven
+     by the extracted `CostHeartbeatTicker` from a background loop in
+     `honest_evaluator.main`, writing `data/honest_eval/<tag>/cost_ledger.jsonl`
+     (spec 30 §"Cost measurement"); closes AWS-cost-analysis Unknown #1
+     (realized honest-eval spend now measured, not derived);
    - port **scale-down-on-drain** to the honest-eval fleet (shipped for
-     the learned batch only);
+     the learned batch only; the honest-eval fleet is static with no
+     replacement provisioning, so this needs an orchestrator-driven design,
+     not a copy of the learned-batch worker-self-terminate model — its own
+     plan);
    - one **instrumented accounting run** to resolve the matchups-per-trial
      spread — includes the never-landed **wolf** (non-meta hull)
      measurement (absorbs the retired Wave-2 residue). The run's
