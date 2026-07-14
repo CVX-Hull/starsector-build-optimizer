@@ -106,6 +106,37 @@ def trimmed_alpha(
     return float(np.mean(residuals))
 
 
+def pooled_residual_variance(
+    matrix: np.ndarray,
+    alpha: np.ndarray,
+    beta: np.ndarray,
+) -> float:
+    """Pooled residual MSE σ̂_ε² over observed cells (spec 28, Phase 5D).
+
+    n_params = n_builds + n_opps − 1: one identifying constraint — α can
+    absorb a constant that β offsets, so the degrees of freedom are reduced
+    by one relative to the naive sum. Single owner of the formula, shared by
+    `ScoreMatrix`, `posthoc_ranker`, and the prequential replay (spec 31).
+
+    Args:
+        matrix: (n_builds, n_opps) score matrix. NaN = unobserved.
+        alpha: (n_builds,) TWFE build effects.
+        beta: (n_opps,) TWFE opponent effects.
+
+    Returns:
+        σ̂_ε², or 0.0 when the matrix has no observed cells.
+    """
+    observed = ~np.isnan(matrix)
+    if not np.any(observed):
+        return 0.0
+    pred = alpha[:, None] + beta[None, :]
+    diff = np.where(observed, matrix - pred, 0.0)
+    n_obs = int(observed.sum())
+    n_builds, n_opps = matrix.shape
+    denom = max(n_obs - (n_builds + n_opps - 1), 1)
+    return float(np.sum(diff * diff)) / denom
+
+
 class ScoreMatrix:
     """Sparse build × opponent score accumulator with cached TWFE decomposition.
 
@@ -202,23 +233,7 @@ class ScoreMatrix:
 
         matrix = self._materialize()
         self._alpha, self._beta = twfe_decompose(matrix, n_iters=config.n_iters, ridge=config.ridge)
-
-        # Pooled residual MSE over observed cells (Phase 5D).
-        # n_params = n_builds + n_opps - 1 (one identifying constraint:
-        # α can absorb a constant that β offsets, so the degrees of freedom
-        # are reduced by one relative to the naive sum).
-        observed_mask = ~np.isnan(matrix)
-        if np.any(observed_mask):
-            pred = self._alpha[:, None] + self._beta[None, :]
-            diff = np.where(observed_mask, matrix - pred, 0.0)
-            resid_sq = float(np.sum(diff * diff))
-            n_obs = int(observed_mask.sum())
-            n_builds, n_opps = matrix.shape
-            denom = max(n_obs - (n_builds + n_opps - 1), 1)
-            self._sigma_eps_sq = resid_sq / denom
-        else:
-            self._sigma_eps_sq = 0.0
-
+        self._sigma_eps_sq = pooled_residual_variance(matrix, self._alpha, self._beta)
         self._dirty = False
 
     def _materialize(self) -> np.ndarray:

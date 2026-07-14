@@ -565,7 +565,7 @@ class TWFEConfig:
 class EBShrinkageConfig:
     """Empirical-Bayes shrinkage parameters for the Phase 5D A2′ stage.
 
-    Controls fusion of TWFE α̂ with a 7-covariate regression prior:
+    Controls fusion of TWFE α̂ with a 10-dim-covariate regression prior:
         α̂_EB_i = w_i · α̂_i + (1 − w_i) · γ̂ᵀ[1, X_i],  w_i = τ̂² / (τ̂² + σ̂_i²)
     See spec 28 §EB Shrinkage (A2′).
 

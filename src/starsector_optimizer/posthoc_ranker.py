@@ -39,7 +39,7 @@ from collections.abc import Sequence
 import numpy as np
 from scipy.optimize import minimize
 
-from .deconfounding import eb_shrinkage, twfe_decompose
+from .deconfounding import eb_shrinkage, pooled_residual_variance, twfe_decompose
 from .models import EBShrinkageConfig, TWFEConfig
 
 logger = logging.getLogger(__name__)
@@ -241,16 +241,8 @@ def rank_twfe(
     matrix, inv_builds, _ = _build_score_matrix(records)
     alpha, beta = twfe_decompose(matrix, n_iters=cfg.n_iters, ridge=cfg.ridge)
 
-    # Per-build n_i and pooled σ̂_ε² for std-error reporting — same formula
-    # as `deconfounding.ScoreMatrix._ensure_decomposed`.
-    observed = ~np.isnan(matrix)
-    pred = alpha[:, None] + beta[None, :]
-    diff = np.where(observed, matrix - pred, 0.0)
-    n_obs = int(observed.sum())
-    n_b, n_o = matrix.shape
-    denom = max(n_obs - (n_b + n_o - 1), 1)
-    sigma_eps_sq = float(np.sum(diff * diff)) / denom
-    n_per_build = observed.sum(axis=1)
+    sigma_eps_sq = pooled_residual_variance(matrix, alpha, beta)
+    n_per_build = (~np.isnan(matrix)).sum(axis=1)
 
     ranked = _alpha_to_ranked(
         alpha,
@@ -282,16 +274,10 @@ def rank_twfe_eb(
     matrix, inv_builds, _ = _build_score_matrix(records)
     alpha, beta = twfe_decompose(matrix, n_iters=tcfg.n_iters, ridge=tcfg.ridge)
 
-    # Pooled residual MSE σ̂_ε² (same formula as ScoreMatrix._ensure_decomposed).
-    observed = ~np.isnan(matrix)
-    pred = alpha[:, None] + beta[None, :]
-    diff = np.where(observed, matrix - pred, 0.0)
-    n_obs = int(observed.sum())
-    n_b, n_o = matrix.shape
-    denom = max(n_obs - (n_b + n_o - 1), 1)
-    sigma_eps_sq = float(np.sum(diff * diff)) / denom
-    n_per_build = observed.sum(axis=1)
+    sigma_eps_sq = pooled_residual_variance(matrix, alpha, beta)
+    n_per_build = (~np.isnan(matrix)).sum(axis=1)
     sigma_sq_per_build = sigma_eps_sq / np.maximum(n_per_build, 1)
+    n_b = matrix.shape[0]
 
     # No covariates → degenerate X (single zero column gets dropped → γ̂ = [μ̂_α]).
     # The "zero-std X columns" warning from `eb_shrinkage` is expected here
@@ -313,7 +299,11 @@ def rank_twfe_eb(
             config=ecfg,
         )
     logger.debug(
-        "rank_twfe_eb: tau2=%.4f sigma_eps_sq=%.4f n_b=%d n_o=%d", tau2, sigma_eps_sq, n_b, n_o
+        "rank_twfe_eb: tau2=%.4f sigma_eps_sq=%.4f n_b=%d n_o=%d",
+        tau2,
+        sigma_eps_sq,
+        n_b,
+        matrix.shape[1],
     )
 
     ranked = _alpha_to_ranked(

@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: 2026-07-12
+last-validated: 2026-07-13
 ---
 
 # Spec 31 — Phase 7 Matchup Data
@@ -15,6 +15,7 @@ lives in:
 - `scripts/analysis/phase7_materialize_matchups.py`
 - `scripts/analysis/phase7_baseline_surrogate.py`
 - `scripts/analysis/phase7_learned_surrogate_experiment.py`
+- `scripts/analysis/phase7_prequential_replay.py`
 - `scripts/cloud/phase7_learned_batch.py`
 
 This spec also owns the Phase 7 learned-surrogate experiment and AWS batch
@@ -1135,6 +1136,206 @@ on honest-eval targets. If an experiment plan changes model families, feature
 families, promotion thresholds, or optimizer-integration decisions after
 inspecting an honest-eval diagnostic, subsequent claims on the same ledger are
 exploratory unless a fresh honest-eval ledger is used for the final claim.
+
+## Prequential Replay Ablation
+
+`scripts/analysis/phase7_prequential_replay.py` owns the prequential
+replay: the optimizer-integration instrument (methodology review M3) that
+replays a wave's proposal stream in arrival order, trains surrogate arms
+on past matchup rows only, scores upcoming proposal blocks, simulates a
+skip-bottom-q gating policy, and computes the offline estimator arms
+folded from the retired Phase 5A debt. It runs locally against the frozen
+matchup DB plus the source eval logs and study DBs; it spends no
+simulation budget.
+
+### Terminology
+
+- **Replay cell**: one `(campaign, seed)` study. The replay unit; streams
+  are never pooled across replay cells.
+- **Oracle panel**: the honest-eval build panel. Its builds are
+  per-campaign selections of the top builds of each *seed-study*
+  (top-`k`-per-seed, per spec 30), plus evaluator-generated
+  random-baseline builds that have no replay cell. A replay cell
+  therefore owns at most `top_k_per_seed` oracle'd builds.
+- **Rankable builds**: the finalized (non-pruned) trials of a replay
+  cell — the only builds the incumbent could select and the only ones
+  with logged covariate vectors. Estimator arms **fit on all matchup
+  rows (finalized + pruned)**, matching the live `ScoreMatrix`, but
+  **rank rankable builds only**, so every arm ranks the same support.
+
+### Replay stream and temporal semantics
+
+The stream orders a replay cell's trials by ascending eval-log
+`(timestamp, trial_number)` — the arrival order of completed results.
+Trials' matchup rows come from `training_matchups`, joined by
+`(source_path, trial_number)`; a trial present on one side of the join
+and absent from the other is a hard `ValueError` (data-integrity
+signal). Pruned trials are included in training data. Trial numbers are
+gappy; the stream iterates observed trials and never assumes contiguity.
+
+**Reconciliation with the `forward-time` split**: spec 31 now carries
+two distinct temporal semantics. The `forward-time` split (§"Split
+Builders") orders by the DB key `(source_path, trial_number,
+opponent_index)` — Optuna *suggestion* order, concatenated
+lexicographically across cells — and exists as a train/test partition
+for split-based evaluation. The replay stream orders by eval-log
+completion timestamps *within* one cell — arrival order, the information
+set a deployed trainer would actually have (the frozen DB carries no
+timestamp; suggestion order is non-monotonic in arrival time under
+parallel workers). The two must not be conflated: forward-time is a
+partition contract, the replay stream is a process contract.
+
+**In-flight gap**: at a cutoff, results of in-flight trials would not
+yet be available to a deployed trainer. `train_gap_trials` excludes the
+G most recent pre-cutoff trials from training; the sweep runs G=0
+(optimistic bound) and G=Ĝ, where Ĝ is the per-cell median in-flight
+count measured from the study DBs' (`datetime_start`,
+`datetime_complete`) interval overlaps and recorded in the artifact.
+
+### Cutoffs, prediction, and fidelity
+
+Cutoffs start at `min_train_trials` and advance by `cutoff_stride`
+while at least `min_future_trials` remain. All replay tunables live in a
+frozen `ReplayConfig`; defaults are designed constants owned by the
+script.
+
+**Decision-time prediction panel**: a trial's predicted score is the
+mean predicted target over its **planned `opponent_order` panel** — the
+opponent list logged at dispatch, before any outcome, for every trial
+including pruned ones. Predicted scores must never use realized row
+sets: which rows a trial realized is a pruner *outcome* (pruned trials
+realize a truncated, outcome-dependent opponent subset), unavailable at
+gate time.
+
+Fidelity per (replay cell, cutoff, horizon bucket, arm) has two
+predeclared targets:
+
+- **T1 — panel-matched raw fidelity**: rank correlation
+  (Spearman + Kendall) between predicted score and realized raw mean,
+  restricted to finalized trials (realized panel = planned panel, equal
+  row counts — no pruner-composition confound).
+- **T2 — opponent-adjusted fidelity**: rank correlation between
+  predicted score and the trial build's full-data A1 α̂ over rankable
+  builds (opponent effects removed — the C1 control).
+
+Horizon buckets group future trials by distance-in-trials ahead of the
+cutoff (`horizon_buckets`, plus an unbounded tail). Per-bucket support
+(contributing cells × cutoffs) is recorded; later cutoffs cannot
+populate deep buckets, so bucket aggregates are comparable only with
+their support shown. Matchup-level per-opponent rank metrics (the
+evaluation-metric suite, bootstrap disabled at per-cutoff level) are
+computed for the adjacent bucket only. Cross-cell aggregation uses a
+campaign-stratified cluster bootstrap (resampling unit = replay cell),
+reported as descriptive.
+
+Surrogate arms are the canonical learned families at
+`DEFAULT_HYPERPARAMETERS` (no per-cutoff HPO — predeclared: nested HPO
+per cutoff is cost-prohibitive and winner's-curse-prone at replay inner
+sizes; cf. methodology review M1/C3) plus the six comparator-gate
+families fit inline. `opponent_mean` is the mandatory build-blind null
+(C1): every surrogate fidelity or gating claim is reported against it.
+
+### Gating policy simulation
+
+Walking cutoffs in order, the policy ranks the next block
+(`[t, t + cutoff_stride)`) by predicted score and skips the bottom `q`
+fraction, for each `q` in `gating_fractions`. **Skipped trials' rows are
+removed from all later training sets** (the counterfactual training
+data a deployed gate would produce); a keep-skipped-rows sensitivity
+runs at the single `gating_sensitivity_fraction`. Accounting per cell:
+
+- **savings**: matchup rows not run = the realized row counts of skipped
+  trials, on the same denominator as the pruner reference;
+- **incumbent pruner reference**: rows the pruner avoided =
+  Σ(`opponents_total` − `opponents_evaluated`) over pruned trials, at
+  zero additional skips (NOT the pruned-row share, which measures rows
+  spent on pruned trials);
+- **regret**: which of the cell's final top-k rankable builds
+  (k ∈ {1, 3, 9}) under the gating target were skipped; the A1 arm is
+  the primary gating target with A0/EB sensitivity; plus Δ oracle value
+  where a skipped build is one of the cell's oracle'd builds.
+
+**Predeclared headline statistic** (single, no forking):
+`catboost_regressor`, G=Ĝ, per-cell q\* = the maximum
+`q ∈ gating_fractions` with zero realized top-3 regret under the A1
+target, aggregated as the **median over replay cells**, with the full
+per-cell distribution and the `opponent_mean` null reported alongside.
+Every other (arm, G, q, k, target) combination is sensitivity and must
+be labeled as such.
+
+**Predeclared caveats** (verbatim in any consuming report): the replay
+measures filtering fidelity on the logged stream and cannot measure the
+counterfactual TPE trajectory had proposals actually been skipped; the
+stream is forward-deployment evidence over later proposals of the *same*
+studies, not novel-build or cross-hull evidence.
+
+### Offline estimator arms
+
+Five arms, all per-replay-cell functions of the build × opponent matrix
+of `hp_differential` targets, computed at every cutoff and at full data.
+The target scale is `hp_differential` (spec 30 / `posthoc_ranker`
+precedent), NOT the live incumbent's `combat_fitness`, which is not
+exactly recoverable from logs; replayed arm values are therefore not
+numerically comparable to the logged `twfe_fitness` trace, which is
+reported as the as-deployed incumbent rather than re-derived. The
+retired Phase 5A experiment's arm boundaries are unrecoverable (deleted
+experiment directory); the definitions below are **normative**.
+
+| Arm | Definition |
+|---|---|
+| `A0` | TWFE α̂ via `twfe_decompose` + `trimmed_alpha(trim_worst=0)` (untrimmed) |
+| `A1` | as A0 with `trim_worst=2` (the live `TWFEConfig` default) |
+| `A2` | `α̂_A1,i − β̂_cv·(h_i − h̄)` where `h_i` is `composite_score` recomputed from `build_json` by the **current** manifest-driven heuristic scorer, and `β̂_cv = Cov(α̂_A1, h)/Var(h)` over rankable builds, with `β̂_cv = 0` when `Var(h) ≤ cv_variance_floor` (designed constant). A2 is a reconstruction, not a replication: the current scorer is not the Phase-5A-era scorer, and `composite_score` is inadmissible as a live covariate (Phase-7-prep) — reports must carry this caveat. |
+| `EB` | A1 + `eb_shrinkage` (+ `triple_goal_rank`) with the logged 10-dim covariate vectors (finalized trials only) and per-build `sigma_sq = σ̂_ε²/n_i` from the shared pooled-residual-variance helper in `deconfounding.py` (`n_params = n_builds + n_opps − 1`, spec 28). The arm calls the pure `eb_shrinkage` function directly; the `EBShrinkageConfig.enabled` deployment guard is not consulted. |
+| `A3` | A2 + the pre-5E top-quartile ceiling rank shape. Monotone except the ceiling, so its ranking equals A2's up to ties among the top quartile; A3 is measured only through top-k selection under seeded random tie-breaking, averaged over `tie_break_draws` draws. |
+
+Arm evaluations are predeclared as: (1) oracle recovery at full data —
+primary statistic is **within-replay-cell pairwise concordance** against
+oracle build means (at most `top_k_per_seed` builds per cell), with a
+cell-clustered binomial CI; secondary is campaign-level rank correlation
+under the pinned cross-study alignment **`μ̂ + α̂`** (predicted mean
+against the common opponent pool, the `posthoc_ranker` pooling
+precedent). Both are direction checks and cannot discriminate arms at
+this panel size; consuming reports must say so. (2) prequential
+convergence — rank correlation of arm-at-cutoff vs arm-at-full-data.
+(3) gating-target sensitivity as above.
+
+### Claim boundary and reuse
+
+Replay artifacts stamp `claim_label: "exploratory"` and
+`honest_eval_usage: "exploratory_selection"` (oracle values serve as
+evaluation targets for arm comparison — more than diagnostic; no
+confirmatory promotion is claimed). The replay draws no outer-split
+seeds; instead of `outer_split_lineage` it stamps
+`reused_source_data: true` with the source DB path and eval-log root —
+the wave-1 data has absorbed repeated analysis waves, and the flag marks
+that history without overloading `reused_partition`, whose defined
+meaning is forward-time-specific. Honest-eval leakage rules apply
+unchanged: no arm or surrogate trains, tunes, or selects on honest-eval
+targets; oracle values appear only in the predeclared arm evaluations
+and gating Δ-oracle accounting.
+
+### Determinism and artifact
+
+The artifact must reproduce **byte-identically** on re-run at the same
+config. Contractually: learned-family prediction runs single-threaded
+(same float-non-associativity rationale as the adversarial-AUC
+diagnostic; fit may use the configured thread budget);
+timing/duration fields are stripped from inline-comparator results
+before artifact assembly; the artifact contains no wall-clock values
+(the sweep date lives in the output filename, supplied by the caller);
+all RNGs (bootstrap, tie-breaking) are seeded from `ReplayConfig`; JSON
+is written sorted-keys.
+
+The artifact stamps: `experiment_schema_version`,
+`feature_schema_version`, `feature_profile`, source DB path, eval-log
+root, study-DB root, code version (or `unknown`), `dependency_extra`,
+`hpo_seed`, the full `ReplayConfig` echo, per-cell Ĝ measurements,
+`claim_boundary` (as above), and `reused_source_data`. Result payloads
+carry per-(cell, cutoff, bucket, arm) T1/T2 fidelity records with
+support counts, per-cell gating curves (savings, regret, pruner
+reference), the headline statistic inputs, and the three arm
+evaluations.
 
 ## Learned AWS Batch Artifacts
 
