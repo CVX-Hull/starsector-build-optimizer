@@ -1292,7 +1292,8 @@ experiment directory); the definitions below are **normative**.
 Arm evaluations are predeclared as: (1) oracle recovery at full data —
 primary statistic is **within-replay-cell pairwise concordance** against
 oracle build means (at most `top_k_per_seed` builds per cell), with a
-cell-clustered binomial CI; secondary is campaign-level rank correlation
+campaign-stratified cluster-bootstrap CI over cells; secondary is
+   campaign-level rank correlation
 under the pinned cross-study alignment **`μ̂ + α̂`** (predicted mean
 against the common opponent pool, the `posthoc_ranker` pooling
 precedent). Both are direction checks and cannot discriminate arms at

@@ -99,10 +99,10 @@ HEADLINE_GAP_MODE = "measured"
 GATING_TARGET_ARMS: tuple[str, ...] = ("A1", "A0", "EB")  # primary first
 ESTIMATOR_ARMS: tuple[str, ...] = ("A0", "A1", "A2", "EB", "A3")
 TRAIN_GAP_MODES: tuple[str, ...] = ("zero", "measured")
-# Arms scored in the fidelity pass: learned families + all comparator-gate
-# families. The matchup-level metric suite runs on GATING_ARMS only (cost).
 A3_TOP_QUANTILE_FRACTION = 0.25
 EB_MIN_RANKABLE_BUILDS = 3  # eb_shrinkage's own n >= 3 contract (spec 28)
+BOOTSTRAP_CI_PERCENTILES = (2.5, 97.5)  # 95% percentile interval
+MIN_BOOTSTRAP_N = 3  # below this a resampled rank correlation is meaningless
 CLAIM_LABEL = learned.DEFAULT_CLAIM_LABEL
 HONEST_EVAL_USAGE = "exploratory_selection"
 TAIL_BUCKET_LABEL = "tail"
@@ -140,7 +140,6 @@ class ReplayConfig:
     top_k_values: tuple[int, ...] = DEFAULT_TOP_K_VALUES
     feature_profile: str = baseline.DEFAULT_FEATURE_PROFILE
     learned_models: tuple[str, ...] = DEFAULT_LEARNED_MODELS
-    allow_missing_optional_models: bool = False
     max_cells: int | None = None
     progress: bool = True
     twfe: TWFEConfig = field(default_factory=TWFEConfig)
@@ -376,6 +375,7 @@ class ArmEstimates:
     values: dict[str, dict[int, float]]
     a3_tie_trials: tuple[int, ...]
     diagnostics: dict[str, Any]
+    beta_by_opponent: dict[str, float]
 
 
 def estimator_arm_estimates(
@@ -467,7 +467,12 @@ def estimator_arm_estimates(
     n_tie = max(math.ceil(len(a2) * A3_TOP_QUANTILE_FRACTION), 1) if a2 else 0
     a3_tie = tuple(sorted(deterministic_top_k(a2, n_tie))) if n_tie else ()
 
-    return ArmEstimates(values=values, a3_tie_trials=a3_tie, diagnostics=diagnostics)
+    return ArmEstimates(
+        values=values,
+        a3_tie_trials=a3_tie,
+        diagnostics=diagnostics,
+        beta_by_opponent={opp: float(beta[j]) for opp, j in opp_index.items()},
+    )
 
 
 def composite_scores(trials: Sequence[ReplayTrial], config: ReplayConfig) -> dict[int, float]:
@@ -663,6 +668,75 @@ def within_cell_concordance(
     return out
 
 
+def campaign_oracle_spearman(
+    cells: Mapping[str, Sequence[ReplayTrial]],
+    full_arms_by_cell: Mapping[str, ArmEstimates],
+    oracle_means_by_key: Mapping[str, float],
+    config: ReplayConfig,
+) -> dict[str, dict[str, Any]]:
+    """Secondary oracle-recovery statistic (spec 31): campaign-level Spearman
+    of pooled arm rankings vs oracle build means, under the pinned μ̂ + α̂
+    cross-study alignment — each build's score is its arm estimate plus its
+    own cell's mean opponent effect over the campaign's common opponent pool.
+
+    Direction check only: n per campaign is the oracle panel's per-campaign
+    build count; build-level bootstrap CIs; arms are not discriminable here.
+    A3 scores are A2 with per-cell top-quartile values clamped to the
+    ceiling (midrank ties).
+    """
+    by_campaign: dict[str, list[str]] = {}
+    for cell in sorted(cells):
+        by_campaign.setdefault(_campaign_of(cell), []).append(cell)
+
+    out: dict[str, dict[str, Any]] = {}
+    for campaign, members in by_campaign.items():
+        common_opps = set.intersection(
+            *(set(full_arms_by_cell[cell].beta_by_opponent) for cell in members)
+        )
+        if not common_opps:
+            out[campaign] = {"status": "no_common_opponents"}
+            continue
+        arm_names = set.intersection(*(set(full_arms_by_cell[cell].values) for cell in members))
+        per_arm: dict[str, Any] = {"common_opponents": len(common_opps)}
+        for arm in sorted(arm_names | ({"A3"} if "A2" in arm_names else set())):
+            aligned: list[float] = []
+            oracle: list[float] = []
+            for cell in members:
+                arms = full_arms_by_cell[cell]
+                base_arm = "A2" if arm == "A3" else arm
+                values = dict(arms.values[base_arm])
+                if arm == "A3" and arms.a3_tie_trials:
+                    ceiling = min(values[t] for t in arms.a3_tie_trials if t in values)
+                    values = {t: min(v, ceiling) for t, v in values.items()}
+                beta_mean = float(np.mean([arms.beta_by_opponent[o] for o in sorted(common_opps)]))
+                oracle_by_trial = {
+                    t.trial_number: oracle_means_by_key[t.build_key]
+                    for t in cells[cell]
+                    if not t.pruned and t.build_key in oracle_means_by_key
+                }
+                for trial_number, oracle_mean in sorted(oracle_by_trial.items()):
+                    if trial_number not in values:
+                        continue
+                    aligned.append(values[trial_number] + beta_mean)
+                    oracle.append(oracle_mean)
+            rho, _tau = _rank_corr(aligned, oracle)
+            entry: dict[str, Any] = {"spearman": rho, "n_builds": len(aligned)}
+            if rho is not None and len(aligned) >= MIN_BOOTSTRAP_N:
+                rng = np.random.default_rng(config.bootstrap_seed)
+                draws = []
+                for _ in range(config.bootstrap_iterations):
+                    idx = rng.integers(0, len(aligned), size=len(aligned))
+                    d_rho, _ = _rank_corr([aligned[i] for i in idx], [oracle[i] for i in idx])
+                    if d_rho is not None:
+                        draws.append(d_rho)
+                if draws:
+                    entry["ci_low"] = float(np.percentile(draws, BOOTSTRAP_CI_PERCENTILES[0]))
+                    entry["ci_high"] = float(np.percentile(draws, BOOTSTRAP_CI_PERCENTILES[1]))
+            per_arm[arm] = entry
+        out[campaign] = per_arm
+    return out
+
+
 def oracle_build_means(config: ReplayConfig) -> dict[str, float]:
     """Oracle panel build means keyed by build_key (honest-eval targets are a
     post-fit evaluation target here — spec 31 claim boundary)."""
@@ -803,8 +877,8 @@ def stratified_cell_bootstrap(
         means.append(float(np.mean(sample)))
     return {
         "mean": float(np.mean([per_cell_values[c] for c in cells])),
-        "ci_low": float(np.percentile(means, 2.5)),
-        "ci_high": float(np.percentile(means, 97.5)),
+        "ci_low": float(np.percentile(means, BOOTSTRAP_CI_PERCENTILES[0])),
+        "ci_high": float(np.percentile(means, BOOTSTRAP_CI_PERCENTILES[1])),
     }
 
 
@@ -865,6 +939,8 @@ def artifact_skeleton(config: ReplayConfig, inflight_gaps: Mapping[str, int]) ->
 
 
 def _fidelity_arms(config: ReplayConfig) -> tuple[str, ...]:
+    """Arms scored in the fidelity pass: learned families + all comparator-gate
+    families. The matchup-level metric suite runs on GATING_ARMS only (cost)."""
     return tuple(config.learned_models) + tuple(baseline.MODEL_CHOICES)
 
 
@@ -875,10 +951,10 @@ def run_cell(
     context: FeatureContext,
     oracle_means_by_key: Mapping[str, float],
     inflight_gap: int,
+    composites: Mapping[int, float],
+    full_arms: ArmEstimates,
 ) -> dict[str, Any]:
     cutoffs = cutoff_indices(len(trials), config)
-    composites = composite_scores(trials, config)
-    full_arms = estimator_arm_estimates(trials, composites, config)
     gap_by_mode = {"zero": 0, "measured": inflight_gap}
     t2_target = full_arms.values["A1"]
     oracle_means = {
@@ -982,8 +1058,15 @@ def run_cell(
             rho, _tau = _rank_corr([estimates[t] for t in common], [full[t] for t in common])
             convergence[arm].append({"cutoff": cutoff, "spearman_vs_full": rho})
 
+    # Concordance covers the full ESTIMATOR_ARMS registry; A3 ranks via A2
+    # (ceiling ties handled inside the concordance function).
+    concordance_values = {
+        arm: full_arms.values["A2" if arm == "A3" else arm]
+        for arm in ESTIMATOR_ARMS
+        if ("A2" if arm == "A3" else arm) in full_arms.values
+    }
     concordance = within_cell_concordance(
-        {**full_arms.values, "A3": full_arms.values["A2"]},
+        concordance_values,
         oracle_means,
         full_arms.a3_tie_trials,
     )
@@ -1155,6 +1238,12 @@ def run_replay(config: ReplayConfig) -> dict[str, Any]:
             measured_inflight_gap(trials, config) if "measured" in config.train_gap_modes else 0
         )
 
+    composites_by_cell = {cell: composite_scores(trials, config) for cell, trials in cells.items()}
+    full_arms_by_cell = {
+        cell: estimator_arm_estimates(trials, composites_by_cell[cell], config)
+        for cell, trials in cells.items()
+    }
+
     payload = artifact_skeleton(config, inflight_gaps)
     cells_payload: dict[str, dict[str, Any]] = {}
     for index, (cell, trials) in enumerate(cells.items(), start=1):
@@ -1163,10 +1252,21 @@ def run_replay(config: ReplayConfig) -> dict[str, Any]:
             config.progress,
         )
         cells_payload[cell] = run_cell(
-            cell, trials, config, context, oracle_means_by_key, inflight_gaps[cell]
+            cell,
+            trials,
+            config,
+            context,
+            oracle_means_by_key,
+            inflight_gaps[cell],
+            composites_by_cell[cell],
+            full_arms_by_cell[cell],
         )
     payload["cells"] = cells_payload
-    payload["aggregates"] = _aggregate(cells_payload, config)
+    aggregates = _aggregate(cells_payload, config)
+    aggregates["oracle_recovery"]["campaign_rank"] = campaign_oracle_spearman(
+        cells, full_arms_by_cell, oracle_means_by_key, config
+    )
+    payload["aggregates"] = aggregates
 
     if config.output is not None:
         learned._write_json_payload(config.output, payload)

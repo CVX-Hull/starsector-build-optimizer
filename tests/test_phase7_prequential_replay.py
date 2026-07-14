@@ -615,6 +615,54 @@ class TestOracleEvaluation:
         # Pairs: (0,1) concordant, (0,2) concordant, (1,2) discordant → 2/3.
         assert stats["A1"] == {"concordant": 2.0, "pairs": 3}
 
+    def test_campaign_secondary_aligns_per_cell_offsets(self):
+        def _trial(cell, seed, trial_number, build_key):
+            path = f"data/logs/wave1-c0a/study_seed{seed}/evaluation_log.jsonl"
+            return replay.ReplayTrial(
+                cell=cell,
+                source_path=path,
+                trial_number=trial_number,
+                timestamp=f"2026-05-10T00:00:{trial_number:02d}+00:00",
+                pruned=False,
+                build_key=build_key,
+                planned_opponents=("opp_a", "opp_b"),
+                rows=(),
+                covariate_vector=(1.0,),
+            )
+
+        cells = {
+            "wave1-c0a:0": (
+                _trial("wave1-c0a:0", 0, 0, "ka0"),
+                _trial("wave1-c0a:0", 0, 1, "ka1"),
+            ),
+            "wave1-c0a:1": (
+                _trial("wave1-c0a:1", 1, 0, "kb0"),
+                _trial("wave1-c0a:1", 1, 1, "kb1"),
+            ),
+        }
+        full_arms = {
+            # Cell B's raw α̂ scale sits ~11 below cell A's; the β̂-mean
+            # alignment must recover the interleaved oracle order.
+            "wave1-c0a:0": replay.ArmEstimates(
+                values={"A1": {0: 1.0, 1: 0.5}},
+                a3_tie_trials=(),
+                diagnostics={},
+                beta_by_opponent={"opp_a": 0.5, "opp_b": -0.5},
+            ),
+            "wave1-c0a:1": replay.ArmEstimates(
+                values={"A1": {0: -10.2, 1: -10.7}},
+                a3_tie_trials=(),
+                diagnostics={},
+                beta_by_opponent={"opp_a": 11.5, "opp_b": 10.5},
+            ),
+        }
+        oracle = {"ka0": 0.9, "ka1": 0.4, "kb0": 0.7, "kb1": 0.2}
+        result = replay.campaign_oracle_spearman(cells, full_arms, oracle, _config())
+        entry = result["wave1-c0a"]["A1"]
+        assert entry["n_builds"] == 4
+        assert entry["spearman"] == pytest.approx(1.0)
+        assert result["wave1-c0a"]["common_opponents"] == 2
+
     def test_a3_pairs_inside_tie_group_get_half(self):
         arm_values = {"A3": {0: 3.0, 1: 2.0, 2: 1.0}}
         oracle = {0: 0.9, 1: 0.5, 2: 0.7}
@@ -874,6 +922,7 @@ class TestIntegration:
         assert cell["pruner_reference_rows_avoided"] == 2
         assert "arm_convergence" in cell
         assert "oracle_recovery" in payload_one["aggregates"]
+        assert "campaign_rank" in payload_one["aggregates"]["oracle_recovery"]
         assert "headline" in payload_one["aggregates"]
         assert (tmp_path / "artifact.json").exists()
 
