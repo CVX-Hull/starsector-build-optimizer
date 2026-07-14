@@ -14,7 +14,7 @@ steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
 Groomed: 2026-07-14 — items 1–2 delivered (defaults flip; prequential
-replay). Full data-first re-groom 2026-07-13, user-ratified; decisions and
+replay); replay follow-ups wired into items 3–7 + the Phase-7 gate. Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
 `last-validated`.
@@ -44,9 +44,9 @@ Compute runs on AWS learned-batch; costs:
    the operational baseline for the item-4 comparison is the plain
    replay on the item-3 stream, contrasted augmented-vs-unaugmented on
    the same cells and cutoffs (item 4).
-3. **Data-wave prerequisites** (AWS, dollar-cheap — walltime and the
-   optional stream oracle coverage below are the real budgets, decided
-   at the plan gate):
+3. **Data-wave prerequisites** (AWS; the base run is dollar-cheap, but
+   walltime and the optional stream oracle coverage below are the real
+   budgets, decided at the plan gate):
    - port a **cost ledger** onto the honest-eval path (still absent;
      [AWS cost analysis §4](reports/2026-07-11-aws-cost-analysis.md));
    - port **scale-down-on-drain** to the honest-eval fleet (shipped for
@@ -63,8 +63,8 @@ Compute runs on AWS learned-batch; costs:
      in: the replay's full data prerequisites (standard eval logs with
      planned opponent order including pruned trials, study DBs with
      start/complete timestamps for the in-flight gap, frozen matchup-DB
-     materialization with join totality — spec 31 §Prequential Replay
-     Ablation); replay-adequate sizing (full-study trial counts per
+     materialization with join totality — spec 31 §"Prequential Replay
+     Ablation"); replay-adequate sizing (full-study trial counts per
      cell; the plan gate sets the minimum cell count for gate adequacy —
      single-cell streams are not gate-adequate, their readings are
      directional only); a **minimum count of wave-hull (hammerhead)
@@ -121,10 +121,14 @@ Compute runs on AWS learned-batch; costs:
    rationale rest on this; any adaptive acquisition arm would need its
    own stream treatment); the **off-TPE build sampler must be
    independent of the item-3 stream's proposals** (enforceable via the
-   per-row acquisition/propensity metadata above; the contrast report
-   must disclose build overlap with the stream's future blocks) — the
-   design gate convenes after the stream exists, so this is the leakage
-   control that keeps the augmented reading honest; the wave's
+   per-row acquisition/propensity metadata above) — but process
+   independence does not guarantee zero realized overlap in the
+   repair-collapsed build space, so the leakage control is an
+   **exclusion rule, not just disclosure**: any wave-panel build whose
+   build key collides with a scored stream future-block trial is
+   removed from the augmentation set before the paired re-run, and the
+   contrast report states the residual overlap as a verified hard-zero
+   check; the wave's
    oracle/holdout design should support **continuous oracle-value
    regret@k for selection evaluation** (expressible in spec 31's
    existing rank-metrics suite; the stream-side gating version is an
@@ -141,9 +145,11 @@ Compute runs on AWS learned-batch; costs:
    alongside the gate statistic — before item 3's baseline value is
    published — so only the null-result *interpretation*
    (panel-unhelpful vs off-TPE-panel-mismatched-to-a-TPE-stream) is
-   settled at item 4; the training-set extension to
-   the replay instrument is spec'd at the same gate, and **running the
-   paired contrast and filing its report is a deliverable of this
+   settled at item 4;
+   **implementing the training-set extension to the replay instrument**
+   (spec'd at the same gate; a strict no-op at empty augmentation,
+   verified to reproduce item 3's computed fields) and **running the
+   paired contrast and filing its report are deliverables of this
    item**. Spec-first through the normal plan gates.
 5. **Re-baseline + feature-profile ablations on the new DB** — absorbs the
    staged-but-unlaunched b1/b2 wave
@@ -161,8 +167,10 @@ Compute runs on AWS learned-batch; costs:
    [replay evidence](reports/2026-07-14-phase7-prequential-replay.md)).
    Model-family promotion claims from this item onward must cite the
    most recent **stream-based prequential opponent-adjusted fidelity**
-   reading for the family (the item-3 stream once it exists, wave-1
-   until then) alongside static split metrics, stating the
+   reading for the family (the item-3 stream once it exists; wave-1 for
+   families that were wave-1 arms; otherwise the nearest-available
+   reading as labelled context, per the spec 31 rule) alongside static
+   split metrics, stating the
    designed-panel limitation of the claim's own data (a spec 31 claim
    rule effective 2026-07-14; static build-like metrics alone overstate
    deployment-relevant signal per the replay evidence).
@@ -173,11 +181,22 @@ Compute runs on AWS learned-batch; costs:
    powered opponent splits. Mandatory comparator: **archetype-cluster-mean
    opponent baseline** before any learned-opponent-representation claim
    ([methodology-gaps §1](reference/phase7-surrogate-methodology-gaps.md)).
+   Because this family is promoted on fresh static build-like metrics —
+   exactly the case the replay showed overstates deployment signal — its
+   promotion deliverable includes **adding FM as a predeclared surrogate
+   arm on the item-3 stream and filing its adjacent-bucket T2 reading**,
+   satisfying the spec 31 disclosure rule with real evidence rather than
+   a no-reading disclaimer.
 7. **Within-opponent pairwise-ranking CatBoost** (groups = opponent, pairs
    gapped beyond noise floor) — targets the top-decile ≈ 0 weakness, the
    statistic the optimizer actually exploits. Scope now includes the **H1
    two-part censored-target treatment** (top-end weakness and 58.7%
-   endpoint mass are two faces of the same target problem).
+   endpoint mass are two faces of the same target problem). Promotion
+   deliverable (spec 31 disclosure rule): **land the ranking-family
+   planned-panel-score spec amendment first** (spec 31 §"Prequential
+   Replay Ablation" requires a ranking arm define its planned-panel
+   score before inclusion), then add the family as a predeclared
+   surrogate arm on the item-3 stream and file its T2 reading.
 
 ## AWS / infrastructure notes
 

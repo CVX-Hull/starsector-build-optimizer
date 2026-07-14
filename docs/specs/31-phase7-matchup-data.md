@@ -1085,7 +1085,7 @@ measure interpolation inside the collecting process's proposal cloud
 [2026-07-14 replay report](../reports/2026-07-14-phase7-prequential-replay.md)).
 The disclosed statistic is the §"Prequential Replay Ablation" T2
 reading for the family — pooled adjacent-bucket across all cutoffs at
-the measured in-flight gap, plus the support-balanced variant whenever
+the measured in-flight gap, plus the support-balanced control whenever
 the claim makes a drift or horizon statement. This is a mandatory
 disclosure, not a pass/fail threshold; any threshold is a designed
 quantity owned by the consuming plan. When the family has no such
