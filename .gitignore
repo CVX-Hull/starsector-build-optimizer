@@ -41,6 +41,7 @@ combat-harness/mod/workdir/heartbeat.txt
 !/data/wave1-comprehensive/
 !/data/wave1-trajectory/
 !/data/phase7-tail-walltime/
+!/data/phase7-prequential-replay/
 *.db
 
 # Experiment databases (too large for git, back up separately)

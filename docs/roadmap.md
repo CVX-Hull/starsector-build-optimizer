@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-07-13
+last-validated: 2026-07-14
 ---
 
 # Roadmap
@@ -13,7 +13,8 @@ must not accumulate their own live next-step lists — when a report's "next
 steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
-Groomed: 2026-07-13 — full data-first re-groom, user-ratified; decisions and
+Groomed: 2026-07-14 — items 1–2 delivered (defaults flip; prequential
+replay). Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
 `last-validated`.
@@ -28,19 +29,17 @@ remain authoritative). Literature grounding:
 Compute runs on AWS learned-batch; costs:
 [2026-07-11 AWS cost analysis](reports/2026-07-11-aws-cost-analysis.md).
 
-1. **Optimizer defaults flip to plain TWFE** (small code change, gates
-   apply): EB shrinkage and Box-Cox shaping become opt-in flags, default
-   off, per the honest-eval end-to-end ranking
-   ([re-groom D3](reports/2026-07-13-roadmap-regroom.md)).
-2. **Prequential replay ablation** — the decision-relevant
-   optimizer-integration gate (methodology review M3), from existing wave-1
-   logs; local, no sim spend. Requirements added by later evidence:
-   **drift-aware** reporting (rank fidelity vs temporal distance — the
-   forward-time partition is genuinely shifted,
-   [adversarial-AUC evidence](reports/2026-07-12-phase7-adversarial-auc-evidence.md))
-   and **estimator arms** A0/A1/A2/A3 folded in from the retired Phase 5A
-   debt (same logs, same incumbent definition;
-   [re-groom D2](reports/2026-07-13-roadmap-regroom.md)).
+1. ~~Optimizer defaults flip~~ — **shipped 2026-07-13** (plain TWFE
+   default; EB/Box-Cox opt-in per
+   [re-groom D3](reports/2026-07-13-roadmap-regroom.md)).
+2. ~~Prequential replay ablation~~ — **shipped 2026-07-14**
+   ([evidence](reports/2026-07-14-phase7-prequential-replay.md)): the M3
+   instrument exists and re-runs on any future DB; first readings show
+   surrogate gating not separable from the build-blind null on wave-1
+   data, opponent-adjusted signal flat within ~40 trials then gone, and
+   the 5A arm fold discharged (target-scale + EB-arm deviations noted at
+   discharge). The adjacent-block opponent-adjusted fidelity from that
+   report is the **pre-wave baseline** the item-4 data wave must beat.
 3. **Data-wave prerequisites** (AWS, cheap):
    - port a **cost ledger** onto the honest-eval path (still absent;
      [AWS cost analysis §4](reports/2026-07-11-aws-cost-analysis.md));
@@ -98,7 +97,10 @@ Compute runs on AWS learned-batch; costs:
 ## Planned phases (gated)
 
 - **Phase 7 — BoTorch structured-search GP sampler**: go/no-go gate =
-  the prequential replay (item 2) plus an offline MCBO bake-off
+  the prequential replay
+  ([first readings shipped](reports/2026-07-14-phase7-prequential-replay.md);
+  re-run on the designed-wave DB expected before the gate decision) plus
+  an offline MCBO bake-off
   (D-scaled vanilla mixed-GP baseline first) per
   [phase7-search-space-compression](reference/phase7-search-space-compression.md);
   cross-hull claims additionally require a **multi-hull data wave**

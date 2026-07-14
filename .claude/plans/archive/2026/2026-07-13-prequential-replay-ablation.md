@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: active
+status: implemented
 created: 2026-07-13
 approved: 2026-07-13
-implemented: null
+implemented: 2026-07-14
 owner: agent
 related_docs:
   - docs/roadmap.md
@@ -13,8 +13,8 @@ related_docs:
   - docs/reports/2026-07-12-phase7-adversarial-auc-evidence.md
   - docs/reports/2026-07-13-roadmap-regroom.md
   - docs/reports/2026-05-11-wave1-honest-eval-final.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: 7a0b64f (audit hardening 37cfb94; evidence + report in the retirement commit)
+post_impl_audit: passed (see §Post-implementation audit record)
 superseded_by: null
 ---
 
@@ -488,13 +488,52 @@ artifact reproduces byte-identically on re-run; report checked against
 CONVENTIONS §empirical-report standard including the
 supervised-learning checklist.
 
+## Post-implementation audit record (2026-07-14)
+
+3 agents ran over commit `7a0b64f` + working tree. **Code verdict:
+clean** — no leakage (gating path traced end-to-end), no invariant
+violations, helper retrofit behavior-preserving, all report numbers
+reproduced except the findings below. All findings fixed in
+`37cfb94` + the evidence commit:
+
+- (blocking, report) "never regrets at q = 0.1" was false (1/15 cells
+  regrets; regret non-monotone in q under remove-semantics) → §4 + Synthesis
+  rewritten; per-cell regret row added to the table.
+- (blocking, report) pooled T2 "monotone decay" was substantially a
+  bucket-support artifact → balanced-panel computation added to the
+  checked-in producer (`t2_balanced_panel`), Figure 1 recaptioned,
+  reading revised to flat-within-~40-then-collapse, tail
+  range-restriction alternative stated.
+- (major, process) reproduction claim published ahead of evidence →
+  commit held until the same-code single-cell byte-compare and the
+  clean-tree canonical sweep completed; appendix rewritten to describe
+  the actual comparisons.
+- (major) chart script duplicated the stratified bootstrap → reuses the
+  replay module's single owner.
+- (minors, all fixed) "80 trees" → 200 (4 sites); §3 aggregation
+  convention aligned to cell means; support line marked arm-specific;
+  spec CI wording aligned; ESTIMATOR_ARMS wired; dead config field
+  removed; percentile/min-n literals named; chart panel letters/tail
+  label; stray spec indent.
+- (declined, with rationale) `keep_skipped_sensitivity` omitting
+  `oracle_skipped`: spec does not require Δ-oracle for the sensitivity
+  run and it is derivable from the artifact's per-cell
+  `oracle_build_means`; adding it would have invalidated the in-flight
+  canonical sweep for a shape nit.
+
 ## Retirement checklist
 
-- [ ] status: implemented; implemented date; implementation_commit
-- [ ] post_impl_audit recorded
-- [ ] moved to `.claude/plans/archive/2026/`
-- [ ] roadmap item 2 removed / follow-ups absorbed (drift findings may
-      feed the data-wave design, item 4); D2 fold discharge notes the
-      target-scale + EB-arm deviations
-- [ ] reports INDEX updated; report cross-linked from methodology review
-      M3 consumers if needed
+- [x] status: implemented; implemented date; implementation_commit
+- [x] post_impl_audit recorded
+- [x] moved to `.claude/plans/archive/2026/`
+- [x] roadmap item 2 marked delivered; replay report named the pre-wave
+      T2 baseline for the item-4 data wave; D2 fold deviations noted at
+      discharge (report Goal + §5 + roadmap closure)
+- [x] reports INDEX updated (2026-07-14 row); dependent-report links in
+      the report's appendix
+
+Retirement notes: determinism verified (same-config single-cell double
+run byte-identical; full-sweep shared-field equality across audit-fix
+commits). The canonical artifact's `code_version` stamps
+`37cfb94+dirty` — the dirt was uncommitted documentation only; code
+files matched the commit.

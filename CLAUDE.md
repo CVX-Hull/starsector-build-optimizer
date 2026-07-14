@@ -22,7 +22,7 @@ Automated ship build discovery for Starsector using Bayesian optimization and co
 | 6 — Cloud worker federation (AWS spot fleet, Tailscale mesh, Redis reliable queue) | shipped, Tier-2 live | [phase6-cloud-worker-federation.md](docs/reference/phase6-cloud-worker-federation.md), spec `22`, [.claude/skills/cloud-worker-ops.md](.claude/skills/cloud-worker-ops.md) |
 | Phase-7-prep — Manifest-as-oracle refactor (deletes `hullmod_effects.py` + `timeout_tuner.py`) | shipped | spec `29` |
 | Phase 7 data substrate — featurized matchup recovery and baseline validation | shipped | spec `31`, [phase7-featurized-matchup-surrogate.md](docs/reference/phase7-featurized-matchup-surrogate.md) |
-| Phase 7 surrogate evidence program (data-first, re-groomed 2026-07-13: replay gate → designed data wave → re-baseline/ablations → FM + ranking models; runs on AWS) | **active** | [docs/roadmap.md](docs/roadmap.md), [re-groom record](docs/reports/2026-07-13-roadmap-regroom.md) |
+| Phase 7 surrogate evidence program (data-first, re-groomed 2026-07-13; prequential replay shipped 2026-07-14: designed data wave → re-baseline/ablations → FM + ranking models; runs on AWS) | **active** | [docs/roadmap.md](docs/roadmap.md), [replay evidence](docs/reports/2026-07-14-phase7-prequential-replay.md) |
 | 7 — Structured search-space rep (BoTorch GP sampler) · 7.5 — Infra & repro · 5G — PSRO curriculum | planned/deferred, gated on the evidence program | [docs/roadmap.md](docs/roadmap.md) |
 
 **Forward roadmap (canonical): [docs/roadmap.md](docs/roadmap.md).** Spec number registry (gaps at 02/20/21): [docs/specs/README.md](docs/specs/README.md). Reports index: [docs/reports/INDEX.md](docs/reports/INDEX.md). Phase-grouped tour: [docs/project-overview.md](docs/project-overview.md).
