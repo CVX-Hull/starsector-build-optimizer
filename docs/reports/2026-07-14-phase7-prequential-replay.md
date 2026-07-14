@@ -362,7 +362,13 @@ evidence.
 
 - Can the designed data wave (roadmap item 4: opponent panel + off-TPE
   build arm) raise adjacent-block T2 above the ≈ 0.12 achieved on
-  TPE-concentrated data? That number is now the pre-wave baseline.
+  TPE-concentrated data? That number is a pre-wave baseline reading.
+  **Superseded comparison design (2026-07-14):** the roadmap replaced
+  "the wave must beat this wave-1 number" with a paired
+  augmented-vs-unaugmented replay on the *item-3* stream's own cells
+  (a cross-dataset comparison would confound augmentation with
+  stream/hull differences) — see [roadmap](../roadmap.md) items 2–4.
+  This wave-1 reading is retained as historical context only.
 - Does the H1 two-part censored target (roadmap item 7) improve
   planned-panel scoring, where 58.7% endpoint mass caps mean-prediction
   contrast?

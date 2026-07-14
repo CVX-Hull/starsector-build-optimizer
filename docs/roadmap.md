@@ -34,20 +34,69 @@ Compute runs on AWS learned-batch; costs:
    [re-groom D3](reports/2026-07-13-roadmap-regroom.md)).
 2. ~~Prequential replay ablation~~ — **shipped 2026-07-14**
    ([evidence](reports/2026-07-14-phase7-prequential-replay.md)): the M3
-   instrument exists and re-runs on any future DB; first readings show
-   surrogate gating not separable from the build-blind null on wave-1
-   data, opponent-adjusted signal flat within ~40 trials then gone, and
-   the 5A arm fold discharged (target-scale + EB-arm deviations noted at
-   discharge). The adjacent-block opponent-adjusted fidelity from that
-   report is the **pre-wave baseline** the item-4 data wave must beat.
-3. **Data-wave prerequisites** (AWS, cheap):
+   instrument exists and re-runs on any future proposal stream; first
+   readings show surrogate gating not separable from the build-blind
+   null on wave-1 data, opponent-adjusted signal flat within the
+   measured horizon then gone, and the 5A arm fold discharged
+   (target-scale + EB-arm deviations noted at discharge). The
+   adjacent-block opponent-adjusted fidelity from that report is the
+   first of the **pre-wave baseline readings** (historical context);
+   the operational baseline for the item-4 comparison is the plain
+   replay on the item-3 stream, contrasted augmented-vs-unaugmented on
+   the same cells and cutoffs (item 4).
+3. **Data-wave prerequisites** (AWS, dollar-cheap — walltime and the
+   optional stream oracle coverage below are the real budgets, decided
+   at the plan gate):
    - port a **cost ledger** onto the honest-eval path (still absent;
      [AWS cost analysis §4](reports/2026-07-11-aws-cost-analysis.md));
    - port **scale-down-on-drain** to the honest-eval fleet (shipped for
      the learned batch only);
    - one **instrumented accounting run** to resolve the matchups-per-trial
      spread — includes the never-landed **wolf** (non-meta hull)
-     measurement (absorbs the retired Wave-2 residue).
+     measurement (absorbs the retired Wave-2 residue). The run's
+     proposal stream additionally **doubles as the fresh
+     prequential-replay input** for the Phase 7 gate — the designed wave
+     (item 4) is a balanced panel, not a stream, so this run is the
+     natural second replay substrate
+     ([replay evidence](reports/2026-07-14-phase7-prequential-replay.md)).
+     That role imposes requirements the item-3 plan gate must design
+     in: the replay's full data prerequisites (standard eval logs with
+     planned opponent order including pruned trials, study DBs with
+     start/complete timestamps for the in-flight gap, frozen matchup-DB
+     materialization with join totality — spec 31 §Prequential Replay
+     Ablation); replay-adequate sizing (full-study trial counts per
+     cell; the plan gate sets the minimum cell count for gate adequacy —
+     single-cell streams are not gate-adequate, their readings are
+     directional only); a **minimum count of wave-hull (hammerhead)
+     cells** — gate adequacy is defined over that subset, both arms of
+     the item-4 contrast run on it, and wolf cells serve the accounting
+     purpose only (directional replay readings at most; cross-hull
+     claims stay gated behind the multi-hull wave); a **stream-reuse
+     discipline** — the complete gate statistic (statistic type,
+     arm, cell scope, cutoffs, aggregation) is predeclared at this plan
+     gate **before the stream is collected**, superseding-or-reaffirming
+     the replay's shipped gating headline for gate purposes, and no
+     model-selection re-run consults the stream before that
+     predeclaration; consultations are appended to a **git-tracked
+     per-stream analysis ledger** (a report-companion file under a
+     negated `data/<stream>/` path or `docs/`, created by this item and
+     named in its report — not the gitignored frozen-DB directory, so
+     the anti-forking record is version-controlled), later new-family
+     re-runs entering as ledger entries; an
+     explicit cost/scope decision on **stream oracle coverage** — if
+     gating evaluation on this stream is to use continuous oracle-value
+     regret (zero-regret counting proved too lumpy to discriminate
+     gates, [replay evidence](reports/2026-07-14-phase7-prequential-replay.md)),
+     a designed subset of stream builds needs honest-eval coverage,
+     which is the expensive kind of spend, and the subset-selection
+     rule (e.g. rank-stratified under the predeclared arm) is fixed in
+     the same predeclaration so coverage cannot be chosen after
+     readings exist; and ownership — **running
+     the replay on this stream and filing its report is a deliverable
+     of this item**. Sizing and any oracle-coverage spend are ratified
+     by the user at this item's plan gate (the D4 pattern), since they
+     convert the ratified accounting errand into the Phase-7 gate's
+     evidence substrate.
 4. **Designed data wave — opponent panel + off-TPE build-diversity arm**
    (the centerpiece; new sim spend, scope user-ratified in
    [re-groom D4](reports/2026-07-13-roadmap-regroom.md)). Design
@@ -63,7 +112,39 @@ Compute runs on AWS learned-batch; costs:
    an **opponent-family lockbox** opened once per phase gate,
    **Ladder-margin acceptance**, and a **per-wave model-info sheet**
    (absorbs the former evidence-reuse-discipline item; methodology review
-   C4). Spec-first through the normal plan gates.
+   C4). Added by the replay findings
+   ([replay evidence](reports/2026-07-14-phase7-prequential-replay.md)):
+   the wave's **player hull is hammerhead** (the program's single-hull
+   anchor; multi-hull stays separately gated — the item-3 same-hull
+   sizing depends on this); **non-adaptive batch sampling** — the wave
+   must remain a panel (the item-3 stream framing and the Phase 7 gate
+   rationale rest on this; any adaptive acquisition arm would need its
+   own stream treatment); the **off-TPE build sampler must be
+   independent of the item-3 stream's proposals** (enforceable via the
+   per-row acquisition/propensity metadata above; the contrast report
+   must disclose build overlap with the stream's future blocks) — the
+   design gate convenes after the stream exists, so this is the leakage
+   control that keeps the augmented reading honest; the wave's
+   oracle/holdout design should support **continuous oracle-value
+   regret@k for selection evaluation** (expressible in spec 31's
+   existing rank-metrics suite; the stream-side gating version is an
+   item-3 oracle-coverage decision, above); and the wave's
+   surrogate-improvement claim is measured by a **panel-augmented
+   replay** on the item-3 stream — train on the wave panel plus the
+   stream prefix, score stream future blocks — as a **paired same-code,
+   same-config run of both arms at item-4 time** on the wave-hull cells
+   and cutoffs (item 3's filed unaugmented report is the predeclaration
+   anchor and consistency check; the re-run is cheap and, with an empty
+   augmentation set, must reproduce that report's computed fields). The
+   contrast's **directional bar form** (which statistic's delta, its
+   sign, whether a margin exists) is fixed at the item-3 plan gate
+   alongside the gate statistic — before item 3's baseline value is
+   published — so only the null-result *interpretation*
+   (panel-unhelpful vs off-TPE-panel-mismatched-to-a-TPE-stream) is
+   settled at item 4; the training-set extension to
+   the replay instrument is spec'd at the same gate, and **running the
+   paired contrast and filing its report is a deliverable of this
+   item**. Spec-first through the normal plan gates.
 5. **Re-baseline + feature-profile ablations on the new DB** — absorbs the
    staged-but-unlaunched b1/b2 wave
    ([re-groom D1](reports/2026-07-13-roadmap-regroom.md); configs
@@ -71,7 +152,21 @@ Compute runs on AWS learned-batch; costs:
    four predeclared primary contrasts carry over from the retired plan).
    Before launch: decide the **RF HPO-budget rebalance** (tail-walltime
    open question — RF is most of fleet compute and loses on build-like
-   splits). Delivers the parked M2 **sparse-ID ablation** as predeclared
+   splits; the replay ran all arms at defaults, so it does not speak to
+   HPO's marginal value, but it found no RF variant sustained
+   opponent-adjusted signal on future proposals while only CatBoost
+   stayed positive across buckets — a prior against spending fleet
+   compute on RF tuning, with the tail-walltime report the primary
+   driver of the decision;
+   [replay evidence](reports/2026-07-14-phase7-prequential-replay.md)).
+   Model-family promotion claims from this item onward must cite the
+   most recent **stream-based prequential opponent-adjusted fidelity**
+   reading for the family (the item-3 stream once it exists, wave-1
+   until then) alongside static split metrics, stating the
+   designed-panel limitation of the claim's own data (a spec 31 claim
+   rule effective 2026-07-14; static build-like metrics alone overstate
+   deployment-relevant signal per the replay evidence).
+   Delivers the parked M2 **sparse-ID ablation** as predeclared
    contrast 1.
 6. **FM / low-rank bilinear interaction features** as a new model family
    (replaces retired sparse-pairwise-ridge), judged on the new DB's
@@ -99,8 +194,18 @@ Compute runs on AWS learned-batch; costs:
 - **Phase 7 — BoTorch structured-search GP sampler**: go/no-go gate =
   the prequential replay
   ([first readings shipped](reports/2026-07-14-phase7-prequential-replay.md);
-  re-run on the designed-wave DB expected before the gate decision) plus
-  an offline MCBO bake-off
+  the designed wave is a panel, not a stream — this bullet predeclares
+  the gate readings' **roles** only: the plain item-3-stream re-run is
+  the baseline control and item 4's paired panel-augmented reading on
+  the same wave-hull cells is the gate reading, deployment-faithful for
+  *incumbent-generated* streams (the MCBO bake-off remains the evidence
+  for the BoTorch proposal distribution). The complete gate statistic,
+  including its arm, is fixed at the item-3 plan gate before the stream
+  is collected; the pinned arm's reading stays primary, and families
+  that only mature in items 5–7 enter as labelled sensitivity via the
+  spec 31 new-family path, never a post-hoc arm swap. Until a successor
+  stream is declared, wave-1 is the designated prior replay stream)
+  plus an offline MCBO bake-off
   (D-scaled vanilla mixed-GP baseline first) per
   [phase7-search-space-compression](reference/phase7-search-space-compression.md);
   cross-hull claims additionally require a **multi-hull data wave**

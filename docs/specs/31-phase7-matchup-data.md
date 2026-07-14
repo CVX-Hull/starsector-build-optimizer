@@ -1,7 +1,7 @@
 ---
 type: spec
 status: shipped
-last-validated: 2026-07-13
+last-validated: 2026-07-14
 ---
 
 # Spec 31 — Phase 7 Matchup Data
@@ -1076,6 +1076,28 @@ metric is `mean_per_opponent_spearman` on the outer test panel; the
 honest-eval diagnostic's primary readout is build-aggregate Spearman with
 CI. Any claim naming a single best model family must be predeclared and, for
 promotion-grade confirmation, spend the reserved confirmatory seed.
+From 2026-07-14, a model-family promotion claim must additionally
+**disclose the family's prequential opponent-adjusted fidelity** and
+reconcile the claim with it — because static build-like split metrics
+measure interpolation inside the collecting process's proposal cloud
+(measured on TPE streams) and overstate deployment-relevant signal
+(evidence:
+[2026-07-14 replay report](../reports/2026-07-14-phase7-prequential-replay.md)).
+The disclosed statistic is the §"Prequential Replay Ablation" T2
+reading for the family — pooled adjacent-bucket across all cutoffs at
+the measured in-flight gap, plus the support-balanced variant whenever
+the claim makes a drift or horizon statement. This is a mandatory
+disclosure, not a pass/fail threshold; any threshold is a designed
+quantity owned by the consuming plan. When the family has no such
+reading yet — a new family, or a claim whose own data is a designed
+panel with no stream — the claim must state that gap explicitly and
+may cite the nearest available reading (another family, an older
+stream) only as labelled context. Producing a family's first reading
+(re-running the instrument with the family as a surrogate arm on a
+current proposal stream, predeclared before the run) and any
+gate-grade reuse discipline are the responsibility of the consuming
+plan, not this contract; enforcement here is report-review-level and
+the batch artifact schema gains no field for this rule.
 
 The artifact contract uses these stable JSON object names at both the top level
 and per-result where the object is result-specific:
@@ -1222,7 +1244,11 @@ Horizon buckets group future trials by distance-in-trials ahead of the
 cutoff (`horizon_buckets`, plus an unbounded tail). Per-bucket support
 (contributing cells × cutoffs) is recorded; later cutoffs cannot
 populate deep buckets, so bucket aggregates are comparable only with
-their support shown. Matchup-level per-opponent rank metrics (the
+their support shown. The **support-balanced control** restricts
+bucket comparisons to cutoffs that populate every bucket (per cell),
+removing the confound of temporal distance with cutoff position and
+training-set size; drift readings must prefer it wherever support
+allows. Matchup-level per-opponent rank metrics (the
 evaluation-metric suite, bootstrap disabled at per-cutoff level) are
 computed for the adjacent bucket only. Cross-cell aggregation uses a
 campaign-stratified cluster bootstrap (resampling unit = replay cell),
@@ -1234,6 +1260,11 @@ per cutoff is cost-prohibitive and winner's-curse-prone at replay inner
 sizes; cf. methodology review M1/C3) plus the six comparator-gate
 families fit inline. `opponent_mean` is the mandatory build-blind null
 (C1): every surrogate fidelity or gating claim is reported against it.
+Additional candidate families may be included as surrogate arms at
+predeclared default hyperparameters via the config's learned-model
+list once they implement the model fit/predict contract; a
+ranking-family arm must define how its planned-panel trial score is
+derived in its own spec amendment before inclusion.
 
 ### Gating policy simulation
 
@@ -1261,7 +1292,12 @@ runs at the single `gating_sensitivity_fraction`. Accounting per cell:
 target, aggregated as the **median over replay cells**, with the full
 per-cell distribution and the `opponent_mean` null reported alongside.
 Every other (arm, G, q, k, target) combination is sensitivity and must
-be labeled as such.
+be labeled as such. This is the default headline for any run of the
+instrument; when a stream's replay readings feed a phase-gate decision,
+the consuming plan may predeclare a different gate statistic for that
+stream (the wave-1 replay found this q\* statistic could not
+discriminate gates), and that predeclaration governs the gate reading
+in place of this default.
 
 **Predeclared caveats** (verbatim in any consuming report): the replay
 measures filtering fidelity on the logged stream and cannot measure the
@@ -1301,6 +1337,34 @@ this panel size; consuming reports must say so. (2) prequential
 convergence — rank correlation of arm-at-cutoff vs arm-at-full-data.
 (3) gating-target sensitivity as above.
 
+### Deployment constraints (forward-looking)
+
+Any future optimizer-integrated gating policy built on this instrument's
+evidence inherits two design mandates, motivated by the
+[2026-07-14 replay report](../reports/2026-07-14-phase7-prequential-replay.md).
+That report's claims are exploratory-grade; the mandates below are
+design-conservative inferences from its measured *mechanisms*, not
+measured search outcomes (the replay contractually cannot measure the
+counterfactual search trajectory — see §"Gating policy simulation").
+
+- **Opponent-adjusted gating targets are mandatory.** Curriculum-driven
+  streams couple opponent difficulty to time, and the report measured
+  build-blind panel-difficulty rankings of future proposals *inverting*
+  opponent-adjusted build quality on such streams; a gating target
+  scored on raw trial means inherits that inversion. The gating target
+  must remove opponent effects (TWFE-adjusted or equivalent).
+- **Retraining cadence must stay within the measured signal horizon.**
+  The surrogate's opponent-adjusted signal on future proposals was
+  absent beyond the horizon measured in the owning report (which cannot
+  exclude tail range-restriction as a contributing mechanism — absent
+  contrary evidence, plan conservatively). A staler surrogate loses
+  build signal, leaving its rankings increasingly dominated by
+  opponent-composition information — which on curriculum streams
+  anti-correlates with build quality (the inversion behind the first
+  mandate). The horizon is an empirical quantity owned by the most
+  recent replay report on the nearest comparable stream — the deploying
+  plan must name it — not a designed constant of this spec.
+
 ### Claim boundary and reuse
 
 Replay artifacts stamp `claim_label: "exploratory"` and
@@ -1311,7 +1375,14 @@ seeds; instead of `outer_split_lineage` it stamps
 `reused_source_data: true` with the source DB path and eval-log root —
 the wave-1 data has absorbed repeated analysis waves, and the flag marks
 that history without overloading `reused_partition`, whose defined
-meaning is forward-time-specific. Honest-eval leakage rules apply
+meaning is forward-time-specific. The flag marks that a stream has
+absorbed analysis history; it is not a reuse budget. When a stream's
+replay readings feed a phase-gate decision, the discipline that keeps
+that reuse honest — predeclaring the complete gate statistic before any
+model-selection re-run consults the stream, and tracking consultations
+so no reading is silently cherry-picked — is owned and specified by the
+consuming plan (see the roadmap's data-wave prerequisites item), not by
+this contract. Honest-eval leakage rules apply
 unchanged: no arm or surrogate trains, tunes, or selects on honest-eval
 targets; oracle values appear only in the predeclared arm evaluations
 and gating Δ-oracle accounting.
