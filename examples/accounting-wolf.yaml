@@ -7,12 +7,12 @@
 # independent (a shared cap could starve the directional wolf block behind the
 # gate-hammerhead cells).
 #
-# BEFORE LAUNCH (Scope B runbook — spend-gated, user-ratified): same three steps
-# as accounting-hammerhead.yaml (set budget_usd; re-bake + paste AMI ids; fresh
-# seeds 120-122 are enumerated in the pre-registration ledger).
+# BEFORE LAUNCH (Scope B runbook — spend-gated, user-ratified): budget_usd
+# ratified 2026-07-15 (conservative $19 accounting cap); still needs re-bake +
+# paste AMI ids; fresh seeds 120-122 are enumerated in the pre-registration ledger.
 
 name: accounting-wolf
-budget_usd: 999.0  # PLACEHOLDER — ratify the real cap at the spend gate
+budget_usd: 19.0  # conservative accounting cap (2026-07-15 gate; realized ~$5-7, directional pending V2)
 provider: aws
 
 regions:

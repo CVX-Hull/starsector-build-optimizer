@@ -6,7 +6,7 @@
 # cell is replay-rankable, comparable to the shipped wave-1 stream.
 #
 # BEFORE LAUNCH (Scope B runbook — spend-gated, user-ratified):
-#   1. `budget_usd` below is a PLACEHOLDER — set the hard cap at the spend gate.
+#   1. `budget_usd` ratified 2026-07-15 (Tier-2 Package B): conservative $72 cap.
 #   2. `ami_ids_by_region` are re-bake placeholders — the new active_matchups /
 #      matchups_dispatched worker code flips WorkerSourceSha, so re-bake
 #      (scripts/cloud/bake_image.sh) and paste the real AMI ids. Preflight
@@ -15,7 +15,7 @@
 #      (docs/reports/2026-07-14-accounting-stream-preregistration.md); 151 is spent.
 
 name: accounting-hammerhead
-budget_usd: 999.0  # PLACEHOLDER — ratify the real cap at the spend gate
+budget_usd: 72.0  # conservative Tier-1 cap (2026-07-15 gate; realized ~$18-25, directional pending V2)
 provider: aws
 
 regions:

@@ -1,7 +1,7 @@
 ---
 type: report
 status: draft
-last-validated: 2026-07-14
+last-validated: 2026-07-15
 ---
 
 # Accounting-run stream — pre-registration & analysis ledger
@@ -89,3 +89,17 @@ entry 0.)_
 
 - **2026-07-14 — entry 0 (predeclaration)**: statistics + seeds + subset rule +
   retained paths fixed before collection. No stream data exists yet.
+- **2026-07-15 — entry 1 (spend-gate ratification — Tier 2, Package B)**: the
+  user ratified **Tier 2** at the plan gate and set the `budget_usd` caps
+  (`accounting-hammerhead.yaml` = $72, `accounting-wolf.yaml` = $19; conservative
+  Tier-1 sim caps, directional pending V2 re-validation). The Tier-2 oracle
+  coverage is funded at **K = 3 builds/cell**, realized under the rank-stratified
+  rule of entry 0 as **3 predicted-rank strata × 1 build per stratum per cell**:
+  strata are the tertiles of the CatBoost opponent-adjusted predicted rank within
+  each hammerhead cell (bottom / middle / top third by predicted rank); exactly
+  one build is drawn per stratum per cell, giving 3 oracle'd builds per cell ×
+  9 hammerhead cells = **27 oracle-covered builds**. This per-stratum count is
+  fixed here, before the stream is collected; the honest-eval oracle `budget_usd`
+  is set at launch alongside the re-bake. No stream data exists yet — this entry
+  precedes collection. Wolf cells receive **no** oracle coverage (accounting +
+  directional replay only), unchanged from entry 0.

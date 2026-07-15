@@ -468,6 +468,31 @@ exclusion of in-flight *pruned* trials is out of scope for this narrow fix
 Verification: full suite **1175 passed, 1 skipped**; ruff/format/mypy/deptry/
 validate_docs all green.
 
+## Scope-B spend-gate ratification (2026-07-15)
+
+The user ratified **Package B — Tier 2** at the plan gate:
+
+- **Tier**: 2 (accounting + directional replay **+** honest-eval oracle coverage
+  enabling the continuous oracle-value-regret gate statistic over the hammerhead
+  subset).
+- **`budget_usd` caps** (written into the YAMLs; conservative, directional
+  pending V2): `accounting-hammerhead.yaml` = **$72**, `accounting-wolf.yaml` =
+  **$19**.
+- **Oracle coverage K = 3 builds/cell** — realized as the entry-0 rank-stratified
+  rule: 3 predicted-rank strata (CatBoost opponent-adjusted tertiles) × 1 build
+  per stratum per cell → 27 oracle-covered builds (9 hammerhead cells). Recorded
+  as ledger **entry 1** (`docs/reports/2026-07-14-accounting-stream-preregistration.md`),
+  committed before any stream exists. Wolf: no oracle coverage.
+- Estimate basis: 2026-07-15 tier/budget brief (Tier-1 realized ~$23-32; Tier-2
+  K=3 add-on ~$23-32; totals ~$46-63 realized). All directional.
+
+**Remaining before spend** (Scope B runbook — each an explicit AWS/billing action
+requiring the user's `--execute` go-ahead): AMI re-bake → paste AMI ids into both
+YAMLs → `audit_amis.sh`/`cleanup_amis.sh` superseded → `--dry-run` → `probe.sh`
+→ smoke → `final_audit.sh` clean (mandatory stale-resource sweep) → spot-quota
+check → `launch_campaign.sh` both YAMLs → honest-eval oracle pass (set its
+`budget_usd` at launch) → materialize → verify join totality → replay → reports.
+
 ## Retirement checklist
 
 - [x] Scope A: implemented + audited (this record). Plan stays **active** —
