@@ -67,7 +67,16 @@ Compute runs on AWS learned-batch; costs:
      until the worker AMI is re-baked to emit `active_matchups`; `--no-drain`
      escape hatch;
    - one **instrumented accounting run** to resolve the matchups-per-trial
-     spread — includes the never-landed **wolf** (non-meta hull)
+     spread — **Scope A shipped 2026-07-14** (no-spend prerequisites:
+     `matchups_dispatched` instrumentation in `optimizer.py` + spec 24; the Ĝ
+     in-flight-gap fix; the `accounting_extract.py` extractor; the two
+     cell-design YAMLs; the pre-registration ledger + retained-paths manifest —
+     [plan](../.claude/plans/active/2026-07-14-instrumented-accounting-run.md),
+     [pre-registration](reports/2026-07-14-accounting-stream-preregistration.md)).
+     The **launch itself is spend-gated** (Scope B: AMI re-bake to activate the
+     drain/cost features + `matchups_dispatched`, then the run + optional Tier-2
+     oracle coverage), pending user Tier + `budget_usd` ratification. It
+     includes the never-landed **wolf** (non-meta hull)
      measurement (absorbs the retired Wave-2 residue). The run's
      proposal stream additionally **doubles as the fresh
      prequential-replay input** for the Phase 7 gate — the designed wave

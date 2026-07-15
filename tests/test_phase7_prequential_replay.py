@@ -240,6 +240,73 @@ class TestEvalLogLoading:
 # ------------------------------------------------------- cutoffs/buckets ---
 
 
+class TestMeasuredInflightGap:
+    """Ĝ counts only stream trials — instance-error trials are COMPLETE in the
+    study DB yet absent from the arrival stream, so they must not inflate Ĝ."""
+
+    def _study_db(self, tmp_path, rows):
+        """rows: list of (number, state, start, complete). Writes a minimal
+        Optuna-shaped `trials` table at study_dbs/wave-acct/study_seed0.db."""
+        db_dir = tmp_path / "study_dbs" / "wave-acct"
+        db_dir.mkdir(parents=True)
+        db = db_dir / "study_seed0.db"
+        con = sqlite3.connect(db)
+        con.execute(
+            "create table trials (number int, state text, "
+            "datetime_start text, datetime_complete text)"
+        )
+        con.executemany("insert into trials values (?, ?, ?, ?)", rows)
+        con.commit()
+        con.close()
+        return db
+
+    def _cell_trials(self, numbers):
+        path = "data/logs/wave-acct/study_seed0/evaluation_log.jsonl"
+        return tuple(
+            replay.ReplayTrial(
+                cell="wave-acct:0",
+                source_path=path,
+                trial_number=n,
+                timestamp=f"2026-05-10T00:00:{n:02d}+00:00",
+                pruned=False,
+                build_key=f"b{n}",
+                planned_opponents=("opp_a",),
+                rows=(),
+                covariate_vector=(1.0,),
+            )
+            for n in numbers
+        )
+
+    def test_instance_error_trial_excluded_from_gap(self, tmp_path):
+        # Three stream trials with disjoint intervals → 0 in-flight each.
+        # An instance-error trial (#99, COMPLETE, NOT in the stream) spans the
+        # whole range: counted, it would raise Ĝ to 1; excluded, Ĝ stays 0.
+        rows = [
+            (0, "COMPLETE", "2026-05-10T00:00:00", "2026-05-10T00:00:01"),
+            (1, "COMPLETE", "2026-05-10T00:00:02", "2026-05-10T00:00:03"),
+            (2, "COMPLETE", "2026-05-10T00:00:04", "2026-05-10T00:00:05"),
+            (99, "COMPLETE", "2026-05-10T00:00:00", "2026-05-10T00:00:06"),
+        ]
+        self._study_db(tmp_path, rows)
+        config = _config(tmp_path)
+        cell_trials = self._cell_trials([0, 1, 2])
+        assert replay.measured_inflight_gap(cell_trials, config) == 0
+
+    def test_gap_counts_genuinely_overlapping_stream_trials(self, tmp_path):
+        # Guard against over-exclusion: two stream trials that genuinely overlap
+        # still produce a positive gap.
+        rows = [
+            (0, "COMPLETE", "2026-05-10T00:00:00", "2026-05-10T00:00:05"),
+            (1, "COMPLETE", "2026-05-10T00:00:01", "2026-05-10T00:00:02"),
+        ]
+        self._study_db(tmp_path, rows)
+        config = _config(tmp_path)
+        cell_trials = self._cell_trials([0, 1])
+        # At trial 1's completion (00:02), trial 0 is in-flight → count 1;
+        # at trial 0's completion (00:05), nothing in-flight → 0. Median = 0.5→0.
+        assert replay.measured_inflight_gap(cell_trials, config) == 0
+
+
 class TestCutoffsAndBuckets:
     def test_cutoff_grid(self):
         config = _config(min_train_trials=40, cutoff_stride=10, min_future_trials=10)

@@ -373,6 +373,7 @@ One line per build evaluation, appended to `data/logs/{campaign}/{hull}__{regime
   ],
   "opponents_evaluated": 2,
   "opponents_total": 10,
+  "matchups_dispatched": 3,
   "pruned": false,
   "opponent_order": ["doom_Strike", "aurora_Assault", "dominator_Assault", "dominator_XIV_Elite", "eagle_Assault", "... five more active opponents ..."],
   "raw_fitness": 0.21,
@@ -411,6 +412,7 @@ Schema:
 - `shape_lambda`: fitted Box-Cox λ for this trial's A3 transform, or `null` during A3 passthrough (first 7 trials or constant-population edge cases). Added in 5E for diagnostic visibility into how the transform is evolving as the completed-values distribution grows.
 - `shape_passthrough_reason`: `"disabled"` when `ShapeConfig.enabled` is False (the shipping default since the 2026-07-13 re-groom — the fitness passes through unshaped); one of `"n<1"`, `"n<min_samples"`, `"constant"` when an enabled A3 fell back to min-max scaling; or `null` when Box-Cox ran. Added in 5E. |
 - `regime`: string, always present on both completed and pruned rows. The name of the loadout regime under which this build was evaluated — one of `"early"` / `"mid"` / `"late"` / `"endgame"`. Logged per trial so post-hoc analysis can filter cross-regime studies without joining against config state. Added in 5F.
+- `matchups_dispatched`: integer, present on all four JSONL row kinds. The count of matchups actually **dispatched** for this trial (`executor.submit(run_matchup, …)`) — including `RetryableMatchupError` re-dispatches of the same opponent. Distinct from `opponents_evaluated` (which counts only matchups that produced a *scored* result): `matchups_dispatched ≥ opponents_evaluated`, and the delta is the retry count. `0` for cache-hit and invalid-spec rows (they dispatch no matchups). This is the honest cost/accounting basis (matchups drive spend), where `opponents_evaluated` is the *useful-work* basis. Added 2026-07-14 for the roadmap item-3 accounting run.
 - For pruned builds, both `fitness` and `raw_fitness` are the raw mean of observed combat_fitness scores at prune time (TWFE α is unstable with few observations; raw mean is used as a diagnostic). `twfe_fitness`, `eb_fitness`, `engine_stats`, `covariate_vector`, `eb_diagnostics`, `shape_lambda`, `shape_passthrough_reason` are all absent. `opponents_evaluated < opponents_total` indicates early termination.
 
 ### Trial-row taxonomy (post-2026-05-10)
@@ -425,6 +427,8 @@ Every JSONL row is exactly one of four kinds, distinguished by the always-presen
 | Invalid spec | `invalid_spec=True`, `invalid_spec_errors=[...]` | no | empty | The build failed `validate_build_spec` before any matchup dispatched. `fitness=failure_score` (sentinel — never mix with real fitness). `eb_fitness` / `twfe_fitness` are omitted (never computed). |
 
 **Aggregator contract**: post-hoc analyses that re-fit TWFE / EB / opponent FE must filter on `not pruned and not cache_hit and not invalid_spec` to get only rows whose `opponent_results` are this trial's own. honest-eval candidate ranking by `eb_fitness` may include cache-hit rows (their copied eb_fitness IS the build's true fitness, just observed once and cached), but should always skip `invalid_spec` rows. Pruners' raw means are diagnostic only — never enter top-K.
+
+**The fifth path — instance-error — emits NO JSONL row.** When a worker raises `InstanceError` mid-trial, the trial is told `failure_score` COMPLETE and dropped **without** an `_append_eval_log` row (it produced no valid combat result and no per-opponent data). This is deliberate: the prequential replay's `(source_path, trial_number)` join is bijective, so an instance-error JSONL row with zero matchup-DB rows would orphan the join (spec 31). Its dispatched-matchup count therefore cannot live in the JSONL; instead it is recorded on the Optuna trial via `trial.set_user_attr("matchups_dispatched", n)` — the one path where a study-DB-side record is correct. Accounting extractors identify instance-error trials as `state=COMPLETE` study-DB trials with **no corresponding JSONL row** (the `failure_score` sentinel is NOT a discriminator — invalid-spec shares it but *does* emit a JSONL row) and read the count from the `user_attr`. `set_user_attr` is used **only** on this path.
 
 ## Study Naming
 

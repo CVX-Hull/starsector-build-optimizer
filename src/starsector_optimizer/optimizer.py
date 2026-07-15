@@ -430,6 +430,10 @@ class _InFlightBuild:
     completed_results: list[CombatResult] = field(default_factory=list)
     raw_scores: list[float] = field(default_factory=list)
     next_opponent_index: int = 0
+    # Matchups actually dispatched for this trial (incl. RetryableMatchupError
+    # re-dispatches). ≥ len(completed_results); the delta is the retry count.
+    # The honest cost basis for the item-3 accounting run (spec 24).
+    matchups_dispatched: int = 0
 
     @property
     def rung(self) -> int:
@@ -692,6 +696,12 @@ class StagedEvaluator:
                             ifb.trial.number,
                             self._config.failure_score,
                         )
+                        # Instance-error emits NO eval-log row (its zero
+                        # matchup-DB rows would orphan the replay's bijective
+                        # join — spec 24 "the fifth path"). Record the dispatched
+                        # count on the trial instead so the accounting extractor
+                        # can recover it from the study DB.
+                        ifb.trial.set_user_attr("matchups_dispatched", ifb.matchups_dispatched)
                         self._study.tell(ifb.trial, self._config.failure_score)
                         self._trials_completed += 1
                         self._trials_errored += 1
@@ -811,6 +821,9 @@ class StagedEvaluator:
                 len(ifb.opponents),
                 ifb.opponents[ifb.next_opponent_index],
             )
+            # Count every dispatch (a RetryableMatchupError re-dispatches the
+            # same opponent through here again — the retry is counted).
+            ifb.matchups_dispatched += 1
             future = executor.submit(self._pool.run_matchup, matchup)
             pending[future] = ifb
 
@@ -1060,6 +1073,7 @@ class StagedEvaluator:
                 regime=self._config.regime.name,
                 pruned=False,
                 opponents_total=len(ifb.opponents),
+                matchups_dispatched=ifb.matchups_dispatched,
                 opponent_order=list(ifb.opponents),
                 eb_diagnostics=eb_diag,
             )
@@ -1147,6 +1161,7 @@ class StagedEvaluator:
                 regime=self._config.regime.name,
                 pruned=True,
                 opponents_total=len(ifb.opponents),
+                matchups_dispatched=ifb.matchups_dispatched,
                 opponent_order=list(ifb.opponents),
             )
 
@@ -1536,6 +1551,7 @@ def _append_eval_log(
     regime: str = "endgame",
     pruned: bool = False,
     opponents_total: int = 0,
+    matchups_dispatched: int = 0,
     opponent_order: list[str] | None = None,
     eb_diagnostics: _EBDiagnostics | None = None,
     cache_hit: bool = False,
@@ -1602,6 +1618,7 @@ def _append_eval_log(
         ],
         "opponents_evaluated": len(results),
         "opponents_total": opponents_total,
+        "matchups_dispatched": matchups_dispatched,
         "opponent_order": opponent_order or [],
         "pruned": pruned,
         "cache_hit": cache_hit,

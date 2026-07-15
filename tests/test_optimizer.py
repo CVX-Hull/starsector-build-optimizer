@@ -256,6 +256,32 @@ class TestEvalLogTrialKindTaxonomy:
         assert rec["eb_fitness"] == 0.5
         assert rec["twfe_fitness"] == 0.5
 
+    def test_matchups_dispatched_field_written(self, tmp_path):
+        """The accounting field is present on the row, carrying the passed
+        value; it defaults to 0 (cache-hit / invalid-spec dispatch nothing)."""
+        from starsector_optimizer.optimizer import _append_eval_log
+
+        path = tmp_path / "eval.jsonl"
+        _append_eval_log(
+            path,
+            "wolf",
+            trial_number=0,
+            build=self._build(),
+            results=[],
+            fitness=0.5,
+            opponents_total=10,
+            matchups_dispatched=12,
+        )
+        rec = json.loads(path.read_text().strip())
+        assert rec["matchups_dispatched"] == 12
+
+        path2 = tmp_path / "eval2.jsonl"
+        _append_eval_log(
+            path2, "wolf", trial_number=1, build=self._build(), results=[], fitness=0.5
+        )
+        rec2 = json.loads(path2.read_text().strip())
+        assert rec2["matchups_dispatched"] == 0  # default: dispatched nothing
+
     def test_cache_hit_row_carries_origin_pointer_and_empty_results(self, tmp_path):
         from starsector_optimizer.optimizer import _append_eval_log
 
@@ -720,6 +746,48 @@ class TestOptimizeHullIntegration:
         assert call_count[0] >= 2
         assert any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials)
 
+    def test_retry_is_counted_in_matchups_dispatched(
+        self, wolf_hull, game_data, manifest, tmp_path
+    ):
+        """A retried matchup is a distinct dispatch: the retried trial's logged
+        matchups_dispatched exceeds its opponents_evaluated by the retry count
+        (spec 24: matchups_dispatched >= opponents_evaluated, delta = retries)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.evaluator_pool import RetryableMatchupError
+
+        pool = self._make_mock_pool()
+        call_count = [0]
+        original_run = pool.run_matchup
+
+        def flaky_run(matchup):
+            call_count[0] += 1
+            if call_count[0] == 1:  # retry exactly the first dispatched matchup
+                raise RetryableMatchupError("discarded corrupt result")
+            return original_run(matchup)
+
+        pool.run_matchup = flaky_run
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        eval_log = tmp_path / "evaluation_log.jsonl"
+        config = OptimizerConfig(
+            sim_budget=2, warm_start_n=1, warm_start_sample_n=20, eval_log_path=eval_log
+        )
+
+        optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+        rows = [json.loads(line) for line in eval_log.read_text().splitlines() if line.strip()]
+        # Some non-cache/non-invalid row recorded the retry: dispatched > evaluated,
+        # and the delta (1) equals the single injected retry for that trial.
+        retried = [
+            r
+            for r in rows
+            if not r["cache_hit"]
+            and not r["invalid_spec"]
+            and r["matchups_dispatched"] > r["opponents_evaluated"]
+        ]
+        assert retried, "no row recorded the retry in matchups_dispatched"
+        assert any(r["matchups_dispatched"] - r["opponents_evaluated"] == 1 for r in retried)
+
 
 # --- Preflight Check Tests ---
 
@@ -1160,6 +1228,50 @@ class TestStagedEvaluator:
         assert len(negative_trials) > 0, (
             "Expected some trials with negative scores from InstanceError"
         )
+
+    def test_instance_error_records_user_attr_and_no_eval_log_row(
+        self, wolf_hull, game_data, manifest, tmp_path
+    ):
+        """Instance-error trials record matchups_dispatched via a study-DB
+        user_attr and emit NO eval-log row (the replay-join guard, spec 24)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.instance_manager import InstanceError
+
+        pool = self._make_mock_pool()
+
+        def always_failing(matchup):
+            raise InstanceError("every matchup fails → pure instance-error trials")
+
+        pool.run_matchup = always_failing
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        eval_log = tmp_path / "evaluation_log.jsonl"
+        config = OptimizerConfig(
+            sim_budget=4, warm_start_n=3, warm_start_sample_n=20, eval_log_path=eval_log
+        )
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+
+        errored = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.value is not None and t.value < 0
+        ]
+        assert errored, "expected instance-error trials"
+        # Each errored trial carries the dispatched count as a user_attr (>=1:
+        # it dispatched the matchup that then raised).
+        for t in errored:
+            assert "matchups_dispatched" in t.user_attrs
+            assert t.user_attrs["matchups_dispatched"] >= 1
+        # And NONE of them emitted an eval-log row (the bijective-join guard).
+        rows = (
+            [json.loads(line) for line in eval_log.read_text().splitlines() if line.strip()]
+            if eval_log.exists()
+            else []
+        )
+        logged_trial_numbers = {r["trial_number"] for r in rows}
+        assert logged_trial_numbers.isdisjoint({t.number for t in errored})
 
     def test_raw_intermediate_reports_at_stable_steps(self, wolf_hull, game_data, manifest):
         """Intermediate trial.report() values are raw combat_fitness at rung positions."""

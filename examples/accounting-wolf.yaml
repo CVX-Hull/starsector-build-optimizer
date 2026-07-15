@@ -1,0 +1,53 @@
+# Instrumented accounting run — wolf / early cells (roadmap item 3).
+#
+# The never-measured non-meta (frigate) hull. This block serves the ACCOUNTING
+# purpose — the matchups-per-trial spread for wolf — and provides directional
+# replay readings only; cross-hull gate claims stay behind the multi-hull wave
+# (item 4). Separate file from the hammerhead block so its budget_usd cap is
+# independent (a shared cap could starve the directional wolf block behind the
+# gate-hammerhead cells).
+#
+# BEFORE LAUNCH (Scope B runbook — spend-gated, user-ratified): same three steps
+# as accounting-hammerhead.yaml (set budget_usd; re-bake + paste AMI ids; fresh
+# seeds 120-122 are enumerated in the pre-registration ledger).
+
+name: accounting-wolf
+budget_usd: 999.0  # PLACEHOLDER — ratify the real cap at the spend gate
+provider: aws
+
+regions:
+  - us-east-1
+  - us-east-2
+
+instance_types:
+  - c7a.2xlarge
+  - c7i.2xlarge
+
+spot_allocation_strategy: price-capacity-optimized
+capacity_rebalancing: true
+
+max_concurrent_workers: 24
+min_workers_to_start: 8
+partial_fleet_policy: proceed_half_speed
+matchup_slots_per_worker: 2
+
+# RE-BAKE REQUIRED before launch (see accounting-hammerhead.yaml).
+ami_ids_by_region:
+  us-east-1: ami-REBAKE-REQUIRED
+  us-east-2: ami-REBAKE-REQUIRED
+
+ssh_key_name: starsector-probe
+
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+
+# 1-3 wolf/early cells (accounting focus). Frigate → smaller opp pool, faster
+# TTK. Production active_opponents default (10).
+studies:
+  - {hull: wolf, regime: early, seeds: [120], budget_per_study: 200, workers_per_study: 8, sampler: tpe}
+  - {hull: wolf, regime: early, seeds: [121], budget_per_study: 200, workers_per_study: 8, sampler: tpe}
+  - {hull: wolf, regime: early, seeds: [122], budget_per_study: 200, workers_per_study: 8, sampler: tpe}
+
+max_lifetime_hours: 1.5
+fleet_provision_timeout_seconds: 600.0
+result_timeout_seconds: 900.0
+ledger_heartbeat_interval_seconds: 60.0

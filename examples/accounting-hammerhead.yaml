@@ -1,0 +1,64 @@
+# Instrumented accounting run — hammerhead / early cells (roadmap item 3).
+#
+# This is the gate-hammerhead block: the wave-hull cells over which prequential
+# gate adequacy is defined (spec 31; the 2026-07-14 accounting-run plan). Nine
+# (campaign, seed) replay cells at full-study trial counts (~250 trials) so each
+# cell is replay-rankable, comparable to the shipped wave-1 stream.
+#
+# BEFORE LAUNCH (Scope B runbook — spend-gated, user-ratified):
+#   1. `budget_usd` below is a PLACEHOLDER — set the hard cap at the spend gate.
+#   2. `ami_ids_by_region` are re-bake placeholders — the new active_matchups /
+#      matchups_dispatched worker code flips WorkerSourceSha, so re-bake
+#      (scripts/cloud/bake_image.sh) and paste the real AMI ids. Preflight
+#      blocks launch until this is done.
+#   3. Fresh seeds 100-108 are enumerated in the pre-registration ledger
+#      (docs/reports/2026-07-14-accounting-stream-preregistration.md); 151 is spent.
+
+name: accounting-hammerhead
+budget_usd: 999.0  # PLACEHOLDER — ratify the real cap at the spend gate
+provider: aws
+
+regions:
+  - us-east-1
+  - us-east-2
+
+instance_types:
+  - c7a.2xlarge
+  - c7i.2xlarge
+
+spot_allocation_strategy: price-capacity-optimized
+capacity_rebalancing: true
+
+max_concurrent_workers: 24
+min_workers_to_start: 16
+partial_fleet_policy: proceed_half_speed
+matchup_slots_per_worker: 2
+
+# RE-BAKE REQUIRED before launch — placeholders fail the WorkerSourceSha
+# preflight on purpose (the accounting instrumentation changed worker source).
+ami_ids_by_region:
+  us-east-1: ami-REBAKE-REQUIRED
+  us-east-2: ami-REBAKE-REQUIRED
+
+ssh_key_name: starsector-probe
+
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+
+# Nine hammerhead/early replay cells = one campaign × nine fresh seeds.
+# Production active_opponents default (10) — NOT the smoke override — so the
+# opponent panel matches wave-1 and the replay's panel-composition semantics hold.
+studies:
+  - {hull: hammerhead, regime: early, seeds: [100], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [101], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [102], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [103], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [104], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [105], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [106], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [107], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [108], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+
+max_lifetime_hours: 2.0
+fleet_provision_timeout_seconds: 600.0
+result_timeout_seconds: 900.0
+ledger_heartbeat_interval_seconds: 60.0

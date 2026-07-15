@@ -277,6 +277,13 @@ def measured_inflight_gap(cell_trials: Sequence[ReplayTrial], config: ReplayConf
     In-flight at trial t's completion = trials with datetime_start before and
     datetime_complete after that moment. This is the Ĝ used by the
     "measured" train-gap mode.
+
+    Only trials that appear in the arrival stream (i.e. emitted an eval-log
+    row) count. Instance-error trials are told `failure_score` as Optuna
+    `state=COMPLETE` yet emit no eval-log row (spec 24 "the fifth path"), so
+    they are absent from `cell_trials`; counting them here would inflate Ĝ
+    over the population the gap actually applies to. Restricting to
+    stream trial numbers excludes them.
     """
     # source_path: data/logs/<campaign>/<study>/evaluation_log.jsonl
     parts = Path(cell_trials[0].source_path).parts
@@ -287,17 +294,20 @@ def measured_inflight_gap(cell_trials: Sequence[ReplayTrial], config: ReplayConf
             f"study DB missing for cell {cell_trials[0].cell!r}: {study_db} — "
             "required to measure the in-flight gap (train_gap_modes includes 'measured')"
         )
+    stream_numbers = {t.trial_number for t in cell_trials}
     con = sqlite3.connect(study_db)
     try:
-        intervals = con.execute(
+        rows = con.execute(
             """
-            select datetime_start, datetime_complete from trials
+            select number, datetime_start, datetime_complete from trials
             where state = 'COMPLETE' and datetime_start is not null
               and datetime_complete is not null
             """
         ).fetchall()
     finally:
         con.close()
+    # Stream-only: drop instance-error COMPLETE trials (absent from the stream).
+    intervals = [(start, complete) for number, start, complete in rows if number in stream_numbers]
     if not intervals:
         raise ValueError(f"study DB {study_db} has no completed trials with timestamps")
     counts = []
