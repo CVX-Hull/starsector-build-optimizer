@@ -932,8 +932,11 @@ class TestMaintainFleetProvisioning:
         assert len(fleet_specs) == 1
         keys = {t["Key"] for t in fleet_specs[0]["Tags"]}
         assert keys == {"Project", "Fleet"}
-        # instance tag spec still present.
-        assert any(t["ResourceType"] == "instance" for t in tag_specs)
+        # maintain create_fleet accepts ONLY a "fleet" ResourceType tag — AWS
+        # rejects an "instance" tag (InvalidTagKey.Malformed); instances inherit
+        # tags from the launch template. So the fleet spec must be the ONLY spec.
+        assert not any(t["ResourceType"] == "instance" for t in tag_specs)
+        assert [t["ResourceType"] for t in tag_specs] == ["fleet"]
 
     def test_poll_returns_full_set_once_target_reached(self, monkeypatch):
         """Poll returns the FULL discovered set once len >= target — it does

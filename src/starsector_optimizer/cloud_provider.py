@@ -468,38 +468,31 @@ class AWSProvider(CloudProvider):
                     "ReplacementStrategy": _CAPACITY_REBALANCE_REPLACEMENT_STRATEGY,
                 }
             }
-        # Both provisioning paths tag launched instances. Under maintain we ALSO
-        # tag the persistent fleet resource (both keys) so `list_fleets_by_tag`
-        # can rediscover it for teardown + the leaked-fleet audit purely from
-        # AWS state (no on-disk FleetId manifest).
-        tag_specifications: list[dict[str, Any]] = [
-            {
-                "ResourceType": "instance",
-                "Tags": [
-                    {"Key": _PROJECT_KEY, "Value": project_tag},
-                    {"Key": _FLEET_KEY, "Value": fleet_name},
-                ],
-            }
+        both_tags = [
+            {"Key": _PROJECT_KEY, "Value": project_tag},
+            {"Key": _FLEET_KEY, "Value": fleet_name},
         ]
+        # `create_fleet` tag scoping differs by fleet type:
+        #  - instant: instances are created synchronously, so the call tags
+        #    `ResourceType:"instance"` directly (belt-and-suspenders with the LT).
+        #  - maintain: the call accepts ONLY `ResourceType:"fleet"` — AWS rejects
+        #    an "instance" tag on a maintain CreateFleet (InvalidTagKey.Malformed),
+        #    because instances are launched asynchronously by the fleet and inherit
+        #    their tags from the launch template (which already tags instance +
+        #    volume with both keys). Tagging the fleet resource lets
+        #    `list_fleets_by_tag` rediscover it for teardown + the leaked-fleet
+        #    audit purely from AWS state (no on-disk FleetId manifest).
         if fleet_type == "maintain":
-            tag_specifications.append(
-                {
-                    "ResourceType": "fleet",
-                    "Tags": [
-                        {"Key": _PROJECT_KEY, "Value": project_tag},
-                        {"Key": _FLEET_KEY, "Value": fleet_name},
-                    ],
-                }
-            )
             return self._create_maintain_fleet_in_region(
                 client,
                 region=region,
                 spot_options=spot_options,
                 launch_template_configs=launch_template_configs,
-                tag_specifications=tag_specifications,
+                tag_specifications=[{"ResourceType": "fleet", "Tags": both_tags}],
                 target=target,
                 provision_timeout_seconds=provision_timeout_seconds,
             )
+        tag_specifications: list[dict[str, Any]] = [{"ResourceType": "instance", "Tags": both_tags}]
         # Retry on transient "just-created resource not yet visible to Fleet"
         # errors. Fleet has a replication lag beyond what individual boto3
         # describe-waiters cover, and a few-second retry loop is sufficient.
