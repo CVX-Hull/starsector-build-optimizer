@@ -76,7 +76,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `instance_types` | `tuple[str, ...]` | required | e.g. `("c7a.2xlarge", "c7i.2xlarge", "c7a.4xlarge", "c7i.4xlarge")` |
 | `spot_allocation_strategy` | `str` | required | `"price-capacity-optimized"` |
 | `fleet_type` | `str` | `"instant"` | EC2 Fleet type. `"instant"` (default) = one-shot fleet, no persistent resource, reclaimed spot is **never** replaced (correctness preserved by the Redis janitor + `matchup_id` dedup, throughput is not). `"maintain"` = persistent fleet that relaunches reclaimed spot to hold `TargetCapacity` — opt-in for long runs (honest-eval, campaign studies). Validated against `_ALLOWED_FLEET_TYPES = frozenset({"instant","maintain"})`; other values raise `ValueError`. learned-batch + probe are always `"instant"` (their self-terminate/boot-test models are respawn-incompatible). **Account prerequisite (one-time, maintain only):** the `AWSServiceRoleForEC2Fleet` service-linked role must exist, or `create_fleet(Type="maintain")` fails with `AuthFailure.ServiceLinkedRoleCreationNotPermitted`. The dedicated `starsector` IAM user has no `iam:*` permissions, so an admin creates it once: `aws iam create-service-linked-role --aws-service-name ec2fleet.amazonaws.com`. Instant fleets don't need it. Also note: on a maintain `create_fleet`, `TagSpecifications` may carry ONLY `ResourceType:"fleet"` (an `"instance"` entry raises `InvalidTagKey.Malformed` — instances inherit tags from the launch template). |
-| `capacity_rebalancing` | `bool` | required | EC2 Fleet CapacityRebalance flag. **Honored only under `fleet_type="maintain"`**, where it adds `SpotOptions.MaintenanceStrategies.CapacityRebalance` (`ReplacementStrategy="launch"`) so the fleet proactively replaces instances AWS flags as at elevated interruption risk. A **no-op under `fleet_type="instant"`** (instant fleets have no maintenance strategy). |
+| `capacity_rebalancing` | `bool` | required | EC2 Fleet CapacityRebalance flag. **Honored only under `fleet_type="maintain"`**, where it adds `SpotOptions.MaintenanceStrategies.CapacityRebalance` (`ReplacementStrategy="launch"`) so the fleet proactively replaces instances AWS flags as at elevated interruption risk. A **no-op under `fleet_type="instant"`** (instant fleets have no maintenance strategy). **Recommended `false` for maintain campaigns** (the example accounting YAMLs set it off): `ReplacementStrategy="launch"` launches a replacement *without terminating the flagged original* (AWS-documented), so the original and its replacement both bill until AWS actually reclaims the original — a stable over-provision above `TargetCapacity` that is idle-billed. Plain maintain already refills genuinely-reclaimed spot toward `TargetCapacity`, and the Redis janitor + `matchup_id` dedup cover in-flight interruptions, so the rebalance buys nothing here. (`launch-before-terminate` would instead hold capacity at target, but is left deferred; the value of `_CAPACITY_REBALANCE_REPLACEMENT_STRATEGY` is unchanged.) |
 | `max_concurrent_workers` | `int` | required | Total VMs across all studies |
 | `min_workers_to_start` | `int` | required | Partial-fleet floor; validator enforces `<= max_concurrent_workers`. **Enforced** in `cloud_runner.prepare_cloud_pool` after `provision_fleet`: `len(instance_ids) < min_workers_to_start` triggers `partial_fleet_policy` |
 | `partial_fleet_policy` | `str` | required | `"proceed_half_speed"` (warn + continue on a partial fleet) or `"abort"` (raise). Enforced in `prepare_cloud_pool` (see `min_workers_to_start`) |
@@ -600,15 +600,33 @@ on the fleet type, resolved from `campaign.fleet_type` threaded into
 - **`maintain`:** a bare `terminate_instances` would be *relaunched* by the
   fleet. So the maintain branch, per region with idle surplus, first
   `list_fleets_by_tag(project_tag, fleet_name, region)` (cached) →
+  `get_fleet_target(fleet_id, region)` for the fleet's current
+  `TotalTargetCapacity` →
   `modify_fleet_target(fleet_id, new_target, excess_policy="no-termination")`
-  where **`new_target = max(0, len(live_in_region) − k_region)` is computed from
-  the ticker's already-observed live count, NOT from the fleet's reported
-  `TargetCapacity`** (a spot reclaim leaves `TargetCapacity` stale-high, so
-  targeting off it would sit above the true live count and respawn — the exact
-  failure this drain exists to avoid). `no-termination` means the fleet neither
-  relaunches toward the lowered target nor self-selects victims; the drain then
-  `terminate_instances` on the same precisely-chosen idle ids as the instant
-  path. Net: precise idle-only selection AND no respawn.
+  where **`new_target = max(0, min(current_target, live_in_region) − k_region)`**.
+  The **`min` clamps against BOTH** the fleet's current target and the ticker's
+  already-observed live count — correct in both regimes:
+  - **Reclaim** (fleet under-fulfilled after a spot reclaim, `current=32`,
+    `live=28`, `k=5` → `23`): using `live` keeps the target from sitting above
+    the true live count and respawning — the failure this drain exists to avoid.
+  - **Over-provision** (CapacityRebalance over-fulfilled, `current=32`,
+    `live=57`, `k=5` → `27`): clamping against `current` keeps the target moving
+    monotonically *down*; deriving from `live` alone (`57 − 5 = 52`) would
+    *raise* the target above `current`, re-inflating the fleet the drain is
+    trying to shrink.
+
+  If `get_fleet_target` returns `None` (the fleet vanished between resolve and
+  read), the drain logs a warning, drops the stale cached `FleetId`, and skips
+  the target-lower this tick rather than guessing. `no-termination` means the
+  fleet neither relaunches toward the lowered target nor self-selects victims;
+  the drain then `terminate_instances` on the same precisely-chosen idle ids as
+  the instant path. Net: precise idle-only selection AND no respawn.
+
+  **Per-region isolation:** each region's target-lower + terminate runs under
+  its own `try/except`, so one region's throttle/`ClientError` neither aborts
+  the tick nor starves the remaining regions of their drain; a
+  `get_fleet_target`/`modify_fleet_target` failure additionally invalidates that
+  region's cached `FleetId` so the next tick re-resolves.
 
 The global keep-floor (`keep = max(1, ceil(remaining / matchup_slots_per_worker))`)
 and never-terminate-a-busy-worker guarantees below are identical for both fleet
@@ -745,6 +763,14 @@ class CloudProvider(abc.ABC):
         # relaunches nor self-terminates; the caller then terminates the chosen idle ids).
 
     @abc.abstractmethod
+    def get_fleet_target(self, fleet_id: str, *, region: str) -> int | None: ...
+        # Current TotalTargetCapacity of a fleet, read from
+        # describe_fleets(FleetIds=[fleet_id]).Fleets[0].TargetCapacitySpecification.
+        # TotalTargetCapacity. Returns None if the fleet isn't found (empty Fleets).
+        # The maintain drain clamps its lowered target against this
+        # (min(current, live)) so an over-fulfilled fleet's target is never RAISED.
+
+    @abc.abstractmethod
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int: ...
         # terminate an explicit subset of instance IDs in one region; empty ids → 0, no API call.
         # The only subset-termination primitive (all other terminate paths are tag-scoped whole-fleet).
@@ -794,6 +820,8 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
 `terminate_fleet(fleet_name, project_tag)`: per region — **under maintain, FIRST `list_fleets_by_tag(project_tag, fleet_name, region=…)` (BOTH tags) → `delete_fleets(ids, terminate_instances=True)` so the persistent fleet cannot relaunch drained/terminated instances** — then filter by BOTH tags → terminate any straggler instances → delete LT (by name) → delete SG (by name, with ENI-detach retry loop: `_SG_DELETE_DEADLINE_SECONDS=300.0`, `_SG_DELETE_POLL_INTERVAL_SECONDS=10.0`). Under instant, `list_fleets_by_tag` returns empty → the fleet step is a no-op and the path is unchanged. Idempotent. (The pre-maintain documented order — terminate instances *before* deleting the fleet — is respawn-unsafe and is superseded by this fleet-first ordering.)
 
 `terminate_all_tagged(project_tag)`: per region — **under maintain, FIRST `list_fleets_by_tag(project_tag, region=…)` (`Project` ONLY) → `delete_fleets(ids, terminate_instances=True)`** — then filter by `Project` tag ONLY → terminate all tagged straggler instances → delete every LT matching the tag (tag-filter `describe_launch_templates`) → delete every SG matching the tag. Idempotent.
+
+**Per-region error isolation (both teardown paths).** Each region's body (fleet-delete → instance-terminate → LT/SG deletes, in that fleet-FIRST order) runs under its own `try/except`. A `ClientError` (e.g. a throttle) in one region is collected into a per-region failure map and the loop *continues* to the remaining regions — a real hazard because a single failed region left mid-teardown would strand its self-respawning maintain fleet, and aborting the loop would leave sibling regions' fleets live too. After all regions are processed, if any failed, `terminate_fleet`/`terminate_all_tagged` raise a `FleetTeardownError` aggregate (`.failures: dict[region, Exception]`) so the failure still surfaces to the caller's `try/finally` + shell-level `trap`. Idempotent, so a retry re-processes only what remains.
 
 `list_active(project_tag)`: per region, instances in `pending` or `running` state with tag `Project=project_tag`.
 

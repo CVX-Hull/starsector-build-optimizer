@@ -227,7 +227,21 @@ def prepare_cloud_pool(
         with pool:
             yield pool
     finally:
-        provider.terminate_fleet(fleet_name=fleet_name, project_tag=project_tag)
+        # A partial-region terminate_fleet failure (FleetTeardownError under
+        # maintain) must NOT skip the project sweep below — that sweep is the
+        # backstop for a still-relaunching maintain fleet. Capture, run the
+        # sweep, then re-raise so the failure still surfaces to the caller.
+        teardown_error: Exception | None = None
+        try:
+            provider.terminate_fleet(fleet_name=fleet_name, project_tag=project_tag)
+        except Exception as e:
+            teardown_error = e
+            logger.error(
+                "terminate_fleet(fleet=%s, project=%s) raised; continuing to sweep: %s",
+                fleet_name,
+                project_tag,
+                e,
+            )
         if sweep_project_on_exit:
             try:
                 provider.terminate_all_tagged(project_tag)
@@ -272,6 +286,8 @@ def prepare_cloud_pool(
                         project_tag,
                         active[:5],
                     )
+        if teardown_error is not None:
+            raise teardown_error
 
 
 def run_cloud_study(

@@ -1745,6 +1745,9 @@ class TestWorkerDrainTicker:
             {"id": "i-3", "region": "us-east-1"},
         ]
         provider.list_fleets_by_tag.return_value = ["fleet-e1"]
+        # Fleet current target ≥ live (reclaim/under-fulfilled regime): the
+        # min-clamp is a no-op vs the live count, so the target derives from live.
+        provider.get_fleet_target.return_value = 32
         order: list[str] = []
         provider.modify_fleet_target.side_effect = lambda *a, **k: order.append("modify")
         provider.terminate_instances.side_effect = lambda *a, **k: order.append("terminate")
@@ -1755,8 +1758,8 @@ class TestWorkerDrainTicker:
         ticker.tick()
         # modify precedes terminate in this region.
         assert order == ["modify", "terminate"]
-        # new_target = live_in_region(3) − k_region(2) = 1, from the observed
-        # live count (NOT describe_fleets TargetCapacity).
+        # new_target = min(current(32), live_in_region(3)) − k_region(2) = 1, from
+        # the observed live count (NOT describe_fleets TargetCapacity).
         mk = provider.modify_fleet_target.call_args
         assert mk.args[0] == "fleet-e1"
         assert mk.args[1] == 1
@@ -1777,6 +1780,7 @@ class TestWorkerDrainTicker:
             {"id": "i-2", "region": "us-east-2"},
         ]
         provider.list_fleets_by_tag.return_value = ["fleet-e2"]
+        provider.get_fleet_target.return_value = 8
         # remaining=1, slots=1 → keep=1; live=2 idle → surplus=1 in us-east-2.
         self._seed_hb(fake_redis, "i-1", active_matchups=0)
         self._seed_hb(fake_redis, "i-2", active_matchups=0)
@@ -1784,7 +1788,7 @@ class TestWorkerDrainTicker:
             fake_redis, provider, _FakeProgress(1), slots=1, fleet_type="maintain"
         )
         ticker.tick()
-        # live_in_region=2, k_region=1 → new_target=1 (still ≥0).
+        # min(current(8), live(2)) − k_region(1) = 1 (still ≥0).
         assert provider.modify_fleet_target.call_args.args[1] == 1
 
     def test_maintain_no_fleet_found_still_terminates(self, fake_redis):
@@ -1802,6 +1806,79 @@ class TestWorkerDrainTicker:
         ticker.tick()
         provider.modify_fleet_target.assert_not_called()
         assert provider.terminate_instances.called
+
+    def _maintain_ticker(self, fake_redis, provider):
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1), fleet_type="maintain")
+        # Prime the FleetId cache so _lower_fleet_target can be exercised directly.
+        provider.list_fleets_by_tag.return_value = ["fleet-x"]
+        return ticker
+
+    def test_lower_fleet_target_reclaim_regime(self, fake_redis):
+        """Reclaim/under-fulfilled: current=32, live=28, k=5 → min(32,28)−5=23.
+        Uses the live count so we never target above the true live set (no
+        respawn)."""
+        provider = MagicMock()
+        provider.get_fleet_target.return_value = 32
+        ticker = self._maintain_ticker(fake_redis, provider)
+        ticker._lower_fleet_target("us-east-1", live_in_region=28, k_region=5)
+        assert provider.modify_fleet_target.call_args.args[1] == 23
+
+    def test_lower_fleet_target_overprovision_regime(self, fake_redis):
+        """Over-provision (CapacityRebalance): current=32, live=57, k=5 →
+        min(32,57)−5=27. Clamping against current keeps the target monotonic-
+        down; deriving from live alone (57−5=52) would RAISE the target (F1)."""
+        provider = MagicMock()
+        provider.get_fleet_target.return_value = 32
+        ticker = self._maintain_ticker(fake_redis, provider)
+        ticker._lower_fleet_target("us-east-1", live_in_region=57, k_region=5)
+        new_target = provider.modify_fleet_target.call_args.args[1]
+        assert new_target == 27
+        assert new_target < 32  # never raises the fleet's current target
+
+    def test_lower_fleet_target_none_skips_lowering(self, fake_redis):
+        """get_fleet_target returns None (fleet vanished) → skip the lower, drop
+        the stale cache entry, DON'T guess a target."""
+        provider = MagicMock()
+        provider.get_fleet_target.return_value = None
+        ticker = self._maintain_ticker(fake_redis, provider)
+        ticker._fleet_id_by_region["us-east-1"] = "fleet-x"
+        ticker._lower_fleet_target("us-east-1", live_in_region=28, k_region=5)
+        provider.modify_fleet_target.assert_not_called()
+        # Cache invalidated so the next tick re-resolves.
+        assert "us-east-1" not in ticker._fleet_id_by_region
+
+    def test_maintain_region_failure_isolated_and_cache_invalidated(self, fake_redis):
+        """Fix 3: one region whose modify_fleet_target raises does not abort the
+        tick — the other region still terminates — and the failing region's
+        cached FleetId is dropped so the next tick re-resolves."""
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-1", "region": "us-east-1"},
+            {"id": "i-2", "region": "us-east-1"},
+            {"id": "i-3", "region": "us-east-2"},
+            {"id": "i-4", "region": "us-east-2"},
+        ]
+        provider.list_fleets_by_tag.side_effect = lambda *a, **k: [f"fleet-{k['region']}"]
+        provider.get_fleet_target.return_value = 8
+
+        def _modify(fleet_id, target, *, region, excess_policy):
+            if region == "us-east-1":
+                raise RuntimeError("throttled in us-east-1")
+
+        provider.modify_fleet_target.side_effect = _modify
+        for iid in ("i-1", "i-2", "i-3", "i-4"):
+            self._seed_hb(fake_redis, iid, active_matchups=0)
+        # remaining=1, slots=2 → keep=1; live=4 idle → surplus=3.
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1), fleet_type="maintain")
+        ticker.tick()
+        # us-east-2 still terminated despite us-east-1's modify failure.
+        terminated_regions = {
+            call.kwargs["region"] for call in provider.terminate_instances.call_args_list
+        }
+        assert "us-east-2" in terminated_regions
+        # Failing region's cache entry dropped; the succeeding region stays cached.
+        assert "us-east-1" not in ticker._fleet_id_by_region
+        assert ticker._fleet_id_by_region.get("us-east-2") == "fleet-us-east-2"
 
 
 class TestRunJanitorPass:

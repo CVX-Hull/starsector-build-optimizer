@@ -92,6 +92,9 @@ class TestCloudProviderABC:
             def modify_fleet_target(self, fleet_id, target, *, region, excess_policy):
                 return None
 
+            def get_fleet_target(self, fleet_id, *, region):
+                return None
+
             def list_active(self, project_tag):
                 return []
 
@@ -120,6 +123,9 @@ class TestCloudProviderABC:
                 return 0
 
             def modify_fleet_target(self, fleet_id, target, *, region, excess_policy):
+                return None
+
+            def get_fleet_target(self, fleet_id, *, region):
                 return None
 
             def list_active(self, project_tag):
@@ -1110,6 +1116,141 @@ class TestDeleteFleetsAndModifyTarget:
         assert kwargs["ExcessCapacityTerminationPolicy"] == "no-termination"
 
 
+class TestGetFleetTarget:
+    """`get_fleet_target` reads Fleets[0].TargetCapacitySpecification.
+    TotalTargetCapacity; None when the fleet isn't found (spec 22 §AWSProvider)."""
+
+    def test_reads_total_target_capacity(self):
+        from unittest.mock import MagicMock
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        client.describe_fleets.return_value = {
+            "Fleets": [{"TargetCapacitySpecification": {"TotalTargetCapacity": 32}}]
+        }
+        provider._clients["us-east-1"] = client
+        assert provider.get_fleet_target("fleet-1", region="us-east-1") == 32
+        # Reads the exact fleet by id, not a tag scan.
+        assert client.describe_fleets.call_args.kwargs["FleetIds"] == ["fleet-1"]
+
+    def test_returns_none_when_fleet_missing(self):
+        from unittest.mock import MagicMock
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        client.describe_fleets.return_value = {"Fleets": []}
+        provider._clients["us-east-1"] = client
+        assert provider.get_fleet_target("fleet-gone", region="us-east-1") is None
+
+    def test_returns_none_when_target_absent(self):
+        from unittest.mock import MagicMock
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        client.describe_fleets.return_value = {"Fleets": [{}]}
+        provider._clients["us-east-1"] = client
+        assert provider.get_fleet_target("fleet-1", region="us-east-1") is None
+
+    def test_returns_none_on_invalid_fleet_id_error(self):
+        """Real EC2 raises InvalidFleetId.NotFound for a purged fleet id (not an
+        empty Fleets list) — that maps to None so the drain treats it as gone."""
+        from unittest.mock import MagicMock
+
+        from botocore.exceptions import ClientError
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        client.describe_fleets.side_effect = ClientError(
+            {"Error": {"Code": "InvalidFleetId.NotFound", "Message": "gone"}},
+            "DescribeFleets",
+        )
+        provider._clients["us-east-1"] = client
+        assert provider.get_fleet_target("fleet-gone", region="us-east-1") is None
+
+    def test_other_client_error_propagates(self):
+        """A non-not-found error (e.g. a throttle) must NOT be swallowed as None —
+        the drain caller then skips terminating rather than guessing."""
+        from unittest.mock import MagicMock
+
+        from botocore.exceptions import ClientError
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        client.describe_fleets.side_effect = ClientError(
+            {"Error": {"Code": "RequestLimitExceeded", "Message": "slow down"}},
+            "DescribeFleets",
+        )
+        provider._clients["us-east-1"] = client
+        with pytest.raises(ClientError):
+            provider.get_fleet_target("fleet-1", region="us-east-1")
+
+
+class TestTeardownRegionIsolation:
+    """One region's ClientError must not strand later regions' self-respawning
+    fleets: teardown processes every region, then raises an aggregate
+    FleetTeardownError (Fix 5, spec 22 §AWSProvider teardown error isolation)."""
+
+    def _provider_two_regions(self, monkeypatch, *, failing_region):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1", "us-east-2"))
+        processed: list[str] = []
+
+        def _list_fleets(project_tag, fleet_name=None, *, region):
+            if region == failing_region:
+                raise RuntimeError(f"throttled in {region}")
+            processed.append(region)
+            return []
+
+        monkeypatch.setattr(provider, "list_fleets_by_tag", _list_fleets)
+        monkeypatch.setattr(provider, "delete_fleets", lambda *a, **k: 0)
+        monkeypatch.setattr(provider, "_terminate_by_tags", lambda *a, **k: 0)
+        monkeypatch.setattr(provider, "_delete_launch_templates_by_tags", lambda *a, **k: None)
+        monkeypatch.setattr(provider, "_delete_security_groups_by_tags", lambda *a, **k: None)
+        return provider, processed
+
+    def test_terminate_fleet_processes_all_regions_then_raises(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import FleetTeardownError
+
+        provider, processed = self._provider_two_regions(monkeypatch, failing_region="us-east-1")
+        with pytest.raises(FleetTeardownError) as exc:
+            provider.terminate_fleet(fleet_name="studyA", project_tag="starsector-p")
+        # The non-failing region was still fully processed.
+        assert processed == ["us-east-2"]
+        assert "us-east-1" in exc.value.failures
+
+    def test_terminate_all_tagged_processes_all_regions_then_raises(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import FleetTeardownError
+
+        provider, processed = self._provider_two_regions(monkeypatch, failing_region="us-east-2")
+        with pytest.raises(FleetTeardownError) as exc:
+            provider.terminate_all_tagged("starsector-p")
+        assert processed == ["us-east-1"]
+        assert "us-east-2" in exc.value.failures
+
+    def test_no_failure_no_raise(self, monkeypatch):
+        # All regions clean → normal return, no FleetTeardownError.
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1", "us-east-2"))
+        monkeypatch.setattr(provider, "list_fleets_by_tag", lambda *a, **k: [])
+        monkeypatch.setattr(provider, "delete_fleets", lambda *a, **k: 0)
+        monkeypatch.setattr(provider, "_terminate_by_tags", lambda *a, **k: 3)
+        monkeypatch.setattr(provider, "_delete_launch_templates_by_tags", lambda *a, **k: None)
+        monkeypatch.setattr(provider, "_delete_security_groups_by_tags", lambda *a, **k: None)
+        assert provider.terminate_all_tagged("starsector-p") == 6
+
+
 class TestTeardownFleetOrdering:
     """Under maintain, terminate_fleet/terminate_all_tagged delete the persistent
     fleet FIRST (so it can't relaunch what the backstop terminates), and
@@ -1222,6 +1363,12 @@ class TestHetznerProvider:
             HetznerProvider().modify_fleet_target(
                 "fleet-x", 1, region="eu-central", excess_policy="no-termination"
             )
+
+    def test_get_fleet_target_raises(self):
+        from starsector_optimizer.cloud_provider import HetznerProvider
+
+        with pytest.raises(NotImplementedError):
+            HetznerProvider().get_fleet_target("fleet-x", region="eu-central")
 
     def test_list_active_raises(self):
         from starsector_optimizer.cloud_provider import HetznerProvider

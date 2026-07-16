@@ -67,14 +67,26 @@ _FLEET_INSTANCE_POLL_INTERVAL_SECONDS = 15.0
 # `list_fleets_by_tag` scans for leaked-fleet discovery + teardown. `deleted`,
 # `deleted-running`, `deleted-terminating`, and `failed` are excluded.
 _FLEET_ACTIVE_STATES = ("submitted", "active", "modifying")
-# CapacityRebalance replacement strategy for maintain fleets. "launch" replaces
-# an at-risk instance without waiting for it to be reclaimed first; the
-# proactive "launch-before-terminate" variant is a deferred tuning knob.
+# CapacityRebalance replacement strategy for maintain fleets. Both "launch" and
+# "launch-before-terminate" are proactive (they act on the at-risk signal before
+# reclaim); the real distinction is termination behavior. "launch" launches a
+# replacement WITHOUT terminating the flagged original (AWS-documented), so an
+# at-risk instance and its replacement both bill until AWS actually reclaims the
+# original — a stable over-provision above TargetCapacity. "launch-before-
+# terminate" instead holds capacity AT target by terminating the original once
+# the replacement is up. This value is left at "launch" (the AWS default) as a
+# deferred tuning knob; the over-provision it causes is why maintain campaigns
+# set `capacity_rebalancing: false` (plain maintain already refills genuinely-
+# reclaimed spot, and the Redis janitor + matchup_id dedup cover in-flight
+# interruptions).
 _CAPACITY_REBALANCE_REPLACEMENT_STRATEGY = "launch"
 # ExcessCapacityTerminationPolicy for the maintain drain's target-lower step:
 # "no-termination" means the fleet neither relaunches toward the lowered target
 # nor self-selects victims — the caller then terminates the chosen idle ids.
 _EXCESS_CAPACITY_NO_TERMINATION = "no-termination"
+# Real EC2 raises this for a purged FleetId (rather than returning an empty
+# `Fleets` list), so `get_fleet_target` maps it to None = "fleet gone".
+_FLEET_NOT_FOUND_ERROR_CODES = frozenset({"InvalidFleetId.NotFound", "InvalidFleetIds.NotFound"})
 
 # Error codes that mean "the resource is already gone" — i.e. the delete
 # operation's postcondition is satisfied. Treat these as success during
@@ -88,6 +100,23 @@ _SG_DELETE_IDEMPOTENT_ERROR_CODES = frozenset(
         "InvalidSecurityGroupID.NotFound",
     }
 )
+
+
+class FleetTeardownError(RuntimeError):
+    """Aggregate raised when one or more regions fail during a multi-region
+    teardown (`terminate_fleet` / `terminate_all_tagged`).
+
+    Teardown processes every region even when an earlier region raises (so a
+    throttle in one region can't strand another region's self-respawning
+    maintain fleet); the per-region failures are collected and surfaced as this
+    single error at the end. The `.failures` attribute maps region → the
+    exception that region raised."""
+
+    def __init__(self, failures: dict[str, Exception]) -> None:
+        self.failures = failures
+        regions = ", ".join(sorted(failures))
+        super().__init__(f"teardown failed in region(s): {regions}")
+
 
 _HETZNER_STUB_MESSAGE = (
     "HetznerProvider is stubbed; implement when campaign budget >= $500. "
@@ -181,6 +210,19 @@ class CloudProvider(abc.ABC):
         to lower a regional fleet's target (`excess_policy="no-termination"` so
         the fleet neither relaunches nor self-terminates; the caller then
         terminates the chosen idle ids)."""
+
+    @abc.abstractmethod
+    def get_fleet_target(self, fleet_id: str, *, region: str) -> int | None:
+        """Current `TotalTargetCapacity` of a fleet, read from
+        `describe_fleets(FleetIds=[fleet_id])`'s
+        `Fleets[0].TargetCapacitySpecification.TotalTargetCapacity`. Returns
+        `None` if the fleet is not found.
+
+        Used by the maintain drain to clamp the lowered target against the
+        fleet's CURRENT target (`min(current, live)`), so an over-fulfilled
+        fleet (live > target from CapacityRebalance) never has its target
+        RAISED by the drain's arithmetic — the target moves monotonically
+        down in both the reclaim and over-provision regimes."""
 
     @abc.abstractmethod
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:
@@ -746,6 +788,37 @@ class AWSProvider(CloudProvider):
             excess_policy,
         )
 
+    def get_fleet_target(self, fleet_id: str, *, region: str) -> int | None:
+        """`TotalTargetCapacity` of `fleet_id`, or None if the fleet is gone.
+
+        Real EC2 raises `InvalidFleetId.NotFound` for a purged fleet id (not an
+        empty `Fleets` list), so that code maps to `None` = "fleet gone" — the
+        drain then skips the target-lower and proceeds to terminate the idle ids
+        (nothing will respawn them). A deleted-but-not-yet-purged fleet is
+        returned with its (usually 0) target. Any OTHER error (e.g. a throttle)
+        propagates, so the drain caller skips terminating rather than guessing.
+        The empty-`Fleets` check is retained as belt-and-suspenders."""
+        client = self._client(region)
+        try:
+            response = client.describe_fleets(FleetIds=[fleet_id])
+        except Exception as e:
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if code in _FLEET_NOT_FOUND_ERROR_CODES:
+                return None
+            raise
+        fleets = response.get("Fleets", [])
+        if not fleets:
+            return None
+        spec = fleets[0].get("TargetCapacitySpecification") or {}
+        target = spec.get("TotalTargetCapacity")
+        if target is None:
+            # A live EC2 fleet always returns TotalTargetCapacity (a required
+            # response field), so this branch is defensive only; treating an
+            # absent target as "gone" (→ drain proceeds to terminate) is safe
+            # because a fleet with no reported target isn't holding capacity.
+            return None
+        return int(target)
+
     # ---- teardown -------------------------------------------------------
 
     def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int:
@@ -755,23 +828,36 @@ class AWSProvider(CloudProvider):
         (both-tag match, so a sibling study's fleet survives) so the fleet
         cannot relaunch what the instance/LT/SG backstop terminates. Under
         instant, `list_fleets_by_tag` returns empty → the fleet step is a
-        no-op and the path is unchanged. Idempotent."""
+        no-op and the path is unchanged. Idempotent.
+
+        Each region's body is isolated: a `ClientError` (e.g. a throttle) in one
+        region is collected, and processing continues to the remaining regions
+        (so one region's failure can't strand another region's self-respawning
+        maintain fleet), then a `FleetTeardownError` aggregate is raised at the
+        end. Fleet-FIRST ordering is preserved within each region."""
         total = 0
+        failures: dict[str, Exception] = {}
         for region in self._regions:
-            fleet_ids = self.list_fleets_by_tag(project_tag, fleet_name, region=region)
-            self.delete_fleets(fleet_ids, region=region, terminate_instances=True)
-            total += self._terminate_by_tags(
-                region,
-                {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
-            )
-            self._delete_launch_templates_by_tags(
-                region,
-                {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
-            )
-            self._delete_security_groups_by_tags(
-                region,
-                {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
-            )
+            try:
+                fleet_ids = self.list_fleets_by_tag(project_tag, fleet_name, region=region)
+                self.delete_fleets(fleet_ids, region=region, terminate_instances=True)
+                total += self._terminate_by_tags(
+                    region,
+                    {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
+                )
+                self._delete_launch_templates_by_tags(
+                    region,
+                    {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
+                )
+                self._delete_security_groups_by_tags(
+                    region,
+                    {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
+                )
+            except Exception as e:
+                logger.exception("terminate_fleet: region %s failed; continuing", region)
+                failures[region] = e
+        if failures:
+            raise FleetTeardownError(failures)
         return total
 
     def terminate_all_tagged(self, project_tag: str) -> int:
@@ -779,14 +865,26 @@ class AWSProvider(CloudProvider):
 
         Under maintain, delete every matching persistent fleet resource FIRST
         (Project-only match) so the sweep cannot race a relaunch. Under instant
-        the fleet step is a no-op. Idempotent."""
+        the fleet step is a no-op. Idempotent.
+
+        Region-isolated like `terminate_fleet`: a failure in one region is
+        collected and the sweep continues to the rest, then a
+        `FleetTeardownError` aggregate is raised at the end. Fleet-FIRST
+        ordering is preserved within each region."""
         total = 0
+        failures: dict[str, Exception] = {}
         for region in self._regions:
-            fleet_ids = self.list_fleets_by_tag(project_tag, region=region)
-            self.delete_fleets(fleet_ids, region=region, terminate_instances=True)
-            total += self._terminate_by_tags(region, {_PROJECT_KEY: project_tag})
-            self._delete_launch_templates_by_tags(region, {_PROJECT_KEY: project_tag})
-            self._delete_security_groups_by_tags(region, {_PROJECT_KEY: project_tag})
+            try:
+                fleet_ids = self.list_fleets_by_tag(project_tag, region=region)
+                self.delete_fleets(fleet_ids, region=region, terminate_instances=True)
+                total += self._terminate_by_tags(region, {_PROJECT_KEY: project_tag})
+                self._delete_launch_templates_by_tags(region, {_PROJECT_KEY: project_tag})
+                self._delete_security_groups_by_tags(region, {_PROJECT_KEY: project_tag})
+            except Exception as e:
+                logger.exception("terminate_all_tagged: region %s failed; continuing", region)
+                failures[region] = e
+        if failures:
+            raise FleetTeardownError(failures)
         return total
 
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:
@@ -1013,6 +1111,9 @@ class HetznerProvider(CloudProvider):
     def modify_fleet_target(
         self, fleet_id: str, target: int, *, region: str, excess_policy: str
     ) -> None:
+        raise NotImplementedError(_HETZNER_STUB_MESSAGE)
+
+    def get_fleet_target(self, fleet_id: str, *, region: str) -> int | None:
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:

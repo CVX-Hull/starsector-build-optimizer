@@ -33,30 +33,56 @@ fi
 SG_DELETE_RETRIES=12
 SG_DELETE_RETRY_SLEEP_SECONDS=5
 
+# A failed fleet describe MUST NOT be treated as "no fleets": if we then bounce
+# the region's instances while its maintain fleet is still alive, the fleet
+# respawns them. So a describe failure records the region into
+# FLEET_SWEEP_FAILED_REGIONS, skips it in the instances pass below, and forces a
+# non-zero script exit at the end. Mirrors final_audit.sh's `if ! ...; then`.
+FLEET_SWEEP_FAILED=0
+FLEET_SWEEP_FAILED_REGIONS=""
+
 # Pass 0: delete every maintain fleet tagged with this campaign. `describe-fleets`
 # has no server-side tag filter, so filter active states server-side and match
 # the Project tag client-side with JMESPath. `delete-fleets --terminate-instances`
 # is async, so the instances pass below stays an idempotent straggler-catcher.
 for region in us-east-1 us-east-2 us-west-1 us-west-2; do
-  fleets=$(aws ec2 describe-fleets \
+  if ! fleets=$(aws ec2 describe-fleets \
     --region "$region" \
     --filters "Name=fleet-state,Values=submitted,active,modifying" \
     --query "Fleets[?Tags[?Key=='Project'&&Value=='$TAG']].FleetId" \
-    --output text 2>/dev/null || true)
+    --output text); then
+    echo "  $region: WARN describe-fleets FAILED — cannot confirm no maintain fleet is live." >&2
+    echo "  $region: skipping this region's instance termination (a live fleet would respawn them). Retry teardown.sh." >&2
+    FLEET_SWEEP_FAILED=1
+    FLEET_SWEEP_FAILED_REGIONS="$FLEET_SWEEP_FAILED_REGIONS $region"
+    continue
+  fi
   if [[ -z "$fleets" ]]; then
     echo "  $region: no fleets tagged $TAG"
     continue
   fi
   echo "  $region: deleting $(echo "$fleets" | wc -w) fleet(s): $fleets"
   read -r -a fleet_arr <<< "$(tr '\t\n' '  ' <<< "$fleets")"
-  aws ec2 delete-fleets --region "$region" \
-    --fleet-ids "${fleet_arr[@]}" --terminate-instances >/dev/null 2>&1 || \
-    echo "  $region: WARN delete-fleets failed (retry teardown.sh)"
+  # A failed delete-fleets is the same hazard as a failed describe: the fleet is
+  # still live, so bouncing its instances in Pass 1 would respawn them. Record
+  # the region so the instances pass skips it and the script exits non-zero.
+  if ! aws ec2 delete-fleets --region "$region" \
+    --fleet-ids "${fleet_arr[@]}" --terminate-instances >/dev/null 2>&1; then
+    echo "  $region: WARN delete-fleets FAILED — fleet may still be live; skipping instance termination (would respawn). Retry teardown.sh." >&2
+    FLEET_SWEEP_FAILED=1
+    FLEET_SWEEP_FAILED_REGIONS="$FLEET_SWEEP_FAILED_REGIONS $region"
+  fi
 done
 
 echo
 
 for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  # Skip regions whose fleet describe failed: their maintain fleet may still be
+  # live and would respawn any instance we terminate here.
+  if [[ " $FLEET_SWEEP_FAILED_REGIONS " == *" $region "* ]]; then
+    echo "  $region: SKIP instance termination (fleet sweep failed for this region)"
+    continue
+  fi
   ids=$(aws ec2 describe-instances \
     --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
@@ -147,4 +173,10 @@ for region in us-east-1 us-east-2 us-west-1 us-west-2; do
 done
 
 echo
+if [[ $FLEET_SWEEP_FAILED -ne 0 ]]; then
+  echo "Teardown INCOMPLETE: fleet sweep (describe or delete) failed in region(s):${FLEET_SWEEP_FAILED_REGIONS}." >&2
+  echo "Those regions' instances were NOT terminated (a live maintain fleet would respawn them)." >&2
+  echo "Rerun scripts/cloud/teardown.sh $CAMPAIGN once AWS is reachable, then final_audit.sh." >&2
+  exit 1
+fi
 echo "Teardown complete. Run scripts/cloud/final_audit.sh $CAMPAIGN to verify."

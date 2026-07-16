@@ -24,7 +24,13 @@ instance_types:
   - c7i.2xlarge
 
 spot_allocation_strategy: price-capacity-optimized
-capacity_rebalancing: true
+# CapacityRebalance uses ReplacementStrategy="launch", which launches a
+# replacement for an at-risk instance WITHOUT terminating the flagged original
+# — a stable over-provision above TargetCapacity that is idle-billed. Plain
+# maintain already refills genuinely-reclaimed spot toward TargetCapacity, and
+# the Redis janitor + matchup_id dedup cover in-flight interruptions, so the
+# rebalance buys nothing here. Keep it off. See spec 22 §Config dataclasses.
+capacity_rebalancing: false
 
 # Self-replenishing fleet: AWS relaunches reclaimed spot to hold TargetCapacity
 # instead of decaying monotonically over a multi-hour run. Opt-in (default is

@@ -570,22 +570,46 @@ class WorkerDrainTicker:
         for iid in to_terminate:
             by_region.setdefault(id_to_region[iid], []).append(iid)
         for region, ids in by_region.items():
-            if self._fleet_type == "maintain":
-                self._lower_fleet_target(region, live_by_region.get(region, 0), len(ids))
-            self._provider.terminate_instances(ids, region=region)
-            logger.info(
-                "worker drain: terminated %d idle workers in %s (remaining=%d)",
-                len(ids),
-                region,
-                remaining,
-            )
+            # Isolate each region: one region's EC2/fleet-API failure (throttle,
+            # transient error) must not abort the whole tick and starve the
+            # remaining regions of their drain. The next tick retries.
+            try:
+                if self._fleet_type == "maintain":
+                    self._lower_fleet_target(region, live_by_region.get(region, 0), len(ids))
+                self._provider.terminate_instances(ids, region=region)
+                logger.info(
+                    "worker drain: terminated %d idle workers in %s (remaining=%d)",
+                    len(ids),
+                    region,
+                    remaining,
+                )
+            except Exception:
+                logger.exception(
+                    "worker drain: region %s failed; continuing with other regions",
+                    region,
+                )
+                continue
 
     def _lower_fleet_target(self, region: str, live_in_region: int, k_region: int) -> None:
         """Maintain-only: lower the region's fleet TargetCapacity BEFORE the
         idle ids are terminated, so the fleet does not relaunch them.
 
-        `new_target = max(0, live_in_region − k_region)` is derived from the
-        observed live count (NOT the fleet's stale-high reported TargetCapacity).
+        The lowered target is
+        `new_target = max(0, min(current_target, live_in_region) − k_region)`,
+        where `current_target` is the fleet's CURRENT `TotalTargetCapacity`
+        (`provider.get_fleet_target`) and `live_in_region` is the ticker's
+        already-observed live count. Clamping against BOTH is correct in both
+        regimes:
+
+        - **Reclaim** (fleet under-fulfilled, `current=32`, `live=28`, `k=5`):
+          `min(32, 28) − 5 = 23`. Uses the live count, so we don't target above
+          the true live set and respawn — the failure this drain exists to
+          avoid.
+        - **Over-provision** (CapacityRebalance over-fulfilled, `current=32`,
+          `live=57`, `k=5`): `min(32, 57) − 5 = 27`. Clamping against `current`
+          keeps the target moving monotonically DOWN; deriving from `live` alone
+          (`57 − 5 = 52`) would RAISE the target above 32 (F1).
+
         `excess_policy="no-termination"` so the fleet neither relaunches toward
         the lowered target nor self-selects victims — the caller terminates the
         precisely-chosen idle ids next.
@@ -602,13 +626,34 @@ class WorkerDrainTicker:
             # Fleet already torn down / not yet discoverable: skip the target
             # lower and let the terminate proceed (instant-equivalent).
             return
-        new_target = max(0, live_in_region - k_region)
-        self._provider.modify_fleet_target(
-            fleet_id,
-            new_target,
-            region=region,
-            excess_policy=_EXCESS_CAPACITY_NO_TERMINATION,
-        )
+        try:
+            current = self._provider.get_fleet_target(fleet_id, region=region)
+            if current is None:
+                # Fleet vanished between resolve and read (deleted/replaced), or
+                # AWS returned no target. Don't guess a target — skip the lower
+                # and drop the stale cache entry so the next tick re-resolves.
+                self._fleet_id_by_region.pop(region, None)
+                logger.warning(
+                    "worker drain: fleet %s in %s has no discoverable target; "
+                    "skipping target-lower this tick",
+                    fleet_id,
+                    region,
+                )
+                return
+            new_target = max(0, min(current, live_in_region) - k_region)
+            self._provider.modify_fleet_target(
+                fleet_id,
+                new_target,
+                region=region,
+                excess_policy=_EXCESS_CAPACITY_NO_TERMINATION,
+            )
+        except Exception:
+            # A get_fleet_target/modify_fleet_target failure may mean the cached
+            # FleetId is stale (fleet deleted/replaced under us). Drop it so the
+            # next tick re-resolves; re-raise so tick's per-region handler logs
+            # and continues with the other regions.
+            self._fleet_id_by_region.pop(region, None)
+            raise
 
     def _resolve_fleet_id(self, region: str) -> str | None:
         """First active FleetId matching BOTH tags in `region`, cached per
