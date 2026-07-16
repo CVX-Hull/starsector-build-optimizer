@@ -179,6 +179,12 @@ def prepare_cloud_pool(
             spot_allocation_strategy=campaign.spot_allocation_strategy,
             target_workers=target_workers,
             user_data=user_data,
+            # `capacity_rebalance` (param) mirrors `capacity_rebalancing` (field);
+            # honored only under fleet_type="maintain". provision_timeout bounds
+            # the maintain async instance-poll.
+            fleet_type=campaign.fleet_type,
+            capacity_rebalance=campaign.capacity_rebalancing,
+            provision_timeout_seconds=campaign.fleet_provision_timeout_seconds,
         )
         if not instance_ids:
             raise RuntimeError(f"provision_fleet returned no instances for fleet_name={fleet_name}")

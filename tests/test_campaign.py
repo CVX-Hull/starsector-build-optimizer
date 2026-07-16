@@ -149,6 +149,37 @@ class TestCampaignConfigLoading:
         config = load_campaign_config(path)
         assert config.studies[0].active_opponents == 1
 
+    def test_fleet_type_defaults_to_instant(self, tmp_path):
+        """Absent `fleet_type` in YAML → CampaignConfig.fleet_type == "instant"
+        (the one-shot, no-respawn default; maintain is strictly opt-in)."""
+        from starsector_optimizer.campaign import load_campaign_config
+
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        assert config.fleet_type == "instant"
+
+    def test_fleet_type_maintain_loads_from_yaml(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+
+        path = _minimal_campaign_yaml(tmp_path, fleet_type="maintain")
+        config = load_campaign_config(path)
+        assert config.fleet_type == "maintain"
+
+    def test_invalid_fleet_type_rejected(self, tmp_path):
+        from starsector_optimizer.campaign import load_campaign_config
+
+        path = _minimal_campaign_yaml(tmp_path, fleet_type="bogus")
+        with pytest.raises(ValueError, match="fleet_type"):
+            load_campaign_config(path)
+
+    def test_invalid_fleet_type_error_lists_allowed_sorted(self, tmp_path):
+        """Error message follows the `_ALLOWED_*` sorted-set convention so the
+        operator sees the valid values."""
+        from starsector_optimizer.campaign import load_campaign_config
+
+        path = _minimal_campaign_yaml(tmp_path, fleet_type="bogus")
+        with pytest.raises(ValueError, match=r"\['instant', 'maintain'\]"):
+            load_campaign_config(path)
+
 
 class TestFrozenDataclasses:
     """Every Phase 6 dataclass is frozen."""
@@ -1587,7 +1618,7 @@ class TestWorkerDrainTicker:
             mapping["active_matchups"] = active_matchups
         redis_client.hset(f"worker:{self._TAG}:{worker_id}:heartbeat", mapping=mapping)
 
-    def _ticker(self, fake_redis, provider, progress, slots=2):
+    def _ticker(self, fake_redis, provider, progress, slots=2, *, fleet_type="instant"):
         from starsector_optimizer.campaign import WorkerDrainTicker
 
         return WorkerDrainTicker(
@@ -1599,6 +1630,8 @@ class TestWorkerDrainTicker:
             matchup_slots_per_worker=slots,
             heartbeat_interval_seconds=30.0,
             heartbeat_stale_multiplier=3,
+            fleet_type=fleet_type,
+            fleet_name=self._TAG,
         )
 
     def test_none_redis_is_noop(self):
@@ -1682,6 +1715,93 @@ class TestWorkerDrainTicker:
             iid for call in provider.terminate_instances.call_args_list for iid in call.args[0]
         ]
         assert terminated == ["i-idle"]
+
+    def test_instant_branch_makes_no_fleet_calls(self, fake_redis):
+        """Under fleet_type='instant' (default) the drain terminates directly
+        with zero maintain fleet-API calls — the original static-fleet path."""
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-1", "region": "us-east-1"},
+            {"id": "i-2", "region": "us-east-1"},
+        ]
+        self._seed_hb(fake_redis, "i-1", active_matchups=0)
+        self._seed_hb(fake_redis, "i-2", active_matchups=0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1))
+        ticker.tick()
+        provider.list_fleets_by_tag.assert_not_called()
+        provider.modify_fleet_target.assert_not_called()
+        assert provider.terminate_instances.called
+
+    def test_maintain_lowers_target_before_terminate(self, fake_redis):
+        """Maintain branch: per region with idle surplus, lower the fleet
+        TargetCapacity (excess_policy=no-termination) BEFORE terminating the
+        chosen idle ids, so the fleet does not relaunch them."""
+        from starsector_optimizer.cloud_provider import _EXCESS_CAPACITY_NO_TERMINATION
+
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-1", "region": "us-east-1"},
+            {"id": "i-2", "region": "us-east-1"},
+            {"id": "i-3", "region": "us-east-1"},
+        ]
+        provider.list_fleets_by_tag.return_value = ["fleet-e1"]
+        order: list[str] = []
+        provider.modify_fleet_target.side_effect = lambda *a, **k: order.append("modify")
+        provider.terminate_instances.side_effect = lambda *a, **k: order.append("terminate")
+        # remaining=1, slots=2 → keep=1; live=3 all idle → surplus=2.
+        for iid in ("i-1", "i-2", "i-3"):
+            self._seed_hb(fake_redis, iid, active_matchups=0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1), fleet_type="maintain")
+        ticker.tick()
+        # modify precedes terminate in this region.
+        assert order == ["modify", "terminate"]
+        # new_target = live_in_region(3) − k_region(2) = 1, from the observed
+        # live count (NOT describe_fleets TargetCapacity).
+        mk = provider.modify_fleet_target.call_args
+        assert mk.args[0] == "fleet-e1"
+        assert mk.args[1] == 1
+        assert mk.kwargs["region"] == "us-east-1"
+        assert mk.kwargs["excess_policy"] == _EXCESS_CAPACITY_NO_TERMINATION
+        # fleet lookup used BOTH tags (fleet_name passed).
+        lk = provider.list_fleets_by_tag.call_args
+        assert lk.args[0] == self._TAG
+        assert lk.args[1] == self._TAG  # fleet_name
+        assert lk.kwargs["region"] == "us-east-1"
+
+    def test_maintain_new_target_clamped_at_zero(self, fake_redis):
+        """new_target = max(0, live_in_region − k_region): even if k_region
+        equals the live count the target never goes negative."""
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-1", "region": "us-east-2"},
+            {"id": "i-2", "region": "us-east-2"},
+        ]
+        provider.list_fleets_by_tag.return_value = ["fleet-e2"]
+        # remaining=1, slots=1 → keep=1; live=2 idle → surplus=1 in us-east-2.
+        self._seed_hb(fake_redis, "i-1", active_matchups=0)
+        self._seed_hb(fake_redis, "i-2", active_matchups=0)
+        ticker = self._ticker(
+            fake_redis, provider, _FakeProgress(1), slots=1, fleet_type="maintain"
+        )
+        ticker.tick()
+        # live_in_region=2, k_region=1 → new_target=1 (still ≥0).
+        assert provider.modify_fleet_target.call_args.args[1] == 1
+
+    def test_maintain_no_fleet_found_still_terminates(self, fake_redis):
+        """If no fleet resource resolves for a region (already torn down), the
+        drain skips the target-lower but still terminates the idle ids."""
+        provider = MagicMock()
+        provider.list_active.return_value = [
+            {"id": "i-1", "region": "us-east-1"},
+            {"id": "i-2", "region": "us-east-1"},
+        ]
+        provider.list_fleets_by_tag.return_value = []
+        for iid in ("i-1", "i-2"):
+            self._seed_hb(fake_redis, iid, active_matchups=0)
+        ticker = self._ticker(fake_redis, provider, _FakeProgress(1), fleet_type="maintain")
+        ticker.tick()
+        provider.modify_fleet_target.assert_not_called()
+        assert provider.terminate_instances.called
 
 
 class TestRunJanitorPass:

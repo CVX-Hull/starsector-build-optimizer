@@ -350,12 +350,18 @@ last value equals total realized spend.
 **Fleet drain.** A second background thread — a sibling of the cost thread,
 built on the same bounded-lifecycle `_PeriodicBackgroundThread` and nested
 inside the cloud-pool context — drives a `WorkerDrainTicker` (spec 22
-§"Worker drain (honest-eval)") every `drain_poll_interval_seconds`. Because the
-honest-eval fleet is static (no replacement provisioning), workers that run out
-of work near end-of-run would otherwise idle-bill until the whole fleet is torn
-down at `evaluate_builds` return; the drain terminates provably-idle surplus
+§"Worker drain (honest-eval)") every `drain_poll_interval_seconds`. Workers that
+run out of work near end-of-run would otherwise idle-bill until the whole fleet
+is torn down at `evaluate_builds` return; the drain sheds provably-idle surplus
 workers as the outstanding-matchup count falls below fleet capacity, keeping
-enough alive to finish the remainder (the keep-floor invariant in spec 22).
+enough alive to finish the remainder (the keep-floor invariant in spec 22). The
+shed mechanism depends on `campaign.fleet_type` (threaded into the ticker): under
+`instant` the fleet is static and the drain simply `terminate_instances` the idle
+surplus; under `maintain` the fleet self-replenishes reclaimed spot during the
+bulk phase, so the drain first lowers the regional fleet's `TargetCapacity`
+(computed from the observed live count) with `no-termination` and then terminates
+the same idle ids, so the shed workers are not respawned (spec 22 §"Respawn-safety
+under `fleet_type`").
 
 The drain reads outstanding work Python-side, not from Redis depth:
 `evaluate_builds` publishes `len(queue)+len(pending)` into a `MatchupProgress`
@@ -464,6 +470,11 @@ configuration from the source campaign YAML:
 timing when needed, then forwarded through `prepare_cloud_pool`):
 `regions`, `instance_types`,
 `spot_allocation_strategy`, `ami_ids_by_region`, `ssh_key_name`,
+`fleet_type`, `capacity_rebalancing`, `fleet_provision_timeout_seconds`
+(the maintain-fleet triad — `fleet_type="maintain"` in the source YAML makes the
+honest-eval fleet self-replenishing and switches the drain to the scale-in
+branch; all three are pass-through, not adjusted, and survive the
+`dataclasses.replace` timing adjustment because they are ordinary fields),
 `max_lifetime_hours`, `matchup_slots_per_worker`, `redis_port`,
 `base_flask_port`, `flask_ports_per_study`, `result_timeout_seconds`,
 `visibility_timeout_seconds`, `janitor_interval_seconds`,

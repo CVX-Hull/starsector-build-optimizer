@@ -56,6 +56,26 @@ _FLEET_TRANSIENT_ERROR_CODES = frozenset(
     }
 )
 
+# Maintain-mode fleet knobs (spec 22 §AWSProvider provisioning + §Worker drain).
+# `create_fleet(Type="maintain")` is async: it returns a FleetId immediately and
+# launches instances in the background, so we poll `describe_fleet_instances`
+# toward the requested per-region target. The poll *timeout* is the caller-
+# supplied `provision_timeout_seconds` (the `CampaignConfig` knob), NOT a
+# constant — only the poll *interval* is fixed here.
+_FLEET_INSTANCE_POLL_INTERVAL_SECONDS = 15.0
+# Fleet states that still hold (or can relaunch) billable capacity — the set
+# `list_fleets_by_tag` scans for leaked-fleet discovery + teardown. `deleted`,
+# `deleted-running`, `deleted-terminating`, and `failed` are excluded.
+_FLEET_ACTIVE_STATES = ("submitted", "active", "modifying")
+# CapacityRebalance replacement strategy for maintain fleets. "launch" replaces
+# an at-risk instance without waiting for it to be reclaimed first; the
+# proactive "launch-before-terminate" variant is a deferred tuning knob.
+_CAPACITY_REBALANCE_REPLACEMENT_STRATEGY = "launch"
+# ExcessCapacityTerminationPolicy for the maintain drain's target-lower step:
+# "no-termination" means the fleet neither relaunches toward the lowered target
+# nor self-selects victims — the caller then terminates the chosen idle ids.
+_EXCESS_CAPACITY_NO_TERMINATION = "no-termination"
+
 # Error codes that mean "the resource is already gone" — i.e. the delete
 # operation's postcondition is satisfied. Treat these as success during
 # teardown rather than retrying for the full deadline. Concurrent teardown
@@ -98,6 +118,9 @@ class CloudProvider(abc.ABC):
         target_workers: int,
         user_data: str,
         root_volume_size_gb: int | None = None,
+        fleet_type: str = "instant",
+        capacity_rebalance: bool = False,
+        provision_timeout_seconds: float = 600.0,
     ) -> list[str]:
         """Launch a spot fleet. Return instance IDs that were launched.
 
@@ -105,18 +128,59 @@ class CloudProvider(abc.ABC):
         `Fleet=<fleet_name>`. LT/SG names use `f"{project_tag}__{fleet_name}"`
         for per-fleet isolation (no collision when multiple studies share a
         project tag).
+
+        `fleet_type="instant"` (default) is synchronous — the response carries
+        launched instance IDs and there is no persistent fleet resource.
+        `fleet_type="maintain"` is asynchronous: it captures `response["FleetId"]`,
+        tags the fleet resource (both `Project` and `Fleet`), and polls
+        `describe_fleet_instances` toward the per-region target (bounded by
+        `provision_timeout_seconds`), returning the full discovered set.
+        `capacity_rebalance` is honored only under maintain (adds
+        `SpotOptions.MaintenanceStrategies.CapacityRebalance`).
         """
 
     @abc.abstractmethod
     def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int:
         """Targeted teardown — reap resources tagged BOTH project_tag AND
-        fleet_name. Idempotent. Returns the number of instances terminated."""
+        fleet_name. Idempotent. Returns the number of instances terminated.
+
+        Under maintain, deletes the matching fleet resource(s) FIRST
+        (`delete_fleets`, `TerminateInstances=True`) before the instance/LT/SG
+        backstop passes, so the fleet cannot relaunch what the backstop kills."""
 
     @abc.abstractmethod
     def terminate_all_tagged(self, project_tag: str) -> int:
         """Campaign-wide sweep — reap everything tagged `Project=project_tag`
         regardless of fleet name. Crash-recovery backstop. Idempotent.
-        Returns the number of instances terminated."""
+        Returns the number of instances terminated. Under maintain, deletes
+        matching fleet resource(s) FIRST (Project-tag match)."""
+
+    @abc.abstractmethod
+    def list_fleets_by_tag(
+        self, project_tag: str, fleet_name: str | None = None, *, region: str
+    ) -> list[str]:
+        """FleetIds of fleets in `_FLEET_ACTIVE_STATES` whose Tags match
+        `Project=project_tag` (AND `Fleet=fleet_name` when given). `describe_fleets`
+        has no server-side tag filter, so the match is client-side over
+        `Fleets[].Tags`. The discovery primitive for maintain teardown, the
+        leaked-fleet audit, and the maintain drain."""
+
+    @abc.abstractmethod
+    def delete_fleets(
+        self, fleet_ids: Sequence[str], *, region: str, terminate_instances: bool = True
+    ) -> int:
+        """`delete-fleets` on an explicit FleetId list. `terminate_instances=True`
+        kills the fleet's instances atomically. Empty ids → 0, no API call.
+        Idempotent. Returns the number of fleet IDs submitted for deletion."""
+
+    @abc.abstractmethod
+    def modify_fleet_target(
+        self, fleet_id: str, target: int, *, region: str, excess_policy: str
+    ) -> None:
+        """`modify-fleet` `TotalTargetCapacity=target`. Used by the maintain drain
+        to lower a regional fleet's target (`excess_policy="no-termination"` so
+        the fleet neither relaunches nor self-terminates; the caller then
+        terminates the chosen idle ids)."""
 
     @abc.abstractmethod
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:
@@ -201,6 +265,9 @@ class AWSProvider(CloudProvider):
         target_workers: int,
         user_data: str,
         root_volume_size_gb: int | None = None,
+        fleet_type: str = "instant",
+        capacity_rebalance: bool = False,
+        provision_timeout_seconds: float = 600.0,
     ) -> list[str]:
         instance_ids: list[str] = []
         per_region_target = max(1, target_workers // max(1, len(regions)))
@@ -239,6 +306,9 @@ class AWSProvider(CloudProvider):
                     instance_types=instance_types,
                     spot_allocation_strategy=spot_allocation_strategy,
                     target=per_region_target,
+                    fleet_type=fleet_type,
+                    capacity_rebalance=capacity_rebalance,
+                    provision_timeout_seconds=provision_timeout_seconds,
                 )
             )
         return instance_ids
@@ -370,6 +440,9 @@ class AWSProvider(CloudProvider):
         instance_types: Sequence[str],
         spot_allocation_strategy: str,
         target: int,
+        fleet_type: str = "instant",
+        capacity_rebalance: bool = False,
+        provision_timeout_seconds: float = 600.0,
     ) -> list[str]:
         client = self._client(region)
         launch_template_configs = [
@@ -383,11 +456,50 @@ class AWSProvider(CloudProvider):
         ]
         # `Type="instant"` = ephemeral fleet; no fleet resource remains to
         # clean up. `MaintenanceStrategies` (CapacityRebalance) is only valid
-        # on `Type="maintain"` fleets. Spot preemption is handled by the
-        # Redis janitor + matchup_id dedup instead.
+        # on `Type="maintain"` fleets. Under instant, spot preemption is handled
+        # by the Redis janitor + matchup_id dedup instead; under maintain the
+        # fleet self-replenishes reclaimed spot toward TargetCapacity.
         spot_options: dict[str, Any] = {
             "AllocationStrategy": spot_allocation_strategy,
         }
+        if fleet_type == "maintain" and capacity_rebalance:
+            spot_options["MaintenanceStrategies"] = {
+                "CapacityRebalance": {
+                    "ReplacementStrategy": _CAPACITY_REBALANCE_REPLACEMENT_STRATEGY,
+                }
+            }
+        # Both provisioning paths tag launched instances. Under maintain we ALSO
+        # tag the persistent fleet resource (both keys) so `list_fleets_by_tag`
+        # can rediscover it for teardown + the leaked-fleet audit purely from
+        # AWS state (no on-disk FleetId manifest).
+        tag_specifications: list[dict[str, Any]] = [
+            {
+                "ResourceType": "instance",
+                "Tags": [
+                    {"Key": _PROJECT_KEY, "Value": project_tag},
+                    {"Key": _FLEET_KEY, "Value": fleet_name},
+                ],
+            }
+        ]
+        if fleet_type == "maintain":
+            tag_specifications.append(
+                {
+                    "ResourceType": "fleet",
+                    "Tags": [
+                        {"Key": _PROJECT_KEY, "Value": project_tag},
+                        {"Key": _FLEET_KEY, "Value": fleet_name},
+                    ],
+                }
+            )
+            return self._create_maintain_fleet_in_region(
+                client,
+                region=region,
+                spot_options=spot_options,
+                launch_template_configs=launch_template_configs,
+                tag_specifications=tag_specifications,
+                target=target,
+                provision_timeout_seconds=provision_timeout_seconds,
+            )
         # Retry on transient "just-created resource not yet visible to Fleet"
         # errors. Fleet has a replication lag beyond what individual boto3
         # describe-waiters cover, and a few-second retry loop is sufficient.
@@ -405,15 +517,7 @@ class AWSProvider(CloudProvider):
                 },
                 LaunchTemplateConfigs=launch_template_configs,
                 Type="instant",
-                TagSpecifications=[
-                    {
-                        "ResourceType": "instance",
-                        "Tags": [
-                            {"Key": _PROJECT_KEY, "Value": project_tag},
-                            {"Key": _FLEET_KEY, "Value": fleet_name},
-                        ],
-                    }
-                ],
+                TagSpecifications=tag_specifications,
             )
             last_errors = response.get("Errors", [])
             ids = []
@@ -458,12 +562,211 @@ class AWSProvider(CloudProvider):
             )
         return ids
 
+    def _create_maintain_fleet_in_region(
+        self,
+        client: Any,
+        *,
+        region: str,
+        spot_options: dict[str, Any],
+        launch_template_configs: list[dict[str, Any]],
+        tag_specifications: list[dict[str, Any]],
+        target: int,
+        provision_timeout_seconds: float,
+    ) -> list[str]:
+        """Provision a `Type="maintain"` fleet (async) and poll its instances.
+
+        `create_fleet(Type="maintain")` returns a `FleetId` immediately and
+        launches spot instances in the background, so we poll
+        `describe_fleet_instances` toward `target` until it is reached OR
+        `provision_timeout_seconds` elapses, then return the FULL discovered
+        set (a genuine shortfall surfaces downstream via
+        `min_workers_to_start`/`partial_fleet_policy`, NOT via an early
+        return at >= 1). The transient SG/LT-visibility retry still guards
+        the create call itself.
+        """
+        fleet_id = ""
+        last_errors: list[dict] = []
+        for attempt in range(_FLEET_PROVISION_MAX_RETRIES):
+            response = client.create_fleet(
+                SpotOptions=spot_options,
+                TargetCapacitySpecification={
+                    "TotalTargetCapacity": target,
+                    "DefaultTargetCapacityType": "spot",
+                },
+                LaunchTemplateConfigs=launch_template_configs,
+                Type="maintain",
+                TagSpecifications=tag_specifications,
+            )
+            fleet_id = response.get("FleetId", "") or ""
+            last_errors = response.get("Errors", [])
+            if fleet_id:
+                break
+            any_transient = any(
+                e.get("ErrorCode") in _FLEET_TRANSIENT_ERROR_CODES for e in last_errors
+            )
+            if not any_transient or attempt == _FLEET_PROVISION_MAX_RETRIES - 1:
+                break
+            logger.warning(
+                "create_fleet (maintain) in %s transient visibility errors "
+                "(attempt %d/%d): %s; retrying after %.1fs",
+                region,
+                attempt + 1,
+                _FLEET_PROVISION_MAX_RETRIES,
+                sorted(
+                    {str(e.get("ErrorCode")) for e in last_errors} & _FLEET_TRANSIENT_ERROR_CODES
+                ),
+                _FLEET_PROVISION_RETRY_DELAY_SECONDS,
+            )
+            time.sleep(_FLEET_PROVISION_RETRY_DELAY_SECONDS)
+        if not fleet_id:
+            logger.error("create_fleet (maintain) errors in %s: %s", region, last_errors)
+            raise RuntimeError(
+                f"create_fleet (maintain) returned no FleetId in {region}; errors: {last_errors}"
+            )
+        if last_errors:
+            # Fleet created but some AZs/pools were rejected (e.g. a per-AZ
+            # InvalidFleetConfiguration). Surface it — matching the instant path's
+            # partial-error WARN — so a below-diversity maintain fleet is visible;
+            # the shortfall also reaches min_workers_to_start via the poll below.
+            logger.warning(
+                "create_fleet (maintain) partial errors in %s (FleetId=%s "
+                "provisioned despite these): %s",
+                region,
+                fleet_id,
+                last_errors,
+            )
+        # NOTE: provision_fleet iterates regions sequentially, so under maintain
+        # the worst-case provision wall time is len(regions) * provision_timeout_seconds
+        # (each region polls up to the full timeout), vs the instant path's much
+        # shorter transient-retry budget. See spec 22 §AWSProvider provisioning.
+        deadline = time.monotonic() + provision_timeout_seconds
+        ids: list[str] = []
+        while True:
+            ids = self._describe_fleet_active_instance_ids(client, fleet_id)
+            if len(ids) >= target:
+                break
+            if time.monotonic() >= deadline:
+                logger.warning(
+                    "maintain fleet %s in %s reached %d/%d instance(s) before "
+                    "the %.0fs provision timeout; returning the partial set "
+                    "(min_workers_to_start decides)",
+                    fleet_id,
+                    region,
+                    len(ids),
+                    target,
+                    provision_timeout_seconds,
+                )
+                break
+            time.sleep(_FLEET_INSTANCE_POLL_INTERVAL_SECONDS)
+        logger.info(
+            "maintain fleet %s in %s active with %d instance(s)",
+            fleet_id,
+            region,
+            len(ids),
+        )
+        return ids
+
+    def _describe_fleet_active_instance_ids(self, client: Any, fleet_id: str) -> list[str]:
+        """All `ActiveInstances[].InstanceId` for a fleet, `NextToken`-paginated."""
+        ids: list[str] = []
+        next_token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {"FleetId": fleet_id}
+            if next_token:
+                kwargs["NextToken"] = next_token
+            response = client.describe_fleet_instances(**kwargs)
+            for active in response.get("ActiveInstances", []):
+                iid = active.get("InstanceId")
+                if iid:
+                    ids.append(iid)
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+        return ids
+
+    # ---- fleet lifecycle primitives -------------------------------------
+
+    def list_fleets_by_tag(
+        self, project_tag: str, fleet_name: str | None = None, *, region: str
+    ) -> list[str]:
+        """FleetIds of active-state fleets whose Tags match `project_tag`
+        (AND `fleet_name` when given). `describe_fleets` has no server-side tag
+        filter, so we filter by `fleet-state` server-side and match tags
+        client-side over `Fleets[].Tags`. `NextToken`-paginated."""
+        client = self._client(region)
+        matched: list[str] = []
+        next_token: str | None = None
+        while True:
+            kwargs: dict[str, Any] = {
+                "Filters": [{"Name": "fleet-state", "Values": list(_FLEET_ACTIVE_STATES)}],
+            }
+            if next_token:
+                kwargs["NextToken"] = next_token
+            response = client.describe_fleets(**kwargs)
+            for fleet in response.get("Fleets", []):
+                tags = {t.get("Key"): t.get("Value") for t in (fleet.get("Tags") or [])}
+                if tags.get(_PROJECT_KEY) != project_tag:
+                    continue
+                if fleet_name is not None and tags.get(_FLEET_KEY) != fleet_name:
+                    continue
+                fleet_id = fleet.get("FleetId")
+                if fleet_id:
+                    matched.append(fleet_id)
+            next_token = response.get("NextToken")
+            if not next_token:
+                break
+        return matched
+
+    def delete_fleets(
+        self, fleet_ids: Sequence[str], *, region: str, terminate_instances: bool = True
+    ) -> int:
+        """`delete-fleets` on an explicit FleetId list. Empty → 0, no API call."""
+        ids = list(fleet_ids)
+        if not ids:
+            return 0
+        client = self._client(region)
+        client.delete_fleets(FleetIds=ids, TerminateInstances=terminate_instances)
+        logger.info(
+            "deleted %d fleet(s) in %s (terminate_instances=%s): %s",
+            len(ids),
+            region,
+            terminate_instances,
+            ids,
+        )
+        return len(ids)
+
+    def modify_fleet_target(
+        self, fleet_id: str, target: int, *, region: str, excess_policy: str
+    ) -> None:
+        """`modify-fleet` `TotalTargetCapacity=target` for the maintain drain."""
+        client = self._client(region)
+        client.modify_fleet(
+            FleetId=fleet_id,
+            TargetCapacitySpecification={"TotalTargetCapacity": target},
+            ExcessCapacityTerminationPolicy=excess_policy,
+        )
+        logger.info(
+            "modified fleet %s in %s to target=%d (excess_policy=%s)",
+            fleet_id,
+            region,
+            target,
+            excess_policy,
+        )
+
     # ---- teardown -------------------------------------------------------
 
     def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int:
-        """Targeted reap: filter by BOTH tags."""
+        """Targeted reap: filter by BOTH tags.
+
+        Under maintain, delete the matching persistent fleet resource(s) FIRST
+        (both-tag match, so a sibling study's fleet survives) so the fleet
+        cannot relaunch what the instance/LT/SG backstop terminates. Under
+        instant, `list_fleets_by_tag` returns empty → the fleet step is a
+        no-op and the path is unchanged. Idempotent."""
         total = 0
         for region in self._regions:
+            fleet_ids = self.list_fleets_by_tag(project_tag, fleet_name, region=region)
+            self.delete_fleets(fleet_ids, region=region, terminate_instances=True)
             total += self._terminate_by_tags(
                 region,
                 {_PROJECT_KEY: project_tag, _FLEET_KEY: fleet_name},
@@ -479,9 +782,15 @@ class AWSProvider(CloudProvider):
         return total
 
     def terminate_all_tagged(self, project_tag: str) -> int:
-        """Sweep: filter by Project tag only. Crash-recovery backstop."""
+        """Sweep: filter by Project tag only. Crash-recovery backstop.
+
+        Under maintain, delete every matching persistent fleet resource FIRST
+        (Project-only match) so the sweep cannot race a relaunch. Under instant
+        the fleet step is a no-op. Idempotent."""
         total = 0
         for region in self._regions:
+            fleet_ids = self.list_fleets_by_tag(project_tag, region=region)
+            self.delete_fleets(fleet_ids, region=region, terminate_instances=True)
             total += self._terminate_by_tags(region, {_PROJECT_KEY: project_tag})
             self._delete_launch_templates_by_tags(region, {_PROJECT_KEY: project_tag})
             self._delete_security_groups_by_tags(region, {_PROJECT_KEY: project_tag})
@@ -696,6 +1005,21 @@ class HetznerProvider(CloudProvider):
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
     def terminate_all_tagged(self, project_tag: str) -> int:
+        raise NotImplementedError(_HETZNER_STUB_MESSAGE)
+
+    def list_fleets_by_tag(
+        self, project_tag: str, fleet_name: str | None = None, *, region: str
+    ) -> list[str]:
+        raise NotImplementedError(_HETZNER_STUB_MESSAGE)
+
+    def delete_fleets(
+        self, fleet_ids: Sequence[str], *, region: str, terminate_instances: bool = True
+    ) -> int:
+        raise NotImplementedError(_HETZNER_STUB_MESSAGE)
+
+    def modify_fleet_target(
+        self, fleet_id: str, target: int, *, region: str, excess_policy: str
+    ) -> None:
         raise NotImplementedError(_HETZNER_STUB_MESSAGE)
 
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int:

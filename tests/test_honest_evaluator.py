@@ -2452,6 +2452,35 @@ class TestHonestEvalCostLedger:
         assert captured["decode_responses"] is True
         assert not cm.thread.is_alive()  # not started
 
+    def test_make_worker_drain_thread_threads_fleet_type_and_name(self, tmp_path, monkeypatch):
+        """The drain ticker inherits campaign.fleet_type and the eval_tag as its
+        fleet_name (honest-eval's study_id == project_tag == eval_tag), so the
+        maintain scale-in branch scopes list_fleets_by_tag to this fleet."""
+        from starsector_optimizer import honest_evaluator as he
+        from starsector_optimizer.campaign import load_campaign_config
+        from starsector_optimizer.honest_evaluator import MatchupProgress
+
+        captured: dict = {}
+
+        class _CapturingTicker:
+            def __init__(self, **kwargs):
+                captured.update(kwargs)
+
+            def tick(self, now=None):
+                return None
+
+        monkeypatch.setattr("redis.Redis", lambda **kw: MagicMock())
+        monkeypatch.setattr(he, "WorkerDrainTicker", _CapturingTicker)
+        campaign = load_campaign_config(_write_smoke_campaign_yaml(tmp_path))
+        he._make_worker_drain_thread(
+            campaign,
+            "starsector-honest-eval-x",
+            MagicMock(),
+            MatchupProgress(),
+        )
+        assert captured["fleet_type"] == campaign.fleet_type
+        assert captured["fleet_name"] == "starsector-honest-eval-x"
+
     def test_cost_thread_ticks_and_joins_and_closes(self):
         import time
 

@@ -6,9 +6,11 @@
 # fallback when the orchestrator can't run that path (SIGKILL, expired
 # credentials mid-run, crash).
 #
-# Order matters: instances first (releases ENIs), then SGs (which require
-# zero ENI attachments), then launch templates, then volumes (only Available
-# state).
+# Order matters: maintain fleets FIRST (a live maintain fleet relaunches spot
+# to hold TargetCapacity, so it must be deleted before we terminate its
+# instances or they respawn), then instances (releases ENIs), then SGs (which
+# require zero ENI attachments), then launch templates, then volumes (only
+# Available state).
 #
 # Usage:
 #   scripts/cloud/teardown.sh <campaign-name>
@@ -30,6 +32,29 @@ fi
 # the AWSProvider._SG_DELETE_DEADLINE_SECONDS pattern (60s budget).
 SG_DELETE_RETRIES=12
 SG_DELETE_RETRY_SLEEP_SECONDS=5
+
+# Pass 0: delete every maintain fleet tagged with this campaign. `describe-fleets`
+# has no server-side tag filter, so filter active states server-side and match
+# the Project tag client-side with JMESPath. `delete-fleets --terminate-instances`
+# is async, so the instances pass below stays an idempotent straggler-catcher.
+for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  fleets=$(aws ec2 describe-fleets \
+    --region "$region" \
+    --filters "Name=fleet-state,Values=submitted,active,modifying" \
+    --query "Fleets[?Tags[?Key=='Project'&&Value=='$TAG']].FleetId" \
+    --output text 2>/dev/null || true)
+  if [[ -z "$fleets" ]]; then
+    echo "  $region: no fleets tagged $TAG"
+    continue
+  fi
+  echo "  $region: deleting $(echo "$fleets" | wc -w) fleet(s): $fleets"
+  read -r -a fleet_arr <<< "$(tr '\t\n' '  ' <<< "$fleets")"
+  aws ec2 delete-fleets --region "$region" \
+    --fleet-ids "${fleet_arr[@]}" --terminate-instances >/dev/null 2>&1 || \
+    echo "  $region: WARN delete-fleets failed (retry teardown.sh)"
+done
+
+echo
 
 for region in us-east-1 us-east-2 us-west-1 us-west-2; do
   ids=$(aws ec2 describe-instances \

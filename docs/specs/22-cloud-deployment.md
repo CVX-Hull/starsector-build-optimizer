@@ -75,7 +75,8 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `regions` | `tuple[str, ...]` | required | e.g. `("us-east-1", "us-east-2")` |
 | `instance_types` | `tuple[str, ...]` | required | e.g. `("c7a.2xlarge", "c7i.2xlarge", "c7a.4xlarge", "c7i.4xlarge")` |
 | `spot_allocation_strategy` | `str` | required | `"price-capacity-optimized"` |
-| `capacity_rebalancing` | `bool` | required | EC2 Fleet CapacityRebalancing flag |
+| `fleet_type` | `str` | `"instant"` | EC2 Fleet type. `"instant"` (default) = one-shot fleet, no persistent resource, reclaimed spot is **never** replaced (correctness preserved by the Redis janitor + `matchup_id` dedup, throughput is not). `"maintain"` = persistent fleet that relaunches reclaimed spot to hold `TargetCapacity` — opt-in for long runs (honest-eval, campaign studies). Validated against `_ALLOWED_FLEET_TYPES = frozenset({"instant","maintain"})`; other values raise `ValueError`. learned-batch + probe are always `"instant"` (their self-terminate/boot-test models are respawn-incompatible). |
+| `capacity_rebalancing` | `bool` | required | EC2 Fleet CapacityRebalance flag. **Honored only under `fleet_type="maintain"`**, where it adds `SpotOptions.MaintenanceStrategies.CapacityRebalance` (`ReplacementStrategy="launch"`) so the fleet proactively replaces instances AWS flags as at elevated interruption risk. A **no-op under `fleet_type="instant"`** (instant fleets have no maintenance strategy). |
 | `max_concurrent_workers` | `int` | required | Total VMs across all studies |
 | `min_workers_to_start` | `int` | required | Partial-fleet floor; validator enforces `<= max_concurrent_workers`. **Enforced** in `cloud_runner.prepare_cloud_pool` after `provision_fleet`: `len(instance_ids) < min_workers_to_start` triggers `partial_fleet_policy` |
 | `partial_fleet_policy` | `str` | required | `"proceed_half_speed"` (warn + continue on a partial fleet) or `"abort"` (raise). Enforced in `prepare_cloud_pool` (see `min_workers_to_start`) |
@@ -88,7 +89,7 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `visibility_timeout_seconds` | `float` | `120.0` | Redis processing-list timeout |
 | `janitor_interval_seconds` | `float` | `60.0` | How often the study subprocess sweeps stuck items |
 | `worker_poll_margin_seconds` | `float` | `5.0` | Subtract from `visibility_timeout_seconds` for worker BRPOPLPUSH timeout |
-| `fleet_provision_timeout_seconds` | `float` | `600.0` | EC2 Fleet retry window before partial-fleet decision |
+| `fleet_provision_timeout_seconds` | `float` | `600.0` | EC2 Fleet provision window. Under `fleet_type="maintain"` it bounds the `describe_fleet_instances` poll that waits for the async fleet to launch toward its per-region target before `provision_fleet` returns; the returned instance-ID count then feeds the `min_workers_to_start`/`partial_fleet_policy` decision. (Under `instant` the response is synchronous, so this is the transient-error retry window.) Threaded into `provision_fleet` as `provision_timeout_seconds` (the `CloudProvider` ABC takes no `CampaignConfig`). |
 | `result_timeout_seconds` | `float` | `900.0` | `CloudWorkerPool.run_matchup` blocks at most this long |
 | `ledger_heartbeat_interval_seconds` | `float` | `60.0` | How often `CampaignManager.monitor_loop` appends ledger rows |
 | `ledger_warn_thresholds` | `tuple[float, ...]` | `(0.5, 0.8, 0.95)` | Budget fractions at which a WARN log fires |
@@ -487,7 +488,7 @@ Four layers from innermost to outermost:
 3. **`atexit.register(self.teardown)`** — registered in `CampaignManager.__init__`, runs on crash paths that bypass `finally`.
 4. **Shell-level `trap EXIT`** in `launch_campaign.sh` — re-runs `teardown.sh` + `final_audit.sh` unconditionally and exits non-zero if any resource leaked.
 
-`final_audit.sh` checks all 4 US regions (not just `regions:`) for any instance tagged `Project=starsector-<campaign-name>` or security groups / volumes / launch templates tagged the same.
+`final_audit.sh` checks all 4 US regions (not just `regions:`) for any instance tagged `Project=starsector-<campaign-name>` or security groups / volumes / launch templates tagged the same, **plus any `submitted|active|modifying` EC2 Fleet whose `Tags` match** (the highest-stakes leak: a live maintain fleet keeps launching billable spot forever and, unlike an orphaned instance, re-creates instances the audit terminated). Fleet discovery is `describe-fleets` filtered by `fleet-state` (no server-side tag filter exists) with a client-side `Project` tag match, `NextToken`-paginated; a failed `describe-fleets` sets the inconclusive/exit-2 path, a match sets the leak/exit-1 path.
 
 ### One-shot AWS batch runners
 
@@ -550,8 +551,13 @@ combat-worker Redis queue still inherit the cloud safety contract:
      down immediately after posting its event rather than idling to the
      bootstrap-scheduled shutdown.
    - Precondition: fleets are provisioned `Type="instant"`, so AWS does not
-     respawn self-terminated instances. This invariant must be revisited if
-     a maintain-type fleet is ever introduced.
+     respawn self-terminated instances. **learned-batch is therefore always
+     `instant` and MUST NOT opt into `fleet_type="maintain"`**: its workers
+     self-terminate on the drained `/lease` verdict, which a maintain fleet
+     would relaunch — an unbounded respawn loop that never converges. The
+     opt-in maintain fleet (§Config `fleet_type`) is reserved for the
+     Redis-queue paths (honest-eval, campaign studies) whose drain/teardown
+     were rewired to be respawn-safe.
    - Monitor accounting: the control plane records `worker_drained` instance
      IDs, and the monitor reconciles them out of pending-instance
      accounting, so a replacement that boots, drains, and self-terminates
@@ -571,20 +577,51 @@ combat-worker Redis queue still inherit the cloud safety contract:
 
 ## Worker drain (honest-eval)
 
-The honest-eval fleet (spec 30) is **static — one `provision_fleet` call, no
-replacement provisioning** — and dispatches over the Redis BRPOPLPUSH reliable
+The honest-eval fleet (spec 30) dispatches over the Redis BRPOPLPUSH reliable
 queue, so the learned-batch drain above (an HTTP-`/lease` worker-self-terminate
 model with replacement) does **not** transfer. Honest-eval instead drains
-**orchestrator-driven**: a background `WorkerDrainTicker` in
-`honest_evaluator.main` (the campaign-analog owner, the same role it plays for
-the cost tick) terminates provably-idle surplus workers as the outstanding
-matchup count falls below fleet capacity near end-of-run.
+**orchestrator-driven**: a background `WorkerDrainTicker` — **defined in
+`campaign.py` and constructed by `honest_evaluator._make_worker_drain_thread`**
+(the campaign-analog owner, the same role it plays for the cost tick) —
+terminates provably-idle surplus workers as the outstanding matchup count falls
+below fleet capacity near end-of-run. Under `fleet_type="instant"` the fleet is
+**static** (one `provision_fleet` call, reclaimed spot never replaced); under
+`fleet_type="maintain"` the fleet self-replenishes reclaimed spot during the
+bulk phase and the drain lowers `TargetCapacity` to shed the idle tail (see
+"Respawn-safety under `fleet_type`" below).
 
-**Depends on** the `Type="instant"` no-respawn invariant (§"Per-study fleet
-lifecycle" step 3): AWS does not respawn a terminated instance, so external
-termination permanently shrinks the fleet. (That section flags the invariant
-"must be revisited if a maintain-type fleet is ever introduced" — this drain is
-one of the dependents.)
+**Respawn-safety under `fleet_type` (§Config).** The drain's mechanism depends
+on the fleet type, resolved from `campaign.fleet_type` threaded into
+`WorkerDrainTicker`:
+
+- **`instant`:** AWS does not respawn a terminated instance, so external
+  `terminate_instances` on the idle surplus permanently shrinks the fleet — the
+  original behavior, unchanged.
+- **`maintain`:** a bare `terminate_instances` would be *relaunched* by the
+  fleet. So the maintain branch, per region with idle surplus, first
+  `list_fleets_by_tag(project_tag, fleet_name, region)` (cached) →
+  `modify_fleet_target(fleet_id, new_target, excess_policy="no-termination")`
+  where **`new_target = max(0, len(live_in_region) − k_region)` is computed from
+  the ticker's already-observed live count, NOT from the fleet's reported
+  `TargetCapacity`** (a spot reclaim leaves `TargetCapacity` stale-high, so
+  targeting off it would sit above the true live count and respawn — the exact
+  failure this drain exists to avoid). `no-termination` means the fleet neither
+  relaunches toward the lowered target nor self-selects victims; the drain then
+  `terminate_instances` on the same precisely-chosen idle ids as the instant
+  path. Net: precise idle-only selection AND no respawn.
+
+The global keep-floor (`keep = max(1, ceil(remaining / matchup_slots_per_worker))`)
+and never-terminate-a-busy-worker guarantees below are identical for both fleet
+types; maintain only *adds* the target-lower step before the terminate.
+
+**Interaction with `max_lifetime_hours` (named limitation).** A maintain fleet
+replaces *reclaimed/interrupted* instances, not instances whose worker *process*
+self-exited at `max_lifetime_hours` — the process ends but the instance keeps
+running (idle), so the fleet sees capacity unchanged and does not refresh it.
+For honest-eval this does not arise (spec 30 raises `max_lifetime_hours` to
+cover the whole eval); for a campaign study opted into maintain it matches
+today's instant behavior (aged idle instance lingers until teardown).
+Process-liveness-driven replacement is out of scope.
 
 Contract:
 
@@ -662,16 +699,50 @@ class CloudProvider(abc.ABC):
         target_workers: int,
         user_data: str,                        # cloud-init script (caller-rendered)
         root_volume_size_gb: int | None = None,
+        fleet_type: str = "instant",           # "instant" | "maintain"
+        capacity_rebalance: bool = False,      # honored only when fleet_type="maintain"
+        provision_timeout_seconds: float = 600.0,  # bounds the maintain async instance-poll
     ) -> list[str]: ...
-        # returns instance IDs
+        # returns instance IDs. Under fleet_type="maintain", create_fleet is async:
+        # captures response["FleetId"], tags the fleet resource (both Project + Fleet),
+        # polls describe_fleet_instances toward the per-region target (bounded by
+        # provision_timeout_seconds), and returns the full discovered set.
 
     @abc.abstractmethod
     def terminate_fleet(self, *, fleet_name: str, project_tag: str) -> int: ...
-        # targeted teardown: reaps resources tagged BOTH project_tag AND fleet_name
+        # targeted teardown: reaps resources tagged BOTH project_tag AND fleet_name.
+        # Under maintain, deletes the matching fleet resource(s) FIRST (delete_fleets,
+        # TerminateInstances=True) before the instance/LT/SG backstop passes, so the
+        # fleet cannot relaunch what the backstop terminates.
 
     @abc.abstractmethod
     def terminate_all_tagged(self, project_tag: str) -> int: ...
         # sweep: reaps everything tagged project_tag regardless of fleet. Crash-recovery backstop.
+        # Under maintain, deletes matching fleet resource(s) FIRST (Project-tag match).
+
+    @abc.abstractmethod
+    def list_fleets_by_tag(
+        self, project_tag: str, fleet_name: str | None = None, *, region: str
+    ) -> list[str]: ...
+        # FleetIds of fleets in fleet-state ∈ {submitted, active, modifying} whose Tags
+        # match Project=project_tag (AND Fleet=fleet_name when given). describe_fleets has
+        # no server-side tag filter, so the match is client-side over Fleets[].Tags.
+        # The discovery primitive for maintain teardown + leaked-fleet audit + drain.
+
+    @abc.abstractmethod
+    def delete_fleets(
+        self, fleet_ids: Sequence[str], *, region: str, terminate_instances: bool = True
+    ) -> int: ...
+        # delete-fleets on an explicit FleetId list. terminate_instances=True kills the
+        # fleet's instances atomically. Empty ids → 0, no API call. Idempotent.
+
+    @abc.abstractmethod
+    def modify_fleet_target(
+        self, fleet_id: str, target: int, *, region: str, excess_policy: str
+    ) -> None: ...
+        # modify-fleet TotalTargetCapacity=target. Used by the maintain drain to lower a
+        # regional fleet's target (excess_policy="no-termination" so the fleet neither
+        # relaunches nor self-terminates; the caller then terminates the chosen idle ids).
 
     @abc.abstractmethod
     def terminate_instances(self, instance_ids: Sequence[str], *, region: str) -> int: ...
@@ -692,9 +763,11 @@ No `CampaignConfig` parameter — the provider is cloud-mechanical, not campaign
 
 ### Two-tag scheme
 
-Every resource (instance, LT, SG) carries BOTH tags:
+Every resource (instance, LT, SG — plus the **fleet resource itself under `fleet_type="maintain"`**) carries BOTH tags:
 - `Project=<project_tag>` — e.g. `starsector-smoke`. Enables `terminate_all_tagged(project_tag)` sweep.
 - `Fleet=<fleet_name>` — e.g. `hammerhead__early__seed0`. Enables `terminate_fleet(fleet_name, project_tag)` targeted reap.
+
+Under `instant` there is **no persistent fleet resource** to tag (the fleet evaporates after returning instances), so only instance/LT/SG carry the tags. Under `maintain` the persistent fleet is tagged at `create_fleet` time (`TagSpecifications` `ResourceType:"fleet"`, both keys) so `list_fleets_by_tag` can rediscover it for teardown and the leaked-fleet audit purely from AWS state — no on-disk FleetId manifest.
 
 LT/SG NAMES are `f"{project_tag}__{fleet_name}"`, e.g. `starsector-smoke__hammerhead__early__seed0`. Unique per fleet → multiple studies in the same region don't collide.
 
@@ -714,11 +787,13 @@ boto3-direct. Credentials loaded from the standard AWS credential chain — neve
    - `BlockDeviceMappings` = `[{DeviceName: "/dev/sda1", Ebs: {DeleteOnTermination: true}}]` (prevents volume audit leak)
    - `TagSpecifications` on `instance` and `volume` include both `Project` and `Fleet`
    - If an LT with the same name already exists, create a new version and `modify_launch_template(DefaultVersion=...)` — LT versions are immutable once referenced.
-3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: spot_allocation_strategy}, Type="instant")` per region, diversified across `instance_types`. `TagSpecifications` on the Fleet resource also include both tags. **Retry up to `_FLEET_PROVISION_MAX_RETRIES=4` times, separated by `_FLEET_PROVISION_RETRY_DELAY_SECONDS=3.0`, when the response contains ANY `InvalidGroup.NotFound` / `InvalidSecurityGroupID.NotFound` error** (the `any(...)` predicate — not `all(...)` — because permanent per-AZ errors like `InvalidFleetConfiguration` when `c7a.2xlarge` is unsupported in `us-east-1e` commonly co-occur with transient SG-visibility errors on the other AZs, and we want to retry so the non-1e AZs succeed). Emit zero-instances failure only if the retry budget is exhausted or no error is transient.
+3. Fire one `ec2.create_fleet(SpotOptions={AllocationStrategy: spot_allocation_strategy, ...}, Type=fleet_type)` per region, diversified across `instance_types`.
+   - **`fleet_type="instant"` (default):** the response is synchronous — `response["Instances"]` carries the launched IDs. `TagSpecifications` tag `ResourceType:"instance"` (both tags); there is no persistent fleet resource. **Retry up to `_FLEET_PROVISION_MAX_RETRIES=4` times, separated by `_FLEET_PROVISION_RETRY_DELAY_SECONDS=3.0`, when the response contains ANY `InvalidGroup.NotFound` / `InvalidSecurityGroupID.NotFound` error** (the `any(...)` predicate — not `all(...)` — because permanent per-AZ errors like `InvalidFleetConfiguration` when `c7a.2xlarge` is unsupported in `us-east-1e` commonly co-occur with transient SG-visibility errors on the other AZs, and we want to retry so the non-1e AZs succeed). Emit zero-instances failure only if the retry budget is exhausted or no error is transient.
+   - **`fleet_type="maintain"`:** `create_fleet` is **asynchronous** — `response["Instances"]` is empty/partial; capture `response["FleetId"]`. `TagSpecifications` additionally tag `ResourceType:"fleet"` (both tags) so the persistent fleet is rediscoverable by `list_fleets_by_tag`. When `capacity_rebalance`, `SpotOptions` also carries `MaintenanceStrategies={CapacityRebalance: {ReplacementStrategy: _CAPACITY_REBALANCE_REPLACEMENT_STRATEGY="launch"}}`. After the create call, poll `describe_fleet_instances(FleetId)` every `_FLEET_INSTANCE_POLL_INTERVAL_SECONDS` until `len(active_instance_ids) >= per_region_target` OR `provision_timeout_seconds` elapses, then return **all** discovered active IDs. Returning the full set (not an early ≥1) keeps the caller's `min_workers_to_start`/`total_matchup_slots` sizing correct; a genuine capacity shortfall surfaces to `partial_fleet_policy` exactly as with instant. The transient SG-visibility retry still guards the create call, and a `FleetId`-with-partial-`Errors` response logs a WARN (matching the instant partial-error log). Because `provision_fleet` iterates regions sequentially, worst-case maintain provision wall time is `len(regions) × provision_timeout_seconds` (each region may poll the full timeout) — materially longer than instant's transient-retry budget; size `fleet_provision_timeout_seconds` accordingly.
 
-`terminate_fleet(fleet_name, project_tag)`: per region, filter by BOTH tags → terminate instances → delete LT (by name) → delete SG (by name, with ENI-detach retry loop: `_SG_DELETE_DEADLINE_SECONDS=300.0`, `_SG_DELETE_POLL_INTERVAL_SECONDS=10.0`). Idempotent.
+`terminate_fleet(fleet_name, project_tag)`: per region — **under maintain, FIRST `list_fleets_by_tag(project_tag, fleet_name, region=…)` (BOTH tags) → `delete_fleets(ids, terminate_instances=True)` so the persistent fleet cannot relaunch drained/terminated instances** — then filter by BOTH tags → terminate any straggler instances → delete LT (by name) → delete SG (by name, with ENI-detach retry loop: `_SG_DELETE_DEADLINE_SECONDS=300.0`, `_SG_DELETE_POLL_INTERVAL_SECONDS=10.0`). Under instant, `list_fleets_by_tag` returns empty → the fleet step is a no-op and the path is unchanged. Idempotent. (The pre-maintain documented order — terminate instances *before* deleting the fleet — is respawn-unsafe and is superseded by this fleet-first ordering.)
 
-`terminate_all_tagged(project_tag)`: per region, filter by `Project` tag ONLY → terminate all tagged instances → delete every LT matching the tag (tag-filter `describe_launch_templates`) → delete every SG matching the tag. Idempotent.
+`terminate_all_tagged(project_tag)`: per region — **under maintain, FIRST `list_fleets_by_tag(project_tag, region=…)` (`Project` ONLY) → `delete_fleets(ids, terminate_instances=True)`** — then filter by `Project` tag ONLY → terminate all tagged straggler instances → delete every LT matching the tag (tag-filter `describe_launch_templates`) → delete every SG matching the tag. Idempotent.
 
 `list_active(project_tag)`: per region, instances in `pending` or `running` state with tag `Project=project_tag`.
 
@@ -914,8 +989,8 @@ scripts/cloud/
 ├── probe.sh                      # Tier-1 validation: 2 spot VMs, boot-test, teardown (sub-dollar; see reports/INDEX.md)
 ├── launch_campaign.sh            # wraps `uv run python -m starsector_optimizer.campaign <yaml>`
 ├── status.sh                     # tail ledger, print per-study best-fitness + trial counts
-├── teardown.sh                   # emergency tag-based cleanup (instances/SGs/LTs/volumes) — campaign-scoped (Project=starsector-<campaign>)
-├── final_audit.sh                # zero-leak verifier (instances/SGs/LTs/volumes) — campaign-scoped, exits 0 clean / 1 on any leak
+├── teardown.sh                   # emergency tag-based cleanup (fleets/instances/SGs/LTs/volumes) — campaign-scoped (Project=starsector-<campaign>); deletes maintain fleets FIRST (delete-fleets --terminate-instances) before instances so they cannot respawn
+├── final_audit.sh                # zero-leak verifier (fleets/instances/SGs/LTs/volumes) — campaign-scoped, exits 0 clean / 1 on any leak / 2 inconclusive
 ├── audit_amis.sh                 # cross-campaign AMI/snapshot inventory (Project=starsector); flags YAML-unreferenced as cleanup candidates
 ├── cleanup_amis.sh               # deregister AMIs + delete snapshots; dry-run by default, --apply to commit, --force to override YAML-reference guard
 ├── devenv-up.sh                  # rootless workstation: userspace tailscaled + redis-server + tailscale serve TCP proxies

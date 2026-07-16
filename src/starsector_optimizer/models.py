@@ -732,6 +732,14 @@ class CampaignConfig:
     tailscale_authkey_secret: str
     studies: tuple[StudyConfig, ...]
     global_auto_stop: GlobalAutoStopConfig = field(default_factory=GlobalAutoStopConfig)
+    # EC2 Fleet type. "instant" (default) = one-shot fleet, no persistent
+    # resource, reclaimed spot is never replaced (correctness preserved by the
+    # Redis janitor + matchup_id dedup, throughput is not). "maintain" =
+    # persistent fleet that relaunches reclaimed spot to hold TargetCapacity —
+    # opt-in for long runs (honest-eval, campaign studies). Validated by
+    # load_campaign_config against `_ALLOWED_FLEET_TYPES`. `capacity_rebalancing`
+    # is honored only under "maintain". See spec 22 §Config dataclasses.
+    fleet_type: str = "instant"
     max_lifetime_hours: float = 6.0
     visibility_timeout_seconds: float = 120.0
     janitor_interval_seconds: float = 60.0

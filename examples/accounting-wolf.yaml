@@ -26,6 +26,12 @@ instance_types:
 spot_allocation_strategy: price-capacity-optimized
 capacity_rebalancing: true
 
+# Self-replenishing fleet: AWS relaunches reclaimed spot to hold TargetCapacity
+# instead of decaying monotonically over a multi-hour run. Opt-in (default is
+# "instant"); the drain + teardown are rewired to be respawn-safe under maintain.
+# See spec 22 §Config dataclasses `fleet_type`.
+fleet_type: maintain
+
 max_concurrent_workers: 24
 min_workers_to_start: 8
 partial_fleet_policy: proceed_half_speed

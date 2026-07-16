@@ -24,6 +24,27 @@ AUDIT_FAILED=0
 echo "=== AWS audit for Project=$TAG ==="
 
 for region in us-east-1 us-east-2 us-west-1 us-west-2; do
+  # Highest-stakes leak: a live maintain fleet keeps launching billable spot
+  # forever and re-creates instances this audit would otherwise call clean.
+  # Checked FIRST so a later describe failure's `continue` cannot skip it.
+  # `describe-fleets` has no server-side tag filter, so filter active states
+  # server-side and match Project client-side with JMESPath. The AWS CLI
+  # follows NextToken automatically, so --query sees every page.
+  if ! fleets=$(aws ec2 describe-fleets --region "$region" \
+    --filters "Name=fleet-state,Values=submitted,active,modifying" \
+    --query "Fleets[?Tags[?Key=='Project'&&Value=='$TAG']].FleetId" \
+    --output text); then
+    echo "AUDIT ERROR in $region: failed to describe fleets" >&2
+    AUDIT_FAILED=1
+    continue
+  fi
+  if [[ -n "$fleets" ]]; then
+    echo "LEAK in $region: fleets: $fleets"
+    LEAKED=1
+  else
+    echo "  $region: no fleets"
+  fi
+
   if ! instances=$(aws ec2 describe-instances --region "$region" \
     --filters "Name=tag:Project,Values=$TAG" \
               "Name=instance-state-name,Values=pending,running,stopping,stopped" \

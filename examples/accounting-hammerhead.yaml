@@ -22,12 +22,28 @@ regions:
   - us-east-1
   - us-east-2
 
+# Diversified x86_64 2xlarge pool (all 8 vCPU → matchup_slots_per_worker=2
+# stays correct). Broadened 2026-07-16 after the original c7a/c7i.2xlarge-only
+# pool scored 3/10 spot-placement in us-east-1 and decayed a one-shot fleet
+# from 33→2 workers mid-run; the 8-type pool scores 9/10 in us-east-1.
 instance_types:
   - c7a.2xlarge
   - c7i.2xlarge
+  - m7a.2xlarge
+  - m7i.2xlarge
+  - c6a.2xlarge
+  - c6i.2xlarge
+  - m6a.2xlarge
+  - m6i.2xlarge
 
 spot_allocation_strategy: price-capacity-optimized
 capacity_rebalancing: true
+
+# Self-replenishing fleet: AWS relaunches reclaimed spot to hold TargetCapacity
+# instead of decaying monotonically over a multi-hour run. Opt-in (default is
+# "instant"); the drain + teardown are rewired to be respawn-safe under maintain.
+# See spec 22 §Config dataclasses `fleet_type`.
+fleet_type: maintain
 
 max_concurrent_workers: 24
 min_workers_to_start: 16

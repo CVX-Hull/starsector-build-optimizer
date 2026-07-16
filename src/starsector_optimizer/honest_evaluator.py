@@ -333,6 +333,12 @@ def _make_worker_drain_thread(
         matchup_slots_per_worker=campaign.matchup_slots_per_worker,
         heartbeat_interval_seconds=WORKER_HEARTBEAT_INTERVAL_SECONDS,
         heartbeat_stale_multiplier=campaign.heartbeat_stale_multiplier,
+        # Under fleet_type="maintain" the drain scales the fleet in (lower
+        # TargetCapacity) before terminating idle surplus, so a reclaimed-spot
+        # relaunch cannot fight the drain. honest-eval's
+        # `study_id == project_tag == eval_tag`, so `fleet_name == project_tag`.
+        fleet_type=campaign.fleet_type,
+        fleet_name=project_tag,
     )
     return _PeriodicBackgroundThread(
         ticker.tick,

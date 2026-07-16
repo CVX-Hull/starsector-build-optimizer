@@ -36,7 +36,7 @@ from collections.abc import Callable, Sequence
 
 import yaml
 
-from .cloud_provider import CloudProvider
+from .cloud_provider import _EXCESS_CAPACITY_NO_TERMINATION, CloudProvider
 from .models import (
     CampaignConfig,
     CostLedgerEntry,
@@ -78,6 +78,7 @@ class TeardownError(Exception):
 _ALLOWED_PROVIDERS = {"aws"}
 _ALLOWED_PARTIAL_POLICIES = {"proceed_half_speed", "abort"}
 _ALLOWED_SAMPLERS = {"tpe"}
+_ALLOWED_FLEET_TYPES = frozenset({"instant", "maintain"})
 # AWS LT names accept [a-zA-Z0-9().-/_]{3,128}. We constrain campaign names
 # tighter to leave room for the `starsector-<name>__<fleet_name>` composition
 # and avoid shell-metacharacters that would leak into subprocess arguments.
@@ -121,6 +122,10 @@ def load_campaign_config(path: Path) -> CampaignConfig:
         raise ValueError(
             f"partial_fleet_policy={raw.get('partial_fleet_policy')!r} invalid; "
             f"allowed: {sorted(_ALLOWED_PARTIAL_POLICIES)}"
+        )
+    if raw.get("fleet_type", "instant") not in _ALLOWED_FLEET_TYPES:
+        raise ValueError(
+            f"fleet_type={raw.get('fleet_type')!r} invalid; allowed: {sorted(_ALLOWED_FLEET_TYPES)}"
         )
     if raw["min_workers_to_start"] > raw["max_concurrent_workers"]:
         raise ValueError(
@@ -188,6 +193,7 @@ def load_campaign_config(path: Path) -> CampaignConfig:
     # adding a field to the dataclass without listing it here silently
     # drops operator YAML overrides (audit finding V1 / 2026-04-19).
     for opt in (
+        "fleet_type",
         "max_lifetime_hours",
         "visibility_timeout_seconds",
         "janitor_interval_seconds",
@@ -496,6 +502,8 @@ class WorkerDrainTicker:
         matchup_slots_per_worker: int,
         heartbeat_interval_seconds: float,
         heartbeat_stale_multiplier: float,
+        fleet_type: str = "instant",
+        fleet_name: str | None = None,
     ) -> None:
         self._redis = redis_client
         self._provider = provider
@@ -505,6 +513,16 @@ class WorkerDrainTicker:
         self._matchup_slots_per_worker = matchup_slots_per_worker
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
         self._heartbeat_stale_multiplier = heartbeat_stale_multiplier
+        # Under `fleet_type="maintain"` a bare `terminate_instances` on the idle
+        # surplus would be *relaunched* by the persistent fleet, so the maintain
+        # branch first lowers the regional fleet's TargetCapacity. `fleet_name`
+        # scopes the both-tag `list_fleets_by_tag` lookup to this fleet.
+        self._fleet_type = fleet_type
+        self._fleet_name = fleet_name
+        # Per-region FleetId cache (resolved once, reused across ticks). Only
+        # non-empty resolutions are cached so a fleet that appears on a later
+        # tick is still discovered.
+        self._fleet_id_by_region: dict[str, str] = {}
 
     def tick(self, now: float | None = None) -> None:
         """Terminate idle-surplus workers if any are safely reclaimable.
@@ -533,6 +551,13 @@ class WorkerDrainTicker:
         live = self._provider.list_active(self._project_tag)
         live_ids = [inst["id"] for inst in live]
         id_to_region = {inst["id"]: inst["region"] for inst in live}
+        # Observed live count per region — the ONLY correct source for the
+        # maintain target-lower step. A spot reclaim leaves the fleet's reported
+        # `TargetCapacity` stale-high, so targeting off it would sit above the
+        # true live count and respawn the very instances we terminate (F1).
+        live_by_region: dict[str, int] = {}
+        for inst in live:
+            live_by_region[inst["region"]] = live_by_region.get(inst["region"], 0) + 1
         to_terminate = plan_worker_drain(
             live_instance_ids=live_ids,
             idle_instance_ids=idle_ids,
@@ -545,6 +570,8 @@ class WorkerDrainTicker:
         for iid in to_terminate:
             by_region.setdefault(id_to_region[iid], []).append(iid)
         for region, ids in by_region.items():
+            if self._fleet_type == "maintain":
+                self._lower_fleet_target(region, live_by_region.get(region, 0), len(ids))
             self._provider.terminate_instances(ids, region=region)
             logger.info(
                 "worker drain: terminated %d idle workers in %s (remaining=%d)",
@@ -552,6 +579,50 @@ class WorkerDrainTicker:
                 region,
                 remaining,
             )
+
+    def _lower_fleet_target(self, region: str, live_in_region: int, k_region: int) -> None:
+        """Maintain-only: lower the region's fleet TargetCapacity BEFORE the
+        idle ids are terminated, so the fleet does not relaunch them.
+
+        `new_target = max(0, live_in_region − k_region)` is derived from the
+        observed live count (NOT the fleet's stale-high reported TargetCapacity).
+        `excess_policy="no-termination"` so the fleet neither relaunches toward
+        the lowered target nor self-selects victims — the caller terminates the
+        precisely-chosen idle ids next.
+
+        ASSUMPTION: `live_in_region` (from `list_active(project_tag)`) counts only
+        THIS fleet's instances. Holds because the drain runs only in honest-eval,
+        where `project_tag == fleet_name` and there is exactly one fleet per
+        region. If the drain is ever extended to a campaign that shares one
+        `project_tag` across multiple `fleet_name`s, `list_active` would over-count
+        and `new_target` would sit too high → respawn; scope the live count by
+        `fleet_name` before enabling the drain there."""
+        fleet_id = self._resolve_fleet_id(region)
+        if fleet_id is None:
+            # Fleet already torn down / not yet discoverable: skip the target
+            # lower and let the terminate proceed (instant-equivalent).
+            return
+        new_target = max(0, live_in_region - k_region)
+        self._provider.modify_fleet_target(
+            fleet_id,
+            new_target,
+            region=region,
+            excess_policy=_EXCESS_CAPACITY_NO_TERMINATION,
+        )
+
+    def _resolve_fleet_id(self, region: str) -> str | None:
+        """First active FleetId matching BOTH tags in `region`, cached per
+        region across ticks. Returns None when no fleet resolves."""
+        cached = self._fleet_id_by_region.get(region)
+        if cached is not None:
+            return cached
+        fleet_ids = self._provider.list_fleets_by_tag(
+            self._project_tag, self._fleet_name, region=region
+        )
+        if not fleet_ids:
+            return None
+        self._fleet_id_by_region[region] = fleet_ids[0]
+        return fleet_ids[0]
 
     def _scan_idle_worker_ids(self, now: float) -> list[str]:
         """Instance IDs of live-fresh workers reporting `active_matchups == 0`.

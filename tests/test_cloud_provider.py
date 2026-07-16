@@ -83,6 +83,15 @@ class TestCloudProviderABC:
             def terminate_instances(self, instance_ids, *, region):
                 return 0
 
+            def list_fleets_by_tag(self, project_tag, fleet_name=None, *, region):
+                return []
+
+            def delete_fleets(self, fleet_ids, *, region, terminate_instances=True):
+                return 0
+
+            def modify_fleet_target(self, fleet_id, target, *, region, excess_policy):
+                return None
+
             def list_active(self, project_tag):
                 return []
 
@@ -103,6 +112,15 @@ class TestCloudProviderABC:
 
             def terminate_all_tagged(self, project_tag):
                 return 0
+
+            def list_fleets_by_tag(self, project_tag, fleet_name=None, *, region):
+                return []
+
+            def delete_fleets(self, fleet_ids, *, region, terminate_instances=True):
+                return 0
+
+            def modify_fleet_target(self, fleet_id, target, *, region, excess_policy):
+                return None
 
             def list_active(self, project_tag):
                 return []
@@ -814,6 +832,336 @@ class TestSecurityGroupDeleteIdempotent:
         assert len(sleep_calls) == 2
 
 
+class TestMaintainFleetProvisioning:
+    """`fleet_type="maintain"` — async create_fleet (FleetId, empty Instances),
+    CapacityRebalance strategy iff capacity_rebalance, fleet-resource TagSpec
+    with BOTH keys, and a describe_fleet_instances poll toward the per-region
+    target (spec 22 §AWSProvider provisioning)."""
+
+    def _maintain_client(self, *, fleet_id="fleet-MAINT", instance_pages):
+        """MagicMock EC2 client. `instance_pages` is the side_effect list for
+        describe_fleet_instances (each a dict with ActiveInstances)."""
+        from unittest.mock import MagicMock
+
+        client = MagicMock()
+        client.describe_security_groups.return_value = {"SecurityGroups": []}
+        client.create_security_group.return_value = {"GroupId": "sg-MMMM"}
+        client.get_waiter.return_value = MagicMock()
+        client.describe_launch_templates.return_value = {"LaunchTemplates": []}
+        client.create_launch_template.return_value = {}
+        client.create_fleet.return_value = {"FleetId": fleet_id, "Instances": [], "Errors": []}
+        client.describe_fleet_instances.side_effect = instance_pages
+        return client
+
+    def _provision_maintain(
+        self, provider, *, capacity_rebalance=False, provision_timeout_seconds=600.0, target=2
+    ):
+        return provider.provision_fleet(
+            fleet_name="f",
+            project_tag="starsector-p",
+            regions=("us-east-1",),
+            ami_ids_by_region={"us-east-1": "ami-00000000000000000"},
+            instance_types=("c7a.2xlarge",),
+            ssh_key_name="starsector-probe",
+            spot_allocation_strategy="price-capacity-optimized",
+            target_workers=target,
+            user_data=PROBE_USER_DATA,
+            fleet_type="maintain",
+            capacity_rebalance=capacity_rebalance,
+            provision_timeout_seconds=provision_timeout_seconds,
+        )
+
+    def test_create_fleet_type_is_maintain(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._maintain_client(
+            instance_pages=[
+                {"ActiveInstances": [{"InstanceId": "i-a"}, {"InstanceId": "i-b"}]},
+            ]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        ids = self._provision_maintain(provider, target=2)
+        assert set(ids) == {"i-a", "i-b"}
+        assert client.create_fleet.call_args.kwargs["Type"] == "maintain"
+
+    def test_capacity_rebalance_present_only_when_requested(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import (
+            AWSProvider,
+            _CAPACITY_REBALANCE_REPLACEMENT_STRATEGY,
+        )
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._maintain_client(
+            instance_pages=[{"ActiveInstances": [{"InstanceId": "i-a"}, {"InstanceId": "i-b"}]}]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        self._provision_maintain(provider, capacity_rebalance=True, target=2)
+        spot = client.create_fleet.call_args.kwargs["SpotOptions"]
+        assert spot["MaintenanceStrategies"]["CapacityRebalance"]["ReplacementStrategy"] == (
+            _CAPACITY_REBALANCE_REPLACEMENT_STRATEGY
+        )
+
+    def test_capacity_rebalance_absent_when_not_requested(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._maintain_client(
+            instance_pages=[{"ActiveInstances": [{"InstanceId": "i-a"}, {"InstanceId": "i-b"}]}]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        self._provision_maintain(provider, capacity_rebalance=False, target=2)
+        spot = client.create_fleet.call_args.kwargs["SpotOptions"]
+        assert "MaintenanceStrategies" not in spot
+
+    def test_fleet_tagspec_present_with_both_keys(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._maintain_client(
+            instance_pages=[{"ActiveInstances": [{"InstanceId": "i-a"}, {"InstanceId": "i-b"}]}]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        self._provision_maintain(provider, target=2)
+        tag_specs = client.create_fleet.call_args.kwargs["TagSpecifications"]
+        fleet_specs = [t for t in tag_specs if t["ResourceType"] == "fleet"]
+        assert len(fleet_specs) == 1
+        keys = {t["Key"] for t in fleet_specs[0]["Tags"]}
+        assert keys == {"Project", "Fleet"}
+        # instance tag spec still present.
+        assert any(t["ResourceType"] == "instance" for t in tag_specs)
+
+    def test_poll_returns_full_set_once_target_reached(self, monkeypatch):
+        """Poll returns the FULL discovered set once len >= target — it does
+        NOT early-return at >= 1 (that would under-size the pool, B2)."""
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._maintain_client(
+            instance_pages=[
+                {"ActiveInstances": []},
+                {"ActiveInstances": [{"InstanceId": "i-a"}]},
+                {"ActiveInstances": [{"InstanceId": "i-a"}, {"InstanceId": "i-b"}]},
+            ]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        ids = self._provision_maintain(provider, target=2, provision_timeout_seconds=600.0)
+        assert set(ids) == {"i-a", "i-b"}
+        assert client.describe_fleet_instances.call_count == 3
+
+    def test_poll_returns_partial_set_at_timeout(self, monkeypatch):
+        """At timeout the partial set is returned (handled downstream by
+        min_workers_to_start), NOT an early-return at the first non-empty poll."""
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        # Never reaches target=3; timeout=0 forces return after the first poll.
+        client = self._maintain_client(
+            instance_pages=[{"ActiveInstances": [{"InstanceId": "i-a"}]}] * 5
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        ids = self._provision_maintain(provider, target=3, provision_timeout_seconds=0.0)
+        assert ids == ["i-a"]
+
+    def test_no_fleet_id_raises(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._maintain_client(instance_pages=[{"ActiveInstances": []}])
+        client.create_fleet.return_value = {"FleetId": "", "Instances": [], "Errors": []}
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        monkeypatch.setattr("starsector_optimizer.cloud_provider.time.sleep", lambda s: None)
+        with pytest.raises(RuntimeError, match="FleetId"):
+            self._provision_maintain(provider, target=1)
+
+
+class TestListFleetsByTag:
+    """Client-side tag match over describe_fleets (no server-side tag filter)."""
+
+    def _client_with_fleets(self, *, fleets, next_pages=None):
+        from unittest.mock import MagicMock
+
+        client = MagicMock()
+        pages = [{"Fleets": fleets}]
+        if next_pages:
+            pages = next_pages
+        client.describe_fleets.side_effect = pages
+        return client
+
+    def test_matches_project_only(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._client_with_fleets(
+            fleets=[
+                {"FleetId": "fleet-1", "Tags": [{"Key": "Project", "Value": "starsector-p"}]},
+                {"FleetId": "fleet-2", "Tags": [{"Key": "Project", "Value": "other"}]},
+                {"FleetId": "fleet-3"},  # no Tags at all
+            ]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        out = provider.list_fleets_by_tag("starsector-p", region="us-east-1")
+        assert out == ["fleet-1"]
+
+    def test_both_tag_match_excludes_wrong_fleet(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._client_with_fleets(
+            fleets=[
+                {
+                    "FleetId": "fleet-A",
+                    "Tags": [
+                        {"Key": "Project", "Value": "starsector-p"},
+                        {"Key": "Fleet", "Value": "studyA"},
+                    ],
+                },
+                {
+                    "FleetId": "fleet-B",
+                    "Tags": [
+                        {"Key": "Project", "Value": "starsector-p"},
+                        {"Key": "Fleet", "Value": "studyB"},
+                    ],
+                },
+            ]
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        out = provider.list_fleets_by_tag("starsector-p", "studyA", region="us-east-1")
+        assert out == ["fleet-A"]
+
+    def test_filters_on_fleet_state(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider, _FLEET_ACTIVE_STATES
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = self._client_with_fleets(fleets=[])
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        provider.list_fleets_by_tag("starsector-p", region="us-east-1")
+        filters = client.describe_fleets.call_args.kwargs["Filters"]
+        state_filter = next(f for f in filters if f["Name"] == "fleet-state")
+        assert set(state_filter["Values"]) == set(_FLEET_ACTIVE_STATES)
+
+    def test_paginates(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        proj = [{"Key": "Project", "Value": "starsector-p"}]
+        client = self._client_with_fleets(
+            fleets=[],
+            next_pages=[
+                {"Fleets": [{"FleetId": "fleet-1", "Tags": proj}], "NextToken": "tok"},
+                {"Fleets": [{"FleetId": "fleet-2", "Tags": proj}]},
+            ],
+        )
+        monkeypatch.setattr(provider, "_client", lambda region: client)
+        out = provider.list_fleets_by_tag("starsector-p", region="us-east-1")
+        assert out == ["fleet-1", "fleet-2"]
+        assert client.describe_fleets.call_count == 2
+
+
+class TestDeleteFleetsAndModifyTarget:
+    def test_delete_fleets_param_shape(self):
+        from unittest.mock import MagicMock
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        provider._clients["us-east-1"] = client
+        n = provider.delete_fleets(["fleet-1", "fleet-2"], region="us-east-1")
+        assert n == 2
+        kwargs = client.delete_fleets.call_args.kwargs
+        assert kwargs["FleetIds"] == ["fleet-1", "fleet-2"]
+        assert kwargs["TerminateInstances"] is True
+
+    def test_delete_fleets_empty_is_noop(self):
+        from unittest.mock import MagicMock
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        provider._clients["us-east-1"] = client
+        assert provider.delete_fleets([], region="us-east-1") == 0
+        client.delete_fleets.assert_not_called()
+
+    def test_modify_fleet_target_param_shape(self):
+        from unittest.mock import MagicMock
+
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        client = MagicMock()
+        provider._clients["us-east-1"] = client
+        provider.modify_fleet_target(
+            "fleet-1", 3, region="us-east-1", excess_policy="no-termination"
+        )
+        kwargs = client.modify_fleet.call_args.kwargs
+        assert kwargs["FleetId"] == "fleet-1"
+        assert kwargs["TargetCapacitySpecification"]["TotalTargetCapacity"] == 3
+        assert kwargs["ExcessCapacityTerminationPolicy"] == "no-termination"
+
+
+class TestTeardownFleetOrdering:
+    """Under maintain, terminate_fleet/terminate_all_tagged delete the persistent
+    fleet FIRST (so it can't relaunch what the backstop terminates), and
+    terminate_fleet passes fleet_name so a sibling study's fleet survives."""
+
+    def test_terminate_fleet_deletes_fleet_before_instances(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        calls: list[str] = []
+
+        def _list_fleets(project_tag, fleet_name=None, *, region):
+            calls.append(f"list:{fleet_name}")
+            return ["fleet-1"]
+
+        def _delete_fleets(fleet_ids, *, region, terminate_instances=True):
+            calls.append("delete_fleets")
+            return len(list(fleet_ids))
+
+        def _terminate_by_tags(region, tags):
+            calls.append("terminate_by_tags")
+            return 0
+
+        monkeypatch.setattr(provider, "list_fleets_by_tag", _list_fleets)
+        monkeypatch.setattr(provider, "delete_fleets", _delete_fleets)
+        monkeypatch.setattr(provider, "_terminate_by_tags", _terminate_by_tags)
+        monkeypatch.setattr(provider, "_delete_launch_templates_by_tags", lambda *a, **k: None)
+        monkeypatch.setattr(provider, "_delete_security_groups_by_tags", lambda *a, **k: None)
+
+        provider.terminate_fleet(fleet_name="studyA", project_tag="starsector-p")
+        assert calls.index("delete_fleets") < calls.index("terminate_by_tags")
+        # terminate_fleet must pass fleet_name so sibling studies' fleets survive.
+        assert "list:studyA" in calls
+
+    def test_terminate_all_tagged_lists_project_only(self, monkeypatch):
+        from starsector_optimizer.cloud_provider import AWSProvider
+
+        provider = AWSProvider(regions=("us-east-1",))
+        seen_fleet_names: list = []
+
+        def _list_fleets(project_tag, fleet_name=None, *, region):
+            seen_fleet_names.append(fleet_name)
+            return []
+
+        monkeypatch.setattr(provider, "list_fleets_by_tag", _list_fleets)
+        monkeypatch.setattr(provider, "delete_fleets", lambda *a, **k: 0)
+        monkeypatch.setattr(provider, "_terminate_by_tags", lambda *a, **k: 0)
+        monkeypatch.setattr(provider, "_delete_launch_templates_by_tags", lambda *a, **k: None)
+        monkeypatch.setattr(provider, "_delete_security_groups_by_tags", lambda *a, **k: None)
+
+        provider.terminate_all_tagged("starsector-p")
+        # Project-only sweep: fleet_name is None (no both-tag narrowing).
+        assert seen_fleet_names == [None]
+
+
 class TestHetznerProvider:
     """HetznerProvider is a stub; every method raises NotImplementedError."""
 
@@ -851,6 +1199,26 @@ class TestHetznerProvider:
 
         with pytest.raises(NotImplementedError):
             HetznerProvider().terminate_instances(["i-abc"], region="eu-central")
+
+    def test_list_fleets_by_tag_raises(self):
+        from starsector_optimizer.cloud_provider import HetznerProvider
+
+        with pytest.raises(NotImplementedError):
+            HetznerProvider().list_fleets_by_tag("starsector-x", region="eu-central")
+
+    def test_delete_fleets_raises(self):
+        from starsector_optimizer.cloud_provider import HetznerProvider
+
+        with pytest.raises(NotImplementedError):
+            HetznerProvider().delete_fleets(["fleet-x"], region="eu-central")
+
+    def test_modify_fleet_target_raises(self):
+        from starsector_optimizer.cloud_provider import HetznerProvider
+
+        with pytest.raises(NotImplementedError):
+            HetznerProvider().modify_fleet_target(
+                "fleet-x", 1, region="eu-central", excess_policy="no-termination"
+            )
 
     def test_list_active_raises(self):
         from starsector_optimizer.cloud_provider import HetznerProvider
