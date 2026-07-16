@@ -69,7 +69,8 @@ class TestSummarize:
 
 class TestInstanceErrorRecovery:
     def _study_db(self, tmp_path, trials):
-        """trials: list of (number, state, matchups_dispatched|None)."""
+        """trials: list of (number, state, matchups_dispatched|None) or
+        (number, state, matchups_dispatched|None, terminal_reason|None)."""
         db = tmp_path / "s.db"
         con = sqlite3.connect(db)
         con.execute("create table trials (trial_id int, number int, state text)")
@@ -78,7 +79,9 @@ class TestInstanceErrorRecovery:
             "(trial_user_attr_id int, trial_id int, key text, value_json text)"
         )
         uaid = 0
-        for tid, (number, state, disp) in enumerate(trials):
+        for tid, row in enumerate(trials):
+            number, state, disp = row[0], row[1], row[2]
+            reason = row[3] if len(row) > 3 else None
             con.execute("insert into trials values (?, ?, ?)", (tid, number, state))
             if disp is not None:
                 con.execute(
@@ -86,24 +89,44 @@ class TestInstanceErrorRecovery:
                     (uaid, tid, "matchups_dispatched", json.dumps(disp)),
                 )
                 uaid += 1
+            if reason is not None:
+                con.execute(
+                    "insert into trial_user_attributes values (?, ?, ?, ?)",
+                    (uaid, tid, "terminal_reason", json.dumps(reason)),
+                )
+                uaid += 1
         con.commit()
         con.close()
         return db
 
-    def test_recovers_instance_error_trials_absent_from_log(self, tmp_path):
-        # Trial 0 is logged (finalized, no user_attr); trial 99 is an
-        # instance-error trial (COMPLETE, user_attr set, NOT in the log).
+    def test_recovers_terminal_failure_trials_absent_from_log(self, tmp_path):
+        # Trial 0 is logged (finalized, no user_attr); trial 99 is a terminal-
+        # failure trial (COMPLETE, user_attr set, NOT in the log). Absent
+        # terminal_reason defaults to instance_error (backward-compat).
         db = self._study_db(tmp_path, [(0, "COMPLETE", None), (99, "COMPLETE", 2)])
-        recs = acct.read_instance_error_records(db, logged_trial_numbers={0})
+        recs = acct.read_terminal_failure_records(db, logged_trial_numbers={0})
         assert len(recs) == 1
         assert recs[0].trial_number == 99
         assert recs[0].kind == "instance_error"
         assert recs[0].matchups_dispatched == 2
 
+    def test_partitions_by_terminal_reason(self, tmp_path):
+        # An instance_error and a worker_timeout trial partition into two kinds.
+        db = self._study_db(
+            tmp_path,
+            [
+                (10, "COMPLETE", 3, "instance_error"),
+                (11, "COMPLETE", 5, "worker_timeout"),
+            ],
+        )
+        recs = acct.read_terminal_failure_records(db, logged_trial_numbers=set())
+        by_num = {r.trial_number: r.kind for r in recs}
+        assert by_num == {10: "instance_error", 11: "worker_timeout"}
+
     def test_logged_trial_with_attr_is_not_double_counted(self, tmp_path):
-        # Defensive: a trial present in the log is never treated as instance-error.
+        # Defensive: a trial present in the log is never treated as a failure.
         db = self._study_db(tmp_path, [(5, "COMPLETE", 7)])
-        recs = acct.read_instance_error_records(db, logged_trial_numbers={5})
+        recs = acct.read_terminal_failure_records(db, logged_trial_numbers={5})
         assert recs == []
 
 

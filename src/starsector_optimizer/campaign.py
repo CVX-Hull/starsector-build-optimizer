@@ -732,6 +732,48 @@ def _tailscale_serve_exposes_port(port: int) -> bool:
     return f"127.0.0.1:{port}" in haystack
 
 
+def _check_flask_ports_free(ports: Sequence[int]) -> None:
+    """Verify each Flask result-port the campaign will bind is free on the
+    workstation, before any fleet is provisioned.
+
+    **Best-effort defense-in-depth, not a guarantee.** The real bind happens
+    in-subprocess minutes later (`cloud_worker_pool` `make_server`), so a
+    *concurrent* campaign that has not yet bound its ports will pass this probe
+    and then race to bind — reproducing the 2026-07-15 collision. This check
+    catches an already-bound concurrent campaign and stale listeners; the
+    guarantee against silent loss is the study-exit check in `monitor_loop`, and
+    the prevention is a **distinct `base_flask_port`** per concurrent campaign
+    (see cloud-worker-ops.md). Probes `0.0.0.0` without `SO_REUSEADDR` to match
+    `make_server`'s bind so an already-listening server is detected.
+    """
+    import socket
+
+    for port in ports:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("0.0.0.0", port))
+        except OSError as e:
+            raise PreflightFailure(
+                f"Flask result-port {port} is already in use: {e}. Another "
+                f"campaign or a stale listener holds it; concurrent campaigns "
+                f"must use distinct base_flask_port ranges (cloud-worker-ops.md)."
+            ) from e
+        finally:
+            sock.close()
+
+
+def _campaign_flask_ports(config: CampaignConfig) -> list[int]:
+    """The exact Flask result-port every `(study_idx, seed_idx)` subprocess binds
+    (cloud_runner.py:273: ``base_flask_port + study_idx * flask_ports_per_study +
+    seed_idx``) — NOT the whole ``flask_ports_per_study`` ACL reservation range.
+    Used by the launch-time port preflight."""
+    return [
+        config.base_flask_port + study_idx * config.flask_ports_per_study + seed_idx
+        for study_idx, study in enumerate(config.studies)
+        for seed_idx in range(len(study.seeds))
+    ]
+
+
 def _check_redis_reachable(
     tailnet_ip: str,
     port: int,
@@ -1096,6 +1138,8 @@ class CampaignManager:
         self._token_factory = token_factory
         self._tailnet_ip: str | None = None
         self._study_procs: list[subprocess.Popen] = []
+        self._study_ids: list[str] = []
+        self._failed_studies: list[str] = []
         self._teardown_done = False
         # Ledger-tick state. _redis is populated by _preflight, which also
         # builds _cost_ticker (owns the per-worker last-tick times + spot-price
@@ -1146,6 +1190,7 @@ class CampaignManager:
             )
             check_aws_credentials()
             check_authkey_syntax(self._config.tailscale_authkey_secret)
+            _check_flask_ports_free(_campaign_flask_ports(self._config))
             self._check_manifest_and_ami_tags()
             # Stash a long-lived Redis client for the ledger tick (SCAN +
             # HGETALL per tick). 127.0.0.1 works for both kernel-mode
@@ -1230,9 +1275,11 @@ class CampaignManager:
         from starsector_optimizer.cloud_runner import resolve_study_id
 
         procs: list[subprocess.Popen] = []
+        study_ids: list[str] = []
         for study_idx, study in enumerate(self._config.studies):
             for seed_idx, _seed in enumerate(study.seeds):
                 study_id = resolve_study_id(self._config, study_idx, seed_idx)
+                study_ids.append(study_id)
                 study_db_path = Path("data/study_dbs") / self._config.name / f"{study_id}.db"
                 study_db_path.parent.mkdir(parents=True, exist_ok=True)
                 cmd = [
@@ -1283,6 +1330,7 @@ class CampaignManager:
                 proc = subprocess.Popen(cmd, env=env)
                 procs.append(proc)
         self._study_procs = procs
+        self._study_ids = study_ids
         return procs
 
     # ---- Monitor / teardown ----
@@ -1297,6 +1345,40 @@ class CampaignManager:
             # the prior `if self._redis is None: return`).
             if self._cost_ticker is not None:
                 self._cost_ticker.tick()
+        self._report_study_exits(study_procs)
+
+    def _report_study_exits(self, study_procs: list[subprocess.Popen]) -> None:
+        """Surface every study subprocess that exited non-zero. A study that
+        dies early (flask-port collision, spot loss at boot) or mid-run (an
+        uncaught crash) would otherwise be silently counted 'done' — the failure
+        that silently dropped 3 cells on 2026-07-15. Reports the loss loudly and
+        records it in `self._failed_studies`; does NOT auto-reschedule. Gate is
+        `returncode != 0` (covers negative signal-kills too), NOT DB-existence —
+        a mid-run crash leaves a partial DB, which is an annotation, not a pass.
+        """
+        study_ids = self._study_ids or [""] * len(study_procs)
+        failed: list[str] = []
+        for study_id, proc in zip(study_ids, study_procs, strict=True):
+            rc = proc.returncode
+            if rc is not None and rc != 0:
+                db = Path("data/study_dbs") / self._config.name / f"{study_id}.db"
+                where = "partial study DB present" if study_id and db.exists() else "no study DB"
+                logger.error(
+                    "study %s exited with returncode %d (%s) — NOT rescheduled",
+                    study_id or f"pid={proc.pid}",
+                    rc,
+                    where,
+                )
+                failed.append(study_id or f"pid={proc.pid}")
+        self._failed_studies = failed
+        if failed:
+            logger.error(
+                "campaign %s: %d/%d studies failed (non-zero exit): %s",
+                self._config.name,
+                len(failed),
+                len(study_procs),
+                ", ".join(failed),
+            )
 
     def _terminate_study_procs(self) -> None:
         """SIGTERM all live study subprocesses, wait, then SIGKILL survivors.

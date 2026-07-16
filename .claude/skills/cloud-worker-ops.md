@@ -510,6 +510,7 @@ Checks all 4 US regions (us-east-1, us-east-2, us-west-1, us-west-2) for instanc
 
 ## Things to push back on
 
+- **"Launch both campaigns at once"** when they share `base_flask_port` (the default `9000`). Two campaigns on one workstation collide on Flask result-ports — `study_idx` 0/1/2 → ports `9000/9100/9200` in **both** — silently dropping the loser's overlapping studies (2026-07-15 accounting-run root cause). Either launch **sequentially**, or give each campaign a **distinct `base_flask_port`** range (e.g. campaign B at `base_flask_port: 9500`, non-overlapping with A's `9000..9000+max_study_idx*flask_ports_per_study`). The launch-time port preflight (`_check_flask_ports_free`) catches an already-bound collision but has a TOCTOU gap against a *concurrently starting* campaign — the distinct-port rule is the actual prevention. A non-zero study exit is now surfaced loudly (`_report_study_exits`), not silently counted done.
 - **"Let's run it overnight and see"** without a budget cap. No — set `budget_usd` explicitly first. A misconfig can burn $500 overnight.
 - **"Skip the baked image, just use cloud-init each time"**. Not supported. Packer bake is mandatory — cloud-init bulk apt/PyPI fails under 50+ concurrent cold starts.
 - **"GPU cloud for speed"**. CPU per-instance throughput meets or exceeds local after the XRandR fix; GPU doesn't help this workload. The quantitative cloud-vs-local ratio was retired unmeasured ([../../docs/reports/2026-07-13-roadmap-regroom.md](../../docs/reports/2026-07-13-roadmap-regroom.md)).

@@ -37,6 +37,7 @@ from optuna.trial import TrialState, create_trial
 from scipy.stats import boxcox
 
 from .calibration import generate_diverse_builds
+from .cloud_worker_pool import WorkerTimeout
 from .evaluator_pool import EvaluatorPool, RetryableMatchupError
 from .game_manifest import GameManifest
 from .instance_manager import InstanceError
@@ -107,6 +108,11 @@ class OptimizerConfig:
     matchup_time_mult: float = 5.0
     log_interval: int = 10
     failure_score: float = -2.0
+    # A matchup that returns no result within result_timeout_seconds raises
+    # WorkerTimeout. Re-dispatch up to this many times (transient lost/reclaimed
+    # worker usually recovers) before finalizing the trial as failure_score.
+    # Bounded so a pathological never-completing matchup can't loop forever.
+    max_worker_timeout_retries: int = 2
     stock_build_scale_mult: float = 2.0
     active_opponents: int = 10
     eval_log_path: Path | None = None
@@ -434,6 +440,9 @@ class _InFlightBuild:
     # re-dispatches). ≥ len(completed_results); the delta is the retry count.
     # The honest cost basis for the item-3 accounting run (spec 24).
     matchups_dispatched: int = 0
+    # WorkerTimeout re-dispatches for this trial, bounded by
+    # OptimizerConfig.max_worker_timeout_retries before finalizing as failure.
+    worker_timeouts: int = 0
 
     @property
     def rung(self) -> int:
@@ -690,23 +699,37 @@ class StagedEvaluator:
                             exc,
                         )
                         continue
+                    except WorkerTimeout as exc:
+                        # A matchup returned no result within the timeout. Usually
+                        # a transient lost/reclaimed worker; re-dispatch (build
+                        # stays in _queue, _dispatched already discarded above) up
+                        # to the bound, then finalize as failure so a pathological
+                        # never-completing matchup can't wedge the run.
+                        ifb.worker_timeouts += 1
+                        if ifb.worker_timeouts <= self._config.max_worker_timeout_retries:
+                            logger.warning(
+                                "WorkerTimeout for trial %d (attempt %d/%d), re-dispatching: %s",
+                                ifb.trial.number,
+                                ifb.worker_timeouts,
+                                self._config.max_worker_timeout_retries,
+                                exc,
+                            )
+                            continue
+                        logger.error(
+                            "Trial %d exhausted %d WorkerTimeout retries, scoring as %s",
+                            ifb.trial.number,
+                            self._config.max_worker_timeout_retries,
+                            self._config.failure_score,
+                        )
+                        self._finalize_terminal_failure(ifb, "worker_timeout")
+                        continue
                     except InstanceError:
                         logger.error(
                             "Worker failed for trial %d, scoring as %s",
                             ifb.trial.number,
                             self._config.failure_score,
                         )
-                        # Instance-error emits NO eval-log row (its zero
-                        # matchup-DB rows would orphan the replay's bijective
-                        # join — spec 24 "the fifth path"). Record the dispatched
-                        # count on the trial instead so the accounting extractor
-                        # can recover it from the study DB.
-                        ifb.trial.set_user_attr("matchups_dispatched", ifb.matchups_dispatched)
-                        self._study.tell(ifb.trial, self._config.failure_score)
-                        self._trials_completed += 1
-                        self._trials_errored += 1
-                        if ifb in self._queue:
-                            self._queue.remove(ifb)
+                        self._finalize_terminal_failure(ifb, "instance_error")
                         continue
 
                     self._handle_result(ifb, result)
@@ -803,6 +826,26 @@ class StagedEvaluator:
         self._eb_shrinkage_magnitudes.append(diff)
         if diff > 1e-9:
             self._eb_activated_count += 1
+
+    def _finalize_terminal_failure(self, ifb: _InFlightBuild, reason: str) -> None:
+        """Finalize a trial that died without a scorable result — instance death
+        (``reason="instance_error"``) or exhausted worker-timeout retries
+        (``"worker_timeout"``).
+
+        Emits **NO** eval-log row: such a trial has zero matchup-DB rows, and a
+        row would orphan the prequential replay's bijective ``(source_path,
+        trial_number)`` join (spec 24 "the fifth path"). Records the dispatched
+        count and the ``terminal_reason`` on the trial instead, so the accounting
+        extractor recovers it from the study DB (COMPLETE-minus-JSONL) and
+        partitions it by kind. These are the only two ``set_user_attr`` writers.
+        """
+        ifb.trial.set_user_attr("matchups_dispatched", ifb.matchups_dispatched)
+        ifb.trial.set_user_attr("terminal_reason", reason)
+        self._study.tell(ifb.trial, self._config.failure_score)
+        self._trials_completed += 1
+        self._trials_errored += 1
+        if ifb in self._queue:
+            self._queue.remove(ifb)
 
     def _fill_workers(self, executor, pending, num_workers) -> None:
         """Dispatch matchups up to the worker concurrency cap. Pool owns

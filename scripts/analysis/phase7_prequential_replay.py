@@ -279,11 +279,12 @@ def measured_inflight_gap(cell_trials: Sequence[ReplayTrial], config: ReplayConf
     "measured" train-gap mode.
 
     Only trials that appear in the arrival stream (i.e. emitted an eval-log
-    row) count. Instance-error trials are told `failure_score` as Optuna
-    `state=COMPLETE` yet emit no eval-log row (spec 24 "the fifth path"), so
-    they are absent from `cell_trials`; counting them here would inflate Ĝ
+    row) count. The two terminal-failure kinds — instance-error and
+    exhausted-worker-timeout — are told `failure_score` as Optuna
+    `state=COMPLETE` yet emit no eval-log row (spec 24 terminal-failure paths),
+    so they are absent from `cell_trials`; counting them here would inflate Ĝ
     over the population the gap actually applies to. Restricting to
-    stream trial numbers excludes them.
+    stream trial numbers excludes both.
     """
     # source_path: data/logs/<campaign>/<study>/evaluation_log.jsonl
     parts = Path(cell_trials[0].source_path).parts
@@ -306,7 +307,9 @@ def measured_inflight_gap(cell_trials: Sequence[ReplayTrial], config: ReplayConf
         ).fetchall()
     finally:
         con.close()
-    # Stream-only: drop instance-error COMPLETE trials (absent from the stream).
+    # Stream-only: drop terminal-failure COMPLETE trials — instance-error AND
+    # exhausted-worker-timeout (both COMPLETE in the study DB but absent from the
+    # arrival stream, as they emit no eval-log row; spec 24 terminal-failure paths).
     intervals = [(start, complete) for number, start, complete in rows if number in stream_numbers]
     if not intervals:
         raise ValueError(f"study DB {study_db} has no completed trials with timestamps")

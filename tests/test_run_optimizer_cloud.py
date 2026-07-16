@@ -968,3 +968,80 @@ class TestResolveStudyId:
             ],
         )
         assert resolve_study_id(config, 0, 0) == "wolf__early__tpe__seed7"
+
+
+class TestMinWorkersEnforcement:
+    """Scope D: min_workers_to_start / partial_fleet_policy enforced in the cloud
+    path (previously dead config, consumed nowhere)."""
+
+    def _run(self, monkeypatch, tmp_path, smoke_env, *, provisioned, policy):
+        import starsector_optimizer.cloud_runner as cloud_runner
+
+        _config, path = _make_smoke_config(
+            tmp_path,
+            max_concurrent_workers=4,
+            min_workers_to_start=2,
+            partial_fleet_policy=policy,
+            studies=[
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 2,
+                    "workers_per_study": 4,
+                    "sampler": "tpe",
+                }
+            ],
+        )
+
+        class FakeProvider:
+            def __init__(self, *, regions):
+                pass
+
+            def provision_fleet(self, **kwargs):
+                return [f"i-{i}" for i in range(provisioned)]
+
+            def terminate_fleet(self, *, fleet_name, project_tag):
+                return provisioned
+
+        class FakePool:
+            def __init__(self, *a, **k):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        monkeypatch.setattr(cloud_runner, "AWSProvider", FakeProvider)
+        monkeypatch.setattr(cloud_runner, "CloudWorkerPool", FakePool)
+        monkeypatch.setattr(cloud_runner, "check_ami_tags_against_manifest", lambda *a, **k: None)
+        monkeypatch.setattr(cloud_runner, "optimize_hull", lambda *a, **k: MagicMock())
+        import redis as redis_mod
+
+        monkeypatch.setattr(redis_mod, "Redis", MagicMock())
+        hull = MagicMock()
+        hull.hull_size = MagicMock()
+        cloud_runner.run_cloud_study(
+            campaign_yaml_path=path,
+            study_idx=0,
+            seed_idx=0,
+            hull_id="hammerhead",
+            hull=hull,
+            game_data=MagicMock(),
+            manifest=MagicMock(),
+            opponent_pool=MagicMock(),
+            optimizer_config=MagicMock(),
+        )
+
+    def test_abort_when_below_min(self, monkeypatch, tmp_path, smoke_env):
+        with pytest.raises(RuntimeError, match="min_workers_to_start"):
+            self._run(monkeypatch, tmp_path, smoke_env, provisioned=1, policy="abort")
+
+    def test_proceed_half_speed_continues_below_min(self, monkeypatch, tmp_path, smoke_env, caplog):
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            self._run(monkeypatch, tmp_path, smoke_env, provisioned=1, policy="proceed_half_speed")
+        assert any("min_workers_to_start" in r.getMessage() for r in caplog.records)

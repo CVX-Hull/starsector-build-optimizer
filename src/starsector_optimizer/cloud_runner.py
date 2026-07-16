@@ -67,6 +67,27 @@ def resolve_study_id(campaign, study_idx: int, seed_idx: int) -> str:
     return f"{study_cfg.hull}__{study_cfg.regime}__{study_cfg.sampler}__seed{seed}"
 
 
+def _probe_flask_port_free(port: int) -> None:
+    """Raise RuntimeError if `port` (this study's Flask result-port) is already
+    bound. Called in-subprocess before provisioning so a port collision fails
+    immediately with a diagnosable message instead of surfacing as a raw
+    EADDRINUSE from `make_server` after the fleet is already provisioned. Probes
+    `0.0.0.0` without SO_REUSEADDR to match the server's bind."""
+    import socket
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(("0.0.0.0", port))
+    except OSError as e:
+        raise RuntimeError(
+            f"Flask result-port {port} already in use ({e}); a concurrent "
+            f"campaign sharing base_flask_port or a stale listener holds it. "
+            f"Aborting before provisioning — use distinct base_flask_port ranges."
+        ) from e
+    finally:
+        sock.close()
+
+
 @contextmanager
 def prepare_cloud_pool(
     *,
@@ -133,6 +154,13 @@ def prepare_cloud_pool(
         mod_jar_override_sha256=mod_jar_override_sha256,
     )
 
+    # Fail fast + diagnosably if this study's Flask result-port is already held
+    # (a concurrent campaign sharing base_flask_port, or a stale listener) —
+    # BEFORE provisioning a fleet that would otherwise be torn down when
+    # make_server (cloud_worker_pool.setup) hits EADDRINUSE. This converts the
+    # 2026-07-15 silent fleet-waste into an immediate, named failure.
+    _probe_flask_port_free(flask_port)
+
     provider = AWSProvider(regions=campaign.regions)
     check_ami_tags_against_manifest(
         provider,
@@ -154,6 +182,16 @@ def prepare_cloud_pool(
         )
         if not instance_ids:
             raise RuntimeError(f"provision_fleet returned no instances for fleet_name={fleet_name}")
+        # Enforce min_workers_to_start / partial_fleet_policy (previously dead
+        # config in the cloud path). Mirrors phase7_learned_batch.py:1542.
+        if len(instance_ids) < campaign.min_workers_to_start:
+            msg = (
+                f"fleet {fleet_name} provisioned {len(instance_ids)} worker(s), "
+                f"below min_workers_to_start={campaign.min_workers_to_start}"
+            )
+            if campaign.partial_fleet_policy == "abort":
+                raise RuntimeError(msg + " (partial_fleet_policy=abort)")
+            logger.warning("%s; proceeding (partial_fleet_policy=proceed_half_speed)", msg)
         actual_matchup_slots = len(instance_ids) * campaign.matchup_slots_per_worker
         if actual_matchup_slots != total_matchup_slots:
             logger.warning(

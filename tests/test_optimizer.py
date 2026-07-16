@@ -788,6 +788,86 @@ class TestOptimizeHullIntegration:
         assert retried, "no row recorded the retry in matchups_dispatched"
         assert any(r["matchups_dispatched"] - r["opponents_evaluated"] == 1 for r in retried)
 
+    def test_worker_timeout_retries_then_recovers(self, wolf_hull, game_data, manifest):
+        """A transient WorkerTimeout re-dispatches the same build (does not crash
+        the run — WorkerTimeout was uncaught before this fix) and the trial still
+        completes."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.cloud_worker_pool import WorkerTimeout
+
+        pool = self._make_mock_pool()
+        call_count = [0]
+        original_run = pool.run_matchup
+
+        def flaky_run(matchup):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                raise WorkerTimeout("transient lost worker")
+            return original_run(matchup)
+
+        pool.run_matchup = flaky_run
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        config = OptimizerConfig(sim_budget=2, warm_start_n=1, warm_start_sample_n=20)
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+        assert call_count[0] >= 2
+        assert any(t.state == optuna.trial.TrialState.COMPLETE for t in study.trials)
+
+    def test_worker_timeout_exhausts_to_failure_score(
+        self, wolf_hull, game_data, manifest, tmp_path
+    ):
+        """A build whose matchup keeps timing out exhausts max_worker_timeout_retries,
+        finalizes as failure_score with terminal_reason='worker_timeout', and emits
+        NO eval-log row (preserving the replay's bijective join)."""
+        from starsector_optimizer.optimizer import optimize_hull
+        from starsector_optimizer.opponent_pool import OpponentPool
+        from starsector_optimizer.models import HullSize
+        from starsector_optimizer.cloud_worker_pool import WorkerTimeout
+
+        pool = self._make_mock_pool()
+        original_run = pool.run_matchup
+        targeted: list = [None]
+
+        def timeout_run(matchup):
+            if targeted[0] is None:
+                targeted[0] = matchup.matchup_id  # exhaust the first-seen matchup
+            if matchup.matchup_id == targeted[0]:
+                raise WorkerTimeout(f"forced timeout {matchup.matchup_id}")
+            return original_run(matchup)
+
+        pool.run_matchup = timeout_run
+        opp_pool = OpponentPool(pools={HullSize.FRIGATE: ("wolf_Assault",)})
+        eval_log = tmp_path / "evaluation_log.jsonl"
+        config = OptimizerConfig(
+            sim_budget=3,
+            warm_start_n=1,
+            warm_start_sample_n=20,
+            max_worker_timeout_retries=2,
+            eval_log_path=eval_log,
+        )
+
+        study = optimize_hull("wolf", game_data, pool, opp_pool, config, manifest)
+
+        failed = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE
+            and t.user_attrs.get("terminal_reason") == "worker_timeout"
+        ]
+        assert failed, "no trial finalized as worker_timeout"
+        assert all(t.value == config.failure_score for t in failed)
+        # A worker-timeout-finalized trial emits NO eval-log row (replay-join safety).
+        rows = (
+            [json.loads(line) for line in eval_log.read_text().splitlines() if line.strip()]
+            if eval_log.exists()
+            else []
+        )
+        logged_numbers = {r["trial_number"] for r in rows}
+        for t in failed:
+            assert t.number not in logged_numbers
+
 
 # --- Preflight Check Tests ---
 

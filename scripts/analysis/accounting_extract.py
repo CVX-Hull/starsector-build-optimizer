@@ -8,10 +8,14 @@ basis), partitioned by trial kind, per cell and pooled, plus the aggregate
 matchup total.
 
 Trial kinds (spec 24): `completed`, `pruned`, `cache_hit`, `invalid_spec` come
-from the eval-log rows; `instance_error` trials emit NO eval-log row (they would
-orphan the replay's bijective join) and are recovered from the study DB as
-`state=COMPLETE` trials carrying a `matchups_dispatched` user_attr but absent
-from the eval log. See docs/specs/24-optimizer.md "the fifth path".
+from the eval-log rows. The two **terminal-failure** kinds — `instance_error`
+(worker/instance death) and `worker_timeout` (a dispatched matchup returned no
+result within `result_timeout_seconds` after exhausting retries) — emit NO
+eval-log row (they would orphan the replay's bijective join) and are recovered
+from the study DB as `state=COMPLETE` trials carrying a `matchups_dispatched`
+user_attr but absent from the eval log; the `terminal_reason` user_attr (set only
+by the two terminal finalizers) partitions them. See docs/specs/24-optimizer.md
+"the fifth path".
 """
 
 from __future__ import annotations
@@ -23,7 +27,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from statistics import median
 
-_KINDS = ("completed", "pruned", "cache_hit", "invalid_spec", "instance_error")
+# The two terminal-failure kinds a trial's `terminal_reason` user_attr can carry
+# (set only by optimizer._finalize_terminal_failure); an unrecognized value
+# collapses to instance_error.
+_TERMINAL_KINDS = ("instance_error", "worker_timeout")
+_KINDS = ("completed", "pruned", "cache_hit", "invalid_spec", *_TERMINAL_KINDS)
 
 
 @dataclass(frozen=True)
@@ -99,22 +107,27 @@ def read_eval_log(path: Path) -> list[dict]:
     return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
-def read_instance_error_records(
+def read_terminal_failure_records(
     study_db: Path, logged_trial_numbers: set[int]
 ) -> list[TrialRecord]:
-    """Instance-error trials: COMPLETE in the study DB, carrying a
-    `matchups_dispatched` user_attr (only that path sets it), and absent from
-    the eval log. Returns their records.
+    """Terminal-failure trials: COMPLETE in the study DB, carrying a
+    `matchups_dispatched` user_attr (set only by the two terminal finalizers),
+    and absent from the eval log. Returns their records, partitioned by the
+    `terminal_reason` user_attr into `instance_error` vs `worker_timeout`
+    (absent → `instance_error` for backward-compat with pre-discriminator runs).
 
-    `opponents_evaluated` is set to 0: any matchups an instance-error trial
-    scored before failing never entered the corpus (spec 24 "the fifth path" —
-    no eval-log/DB row), so 0 is the *corpus useful-work* count. The dispatched
-    count (from the user_attr) is the honest cost basis and is exact."""
+    `opponents_evaluated` is set to 0: any matchups such a trial scored before
+    failing never entered the corpus (spec 24 "the fifth path" — no eval-log/DB
+    row), so 0 is the *corpus useful-work* count. The dispatched count (from the
+    user_attr) is the honest cost basis and is exact."""
     con = sqlite3.connect(study_db)
     try:
         rows = con.execute(
             """
-            select t.number, ua.value_json from trials t
+            select t.number, ua.value_json,
+                   (select tr.value_json from trial_user_attributes tr
+                    where tr.trial_id = t.trial_id and tr.key = 'terminal_reason')
+            from trials t
             join trial_user_attributes ua on ua.trial_id = t.trial_id
             where t.state = 'COMPLETE' and ua.key = 'matchups_dispatched'
             """
@@ -122,14 +135,16 @@ def read_instance_error_records(
     finally:
         con.close()
     out = []
-    for number, value_json in rows:
+    for number, value_json, reason_json in rows:
         n = int(number)
         if n in logged_trial_numbers:
-            continue  # defensive: a logged trial is not an instance-error trial
+            continue  # defensive: a logged trial is not a terminal-failure trial
+        reason = json.loads(reason_json) if reason_json is not None else "instance_error"
+        kind = reason if reason in _TERMINAL_KINDS else "instance_error"
         out.append(
             TrialRecord(
                 trial_number=n,
-                kind="instance_error",
+                kind=kind,
                 opponents_evaluated=0,
                 matchups_dispatched=int(json.loads(value_json)),
             )
@@ -138,12 +153,13 @@ def read_instance_error_records(
 
 
 def extract_cell(eval_log: Path, study_db: Path | None) -> list[TrialRecord]:
-    """All trial records for one cell: eval-log kinds + instance-error trials."""
+    """All trial records for one cell: eval-log kinds + terminal-failure trials
+    (instance_error / worker_timeout, recovered from the study DB)."""
     rows = read_eval_log(eval_log)
     records = records_from_eval_rows(rows)
     if study_db is not None and study_db.exists():
         logged = {r.trial_number for r in records}
-        records = records + read_instance_error_records(study_db, logged)
+        records = records + read_terminal_failure_records(study_db, logged)
     return records
 
 

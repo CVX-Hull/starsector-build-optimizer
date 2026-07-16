@@ -77,8 +77,8 @@ Top-level campaign descriptor, loaded from YAML. Immutable after `load_campaign_
 | `spot_allocation_strategy` | `str` | required | `"price-capacity-optimized"` |
 | `capacity_rebalancing` | `bool` | required | EC2 Fleet CapacityRebalancing flag |
 | `max_concurrent_workers` | `int` | required | Total VMs across all studies |
-| `min_workers_to_start` | `int` | required | Partial-fleet floor; validator enforces `<= max_concurrent_workers` |
-| `partial_fleet_policy` | `str` | required | `"proceed_half_speed"` or `"abort"` |
+| `min_workers_to_start` | `int` | required | Partial-fleet floor; validator enforces `<= max_concurrent_workers`. **Enforced** in `cloud_runner.prepare_cloud_pool` after `provision_fleet`: `len(instance_ids) < min_workers_to_start` triggers `partial_fleet_policy` |
+| `partial_fleet_policy` | `str` | required | `"proceed_half_speed"` (warn + continue on a partial fleet) or `"abort"` (raise). Enforced in `prepare_cloud_pool` (see `min_workers_to_start`) |
 | `ami_ids_by_region` | `dict[str, str]` | required | Populated exactly once by `load_campaign_config`; grep invariant forbids post-load mutation |
 | `ssh_key_name` | `str` | required | Pre-registered AWS key pair name |
 | `tailscale_authkey_secret` | `str` | required | Injected into cloud-init; redacted from `__repr__`. Supports `${VAR}` env-substitution — if value starts with `${` and ends with `}`, `load_campaign_config` resolves via `os.environ`. Missing env var → `ValueError`. Substitution is SCOPED to this field only. |
@@ -337,6 +337,36 @@ Catches the failure mode introduced by `serve_mod_jar.sh` tailnet
 overrides — without the consistency check, a partial override that
 some workers picked up and others didn't would silently corrupt the
 fleet's results.
+
+### Flask-port preflight + study-exit detection (2026-07-15)
+
+Two guards against a Flask result-port collision silently dropping studies (root
+cause of the 2026-07-15 accounting-run partial loss — two campaigns launched
+concurrently sharing `base_flask_port`, so `study_idx` 0/1/2 mapped to the same
+ports 9000/9100/9200 in both):
+
+1. **Preflight port check** (`_preflight` → `_check_flask_ports_free`). Before
+   `spawn_studies`, probe (`socket.bind(("0.0.0.0", p))`, no `SO_REUSEADDR`, to
+   match `make_server`) every port `_campaign_flask_ports(config)` will bind — the
+   exact `base_flask_port + study_idx * flask_ports_per_study + seed_idx` per
+   `(study_idx, seed_idx)` pair, NOT the whole `flask_ports_per_study` ACL range.
+   An occupied port → `PreflightFailure` → exit 2, before any fleet is
+   provisioned. **Best-effort defense-in-depth, not a guarantee:** the real bind
+   is in-subprocess minutes later, so a concurrent campaign that has not yet bound
+   passes this probe and then races. `cloud_runner.prepare_cloud_pool` adds an
+   in-subprocess `_probe_flask_port_free(flask_port)` immediately before
+   provisioning, converting the raw `EADDRINUSE` from `make_server` into a
+   diagnosable failure without wasting a fleet.
+2. **Study-exit detection** (`monitor_loop` → `_report_study_exits`). The
+   guarantee against silent loss: after all study subprocesses exit,
+   **every** `returncode != 0` (including negative signal-kills) is logged at
+   ERROR and recorded in `self._failed_studies` — gated on the return code, NOT
+   on study-DB existence (a mid-run crash leaves a partial DB, which is an
+   annotation only). Does not auto-reschedule.
+
+**Prevention** (operational, no code): concurrent campaigns on one workstation
+must use **distinct `base_flask_port`** ranges, or launch **sequentially** — see
+`.claude/skills/cloud-worker-ops.md`.
 
 ### Manifest + AMI tag preflight (2026-04-19, expanded 2026-05-10)
 

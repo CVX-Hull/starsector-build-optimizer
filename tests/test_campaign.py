@@ -408,10 +408,14 @@ class TestCostLedger:
 
 class _FakeProc:
     """A study-subprocess stand-in: `poll()` returns None on the first call
-    (alive → monitor_loop enters its body once) then 0 (exited → loop stops)."""
+    (alive → monitor_loop enters its body once) then 0 (exited → loop stops).
+    `returncode` mirrors a real Popen (0 = clean exit) so the study-exit check
+    in monitor_loop sees a successful study."""
 
-    def __init__(self) -> None:
+    def __init__(self, returncode: int = 0) -> None:
         self._calls = 0
+        self.returncode = returncode
+        self.pid = 0
 
     def poll(self):
         self._calls += 1
@@ -780,6 +784,34 @@ class TestCampaignManagerPreflight:
             "tskey" in r.getMessage().lower() or "authkey" in r.getMessage().lower()
             for r in caplog.records
         )
+
+    def test_preflight_exits_on_occupied_flask_port(self, tmp_path, caplog):
+        """The flask-port check is wired into _preflight: an occupied port →
+        PreflightFailure → exit 2 (before any fleet is provisioned). Guards the
+        wiring, not just the isolated helper."""
+        import socket
+
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("0.0.0.0", 0))
+        port = holder.getsockname()[1]
+        holder.listen(1)
+        try:
+            # Single study, one seed → the campaign binds exactly `port`.
+            manager = self._manager_with_mocks(tmp_path, base_flask_port=port)
+            with (
+                patch("subprocess.run") as mock_run,
+                patch("redis.Redis") as mock_redis_ctor,
+                patch("boto3.client") as mock_boto,
+            ):
+                mock_run.return_value = MagicMock(returncode=0, stdout="100.64.1.2\n", stderr="")
+                mock_redis_ctor.return_value.ping.return_value = True
+                mock_boto.return_value.get_caller_identity.return_value = {"UserId": "u"}
+                with caplog.at_level(logging.ERROR):
+                    with pytest.raises(SystemExit):
+                        manager._preflight()
+            assert any(str(port) in r.getMessage() for r in caplog.records)
+        finally:
+            holder.close()
 
     def test_preflight_stores_tailnet_ip(self, tmp_path):
         manager = self._manager_with_mocks(tmp_path)
@@ -2272,3 +2304,111 @@ class TestEnvDictNotLogged:
             bearer = env.get("STARSECTOR_BEARER_TOKEN", "")
             if bearer:
                 assert bearer not in record.getMessage()
+
+
+class TestFlaskPortPreflight:
+    """Scope B: flask-port preflight catches an already-bound port before spawn."""
+
+    def test_free_port_passes(self):
+        import socket
+
+        from starsector_optimizer.campaign import _check_flask_ports_free
+
+        # Grab-and-release an ephemeral port to get one known-free (not a fixed
+        # literal that CI might have occupied).
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("0.0.0.0", 0))
+        port = s.getsockname()[1]
+        s.close()
+        _check_flask_ports_free([port])  # now free → no raise
+
+    def test_occupied_port_raises(self):
+        import socket
+
+        from starsector_optimizer.campaign import PreflightFailure, _check_flask_ports_free
+
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("0.0.0.0", 0))
+        port = holder.getsockname()[1]
+        holder.listen(1)
+        try:
+            with pytest.raises(PreflightFailure, match=str(port)):
+                _check_flask_ports_free([port])
+        finally:
+            holder.close()
+
+    def test_port_set_includes_seed_idx(self, tmp_path):
+        """The exact per-(study_idx, seed_idx) ports, NOT per-study — pins the
+        `+ seed_idx` term a per-study-only formula would drop."""
+        from starsector_optimizer.campaign import _campaign_flask_ports, load_campaign_config
+
+        path = _minimal_campaign_yaml(
+            tmp_path,
+            studies=[
+                {
+                    "hull": "wolf",
+                    "regime": "early",
+                    "seeds": [0, 1, 2],
+                    "budget_per_study": 200,
+                    "workers_per_study": 12,
+                    "sampler": "tpe",
+                },
+                {
+                    "hull": "hammerhead",
+                    "regime": "early",
+                    "seeds": [0],
+                    "budget_per_study": 200,
+                    "workers_per_study": 12,
+                    "sampler": "tpe",
+                },
+            ],
+        )
+        config = load_campaign_config(path)
+        # study 0 (3 seeds) → base+0..2 ; study 1 (1 seed) → base+per_study.
+        base, per = config.base_flask_port, config.flask_ports_per_study
+        assert _campaign_flask_ports(config) == [base, base + 1, base + 2, base + per]
+
+    def test_probe_flask_port_free_raises_on_occupied(self):
+        """cloud_runner's in-subprocess probe raises RuntimeError on a bound port."""
+        import socket
+
+        from starsector_optimizer.cloud_runner import _probe_flask_port_free
+
+        holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        holder.bind(("0.0.0.0", 0))
+        port = holder.getsockname()[1]
+        holder.listen(1)
+        try:
+            with pytest.raises(RuntimeError, match=str(port)):
+                _probe_flask_port_free(port)
+        finally:
+            holder.close()
+
+
+class TestStudyExitDetection:
+    """Scope C: a study subprocess that exits non-zero is surfaced, not hidden."""
+
+    def _manager(self, tmp_path):
+        from starsector_optimizer.campaign import CampaignManager, load_campaign_config
+
+        config = load_campaign_config(_minimal_campaign_yaml(tmp_path))
+        return CampaignManager(config, MagicMock(), MagicMock())
+
+    def test_nonzero_and_signal_exits_recorded(self, tmp_path, caplog):
+        mgr = self._manager(tmp_path)
+        mgr._study_ids = ["studyA", "studyB", "studyC"]
+        procs = [
+            MagicMock(returncode=0, pid=1),
+            MagicMock(returncode=1, pid=2),  # nonzero
+            MagicMock(returncode=-9, pid=3),  # SIGKILL (negative) also counts
+        ]
+        with caplog.at_level(logging.ERROR):
+            mgr._report_study_exits(procs)
+        assert mgr._failed_studies == ["studyB", "studyC"]
+        assert any("studyB" in r.getMessage() for r in caplog.records)
+
+    def test_all_success_no_failures(self, tmp_path):
+        mgr = self._manager(tmp_path)
+        mgr._study_ids = ["studyA"]
+        mgr._report_study_exits([MagicMock(returncode=0, pid=1)])
+        assert mgr._failed_studies == []
