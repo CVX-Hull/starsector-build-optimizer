@@ -87,6 +87,8 @@ aws iam create-service-linked-role --aws-service-name ec2fleet.amazonaws.com
 
 You can't verify it from the `starsector` profile (no `iam:GetRole`); the practical check is "a `fleet_type: maintain` launch gets past provisioning." (Created for this account 2026-07-16.)
 
+**Iterating on maintain provisioning code:** the unit tests mock `create_fleet`, so they cannot catch AWS API-validation errors — the SLR requirement above and the "maintain `create_fleet` accepts ONLY a `ResourceType:"fleet"` tag, not `"instance"` (`InvalidTagKey.Malformed`)" rule both surfaced only at launch. Any `src/` change forces a ~30-min AMI re-bake (WorkerSourceSha covers all of `src/`, including orchestrator-only files like `cloud_provider.py`), so before baking, validate against real AWS with a throwaway 1-worker round-trip: `provider.provision_fleet(fleet_type="maintain", target_workers=1, ...)` → `provider.terminate_fleet(...)`. Sub-dollar, ~90s, and it catches the API-validation class the mocks can't.
+
 ### Game prefs.xml
 
 The Packer `provisioner "file"` copies `scripts/cloud/packer/prefs.xml` (gitignored) into the AMI at `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml`. Java reads that file via `FileSystemPreferences` at game-launch time, and Starsector reads `serial` to satisfy the activation check. Without it, the launcher's first-run / activation dialog blocks the game indefinitely; the worker's `LocalInstancePool.run_matchup` then hangs on `pool.run_matchup` until `result_timeout_seconds` and the campaign times out wholesale.
