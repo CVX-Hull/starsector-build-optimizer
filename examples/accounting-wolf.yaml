@@ -31,10 +31,10 @@ min_workers_to_start: 8
 partial_fleet_policy: proceed_half_speed
 matchup_slots_per_worker: 2
 
-# RE-BAKE REQUIRED before launch (see accounting-hammerhead.yaml).
+# Baked 2026-07-15 with the accounting instrumentation (see accounting-hammerhead.yaml).
 ami_ids_by_region:
-  us-east-1: ami-REBAKE-REQUIRED
-  us-east-2: ami-REBAKE-REQUIRED
+  us-east-1: ami-09010fcce02cf909c
+  us-east-2: ami-019da5d906498a37b
 
 ssh_key_name: starsector-probe
 
