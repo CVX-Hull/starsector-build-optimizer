@@ -1,0 +1,70 @@
+# Instrumented accounting run — hammerhead re-run of the 4 deficient cells.
+#
+# Completes the predeclared 9-cell hammerhead/early stream (roadmap item 3).
+# The 2026-07-15 concurrent launch (hammerhead + wolf sharing base_flask_port
+# 9000) lost 4 cells to a port collision (fixed 2026-07-16, commit cdabdf4):
+#   - seeds 100/101/102: never provisioned a study (port-bind EADDRINUSE)
+#   - seed 106: crashed partway (166 trials + 16 zombie RUNNING) — its partial
+#     study DB + eval log were discarded so it re-runs clean.
+# Seeds 103/104/105/107/108 completed cleanly on 2026-07-15 and are NOT re-run;
+# their DBs/logs under data/{study_dbs,logs}/accounting-hammerhead/ are untouched.
+#
+# Same `name: accounting-hammerhead` as the original block so all nine cells
+# live under one campaign dir (the extractor + replay read `--campaign
+# accounting-hammerhead`). HAMMERHEAD-ONLY — do NOT co-launch wolf; distinct
+# base_flask_port is the collision prevention, and running solo guarantees it.
+#
+# BEFORE LAUNCH:
+#   1. `budget_usd` $20 cap (Tier-2; realized est. ~$6-9 for 4 cells).
+#   2. `ami_ids_by_region` re-baked 2026-07-16 post-cdabdf4 (WorkerSourceSha
+#      flipped by the robustness fix); paste the fresh AMI ids from bake_image.sh.
+
+name: accounting-hammerhead
+budget_usd: 20.0  # 4-cell re-run cap (2026-07-16); realized est. ~$6-9
+provider: aws
+
+regions:
+  - us-east-1
+  - us-east-2
+
+instance_types:
+  - c7a.2xlarge
+  - c7i.2xlarge
+
+spot_allocation_strategy: price-capacity-optimized
+capacity_rebalancing: true
+
+max_concurrent_workers: 32  # 4 studies x 8 workers each, all concurrent
+min_workers_to_start: 16
+partial_fleet_policy: proceed_half_speed
+matchup_slots_per_worker: 2
+
+# Pack the 4 studies' Flask result-ports into 9000/9010/9020/9030 — all inside
+# the devenv `tailscale serve` window (9000-9099, the only tailnet-exposed Flask
+# range). With the default stride of 100, study 3 (seed106) would bind 9300,
+# which devenv does NOT serve → workers could not POST results (silent drop).
+# Each study has 1 seed so a stride of 10 is ample reservation width.
+flask_ports_per_study: 10
+
+# Baked 2026-07-16 post-cdabdf4 (WorkerSourceSha flipped by cloud-study
+# robustness fix). Fill from bake_image.sh output.
+ami_ids_by_region:
+  us-east-1: ami-00df37dae8b26a49f
+  us-east-2: ami-012193a1d8589fb76
+
+ssh_key_name: starsector-probe
+
+tailscale_authkey_secret: ${TAILSCALE_AUTHKEY}
+
+# The four deficient cells only. Production active_opponents default (10) — NOT
+# the smoke override — so the opponent panel matches wave-1 / the original block.
+studies:
+  - {hull: hammerhead, regime: early, seeds: [100], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [101], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [102], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+  - {hull: hammerhead, regime: early, seeds: [106], budget_per_study: 250, workers_per_study: 8, sampler: tpe}
+
+max_lifetime_hours: 2.0
+fleet_provision_timeout_seconds: 600.0
+result_timeout_seconds: 900.0
+ledger_heartbeat_interval_seconds: 60.0
