@@ -74,6 +74,19 @@ AWS_PROFILE=starsector uv run python -c "import boto3; print(boto3.client('sts')
 - **`AmazonEC2FullAccess`**: the campaign needs `ec2:CreateFleet/RunInstances/CreateLaunchTemplate/CreateSecurityGroup/...`, Packer needs `ec2:RegisterImage/CopyImage/CreateTags/...`, and the ledger tick needs `ec2:DescribeSpotPriceHistory`. Tighter scoping is possible but adds maintenance load when AWS adds APIs.
 - **Non-default profile + `AWS_PROFILE` in `.env`**: lets the workstation's existing `[default]` profile (often Amazon Q login_session, IAM Identity Center, etc.) keep working for unrelated AWS work.
 
+### EC2 Fleet service-linked role (maintain fleets only)
+
+**Only needed when a campaign/eval sets `fleet_type: maintain`** (spec 22 §Config dataclasses; default `instant` does NOT need this). `Type="maintain"` fleets — which self-replenish spot-reclaimed capacity — are managed by AWS via the `AWSServiceRoleForEC2Fleet` service-linked role. It is created **once per AWS account** and then persists; there is nothing to store locally and nothing that references it from our side (AWS assumes it automatically).
+
+The dedicated `starsector-optimizer` IAM user has `AmazonEC2FullAccess` but **no `iam:*` permissions**, so it cannot auto-create the role. If the role is missing, `create_fleet(Type="maintain")` fails at provision time with `AuthFailure.ServiceLinkedRoleCreationNotPermitted` (instant fleets are unaffected). Create it once from a shell with admin/root AWS auth — **NOT** the `starsector` profile:
+
+```bash
+aws iam create-service-linked-role --aws-service-name ec2fleet.amazonaws.com
+# Already exists → "InvalidInput: ... has been taken", which is fine.
+```
+
+You can't verify it from the `starsector` profile (no `iam:GetRole`); the practical check is "a `fleet_type: maintain` launch gets past provisioning." (Created for this account 2026-07-16.)
+
 ### Game prefs.xml
 
 The Packer `provisioner "file"` copies `scripts/cloud/packer/prefs.xml` (gitignored) into the AMI at `/home/ubuntu/.java/.userPrefs/com/fs/starfarer/prefs.xml`. Java reads that file via `FileSystemPreferences` at game-launch time, and Starsector reads `serial` to satisfy the activation check. Without it, the launcher's first-run / activation dialog blocks the game indefinitely; the worker's `LocalInstancePool.run_matchup` then hangs on `pool.run_matchup` until `result_timeout_seconds` and the campaign times out wholesale.
@@ -151,6 +164,7 @@ Run all of these. Failure on any one = STOP. `CampaignManager._preflight` re-run
    done
    ```
    At 8 vCPU/VM, confirm `quota ≥ 8 × planned_workers_per_region`.
+   - **If the YAML sets `fleet_type: maintain`**: the `AWSServiceRoleForEC2Fleet` service-linked role must exist, or provisioning dies with `AuthFailure.ServiceLinkedRoleCreationNotPermitted` *after* SGs/LTs are created. One-time per account — see "Initial workstation setup → EC2 Fleet service-linked role". Not verifiable from the `starsector` profile (no `iam:GetRole`); the check is a maintain launch getting past provisioning.
 8. **No orphaned resources** under your target tag:
    ```bash
    scripts/cloud/final_audit.sh <campaign-name>   # must exit 0 before launching
