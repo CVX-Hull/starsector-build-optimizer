@@ -50,12 +50,12 @@ min_workers_to_start: 16
 partial_fleet_policy: proceed_half_speed
 matchup_slots_per_worker: 2
 
-# Re-baked 2026-07-16 post-cdabdf4 (cloud-study robustness fix flipped
-# WorkerSourceSha); WorkerSourceSha=d520148e…, ManifestSha256=c96ff0da…
-# (superseded the 2026-07-15 b51ce36e… bake, now deregistered).
+# Re-baked 2026-07-16 post-e0de429 (maintain-mode fleet commit flipped
+# WorkerSourceSha); WorkerSourceSha=d344d473…, ManifestSha256=c96ff0da…
+# (superseded the d520148e… bake ami-07020e982d23467a2 / ami-0ff1c09aaf169daea).
 ami_ids_by_region:
-  us-east-1: ami-07020e982d23467a2
-  us-east-2: ami-0ff1c09aaf169daea
+  us-east-1: ami-047036993286f672a
+  us-east-2: ami-0d34b2449c2831550
 
 ssh_key_name: starsector-probe
 
