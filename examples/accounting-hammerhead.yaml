@@ -38,8 +38,8 @@ matchup_slots_per_worker: 2
 # WorkerSourceSha); WorkerSourceSha=d520148e…, ManifestSha256=c96ff0da…
 # (superseded the 2026-07-15 b51ce36e… bake, now deregistered).
 ami_ids_by_region:
-  us-east-1: ami-00df37dae8b26a49f
-  us-east-2: ami-012193a1d8589fb76
+  us-east-1: ami-07020e982d23467a2
+  us-east-2: ami-0ff1c09aaf169daea
 
 ssh_key_name: starsector-probe
 

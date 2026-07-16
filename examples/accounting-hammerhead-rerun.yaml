@@ -49,8 +49,8 @@ flask_ports_per_study: 10
 # Baked 2026-07-16 post-cdabdf4 (WorkerSourceSha flipped by cloud-study
 # robustness fix). Fill from bake_image.sh output.
 ami_ids_by_region:
-  us-east-1: ami-00df37dae8b26a49f
-  us-east-2: ami-012193a1d8589fb76
+  us-east-1: ami-07020e982d23467a2
+  us-east-2: ami-0ff1c09aaf169daea
 
 ssh_key_name: starsector-probe
 

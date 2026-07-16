@@ -78,7 +78,8 @@ data/logs/accounting-hammerhead/*/evaluation_log.jsonl
 data/logs/accounting-wolf/*/evaluation_log.jsonl
 data/study_dbs/accounting-hammerhead/*.db
 data/study_dbs/accounting-wolf/*.db
-data/phase7/accounting_matchups.sqlite        # frozen matchup DB (materialized in Scope B)
+data/phase7/accounting_matchups.sqlite         # frozen matchup DB (materialized in Scope B)
+data/phase7/accounting_oracle_builds.json      # rank-stratified 27 (entry 2 selector; the build_id↔build_key bridge for the replay join)
 ```
 
 ## Analysis ledger
