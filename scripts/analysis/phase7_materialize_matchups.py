@@ -13,6 +13,7 @@ from starsector_optimizer.parser import load_game_data
 from starsector_optimizer.phase7_matchup_data import (
     honest_build_id_to_key,
     iter_honest_eval_matchups,
+    selector_json_build_id_to_key,
     iter_training_matchups,
     materialize_sqlite,
     recover_honest_eval_candidate_builds,
@@ -106,6 +107,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--honest-top-k", type=int, default=DEFAULT_HONEST_TOP_K)
     parser.add_argument("--honest-method", default="twfe_eb")
+    parser.add_argument(
+        "--honest-selector-json",
+        type=Path,
+        default=None,
+        help="Oracle-coverage selector output (phase7_select_oracle_builds.py). "
+        "Provides the authoritative honest build_id → build_key map for "
+        "rank-stratified oracle builds, whose stratum-ordinal source_rank the "
+        "native honest_build_id_to_key resolver cannot recover.",
+    )
     return parser
 
 
@@ -156,6 +166,23 @@ def main() -> None:
             honest_outputs = recover_honest_eval_output_builds(honest_eval_json_paths)
             recovered.extend(honest_outputs)
             build_id_to_key.update(honest_build_id_to_key(honest_outputs))
+        if args.honest_selector_json:
+            # Authoritative for rank-stratified oracle builds (their build_key
+            # already exists in `recovered` from the stream); takes precedence.
+            selector_map = selector_json_build_id_to_key(args.honest_selector_json)
+            recovered_keys = {rb.build_key for rb in recovered}
+            missing = sorted(bid for bid, bk in selector_map.items() if bk not in recovered_keys)
+            if missing:
+                # Fail loud: a selector build_key absent from recovered_builds would
+                # be silently dropped by the replay's build_key join (the same
+                # zeroed-coverage failure --honest-selector-json exists to prevent,
+                # just relocated). Materialize over the same stream the selector ran on.
+                raise SystemExit(
+                    f"--honest-selector-json references {len(missing)} build_key(s) "
+                    f"absent from recovered_builds (e.g. {missing[:3]}); the replay "
+                    f"build_key join would silently drop these oracle builds."
+                )
+            build_id_to_key.update(selector_map)
         honest_matchups = list(iter_honest_eval_matchups(args.honest_ledger, build_id_to_key))
         unresolved_honest_build_ids = sorted(
             {row.build_id for row in honest_matchups if row.build_key is None}

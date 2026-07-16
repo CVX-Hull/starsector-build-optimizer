@@ -16,6 +16,8 @@ from starsector_optimizer.honest_evaluator import (
     discover_evaluation_pool,
     evaluate_builds,
     extract_top_builds,
+    load_builds_from_file,
+    main as honest_evaluator_main,
     summarize_by_cell,
 )
 from starsector_optimizer.models import (
@@ -2556,3 +2558,131 @@ class TestHonestEvalCostLedger:
         assert len(rows) >= 1
         assert rows[0]["worker_id"] == "w1"
         assert rows[0]["delta_usd"] > 0
+
+
+# ---- --builds-file explicit build list (Tier-2 oracle-coverage) --------------
+
+
+def _write_builds_file(tmp_path, hammerhead_hull, game_data, manifest, *, n=6, schema_version=1):
+    """Write a minimal oracle-selector-shaped builds file with `n` distinct
+    feasible builds, one per (seed, rank) so provenance ids are unique."""
+    from starsector_optimizer.calibration import generate_random_build
+    from starsector_optimizer.models import REGIME_PRESETS
+    from starsector_optimizer.phase7_matchup_data import build_key, canonical_build_dict
+    from starsector_optimizer.repair import repair_build
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    builds = []
+    for i in range(n):
+        raw = generate_random_build(
+            hammerhead_hull, game_data, manifest, rng=rng, regime=REGIME_PRESETS["early"]
+        )
+        repaired = repair_build(raw, hammerhead_hull, game_data, manifest)
+        builds.append(
+            {
+                "source_campaign": "accounting-hammerhead",
+                "source_study_idx": 0,
+                "source_seed_idx": 100 + i // 3,  # 3 ranks per seed
+                "source_rank": (i % 3) + 1,
+                "stratum": ["bottom", "middle", "top"][i % 3],
+                "predicted_score": float(i),
+                "predicted_rank_in_cell": i + 1,
+                "build_key": build_key(repaired),
+                "trial_number": i,
+                "build": canonical_build_dict(repaired),
+            }
+        )
+    payload = {
+        "schema_version": schema_version,
+        "selector": "catboost_regressor_opponent_adjusted",
+        "builds": builds,
+    }
+    path = tmp_path / "oracle_builds.json"
+    path.write_text(json.dumps(payload))
+    return path, builds
+
+
+class TestLoadBuildsFromFile:
+    def test_loads_valid_builds_file(self, tmp_path, hammerhead_hull, game_data, manifest):
+        path, builds = _write_builds_file(tmp_path, hammerhead_hull, game_data, manifest, n=6)
+        loaded = load_builds_from_file(path, hammerhead_hull, game_data, manifest)
+        assert len(loaded) == 6
+        assert all(isinstance(b, _BuildWithProvenance) for b in loaded)
+        assert [b.source_rank for b in loaded] == [e["source_rank"] for e in builds]
+        assert [b.source_seed_idx for b in loaded] == [e["source_seed_idx"] for e in builds]
+        assert loaded[0].source_campaign == "accounting-hammerhead"
+        assert loaded[0].source_value == builds[0]["predicted_score"]
+
+    def test_provenance_ids_unique(self, tmp_path, hammerhead_hull, game_data, manifest):
+        path, _ = _write_builds_file(tmp_path, hammerhead_hull, game_data, manifest, n=9)
+        loaded = load_builds_from_file(path, hammerhead_hull, game_data, manifest)
+        ids = {
+            (b.source_campaign, b.source_study_idx, b.source_seed_idx, b.source_rank)
+            for b in loaded
+        }
+        assert len(ids) == len(loaded)
+
+    def test_evaluate_builds_accepts_loaded_provenance(
+        self, tmp_path, hammerhead_hull, game_data, manifest
+    ):
+        # The loaded set must survive evaluate_builds' _build_id uniqueness guard;
+        # a --dry-run-style provenance construction should not raise on ids.
+        path, _ = _write_builds_file(tmp_path, hammerhead_hull, game_data, manifest, n=9)
+        loaded = load_builds_from_file(path, hammerhead_hull, game_data, manifest)
+        # _build_id is (campaign, study, seed, rank); assert no collision the guard would reject.
+        seen = set()
+        for b in loaded:
+            key = (b.source_campaign, b.source_study_idx, b.source_seed_idx, b.source_rank)
+            assert key not in seen
+            seen.add(key)
+
+    def test_rejects_schema_version_mismatch(self, tmp_path, hammerhead_hull, game_data, manifest):
+        path, _ = _write_builds_file(
+            tmp_path, hammerhead_hull, game_data, manifest, n=3, schema_version=999
+        )
+        with pytest.raises(ValueError, match="schema_version"):
+            load_builds_from_file(path, hammerhead_hull, game_data, manifest)
+
+    def test_raises_loud_on_malformed_build(self, tmp_path, hammerhead_hull, game_data, manifest):
+        payload = {
+            "schema_version": 1,
+            "builds": [
+                {
+                    "source_campaign": "accounting-hammerhead",
+                    "source_study_idx": 0,
+                    "source_seed_idx": 100,
+                    "source_rank": 1,
+                    "predicted_score": 0.0,
+                    "build": {"hull_id": "hammerhead"},  # missing weapon_assignments/hullmods/...
+                }
+            ],
+        }
+        path = tmp_path / "bad.json"
+        path.write_text(json.dumps(payload))
+        with pytest.raises(RuntimeError, match="repair_build"):
+            load_builds_from_file(path, hammerhead_hull, game_data, manifest)
+
+
+class TestBuildsFileCliGuards:
+    def test_mutual_exclusion_with_random_baseline(self):
+        with pytest.raises(SystemExit):
+            honest_evaluator_main(
+                [
+                    "--campaign-name",
+                    "accounting-hammerhead",
+                    "--hull",
+                    "hammerhead",
+                    "--builds-file",
+                    "/nonexistent.json",
+                    "--random-baseline-n",
+                    "1",
+                ]
+            )
+
+    def test_builds_file_still_requires_campaign_name(self):
+        # eval_tag = f"starsector-honest-eval-{campaign_name[0]}-..." depends on
+        # --campaign-name staying required under --builds-file (else the
+        # teardown-keyed 'starsector-' prefix is lost). argparse must still demand it.
+        with pytest.raises(SystemExit):
+            honest_evaluator_main(["--hull", "hammerhead", "--builds-file", "/nonexistent.json"])

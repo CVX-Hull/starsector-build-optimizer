@@ -46,6 +46,7 @@ from starsector_optimizer.phase7_matchup_data import (
     recover_logged_builds,
     recover_study_db_builds,
     honest_build_id_to_key,
+    selector_json_build_id_to_key,
     reject_excluded_split_seed,
     split_partition_sha256,
 )
@@ -352,6 +353,42 @@ class TestHonestEvalRecovery:
         assert recovered[0].campaign == "random-baseline"
         assert recovered[0].study == "s0"
         assert mapping == {"honest__random-baseline__s0__seed0__rank7": recovered[0].build_key}
+
+
+class TestSelectorJsonBuildIdToKey:
+    def test_maps_build_id_to_build_key(self, tmp_path):
+        # Selector output shape: source_rank is a stratum ordinal (1/2/3), and
+        # build_key is carried directly — the resolver reconstructs the honest
+        # build_id string and maps it to the build_key.
+        path = tmp_path / "oracle_builds.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "builds": [
+                        {
+                            "source_campaign": "accounting-hammerhead",
+                            "source_study_idx": 0,
+                            "source_seed_idx": 100,
+                            "source_rank": 1,
+                            "build_key": "deadbeef01",
+                        },
+                        {
+                            "source_campaign": "accounting-hammerhead",
+                            "source_study_idx": 0,
+                            "source_seed_idx": 106,
+                            "source_rank": 3,
+                            "build_key": "cafef00d02",
+                        },
+                    ],
+                }
+            )
+        )
+        mapping = selector_json_build_id_to_key(path)
+        assert mapping == {
+            "honest__accounting-hammerhead__s0__seed100__rank1": "deadbeef01",
+            "honest__accounting-hammerhead__s0__seed106__rank3": "cafef00d02",
+        }
 
 
 class TestSqliteMaterialization:

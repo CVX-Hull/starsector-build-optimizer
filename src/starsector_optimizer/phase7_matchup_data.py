@@ -194,7 +194,7 @@ def split_partition_sha256(split: SplitIds) -> str:
     return sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _canonical_build_dict(build: Build) -> dict[str, Any]:
+def canonical_build_dict(build: Build) -> dict[str, Any]:
     return {
         "hull_id": build.hull_id,
         "weapon_assignments": dict(sorted(build.weapon_assignments.items())),
@@ -204,7 +204,7 @@ def _canonical_build_dict(build: Build) -> dict[str, Any]:
     }
 
 
-def _build_from_canonical(data: Mapping[str, Any]) -> Build:
+def build_from_canonical(data: Mapping[str, Any]) -> Build:
     return Build(
         hull_id=str(data["hull_id"]),
         weapon_assignments=dict(data["weapon_assignments"]),
@@ -215,7 +215,7 @@ def _build_from_canonical(data: Mapping[str, Any]) -> Build:
 
 
 def _build_json(build: Build) -> str:
-    return json.dumps(_canonical_build_dict(build), sort_keys=True, separators=(",", ":"))
+    return json.dumps(canonical_build_dict(build), sort_keys=True, separators=(",", ":"))
 
 
 def component_fingerprint_json(build: Build) -> str:
@@ -479,7 +479,7 @@ def recover_honest_eval_output_builds(paths: Sequence[Path]) -> tuple[RecoveredB
     for path in paths:
         data = json.loads(path.read_text())
         for row in data.get("evaluated_builds") or ():
-            build = _build_from_canonical(row["build"])
+            build = build_from_canonical(row["build"])
             out.append(
                 RecoveredBuild(
                     build_key=build_key(build),
@@ -525,6 +525,28 @@ def honest_build_id_to_key(candidates: Sequence[RecoveredBuild]) -> dict[str, st
                 study_idx = int(study_match.group(1))
         build_id = f"honest__{item.campaign}__s{study_idx}__seed{item.seed}__rank{item.rank}"
         out[build_id] = item.build_key
+    return out
+
+
+def selector_json_build_id_to_key(path: Path) -> dict[str, str]:
+    """Map honest-eval `build_id` → `build_key` from an oracle-coverage selector
+    JSON (`phase7_select_oracle_builds.py` output).
+
+    The selector's `source_rank` is a stratum ordinal (1/2/3) that is absent from
+    `recovered_builds` (ordinary stream trials carry `rank = None`), so
+    `honest_build_id_to_key` cannot resolve the oracle ledger back to a
+    `build_key`. The selector JSON is the only artifact holding both, so this
+    reads its own `build_id ↔ build_key` correspondence directly. The referenced
+    `build_key` already exists in `recovered_builds` (the 27 are drawn from the
+    stream), so the materialize → replay join closes."""
+    spec = json.loads(path.read_text())
+    out: dict[str, str] = {}
+    for entry in spec["builds"]:
+        build_id = (
+            f"honest__{entry['source_campaign']}__s{entry['source_study_idx']}"
+            f"__seed{entry['source_seed_idx']}__rank{entry['source_rank']}"
+        )
+        out[build_id] = str(entry["build_key"])
     return out
 
 
@@ -691,7 +713,7 @@ def load_recovered_builds(db_path: Path) -> tuple[RecoveredBuild, ...]:
         return tuple(
             RecoveredBuild(
                 build_key=str(build_key_value),
-                build=_build_from_canonical(json.loads(build_json)),
+                build=build_from_canonical(json.loads(build_json)),
                 source_kind=BuildSourceKind(source_kind),
                 campaign=campaign,
                 study=study,

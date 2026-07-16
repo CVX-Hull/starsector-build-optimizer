@@ -561,6 +561,62 @@ def extract_top_builds(
     return tuple(out)
 
 
+# Schema version of the oracle-coverage selector output consumed by
+# --builds-file. Must match phase7_select_oracle_builds.ORACLE_SELECTION_SCHEMA_VERSION.
+_ORACLE_BUILDS_FILE_SCHEMA_VERSION = 1
+
+
+def load_builds_from_file(
+    path: Path,
+    hull: ShipHull,
+    game_data: GameData,
+    manifest: GameManifest,
+) -> list[_BuildWithProvenance]:
+    """Load a pre-selected build list (the oracle-coverage selector's output)
+    into provenance entries, bypassing top-K glob selection. Each build is
+    re-run through `repair_build` (fail-loud on search-space / manifest drift,
+    mirroring `extract_top_builds`) so the oracle evaluates exactly the selected,
+    feasible build. See docs/specs/30-honest-evaluator.md §--builds-file."""
+    spec = json.loads(path.read_text())
+    version = spec.get("schema_version")
+    if version != _ORACLE_BUILDS_FILE_SCHEMA_VERSION:
+        raise ValueError(
+            f"{path}: unsupported builds-file schema_version {version!r} "
+            f"(expected {_ORACLE_BUILDS_FILE_SCHEMA_VERSION})"
+        )
+    out: list[_BuildWithProvenance] = []
+    for entry in spec["builds"]:
+        raw = entry["build"]
+        try:
+            candidate = Build(
+                hull_id=raw["hull_id"],
+                weapon_assignments=dict(raw["weapon_assignments"]),
+                hullmods=frozenset(raw["hullmods"]),
+                flux_vents=int(raw["flux_vents"]),
+                flux_capacitors=int(raw["flux_capacitors"]),
+            )
+            repaired = repair_build(candidate, hull, game_data, manifest)
+        except Exception as exc:
+            raise RuntimeError(
+                f"{path}: build {entry.get('build_key', '?')} "
+                f"(campaign={entry.get('source_campaign')}, "
+                f"seed={entry.get('source_seed_idx')}, rank={entry.get('source_rank')}) "
+                f"failed repair_build: {exc}. Search-space drift or manifest change "
+                f"since selection — investigate before spending oracle budget."
+            ) from exc
+        out.append(
+            _BuildWithProvenance(
+                build=repaired,
+                source_campaign=str(entry["source_campaign"]),
+                source_study_idx=int(entry["source_study_idx"]),
+                source_seed_idx=int(entry["source_seed_idx"]),
+                source_rank=int(entry["source_rank"]),
+                source_value=float(entry["predicted_score"]),
+            )
+        )
+    return out
+
+
 def report_method_disagreement(
     eval_log_path: Path,
     top_k: int,
@@ -1257,7 +1313,24 @@ def main(argv: list[str] | None = None) -> int:
         "Wave 1 — kept here only for ablation. See "
         "docs/reports/2026-05-10-posthoc-ranker-research.md.",
     )
+    parser.add_argument(
+        "--builds-file",
+        type=Path,
+        default=None,
+        help="JSON of pre-selected builds (the oracle-coverage selector's "
+        "output, phase7_select_oracle_builds.py). Bypasses top-K glob "
+        "selection AND the random baseline — oracles exactly the listed "
+        "builds. --campaign-name / --hull remain required (naming, eval_tag, "
+        "and fleet-config resolution only; the glob is not run). Incompatible "
+        "with --random-baseline-n>0.",
+    )
     args = parser.parse_args(argv)
+    if args.builds_file is not None and args.random_baseline_n > 0:
+        parser.error(
+            "--builds-file cannot be combined with --random-baseline-n>0: the "
+            "pre-selected set is exact; a baseline cell would oracle unselected "
+            "builds and overspend."
+        )
 
     logging.basicConfig(
         level=logging.INFO,
@@ -1279,7 +1352,17 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     builds_with_provenance: list[_BuildWithProvenance] = []
+    if args.builds_file is not None:
+        builds_with_provenance = load_builds_from_file(args.builds_file, hull, game_data, manifest)
+        logger.info(
+            "honest_eval: loaded %d pre-selected builds from %s "
+            "(top-K glob + random baseline bypassed)",
+            len(builds_with_provenance),
+            args.builds_file,
+        )
     for name in args.campaign_name:
+        if args.builds_file is not None:
+            break  # --builds-file supplies the exact build set; skip top-K glob
         # Per-study evaluation_log.jsonl is the candidate-selection input
         # (SQLite `intermediate_values` lacks opponent identity, which
         # TWFE/EB need). Wave 1 logs were migrated to this layout via
@@ -1363,7 +1446,9 @@ def main(argv: list[str] | None = None) -> int:
     # Random-feasible baseline cell — answers the existence question
     # "does any of our optimization machinery beat random sampling?".
     # Without it, all-cells-tied on the oracle is uninterpretable.
-    if args.random_baseline_n > 0:
+    # Bypassed under --builds-file (the pre-selected set is exact; the CLI also
+    # hard-errors on --builds-file + --random-baseline-n>0 above).
+    if args.builds_file is None and args.random_baseline_n > 0:
         baseline = synthesize_random_baseline_builds(
             hull,
             game_data,

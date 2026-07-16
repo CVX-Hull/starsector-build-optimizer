@@ -257,6 +257,24 @@ module exposes a `main(argv)` that takes:
 - `--out-root data` — JSON output root
 - `--random-baseline-n 0` / `--random-baseline-seed 0` — append
   deterministic synthetic feasible baseline builds when `n > 0`
+- `--builds-file <path>` — JSON list of pre-selected builds (the
+  oracle-coverage selector's output, `scripts/analysis/phase7_select_oracle_builds.py`).
+  When set, `main()` loads that exact set via `load_builds_from_file` and
+  **bypasses both** the per-campaign top-K glob selection **and** the random
+  baseline — the oracle evaluates exactly the listed builds. Each build is
+  re-run through `repair_build` (fail-loud on search-space / manifest drift,
+  mirroring `extract_top_builds`); a `schema_version` mismatch raises. Required
+  JSON shape: `{"schema_version": 1, "builds": [{"source_campaign",
+  "source_study_idx", "source_seed_idx", "source_rank", "predicted_score",
+  "build": {canonical build dict}}, ...]}`; `source_value` is set to
+  `predicted_score`. `--campaign-name` and `--hull` remain **required** under
+  this path — they resolve the fleet-config YAML default and the `eval_tag`
+  (`starsector-honest-eval-{campaign_name[0]}-{stamp}`, the `starsector-` prefix
+  `teardown.sh` keys on); only the eval-log glob is skipped. **Mutually
+  exclusive with `--random-baseline-n > 0`** (`parser.error` — the pre-selected
+  set is exact; a baseline cell would oracle unselected builds and overspend).
+  The build_id→build_key correspondence in this file is the authoritative input
+  to `phase7_materialize_matchups.py --honest-selector-json` for the replay join.
 - `--campaign-config <path>` — source-campaign YAML for fleet config;
   default `examples/{first-campaign-name}.yaml`
 - `--workers <N>` — fleet size; default `max(s.workers_per_study)` from

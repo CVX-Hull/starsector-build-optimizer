@@ -103,3 +103,41 @@ entry 0.)_
   is set at launch alongside the re-bake. No stream data exists yet — this entry
   precedes collection. Wolf cells receive **no** oracle coverage (accounting +
   directional replay only), unchanged from entry 0.
+- **2026-07-16 — entry 2 (deterministic selection rule)**: entry 1 fixed the
+  *count* (3 tertiles × 1/stratum × 9 cells = 27); this entry fixes the exact
+  *mechanism*, on methodological grounds and **without consulting the fitted
+  predicted-score distribution or any oracle reading** (the stream is collected
+  and the frozen matchup DB `data/phase7/accounting_matchups.sqlite` exists, but
+  no predicted scores were inspected in choosing this rule). Implemented by
+  `scripts/analysis/phase7_select_oracle_builds.py`
+  (plan [2026-07-16-oracle-coverage-selection.md](../../.claude/plans/active/2026-07-16-oracle-coverage-selection.md)),
+  committed together with this entry before first execution; the selector records
+  this doc's git commit hash (`prereg_commit`) in its output JSON so
+  "fixed-before-selection" is verifiable.
+  - **Ranking arm**: `catboost_regressor` (opponent-adjusted) —
+    `learned.DEFAULT_HYPERPARAMETERS["catboost_regressor"]`,
+    `learned.DEFAULT_HPO_SEED = 23`, `thread_count = 1`. Per hammerhead cell an
+    **in-sample** model is fit on **all** of that cell's `training_matchups` rows
+    (finalized + pruned; no row-kind filter — matches the replay arm
+    `_fit_predict_scores`).
+  - **Selection population**: the **distinct `build_key`** values within each
+    cell (a build re-proposed across trials is one unit). Per-build predicted
+    score = **mean predicted target over that build's matchup rows** in the cell.
+  - **Strata (sole rule)**: sort distinct builds by `(predicted_score,
+    build_key)` ascending; `numpy.array_split` the rank-ordered list into 3
+    near-equal **contiguous** groups = bottom / middle / top third **by predicted
+    rank**. No score-value quantiles.
+  - **Intra-stratum pick**: the build at the **median predicted score of its
+    stratum** (lower-middle index on even counts) in that stratum's
+    `(predicted_score, build_key)`-sorted order. Deterministic, no RNG.
+  - **Provenance / join**: honest-eval `source_rank` = stratum ordinal
+    (bottom=1, middle=2, top=3); `(source_campaign="accounting-hammerhead",
+    source_study_idx=0, source_seed_idx=seed, source_rank)` is unique across the
+    27. Because ordinary stream trials carry `recovered_builds.rank = None`, the
+    oracle `build_id → build_key` join is resolved **from the selector JSON**
+    (which carries both), via the materializer's `--honest-selector-json`, not
+    the native `honest_build_id_to_key`.
+  - **Degenerate cells**: a cell with `< 3` distinct builds is a data defect →
+    the selector fails loud (`ValueError`), not silently degrades. (Each
+    hammerhead cell has hundreds of distinct builds.)
+  No oracle reading exists yet — this entry precedes the oracle pass.
