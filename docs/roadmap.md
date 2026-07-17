@@ -1,7 +1,7 @@
 ---
 type: index
 status: shipped
-last-validated: 2026-07-14
+last-validated: 2026-07-17
 ---
 
 # Roadmap
@@ -24,6 +24,19 @@ wave), for which item 3's stream + frozen DB are the retained
 augmented-vs-unaugmented comparison substrate. Items 1–2 delivered earlier
 (defaults flip; prequential replay); item-3 cost-ledger + scale-down-on-drain
 prerequisites shipped 2026-07-14 (now live post-AMI-rebake).
+
+Adjusted in this pass by the item-3 Tier-2 findings: item 4 gains a concrete
+baseline (deployable-build oracle recovery ≈ 0) and an oracle-budget rule
+(cover the *rankable* population — item 3 spent ~half its coverage on
+pruner-censored builds that never became rankable); the item-3 stream
+**supersedes wave-1** as the designated replay stream and the gate's replay
+input now leans against a surrogate-gated BoTorch story; item 5's
+"only-CatBoost-positive" prior is corrected to wave-1-specific (the RF-tuning
+prior strengthens); a **recorded anti-forking sequencing miss** (item 4's
+contrast bar form was never predeclared before item 3's baseline was
+published — item 4's plan gate must attest to it); a new **Open engineering
+items** section for three small named gaps; and a directional multi-hull
+hypothesis (wolf's surrogate signal is ~3× hammerhead's).
 Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
@@ -181,21 +194,55 @@ Compute runs on AWS learned-batch; costs:
    TPE stream); the wave's
    oracle/holdout design should support **continuous oracle-value
    regret@k for selection evaluation** (expressible in spec 31's
-   existing rank-metrics suite; the stream-side gating version is an
-   item-3 oracle-coverage decision, above); and the wave's
+   existing rank-metrics suite; the stream-side gating version was the
+   item-3 oracle-coverage decision, now delivered). **Sharpened by the
+   item-3 Tier-2 reading**
+   ([oracle-value replay](reports/2026-07-17-phase7-oracle-value-replay.md)):
+   (i) the **concrete baseline this wave must beat** is CatBoost-vs-oracle
+   rank recovery among *deployable* (rankable/finalized) builds ≈ **0**
+   (+0.01, n = 13) — the full-set +0.34 is carried by coarse
+   pruned-bottom-vs-finalized-top separation and is **not** the deployable
+   statistic, so the wave's bar must be stated on the rankable support;
+   (ii) **oracle coverage must be drawn from the rankable population**
+   (or its top-heavy support accepted explicitly): item 3 stratified over
+   *all* distinct builds, and the pruner then finalized high-predicted
+   builds while pruning low-predicted ones, so only 13 of 27 oracle'd
+   builds were rankable (strata bottom 1 / middle 4 / top 8) — coverage
+   spent on pruned-stratum builds bought no rank-recovery power, the
+   single biggest oracle-budget efficiency lesson for this wave;
+   (iii) the wave's **no-pruner-censoring** design removes this skew at
+   the source, so its oracle coverage should be materially more
+   informative per dollar than item 3's; and the wave's
    surrogate-improvement claim is measured by a **panel-augmented
    replay** on the item-3 stream — train on the wave panel plus the
    stream prefix, score stream future blocks — as a **paired same-code,
    same-config run of both conditions at item-4 time** on the wave-hull cells
-   and cutoffs (item 3's filed unaugmented report is the predeclaration
-   anchor and consistency check; the re-run is cheap and, with an empty
-   augmentation set, must reproduce that report's computed fields). The
-   contrast's **directional bar form** (which statistic's delta, its
-   sign, whether a margin exists) is fixed at the item-3 plan gate
-   alongside the gate statistic — before item 3's baseline value is
-   published — so only the null-result *interpretation*
-   (panel-unhelpful vs off-TPE-panel-mismatched-to-a-TPE-stream) is
-   settled at item 4;
+   and cutoffs (item 3's filed unaugmented report —
+   [2026-07-17 oracle-value replay](reports/2026-07-17-phase7-oracle-value-replay.md)
+   — is the predeclaration anchor and consistency check; the re-run is
+   cheap and, with an empty augmentation set, must reproduce that
+   report's computed fields).
+   **Anti-forking sequencing miss (recorded 2026-07-17 — do not silently
+   discharge).** This item's contrast **directional bar form** (which
+   statistic's delta, its sign, whether a margin exists) was required to
+   be fixed at the item-3 plan gate *before item 3's baseline value was
+   published*. It was **not** — neither the
+   [pre-registration ledger](reports/2026-07-14-accounting-stream-preregistration.md)
+   (entries 0–2) nor the accounting-run plan fixed it, and item 3's
+   baseline is now published (2026-07-17). The designed ordering cannot
+   be recovered. **Remediation**: fix the bar form at item 4's plan gate,
+   which is still **before any wave data exists** — the primary
+   anti-forking property (a bar cannot be tuned to the wave's outcome)
+   remains intact; the lost property is the weaker one (the bar is now
+   chosen with item 3's baseline values visible: adjacent-block T2
+   +0.087, deployable-build oracle recovery +0.01, gating q\* 0.3 = null).
+   The item-4 plan gate MUST record this contamination explicitly as an
+   attestation in the contrast's predeclaration, and the contrast report
+   must carry it as a stated caveat, so readers discount the bar's
+   independence accordingly. Do not treat a bar chosen now as if it had
+   been chosen blind. With the bar so fixed, only the null-result
+   *interpretation* (panel-unhelpful vs
+   off-TPE-panel-mismatched-to-a-TPE-stream) is settled at item 4;
    **implementing the training-set extension to the replay instrument**
    (spec'd at the same gate; a strict no-op at empty augmentation,
    verified to reproduce item 3's computed fields) and **running the
@@ -215,6 +262,16 @@ Compute runs on AWS learned-batch; costs:
    compute on RF tuning, with the tail-walltime report the primary
    driver of the decision;
    [replay evidence](reports/2026-07-14-phase7-prequential-replay.md)).
+   **Refined by the item-3 stream**
+   ([oracle-value replay](reports/2026-07-17-phase7-oracle-value-replay.md)):
+   the "only CatBoost positive across buckets" phrasing is wave-1-specific
+   and does not generalize — on the accounting stream several build-aware
+   arms are weakly positive near-horizon (`ridge_hybrid` ≈ +0.070,
+   `random_forest` ≈ +0.055 at 0–10) and CatBoost itself collapses to ≈ 0
+   beyond 20 trials. The **RF-tuning prior nonetheless strengthens**:
+   `random_forest_tuned` posts the weakest near-horizon T2 of the
+   build-aware arms (+0.004) and goes negative thereafter, so tuned RF
+   remains the worst per-dollar use of fleet compute on this evidence.
    Model-family promotion claims from this item onward must cite the
    most recent **stream-based prequential opponent-adjusted fidelity**
    reading for the family (the item-3 stream once it exists; wave-1 for
@@ -257,15 +314,63 @@ Compute runs on AWS learned-batch; costs:
   (Standard-family spot, us-east-1) = 640 vCPU ⇒ max 40 concurrent
   16-vCPU learned-batch workers (80 × 8-vCPU sim workers). Fleets must be
   sized to it or a quota increase requested per-launch.
+- **EC2 Fleet `Type="maintain"`** is the shipped fleet mode (spot
+  reclamation is auto-replaced to hold `TargetCapacity`; instant fleets
+  decayed monotonically). Requires the one-time
+  `AWSServiceRoleForEC2Fleet` SLR; `capacity_rebalancing: false` (the
+  `ReplacementStrategy="launch"` path over-provisions ~1.75× and
+  idle-bills). SOP:
+  [`cloud-worker-ops`](../.claude/skills/cloud-worker-ops.md).
 - Stale-AMI hygiene and the pre-launch gate live as SOPs in
   [`cloud-worker-ops`](../.claude/skills/cloud-worker-ops.md) — not open
   work.
+
+## Open engineering items (small, unscheduled)
+
+Known gaps with a named fix, too small for their own workstream item. Each
+is real open work — not a deferred idea.
+
+- **Flask-port *serving* preflight gap** (unblocked 2026-07-17; was held
+  behind the oracle pass). The 2026-07-15 robustness work
+  (`cdabdf4`) fixed the port-**collision/bind** class
+  (`_check_flask_ports_free` + study-exit detection); a port that binds
+  but whose server never serves is still undetected pre-launch. Home:
+  spec 22 preflight contract + `campaign.py`.
+- **Spec-31 gating-arm oracle-regret statistic** (raised by the item-3
+  Tier-2 reading). The item-3 pre-registration named "oracle-value
+  regret@k under the CatBoost arm", which maps to **no** shipped-tool
+  output — the tool computes estimator-arm oracle recovery plus a
+  Δ-oracle accounting inside the gating sim, so the reading had to
+  realize the statistic three ways
+  ([replay report](reports/2026-07-17-phase7-oracle-value-replay.md)
+  §"Pre-registration fidelity"). Amend spec 31 to define an explicit
+  gating-arm oracle-regret statistic so future pre-registrations bind to
+  a tool output verbatim. **Gates item 4's oracle-value statistic** — do
+  this before item 4's plan gate fixes its bar form.
+- **Hash-seed nondeterminism in study-DB build reconstruction.** The
+  frozen-DB materializer's reconstructed *lookup* builds vary with
+  `PYTHONHASHSEED` (4,076 distinct at seed 0 vs 4,101 at 12345) because
+  `repair_build` iterates hash-ordered collections. No result is affected
+  (`training_matchups` is byte-identical, every referenced `build_key` is
+  content-addressed, and the delta is confined to builds no matchup row
+  references), but it makes a **retained through-item-7 artifact**
+  non-reproducible without pinning. The item-3 frozen DB is pinned to
+  `PYTHONHASHSEED=0`; make the reconstruction deterministic and drop the
+  pin. Home: `phase7_matchup_data.recover_study_db_builds` / `repair_build`.
 
 ## Planned phases (gated)
 
 - **Phase 7 — BoTorch structured-search GP sampler**: go/no-go gate =
   the prequential replay
   ([first readings shipped](reports/2026-07-14-phase7-prequential-replay.md);
+  **the item-3 accounting stream is now the designated successor replay
+  stream** (superseding wave-1 as the designated prior, 2026-07-17) and
+  its [Tier-2 oracle-value reading](reports/2026-07-17-phase7-oracle-value-replay.md)
+  is the current baseline control: oracle coverage **confirmed** rather
+  than overturned "surrogate gating value not established" — so as of
+  today the gate's replay input leans **against** a surrogate-gated
+  BoTorch story, and item 4's paired panel-augmented reading is what
+  could move it;
   the designed wave is a panel, not a stream — this bullet predeclares
   the gate readings' **roles** only: the plain item-3-stream re-run is
   the baseline control and item 4's paired panel-augmented reading on
@@ -275,13 +380,25 @@ Compute runs on AWS learned-batch; costs:
   including its arm, is fixed at the item-3 plan gate before the stream
   is collected; the pinned arm's reading stays primary, and families
   that only mature in items 5–7 enter as labelled sensitivity via the
-  spec 31 new-family path, never a post-hoc arm swap. Until a successor
-  stream is declared, wave-1 is the designated prior replay stream)
+  spec 31 new-family path, never a post-hoc arm swap. The successor
+  stream is now declared: **the item-3 accounting stream supersedes
+  wave-1 as the designated replay stream** (2026-07-17); wave-1 readings
+  become historical context)
   plus an offline MCBO bake-off
   (D-scaled vanilla mixed-GP baseline first) per
   [phase7-search-space-compression](reference/phase7-search-space-compression.md);
   cross-hull claims additionally require a **multi-hull data wave**
-  (also the trigger for parked 5F below).
+  (also the trigger for parked 5F below). **New motivating observation
+  (2026-07-17, directional only)**: on the item-3 stream the wolf frigate's
+  opponent-adjusted T2 is markedly *stronger* and more persistent than
+  hammerhead's (+0.26 vs +0.087 at 0–10, still +0.10 at 20–40, against a
+  strongly negative build-blind null) — the cleanest surrogate signal
+  measured in the program to date. n = 3 cells, no oracle coverage, so
+  this is a hypothesis, not evidence: **surrogate signal may be
+  hull-dependent, and the program's hammerhead anchor may be its hardest
+  case.** If the multi-hull wave is ever funded, this is a concrete prior
+  worth testing first
+  ([oracle-value replay](reports/2026-07-17-phase7-oracle-value-replay.md) §3).
 - **Phase 7.5 — Infra & reproducibility**:
   [phase7.5-infrastructure-reproducibility](reference/phase7.5-infrastructure-reproducibility.md).
 
