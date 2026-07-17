@@ -8,10 +8,10 @@ owner: agent
 related_docs:
   - docs/specs/22-cloud-deployment.md
   - docs/specs/24-optimizer.md
-  - .claude/plans/active/2026-07-14-instrumented-accounting-run.md
+  - .claude/plans/archive/2026/2026-07-14-instrumented-accounting-run.md
   - .claude/skills/cloud-worker-ops.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: cdabdf4
+post_impl_audit: passed
 superseded_by: null
 ---
 
@@ -312,3 +312,17 @@ src/ changed → WorkerSourceSha flips → existing AMI fails preflight. Re-bake
 update accounting-hammerhead AMIs → re-run **hammerhead-only** cells 100/101/102/106
 (no concurrent wolf → no port collision) → verify 9 complete cells → resume the
 owning accounting plan (oracle pass → materialize → replay → reports).
+
+## Retirement (2026-07-17)
+
+**Complete.** The re-bake + hammerhead-only re-run of the deficient cells
+landed (tasks #71–74, 9 complete cells, final audit clean); the owning
+accounting plan then ran to completion (oracle → materialize → replay →
+reports, 2026-07-17). All three robustness defects are fixed and shipped in
+`cdabdf4` (WorkerTimeout bounded-retry + terminal-reason discriminator;
+flask-port-**free** preflight + study-exit detection; min_workers/partial_fleet
+dead-config enforcement); post-impl audit PASS. Scope note: this plan fixed the
+flask-port **collision/bind** class; the separate flask-port-**serving**
+preflight gap (a live server that binds but fails to serve) is deliberately
+out of scope here and tracked independently as a post-oracle task. Archived to
+`.claude/plans/archive/2026/`.

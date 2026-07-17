@@ -13,11 +13,17 @@ must not accumulate their own live next-step lists — when a report's "next
 steps" section is adopted, move the items here and leave the report as the
 dated evidence for *why*. No internal-sim numbers here; follow the links.
 
-Groomed: 2026-07-14 — items 1–2 delivered (defaults flip; prequential
-replay); replay follow-ups wired into items 3–7 + the Phase-7 gate; item-3
-cost-ledger + scale-down-on-drain prerequisites shipped (honest-eval cost
-measurement + orchestrator-driven fleet drain, both dormant/measurement-only
-until the next AMI re-bake activates the worker-side signals).
+Groomed: 2026-07-17 — items 1–3 delivered. Item 3 (instrumented accounting
+run + Tier-2 oracle coverage) closed 2026-07-17: the accounting spread and
+the oracle-value prequential replay are filed
+([spread](reports/2026-07-17-accounting-matchup-spread.md),
+[replay](reports/2026-07-17-phase7-oracle-value-replay.md)); the Tier-2
+oracle coverage confirmed the shipped "surrogate gating value not
+established" against an independent oracle. Next: item 4 (designed data
+wave), for which item 3's stream + frozen DB are the retained
+augmented-vs-unaugmented comparison substrate. Items 1–2 delivered earlier
+(defaults flip; prequential replay); item-3 cost-ledger + scale-down-on-drain
+prerequisites shipped 2026-07-14 (now live post-AMI-rebake).
 Full data-first re-groom 2026-07-13, user-ratified; decisions and
 rationale: [2026-07-13 re-groom record](reports/2026-07-13-roadmap-regroom.md).
 Re-groom whenever a wave completes or a decision changes scope; update
@@ -67,11 +73,22 @@ Compute runs on AWS learned-batch; costs:
      until the worker AMI is re-baked to emit `active_matchups`; `--no-drain`
      escape hatch;
    - one **instrumented accounting run** to resolve the matchups-per-trial
-     spread — **Scope A shipped 2026-07-14** (no-spend prerequisites:
+     spread — **DELIVERED 2026-07-17** (Scope B launched Tier-2: the 9-cell
+     hammerhead + 3-cell wolf stream, the 27-build oracle pass, the
+     re-materialized frozen DB, the Tier-2 prequential replay, and both
+     deliverable reports — [accounting spread](reports/2026-07-17-accounting-matchup-spread.md),
+     [oracle-value replay](reports/2026-07-17-phase7-oracle-value-replay.md),
+     [ledger entry 3](reports/2026-07-14-accounting-stream-preregistration.md)).
+     The Tier-2 verdict: oracle coverage **confirmed** rather than overturned
+     the shipped "surrogate gating value not established" (CatBoost-vs-oracle
+     Spearman ≈0 among deployable builds; gating q\* = the build-blind null);
+     the one positive oracle signal is the TWFE α̂ target, not the surrogate —
+     strengthening the data-first ordering into item 4. — **Scope A shipped
+     2026-07-14** (no-spend prerequisites:
      `matchups_dispatched` instrumentation in `optimizer.py` + spec 24; the Ĝ
      in-flight-gap fix; the `accounting_extract.py` extractor; the two
      cell-design YAMLs; the pre-registration ledger + retained-paths manifest —
-     [plan](../.claude/plans/active/2026-07-14-instrumented-accounting-run.md),
+     [plan](../.claude/plans/archive/2026/2026-07-14-instrumented-accounting-run.md),
      [pre-registration](reports/2026-07-14-accounting-stream-preregistration.md)).
      The **launch itself is spend-gated** (Scope B: AMI re-bake to activate the
      drain/cost features + `matchups_dispatched`, then the run + optional Tier-2

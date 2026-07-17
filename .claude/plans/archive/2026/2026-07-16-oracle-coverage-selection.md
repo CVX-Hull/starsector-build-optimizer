@@ -255,6 +255,18 @@ Bug caught during validation: `np.int64` from `np.array_split` leaked into the
 JSON payload → not serializable; fixed (`_stratify_indices` casts to native
 `int`) + regression test.
 
+## Retirement (2026-07-17)
+
+**Complete.** S1–S3b + helper promotion + S4.0 verification shipped in
+`424826a` (post-impl audit PASS). S4.1–S4.3 (re-bake → select the 27 →
+launch the honest-eval oracle pass with `--builds-file`) all executed: the
+selector produced `data/phase7/accounting_oracle_builds.json` (27 builds,
+`prereg_commit = 424826a`), and the oracle pass ran to full coverage on the
+maintain-mode fleet (owning-plan task #76, 2026-07-16→17). The post-oracle
+tail (re-materialize → replay → reports) belongs to the owning accounting
+plan and is now delivered (2026-07-17). Archived to
+`.claude/plans/archive/2026/`.
+
 ## Post-impl audit (2026-07-16)
 
 One independent read-only audit sub-agent (correctness + the $60-wasting join +

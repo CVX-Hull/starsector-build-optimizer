@@ -1,12 +1,13 @@
 ---
 type: report
-status: draft
-last-validated: 2026-07-15
+status: shipped
+last-validated: 2026-07-17
 ---
 
 # Accounting-run stream — pre-registration & analysis ledger
 
-**Status: pre-registration (draft).** This document is authored and committed
+**Status: pre-registration, now shipped with its first consultation (entry 3,
+2026-07-17).** The predeclaration (entries 0–2) was authored and committed
 **before** the instrumented accounting run's proposal stream is collected. It
 fixes the complete gate statistic, the oracle-coverage subset rule, the fresh
 seeds, and the retained artifacts, so that neither the gate statistic nor the
@@ -111,7 +112,7 @@ entry 0.)_
   and the frozen matchup DB `data/phase7/accounting_matchups.sqlite` exists, but
   no predicted scores were inspected in choosing this rule). Implemented by
   `scripts/analysis/phase7_select_oracle_builds.py`
-  (plan [2026-07-16-oracle-coverage-selection.md](../../.claude/plans/active/2026-07-16-oracle-coverage-selection.md)),
+  (plan [2026-07-16-oracle-coverage-selection.md](../../.claude/plans/archive/2026/2026-07-16-oracle-coverage-selection.md)),
   committed together with this entry before first execution; the selector records
   this doc's git commit hash (`prereg_commit`) in its output JSON so
   "fixed-before-selection" is verifiable.
@@ -142,3 +143,31 @@ entry 0.)_
     the selector fails loud (`ValueError`), not silently degrades. (Each
     hammerhead cell has hundreds of distinct builds.)
   No oracle reading exists yet — this entry precedes the oracle pass.
+- **2026-07-17 — entry 3 (Tier-2 reading — first consultation of the oracle'd
+  stream)**: the oracle pass (27 builds × 54 opponents × 30 replicates, all at
+  full 1,620/1,620 coverage, zero failures) completed 2026-07-17; the frozen DB
+  was re-materialized with `--honest-ledger` + `--honest-selector-json`
+  (`honest_eval_matchups` 43,740 rows, 0 unresolved; `training_matchups`
+  byte-identical to the pre-oracle materialization) and the prequential replay
+  run under the predeclared statistic. Full reading:
+  [2026-07-17-phase7-oracle-value-replay.md](2026-07-17-phase7-oracle-value-replay.md);
+  accounting: [2026-07-17-accounting-matchup-spread.md](2026-07-17-accounting-matchup-spread.md).
+  **Verdict: the Tier-2 coverage did not certify the surrogate — it confirmed
+  the shipped "gating value not established" against an independent oracle.**
+  The CatBoost selection arm's predicted-score-vs-oracle Spearman is +0.34
+  (p = 0.08, n = 27, carried by the coarse pruned-bottom-vs-finalized-top
+  separation) but ≈ 0 (+0.01, n = 13) among rankable/deployable builds;
+  gating median q\* = 0.3 = the build-blind null; T2 opponent-adjusted drift
+  reproduces (CatBoost the only positive arm near-horizon, collapsing beyond
+  ~20 trials). The one positive oracle signal is the **TWFE α̂ estimator arm**
+  (campaign Spearman +0.50–0.58, n = 13, marginal CIs) — validating the
+  gating/honest-eval **target**, not the surrogate. **Pre-registration fidelity
+  note**: the entry-0 phrase "oracle-value regret@k under the CatBoost arm" does
+  not map verbatim to a shipped-tool output; the reading realizes it three
+  faithful ways (literal CatBoost-vs-oracle Spearman, CatBoost gating Δ-oracle,
+  tool-native estimator-arm recovery), all agreeing in direction, and the
+  mapping was fixed by the spec-31 contract (predating the stream), not chosen
+  after readings existed. A spec-31 amendment naming an explicit gating-arm
+  oracle-regret statistic is filed as a follow-up. This entry is the first
+  post-collection consultation; later new-family re-fits append as further
+  entries.

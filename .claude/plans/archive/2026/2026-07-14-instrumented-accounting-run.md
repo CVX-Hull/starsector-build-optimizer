@@ -1,9 +1,9 @@
 ---
 plan_type: implementation
-status: approved
+status: implemented
 created: 2026-07-14
 approved: 2026-07-14
-implemented: null
+implemented: 2026-07-17
 owner: agent
 related_docs:
   - docs/roadmap.md
@@ -12,8 +12,8 @@ related_docs:
   - docs/reports/2026-07-14-phase7-prequential-replay.md
   - .claude/skills/cloud-worker-ops.md
   - docs/reports/2026-07-11-aws-cost-analysis.md
-implementation_commit: null
-post_impl_audit: null
+implementation_commit: 3bd03b0
+post_impl_audit: passed
 superseded_by: null
 ---
 
@@ -493,11 +493,44 @@ YAMLs → `audit_amis.sh`/`cleanup_amis.sh` superseded → `--dry-run` → `prob
 check → `launch_campaign.sh` both YAMLs → honest-eval oracle pass (set its
 `budget_usd` at launch) → materialize → verify join totality → replay → reports.
 
+## Scope-B delivery record (2026-07-17)
+
+Scope B (launch + Tier-2 oracle coverage + deliverables) is **complete**. The
+9-cell hammerhead + 3-cell wolf stream was collected (task #73–74), the frozen
+matchup DB materialized with bijective-join verify (task #77), the 27-build
+rank-stratified oracle pass ran on maintain-mode fleet to full 1,620/1,620
+coverage per build (task #76), the frozen DB was re-materialized with
+`--honest-ledger` + `--honest-selector-json` (`honest_eval_matchups` 43,740,
+0 unresolved; `training_matchups` byte-identical to the pre-oracle
+materialization — checksum-verified), and the Tier-2 prequential replay was run
+under the predeclared statistic.
+
+**Deliverables filed** (2026-07-17): the accounting report
+([2026-07-17-accounting-matchup-spread.md](../../../docs/reports/2026-07-17-accounting-matchup-spread.md)),
+the oracle-value replay report
+([2026-07-17-phase7-oracle-value-replay.md](../../../docs/reports/2026-07-17-phase7-oracle-value-replay.md)),
+and pre-registration ledger entry 3
+([2026-07-14-accounting-stream-preregistration.md](../../../docs/reports/2026-07-14-accounting-stream-preregistration.md)).
+
+**Reading**: the Tier-2 oracle coverage did **not** certify the surrogate — it
+confirmed the shipped "gating value not established" against an independent
+oracle (CatBoost-vs-oracle Spearman ≈0 among deployable builds; gating q\* =
+the build-blind null; T2 drift reproduces). The one positive oracle signal is
+the TWFE α̂ **target** (+0.5, marginal), not the surrogate.
+
+Two follow-ups surfaced (both filed, neither blocks retirement): (a) a spec-31
+amendment naming an explicit gating-arm oracle-regret statistic so future
+pre-registrations bind to a tool output verbatim (the entry-0 "oracle-value
+regret@k under the CatBoost arm" phrase did not map verbatim; realized three
+faithful, direction-agreeing ways instead); (b) hash-seed nondeterminism in
+study-DB build reconstruction (unreferenced lookup builds only; no result
+affected; frozen DB pinned to `PYTHONHASHSEED=0`).
+
 ## Retirement checklist
 
-- [x] Scope A: implemented + audited (this record). Plan stays **active** —
-      Scope B (launch + oracle coverage) pending user spend ratification.
-- [ ] status: implemented, dates, commit hash (after the run lands).
-- [ ] Roadmap: item-3 accounting bullet → shipped note; item 3 closed when the
-      run + replay report + accounting report land (post-launch).
-- [ ] Archive to `.claude/plans/archive/2026/`.
+- [x] Scope A: implemented + audited (`3bd03b0`).
+- [x] Scope B: launched, oracle'd, re-materialized, replayed, reports filed
+      (this record, 2026-07-17).
+- [x] status: implemented; implemented 2026-07-17; implementation_commit `3bd03b0`.
+- [x] Roadmap: item-3 accounting bullet → delivered note; item 3 closed.
+- [x] Archive to `.claude/plans/archive/2026/`.
